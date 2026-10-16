@@ -342,3 +342,29 @@ def test_plan_status_matches_the_fixture():
         EVENTS["status"]["plan_extension"]
     )
     assert set(event["plan"]) == {"steps", "current_step"}
+
+
+def test_context_status_matches_the_fixture(tmp_path):
+    from gaia.agents.base.history import SessionHistory
+
+    class _Agent:
+        device = "gpu"
+        system_prompt = "prompt"
+        conversation_history = SessionHistory(tmp_path / "s.db")
+
+    out = io.StringIO()
+    stdio._write_context(_Agent(), out)
+    event = json.loads(out.getvalue())
+
+    assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | set(
+        EVENTS["status"]["context_extension"]
+    )
+    assert {
+        "window",
+        "system",
+        "tools",
+        "conversation",
+        "tool_results",
+        "history_budget",
+    } <= set(event["context"])
+    _Agent.conversation_history.close()

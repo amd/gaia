@@ -95,6 +95,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		if e.Context != nil {
+			m.takeContextReport(*e.Context)
+			break
+		}
+
 		if e.Plan != nil {
 			m.updatePlan(planFromWire(e.Plan.Steps, e.Plan.CurrentStep))
 		}

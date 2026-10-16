@@ -252,8 +252,8 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
     return result
 
 
-def history_budget(agent: Any, query: str) -> int:
-    """Reserve prompt, tools, output and safety margin for any transport."""
+def context_window(agent: Any) -> int:
+    """The context window, in tokens, the agent's chat model runs with."""
     from gaia.llm.lemonade_client import (
         GPU_CTX_SIZE,
         LemonadeClient,
@@ -272,21 +272,32 @@ def history_budget(agent: Any, query: str) -> int:
     if getattr(agent, "_use_claude", False):
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 
-        ctx = CLAUDE_CTX_SIZE
-    elif cloud:
+        return CLAUDE_CTX_SIZE
+    if cloud:
         # Remote admission policy, not a claim about the provider's context ceiling.
-        ctx = GPU_CTX_SIZE
-    else:
-        ctx = resolve_ctx_size(
-            model=getattr(agent, "model_id", None),
-            device=getattr(agent, "device", None),
-        )
+        return GPU_CTX_SIZE
+    return resolve_ctx_size(
+        model=getattr(agent, "model_id", None),
+        device=getattr(agent, "device", None),
+    )
+
+
+def _reserved_output(agent: Any) -> int:
+    config = getattr(getattr(agent, "chat", None), "config", None)
+    return getattr(config, "max_tokens", 8192)
+
+
+def _budget(ctx: int, overhead: int, output: int) -> int:
+    return min(ctx // 2, ctx - overhead - output - 2048)
+
+
+def history_budget(agent: Any, query: str) -> int:
+    """Reserve prompt, tools, output and safety margin for any transport."""
+    ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
-    config = getattr(getattr(agent, "chat", None), "config", None)
-    output = getattr(config, "max_tokens", 8192)
-    return min(ctx // 2, ctx - overhead - output - 2048)
+    return _budget(ctx, overhead, _reserved_output(agent))
 
 
 class SessionHistory(list):
@@ -320,6 +331,10 @@ class SessionHistory(list):
         )
         self._db.commit()
         self._cuts = CutReporter()
+        self._turns: list[list[dict]] = []
+        self.hidden = 0
+        # Turns hidden from the view the model last answered from.
+        self.shown_hidden: Optional[int] = None
 
     def record(self, messages: list[dict]) -> None:
         """Persist a complete turn without modifying its native tool IDs."""
@@ -352,12 +367,69 @@ class SessionHistory(list):
             on_cut,
             self._cuts if on_cut is not None else None,
         )
+        # Replay is always a suffix of whole turns.
+        kept, replayed = 0, 0
+        for turn in reversed(turns):
+            if replayed >= len(self):
+                break
+            replayed += len(turn)
+            kept += 1
+        self._turns = turns
+        self.hidden = len(turns) - kept
+        if on_cut is not None:
+            self.shown_hidden = self.hidden
+
+    def context_report(self, agent: Any) -> dict:
+        """How full the model's context is, by part, for the next message.
+
+        ``dropping`` names the turns the next message will no longer show the
+        model, compared with the view this turn was answered from.
+        """
+        window = context_window(agent)
+        system = count_tokens(
+            json.dumps(getattr(agent, "system_prompt", ""), ensure_ascii=False)
+        )
+        tools = count_tokens(
+            json.dumps(getattr(agent, "_openai_tools", []), ensure_ascii=False)
+        )
+        conversation = 0
+        tool_results = 0
+        for message in self:
+            cost = count_tokens(json.dumps(message, ensure_ascii=False))
+            content = message.get("content")
+            if message.get("role") == "tool" or (
+                isinstance(content, str) and content.startswith("[Recorded tool result")
+            ):
+                tool_results += cost
+            else:
+                conversation += cost
+        report = {
+            "window": window,
+            "system": system,
+            "tools": tools,
+            "conversation": conversation,
+            "tool_results": tool_results,
+            "history_budget": _budget(window, system + tools, _reserved_output(agent)),
+        }
+        if self.shown_hidden is not None and self.hidden > self.shown_hidden:
+            first = self._turns[self.shown_hidden]
+            asked = next(
+                (m.get("content") for m in first if m.get("role") == "user"), ""
+            )
+            report["dropping"] = {
+                "turns": self.hidden - self.shown_hidden,
+                "first": " ".join(str(asked or "").split())[:80],
+            }
+        return report
 
     def clear(self) -> None:
         with self._db:
             self._db.execute("DELETE FROM turns")
         super().clear()
         self._cuts = CutReporter()
+        self._turns = []
+        self.hidden = 0
+        self.shown_hidden = None
 
     def close(self) -> None:
         self._db.close()

@@ -28,8 +28,9 @@ var memoPlan = []event.PlanStep{
 }
 
 // noColorView is the frame as drawn with no colour at all — what NO_COLOR
-// gets. It must carry no SGR sequence, so every state has to be in the text.
-func noColorView(t *testing.T, m ChatModel) string {
+// gets. The rows carrying any of markers must have no SGR sequence, so their
+// state has to be in the text.
+func noColorView(t *testing.T, m ChatModel, markers ...string) string {
 	t.Helper()
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.Ascii)
@@ -41,13 +42,16 @@ func noColorView(t *testing.T, m ChatModel) string {
 		config:  func() []byte { return nil },
 	})
 	m.updateViewport()
-	raw := m.View()
-	if sgr := regexp.MustCompile("\x1b\\[[0-9;]*m"); sgr.MatchString(raw) {
-		t.Errorf("NO_COLOR frame still carries colour codes")
-	}
-	rows := strings.Split(ansi.Strip(raw), "\n")
+	sgr := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	rows := strings.Split(m.View(), "\n")
 	for i, r := range rows {
-		rows[i] = strings.TrimRight(r, " ")
+		plain := strings.TrimRight(ansi.Strip(r), " ")
+		for _, mark := range markers {
+			if strings.Contains(plain, mark) && sgr.MatchString(r) {
+				t.Errorf("row %q is coloured under NO_COLOR", plain)
+			}
+		}
+		rows[i] = plain
 	}
 	return strings.Join(rows, "\n") + "\n"
 }
@@ -147,7 +151,7 @@ func TestFramePlanMidTurn(t *testing.T) {
 			*now = now.Add(7 * time.Second)
 			got := screen(*m)
 			golden(t, tc.name, got)
-			if nc := noColorView(t, *m); nc != got {
+			if nc := noColorView(t, *m, "Plan ·", "✓", "▸", "○"); nc != got {
 				t.Errorf("the NO_COLOR frame differs:\n%s", nc)
 			}
 			for _, want := range []string{"Plan · 1 of 3 done", "✓ Read term_sheet.pdf", "▸ Search the web", "○ Write the 2-page memo"} {

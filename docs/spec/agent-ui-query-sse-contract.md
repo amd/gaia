@@ -692,6 +692,15 @@ its current step moves: `{"steps": [...], "current_step": N}`, where each step i
 repeats the last one. The TUI draws it as a checklist and replaces it when the
 steps change.
 
+Once a turn is recorded, and before its terminal event, the agent sends a
+`status` with an empty `message` and `context`: how full the model's context
+will be for the next message, in estimated tokens. It carries `window`,
+`system`, `tools`, `conversation`, `tool_results` and `history_budget` (the
+history replayed before older turns drop). When the next message will hide turns
+the model saw this turn, `dropping` is `{"turns": N, "first": "<first words of
+the oldest one>"}`, so the TUI can warn before it happens; `history_cut` still
+reports the cut once it has.
+
 Over stdio the agent never sends `tool_result.render`,
 `needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
 other transports, and it sets `source` itself on an error it synthesizes.

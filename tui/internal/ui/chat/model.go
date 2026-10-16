@@ -395,6 +395,8 @@ type ChatModel struct {
 	modelRemote  bool
 	// plan is the running turn's plan checklist (plan.go).
 	plan livePlan
+	// ctxMeter is how full the model's context is (context.go).
+	ctxMeter contextMeter
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -1893,6 +1895,11 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "/context":
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: m.contextBreakdown()})
+		m.updateViewport()
+		return m, nil
+
 	case "/cost help":
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
@@ -2080,6 +2087,7 @@ func (m *ChatModel) settleTurn() {
 	// and when the cancel lost the race it sat directly above the answer that
 	// did arrive, contradicting it.
 	m.dropCancellingNotice()
+	m.flushContextWarning()
 	if m.cancelPending {
 		m.cancelPending = false
 		m.messages = append(m.messages, Message{

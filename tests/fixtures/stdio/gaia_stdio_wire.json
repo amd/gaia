@@ -33,7 +33,8 @@
       ],
       "phase_extension": ["phase", "words", "chars"],
       "history_cut_extension": ["history_cut"],
-      "plan_extension": ["plan"]
+      "plan_extension": ["plan"],
+      "context_extension": ["context"]
     },
     "token": { "fields": ["delta"] },
     "tool_call": { "fields": ["tool", "args", "narration"] },

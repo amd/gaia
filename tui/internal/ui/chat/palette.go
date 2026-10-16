@@ -40,6 +40,7 @@ var paletteCommands = []paletteCommand{
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 	{"/cost", "What this session has spent; /cost help for rates"},
+	{"/context", "How full the model's context is, and what fills it"},
 	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
 	{"/copy all", "Copy the whole conversation as markdown"},
 	{"/agents", "List installed agents and switch this session to one"},

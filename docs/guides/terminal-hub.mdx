@@ -495,6 +495,11 @@ inside each one, and one line sums the turn up:
   on it.
 - **A long turn** folds its middle once it has more than eight steps:
   `… 23 more actions · Ctrl+O to expand`.
+- **A plan** the agent makes shows as a checklist right above the running step:
+  `✓` done, `▸` running, `○` still to do, with `Plan · 1 of 3 done` on top. It
+  updates in place as the agent moves through it, and a new plan replaces the
+  old one rather than adding a second list. A long plan keeps the running step
+  in view and folds the rest into `… N more`.
 - **Each file in the Created list is a link.** In a terminal that supports them
   (Windows Terminal, iTerm2, WezTerm, kitty), clicking one opens the file.
   `Ctrl+G` opens the newest one from the keyboard.
@@ -558,10 +563,32 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
+| `/context` | How full the model's context is, split into instructions, tool definitions, conversation, and files, pages and tool results |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+
+### How full the context is
+
+Local models see a limited window, so the status bar shows how full it is after
+each answer: `ctx 41%`. The figure counts what the model sees before older turns
+leave its view, so 100% is the point where they start to drop. Past 80% it reads
+`ctx 86% nearly full` and stays visible ahead of the scroll hints; on a narrow
+terminal it is the first thing to give way. `/context` prints the breakdown.
+
+Before a message would push older turns out of the model's view, one line under
+the answer says so and names the oldest one:
+
+```
+  [!] Context is full: your next message pushes the oldest 2 turns, from "Review the 8
+  contracts in ./contracts and build…" out of the model's view. It stays saved, and GAIA
+  can recall it if you ask.
+```
+
+Nothing is summarised or compacted. Turns that leave the view stay in the
+session's saved history, and GAIA's memory and document search are how it finds
+them again.
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`

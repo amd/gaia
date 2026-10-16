@@ -1343,6 +1343,7 @@ def run_turn(
                     logger.exception("Failed to preserve turn history")
                     _write(_terminal_error(exc), out)
                     return
+                _write_context(agent, out)
             _write(terminal_event, out)
             return
         if "error" in result:
@@ -1369,6 +1370,7 @@ def run_turn(
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
+        _write_context(agent, out)
         final: Dict[str, Any] = {"type": "final", "answer": answer}
         usage = _usage_from_result(value)
         if usage:
@@ -1404,6 +1406,22 @@ def _history_cut_event(cut: Any) -> Dict[str, Any]:
         "message": cut.notice,
         "history_cut": {"turns": cut.turns, "tokens": cut.tokens},
     }
+
+
+def _write_context(agent: Any, out) -> None:
+    """Report how full the model's context is for the next message.
+
+    Sent once a turn is recorded, so a long file the turn read moves the meter,
+    and ``dropping`` warns before the next message pushes turns out of view.
+    """
+    from gaia.agents.base.history import SessionHistory
+
+    history = getattr(agent, "conversation_history", None)
+    if isinstance(history, SessionHistory):
+        _write(
+            {"type": "status", "message": "", "context": history.context_report(agent)},
+            out,
+        )
 
 
 def run_warm_up(agent: Any, out) -> None:
