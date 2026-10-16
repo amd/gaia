@@ -132,6 +132,9 @@ class GaiaConfig:
             project-local ``.env`` or a checked-in config must never be able to
             switch off another person's confirmation prompts. The TUI still
             shows its banner on every frame while it is on.
+        keep_awake: Keep the PC from idle-sleeping while the terminal UI works
+            on a turn (on Linux, from suspending at all), and let it sleep
+            again once the turn ends or waits for the user.
         last_provider: Provider of the model last chosen in the TUI
             (``local``, ``fireworks``, ``amd``, ``claude``, ...). Saved with
             ``last_model`` after every switch the agent confirms.
@@ -154,6 +157,10 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        notify_approval: Desktop notification from the terminal UI when a step
+            waits for approval while the terminal is in the background.
+        notify_question: The same when the agent asks a question.
+        notify_finished: The same when a turn finishes.
         reduced_motion: Turn off the terminal UI's animations — the shimmer on
             the live status line, a pending prompt's pulse, and the spinner.
             ``GAIA_TUI_REDUCED_MOTION=1`` does the same for one launch.
@@ -163,6 +170,7 @@ class GaiaConfig:
     default_device: str = "gpu"
     default_model: Optional[str] = None
     full_access: bool = False
+    keep_awake: bool = True
     last_provider: Optional[str] = None
     last_model: Optional[str] = None
     lemonade_mode: Optional[str] = None
@@ -170,6 +178,9 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    notify_approval: bool = True
+    notify_question: bool = True
+    notify_finished: bool = True
     reduced_motion: bool = False
 
     #: Strings accepted for a boolean field, and what each means. Anything

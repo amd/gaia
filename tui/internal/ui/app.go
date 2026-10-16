@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/amd/gaia/tui/internal/attention"
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
@@ -153,10 +154,18 @@ const (
 // own Init and releases it again for SELECT MODE (Ctrl+T); the splash and the
 // readiness gate never ask for the mouse at all. Setting a program-level mouse
 // option here would fight that reconciliation on every frame.
-func teaOptions() []tea.ProgramOption {
-	return []tea.ProgramOption{
+//
+// out is the locked stdout notifications share with the renderer. Focus
+// reports are asked for only where they reach the program.
+func teaOptions(out *attention.Terminal) []tea.ProgramOption {
+	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
+		tea.WithOutput(out),
 	}
+	if attention.ReportsFocus {
+		opts = append(opts, tea.WithReportFocus())
+	}
+	return opts
 }
 
 // run boots the Bubble Tea program, optionally wrapping it with the control
@@ -181,8 +190,12 @@ func run(model tea.Model, ctrl *control.Options) error {
 		}()
 	}
 
-	// After the Closer check above, which has to see the real model.
-	model = repaintOnResize{inner: model}
+	// Notifications and keep-awake watch the real model's state; the wrappers
+	// go on after the Closer check above, which has to see the real model.
+	out := attention.NewTerminal(os.Stdout)
+	watched, stopWatch := newAttentionWatch(model, out)
+	defer stopWatch()
+	model = repaintOnResize{inner: watched}
 
 	// Swept whether or not this run publishes one of its own: a session started
 	// WITHOUT --control used to leave a dead predecessor's file in place.
@@ -193,7 +206,7 @@ func run(model tea.Model, ctrl *control.Options) error {
 	}
 
 	if ctrl == nil {
-		p := tea.NewProgram(model, teaOptions()...)
+		p := tea.NewProgram(model, teaOptions(out)...)
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -203,7 +216,7 @@ func run(model tea.Model, ctrl *control.Options) error {
 	// The server and the recorder log through the same switch.
 	opts := *ctrl
 	state := control.NewState(control.Debugf(opts.Debug))
-	p := tea.NewProgram(control.NewRecorder(model, state), teaOptions()...)
+	p := tea.NewProgram(control.NewRecorder(model, state), teaOptions(out)...)
 
 	srv, err := control.Start(p, state, opts)
 	if err != nil {

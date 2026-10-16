@@ -1,6 +1,7 @@
 package root
 
 import (
+	"github.com/amd/gaia/tui/internal/attention"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
@@ -90,3 +91,12 @@ func GateAskedAboutSetupForTest(rep preflight.Report) bool { return gateAskedAbo
 // builds after the gate passes. Exposed so a test can prove the flag is not
 // silently dropped on the way through.
 func ModelForTest(m FlagshipModel) string { return m.model }
+
+// Attention forwards the chat's, so notifications and keep-awake follow the
+// conversation and stay quiet on every other screen.
+func (m FlagshipModel) Attention() (attention.State, bool) {
+	if m.activeView != viewChat || m.chat == nil {
+		return attention.State{}, false
+	}
+	return m.chat.Attention()
+}

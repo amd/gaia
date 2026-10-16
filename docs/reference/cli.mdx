@@ -1633,6 +1633,8 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
+| `notify_approval`, `notify_question`, `notify_finished` | `true` | Desktop notification from `gaia-tui` when a step waits for approval, the agent asks a question, or a turn finishes, sent only while the terminal is in the background — see [When GAIA needs you](/guides/terminal-hub#when-gaia-needs-you) |
+| `keep_awake` | `true` | Keep the PC from idle-sleeping while `gaia-tui` works on a turn (on Linux, from suspending at all) — see [Staying awake](/guides/terminal-hub#staying-awake) |
 
 ### Full access
 

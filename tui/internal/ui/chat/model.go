@@ -802,6 +802,10 @@ func (m *ChatModel) drainPendingPreScan() {
 // tenth terminal path is added. settleTurn is *ChatModel and returns nothing,
 // so it cannot hand back the send Cmd this needs.
 func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Ahead of every overlay, which would otherwise swallow it.
+	if n, ok := msg.(NoticeMsg); ok {
+		return m.statusNote(n.Text), nil
+	}
 	updated, cmd := m.update(msg)
 
 	next, ok := updated.(ChatModel)

@@ -810,6 +810,53 @@ shell for the session.
 persistent warning the whole time it is on. `/bypass off` turns it off
 mid-session.
 
+## When GAIA needs you
+
+A long turn on a local model can take minutes, so you may switch to another
+window. When the terminal is in the background and GAIA needs you, it sends a
+desktop notification through the terminal:
+
+- a step is waiting for your approval;
+- the agent asks you a question;
+- a turn finishes.
+
+Nothing is sent while you are looking at the terminal. Each one can be turned
+off on its own:
+
+```bash
+gaia config set notify_approval false
+gaia config set notify_question false
+gaia config set notify_finished false
+```
+
+An approval notification doesn't include the command itself: the OS keeps
+notifications in its history and can show them on the lock screen.
+
+What you see depends on the terminal. iTerm2, Ghostty, WezTerm, foot and
+rxvt-unicode show a desktop notification. Windows Terminal shows one from
+version 1.26 once you set `"compatibility.allowOSC777": true` in its
+`settings.json`; before that, and in every other terminal, GAIA rings the
+terminal bell, which Windows Terminal turns into a sound or a flashing taskbar
+button depending on its **Bell notification style**.
+
+GAIA has to know the terminal is in the background, so a terminal that doesn't
+report focus never notifies. Inside tmux, turn focus reports on with
+`set -g focus-events on`; GNU screen doesn't pass them on. On Windows, GAIA asks
+Windows which window is in front instead, so switching to another tab of the
+same Windows Terminal window still counts as looking at it.
+
+### Staying awake
+
+While GAIA works on a turn, it keeps the PC from going to sleep when it is
+idle, and lets it sleep again when the turn ends or stops to wait for you. The
+screen can still turn off. On Linux it also holds off a suspend you ask for
+until then. If the PC refuses (for example, Linux without `systemd-inhibit`),
+GAIA says so once in the chat. To turn it off:
+
+```bash
+gaia config set keep_awake false
+```
+
 ## Running another agent
 
 The flagship is the default, but `gaia-tui` can also drive `email` by id — it keeps
