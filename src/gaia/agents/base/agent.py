@@ -7246,9 +7246,11 @@ Do NOT wrap conversational replies in JSON.
 
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                _model_ids_match,
                 cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_ctx_size,
+                resolve_effective_ctx_size,
                 resolve_lemonade_api_key,
                 resolve_lemonade_base_url,
             )
@@ -7272,18 +7274,40 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
+            own_model = getattr(self, "model_id", None)
+            if not own_model:
+                # the "_model_ids_match" treats two empty names as equal, so without
+                # an id, every entry lacking an 'id' would match
+                return False
             for m in data.get("all_models_loaded", []):
-                if m.get("type") in ("llm", "vlm"):
-                    ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Each model against its own window: an NPU model is right
-                    # at 32K, a memory-sized GPU model may be far above 64K.
-                    expected_ctx = resolve_ctx_size(
+                if m.get("type") not in ("llm", "vlm"):
+                    continue
+
+                # Only the agent's own model will decide the trim vs reload. A smaller
+                # resident model (vision, embedder listed as llm/vlm) says
+                # nothing about whether this overflow was a bad load (#5063).
+                if not (
+                    _model_ids_match(m.get("model_name"), own_model)
+                    or _model_ids_match(m.get("id"), own_model)
+                ):
+                    continue
+
+                ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                # Agent's model against its own window: an NPU model is right
+                # at 32K, a memory-sized GPU model may be far above 64K.
+                # Clamp to the trained ceiling, as the load path does: a
+                # model correctly loaded at max_context_window below the
+                # target can't be reloaded any larger (#5063)
+                expected_ctx = resolve_effective_ctx_size(
+                    resolve_ctx_size(
                         model=m.get("model_name"),
                         device=self.device,
                         base_url=base_url,
-                    )
-                    if 0 < ctx < expected_ctx:
-                        return True
+                    ),
+                    m.get("max_context_window"),
+                )
+                if 0 < ctx < expected_ctx:
+                    return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
             logger.debug("Loaded-context probe failed: %s", e)
