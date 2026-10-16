@@ -194,6 +194,20 @@ class TestConfigCLI:
                 ["config", "set", "reduced_motion", "sometimes"], monkeypatch, tmp_path
             )
 
+    @pytest.mark.parametrize(
+        "key", ["notify_approval", "notify_question", "notify_finished", "keep_awake"]
+    )
+    def test_attention_settings_are_strict_booleans(
+        self, key, monkeypatch, tmp_path, capsys
+    ):
+        """The terminal UI reads each attention setting as a JSON boolean."""
+        _run_main(["config", "set", key, "off"], monkeypatch, tmp_path)
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data[key] is False
+
+        with pytest.raises(SystemExit):
+            _run_main(["config", "set", key, "sometimes"], monkeypatch, tmp_path)
+
     def test_show_includes_path_and_fields(self, monkeypatch, tmp_path, capsys):
         _run_main(["config", "show"], monkeypatch, tmp_path)
         out = capsys.readouterr().out

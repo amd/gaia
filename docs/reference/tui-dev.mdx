@@ -149,6 +149,20 @@ After an intended change, regenerate them and review the diff:
 cd tui && go test ./internal/ui/chat -run TestFrame -update
 ```
 
+### Notifications and keep-awake
+
+`internal/attention` watches one value, `ChatModel.Attention()`, after every
+update, through a wrapper around the root model (`internal/ui/attention.go`).
+An approval or question appearing, or a user turn ending, is an edge in that
+state, so nothing in the chat view calls it. Turn start and end take and release
+the keep-awake hold.
+
+Notifications go out through `attention.Terminal`, the program's stdout behind
+one lock that Bubble Tea's renderer writes through as well, so a notification
+never lands inside a frame. Focus comes from focus reports (`CSI ?1004h`)
+everywhere except Windows, where Bubble Tea drops the console's focus events and
+the foreground window is asked instead.
+
 ## The control API
 
 Off by default. `--control` auto-assigns a port; `--control-port N` pins one. It
