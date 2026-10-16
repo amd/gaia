@@ -430,7 +430,7 @@ When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a
 
 ## Long Responses
 
-A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count. Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
+A chat reply runs as long as the agent keeps making progress. GAIA stops it only after 600 seconds with no progress, and says so in the reply; anything finished before then is kept. A running tool, or a question or permission prompt waiting on you, doesn't count as no progress. Raise the limit for slow models with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
 
 ```bash
 export GAIA_STREAM_TIMEOUT=1800   # seconds; whole number from 1 to 86400

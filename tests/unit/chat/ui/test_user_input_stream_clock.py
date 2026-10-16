@@ -1,16 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Time spent waiting on a request_user_input answer does not count against
-the Agent UI's per-turn stream timeout.
+"""The Agent UI's stream timeout counts only silence: time with no agent
+events, no tool running, and no question or prompt waiting on the user.
 
-Without this, a question asked late in a long turn got only what was left of
-the turn's 600 s, and running out was reported as "try a simpler query".
+A long task that keeps making progress must run to the end (#5177).
 """
 
 import threading
 import time
 
-from gaia.ui._chat_helpers import _UserWaitClock
+from gaia.ui._chat_helpers import _SilenceClock, _stream_timeout_message
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -44,16 +43,30 @@ def test_a_pending_question_is_reported_until_it_is_answered():
     assert handler.awaiting_user_input() is False
 
 
-def test_the_clock_counts_only_time_spent_waiting_on_the_user():
-    clock = _UserWaitClock()
+def test_the_clock_counts_only_silence():
+    clock = _SilenceClock(100.0)
 
-    assert clock.update(False, 100.0) == 0.0
-    assert clock.update(True, 120.0) == 0.0
-    assert clock.update(True, 300.0) == 180.0  # an open wait counts as it runs
-    assert clock.update(False, 420.0) == 300.0
-    assert clock.update(False, 500.0) == 300.0  # the turn's own time does not
-    assert clock.update(True, 510.0) == 300.0
-    assert clock.update(False, 520.0) == 310.0
+    assert clock.silent_for(False, 160.0) == 60.0
+    clock.progressed(170.0)
+    assert clock.silent_for(False, 200.0) == 30.0  # an event restarts it
+    assert clock.silent_for(True, 900.0) == 0.0  # a tool run or user wait
+    assert clock.silent_for(False, 950.0) == 50.0  # restarts once it ends
+
+
+def test_a_running_tool_counts_as_expected_quiet():
+    handler = SSEOutputHandler()
+    assert handler.tool_running() is False
+    handler.print_tool_usage("run_python")
+    assert handler.tool_running() is True
+    handler.pretty_print_json({"status": "success"}, "Result")
+    assert handler.tool_running() is False
+
+
+def test_the_timeout_message_says_why_in_plain_words():
+    message = _stream_timeout_message(600)
+    assert "no progress for 10 minutes" in message
+    assert "stopped before it finished" not in message
+    assert "made no progress for 45 seconds" in _stream_timeout_message(45)
 
 
 def test_a_pending_tool_confirmation_counts_as_waiting_on_the_user():

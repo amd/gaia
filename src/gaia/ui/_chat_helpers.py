@@ -1744,20 +1744,39 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
     return last.get("success") is False or bool(running)
 
 
-class _UserWaitClock:
-    """Total seconds a stream has spent waiting on the user, open wait included."""
+class _SilenceClock:
+    """Seconds a stream has gone without progress.
 
-    def __init__(self) -> None:
-        self._closed = 0.0
-        self._since: Optional[float] = None
+    A running tool or a wait on the user is expected to be quiet — tools carry
+    their own timeouts and the user's wait has its own deadline — so neither counts.
+    """
 
-    def update(self, waiting: bool, now: float) -> float:
-        if waiting and self._since is None:
+    def __init__(self, now: float) -> None:
+        self._since = now
+
+    def progressed(self, now: float) -> None:
+        self._since = now
+
+    def silent_for(self, quiet_expected: bool, now: float) -> float:
+        if quiet_expected:
             self._since = now
-        elif not waiting and self._since is not None:
-            self._closed += now - self._since
-            self._since = None
-        return self._closed + (now - self._since if self._since is not None else 0.0)
+        return now - self._since
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds % 60 == 0:
+        minutes = seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    return f"{seconds} second{'s' if seconds != 1 else ''}"
+
+
+def _stream_timeout_message(seconds: int) -> str:
+    return (
+        f"GAIA stopped this reply because the agent made no progress for "
+        f"{_format_duration(seconds)}. Anything it finished before then is kept; "
+        "send a follow-up to pick up where it left off. To allow longer pauses, "
+        f"set {_STREAM_TIMEOUT_ENV} before starting GAIA."
+    )
 
 
 def _canonicalize_user_input_request(event: dict) -> dict:
@@ -2953,9 +2972,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        # Time spent waiting on a request_user_input answer is the user's, not
-        # the turn's; that wait has its own deadline.
-        _user_wait = _UserWaitClock()
+        # The limit is on silence, not total time: a long task that keeps
+        # making progress runs to the end.
+        _silence = _SilenceClock(_stream_start)
+        timeout_message = None
 
         def _blocked_policy_steps():
             return [
@@ -2993,20 +3013,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             return persisted_policy_block_msg_id
 
         while True:
-            # Guard: total timeout for the streaming response
-            _now = _time.time()
-            _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
-            if _now - _stream_start - _waited > _STREAM_TIMEOUT_SECONDS:
+            _quiet_expected = (
+                sse_handler.awaiting_user_input() or sse_handler.tool_running()
+            )
+            if (
+                _silence.silent_for(_quiet_expected, _time.time())
+                > _STREAM_TIMEOUT_SECONDS
+            ):
                 logger.error(
-                    "Streaming response timed out after %ds", _STREAM_TIMEOUT_SECONDS
+                    "Streaming response made no progress for %ds",
+                    _STREAM_TIMEOUT_SECONDS,
                 )
+                timeout_message = _stream_timeout_message(_STREAM_TIMEOUT_SECONDS)
                 timeout_event = json.dumps(
-                    {
-                        "type": "agent_error",
-                        "content": f"Response timed out after {_STREAM_TIMEOUT_SECONDS}s. "
-                        "Try a simpler query, break it into smaller questions, "
-                        f"or raise {_STREAM_TIMEOUT_ENV} and restart GAIA.",
-                    }
+                    {"type": "agent_error", "content": timeout_message}
                 )
                 yield f"data: {timeout_event}\n\n"
                 break
@@ -3015,6 +3035,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
+                _silence.progressed(_time.time())
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -3246,6 +3267,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 full_response += f"\n\n[Error: {result_holder['error']}]"
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
+
+        if timeout_message:
+            # The agent's own answer is the generic "stopped" text; say why.
+            full_response = timeout_message
+            yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
