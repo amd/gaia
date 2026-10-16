@@ -8,7 +8,9 @@ candidate may opt out by carrying ``[skip eval]`` in its ANNOTATED tag message::
 
     git tag -a v0.25.0-rc16 -m "rc16 [skip eval]"
 
-A final release (``vX.Y.Z``) always runs: the marker is ignored with a notice.
+An agent package's release candidate (``agent-pkg-<id>-vX.Y.Z-rc.N``) may opt
+out the same way. A final release (``vX.Y.Z``, ``agent-pkg-<id>-vX.Y.Z``) always
+runs: the marker is ignored with a notice.
 A lightweight tag has no message of its own, so it always runs too (its
 ``%(contents)`` would be the commit message, which must not be able to skip a
 release eval). Every other event - ``workflow_dispatch``, a non-tag push, a
@@ -33,6 +35,10 @@ from dataclasses import dataclass
 from release_tag import RC_TAG_RE
 
 SKIP_MARKER_RE = re.compile(r"\[skip eval\]", re.IGNORECASE)
+# An agent package RC, e.g. agent-pkg-gaia-v0.3.0-rc.1 (npm pre-release form).
+AGENT_RC_TAG_RE = re.compile(
+    r"^agent-pkg-[a-z0-9][a-z0-9-]*-v\d+\.\d+\.\d+-rc\.[1-9]\d*$"
+)
 
 
 @dataclass(frozen=True)
@@ -54,11 +60,11 @@ def decide(
     marker = bool(SKIP_MARKER_RE.search(tag_message)) and tag_object_type == "tag"
     if not marker:
         return Decision(True)
-    if not RC_TAG_RE.match(tag):
+    if not (RC_TAG_RE.match(tag) or AGENT_RC_TAG_RE.match(tag)):
         return Decision(
             True,
-            f"{tag} carries [skip eval], but only a release candidate (vX.Y.Z-rcN) "
-            "may skip the eval. Running it.",
+            f"{tag} carries [skip eval], but only a release candidate (vX.Y.Z-rcN, "
+            "agent-pkg-<id>-vX.Y.Z-rc.N) may skip the eval. Running it.",
         )
     return Decision(
         False,

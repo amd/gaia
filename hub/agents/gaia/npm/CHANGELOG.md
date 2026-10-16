@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] — 2026-10-15
+
+Release candidate for 0.3.0, built with GAIA 0.25.0-rc16. Install it with
+`npm install @amd-gaia/gaia@next`; `latest` stays on 0.2.0 and the Agent Hub
+keeps listing 0.2.0 until 0.3.0 ships. It contains the entries below and
+everything under [0.3.0], which is not released yet.
+
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

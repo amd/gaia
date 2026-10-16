@@ -52,6 +52,16 @@ PR_TRIGGER_ALLOWED = {
         # Not an RC by release_tag.py's rules, so not skippable.
         ("push", "tag", "v0.25.0-rc0", "tag", "[skip eval]", True),
         ("push", "tag", "v0.25.0-rc16b", "tag", "[skip eval]", True),
+        # An agent package RC may skip; its final and malformed RCs may not.
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-rc.1", "tag", "[skip eval]", False),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-rc.1", "commit", "[skip eval]", True),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-rc.1", "tag", "rc.1", True),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0", "tag", "[skip eval]", True),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-rc.0", "tag", "[skip eval]", True),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-rc1", "tag", "[skip eval]", True),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-beta.1", "tag", "[skip eval]", True),
+        ("push", "tag", "agent-pkg-gaia-v0.3.0-rc.1-x", "tag", "[skip eval]", True),
+        ("workflow_dispatch", "tag", "agent-pkg-gaia-v0.3.0-rc.1", "", "", True),
         ("workflow_dispatch", "branch", "main", "", "", True),
         ("workflow_dispatch", "tag", "v0.25.0-rc16", "", "", True),
         ("push", "branch", "main", "", "", True),
