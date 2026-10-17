@@ -21,6 +21,7 @@ import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID } from './utils/newTask';
+import { setVisibleInterval } from './utils/visibleInterval';
 import type { SetupCheck } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -137,8 +138,7 @@ function App() {
     useEffect(() => {
         void checkSystemStatus();
         const fast = useChatStore.getState().systemStatus?.download_progress ? 2_000 : 5_000;
-        const t = setInterval(checkSystemStatus, fast);
-        return () => clearInterval(t);
+        return setVisibleInterval(() => { void checkSystemStatus(); }, fast);
     }, [checkSystemStatus]);
 
     // ── Chats ───────────────────────────────────────────────────────────

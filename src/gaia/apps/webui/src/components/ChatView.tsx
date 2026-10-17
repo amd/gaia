@@ -22,6 +22,7 @@ import { PermissionPrompt } from './PermissionPrompt';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { STARTING_REASON } from '../utils/constants';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -304,7 +305,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [setStreamContent, isStale]);
 
     // Load messages on mount, then poll for external changes (MCP, API)
-    const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastMsgCountRef = useRef<number>(0);
 
     useEffect(() => {
@@ -350,11 +350,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         loadMessages(true);
 
-        // Poll every 3s for messages added by external tools (MCP API, etc.)
-        msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
+        // Poll every 3s for messages added by external tools (MCP API, etc.); not while hidden.
+        const stopPoll = setVisibleInterval(() => loadMessages(false), 3_000);
         return () => {
             cancelled = true;
-            if (msgPollRef.current) clearInterval(msgPollRef.current);
+            stopPoll();
         };
     }, [sessionId, setMessages, setLoadingMessages]);
 
