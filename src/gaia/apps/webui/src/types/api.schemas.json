@@ -281,6 +281,17 @@
           }
         ]
       },
+      "currentStep": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Currentstep"
+      },
       "data": {
         "anyOf": [
           {},
@@ -351,6 +362,31 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "narration": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Narration"
+      },
+      "planNarrations": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Plannarrations"
       },
       "planSteps": {
         "anyOf": [
