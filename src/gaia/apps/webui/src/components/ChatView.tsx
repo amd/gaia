@@ -21,7 +21,7 @@ import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
-import { STARTING_REASON } from '../utils/constants';
+import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -1256,10 +1256,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
     };
 
     const saveTitle = async () => {
-        if (titleDraft.trim() && titleDraft !== session?.title) {
+        const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
+        if (title && title !== session?.title) {
             // Explicit rename — pin against the auto-retitler (#2165).
-            await api.updateSession(sessionId, { title: titleDraft.trim(), title_is_custom: true });
-            updateSessionInList(sessionId, { title: titleDraft.trim() });
+            await api.updateSession(sessionId, { title, title_is_custom: true });
+            updateSessionInList(sessionId, { title });
         }
         setEditingTitle(false);
     };
@@ -1403,6 +1404,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <input
                             className="title-edit"
                             value={titleDraft}
+                            maxLength={MAX_SESSION_TITLE_CHARS}
                             onChange={(e) => setTitleDraft(e.target.value)}
                             onBlur={saveTitle}
                             onKeyDown={(e) => {
