@@ -11,7 +11,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { shortModelName } from '../stores/modelStore';
+import { displayModelName } from '../stores/modelStore';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
@@ -34,7 +34,7 @@ export function greeting(now: Date = new Date()): string {
 export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
     if (!model) return `Getting GAIA ready… ${seconds}s`;
     const where = deviceLabel(device);
-    return `Loading ${shortModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
+    return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
 }
 
 /** No suggestions: one plain sentence, a retry, and the full error behind Details. */
