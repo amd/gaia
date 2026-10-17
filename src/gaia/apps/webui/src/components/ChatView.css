@@ -254,7 +254,7 @@
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
-    transition: opacity 200ms var(--ease);
+    transition: opacity var(--duration) var(--ease);
 }
 
 .skeleton-msg {
@@ -275,12 +275,12 @@
     height: 12px;
     border-radius: var(--radius-sm);
     background: var(--bg-tertiary);
-    animation: skeletonPulse 1.5s ease-in-out infinite;
+    animation: skeletonPulse var(--duration-pulse) var(--ease-in-out) infinite;
 }
 
-.skeleton-line:nth-child(1) { width: 85%; animation-delay: 100ms; }
-.skeleton-line:nth-child(2) { width: 65%; animation-delay: 200ms; }
-.skeleton-line:nth-child(3) { width: 40%; animation-delay: 300ms; }
+.skeleton-line:nth-child(1) { width: 85%; animation-delay: var(--stagger); }
+.skeleton-line:nth-child(2) { width: 65%; animation-delay: calc(var(--stagger) * 2); }
+.skeleton-line:nth-child(3) { width: 40%; animation-delay: calc(var(--stagger) * 3); }
 
 @keyframes skeletonPulse {
     0%, 100% { opacity: 0.25; }
@@ -288,7 +288,7 @@
 }
 
 .skeleton-msg {
-    transition: opacity 200ms var(--ease);
+    transition: opacity var(--duration) var(--ease);
 }
 
 /* ── Drag overlay ────────────────────────────────────────────────── */
@@ -312,16 +312,16 @@
     font-family: var(--font-sans);
     letter-spacing: 0.3px;
     pointer-events: none;
-    animation: fadeIn 100ms var(--ease);
+    animation: fadeIn var(--duration-fast) var(--ease);
     backdrop-filter: blur(4px);
 }
 
 /* ── Streaming bubble entrance/exit ─────────────────────────────── */
 .streaming-bubble {
-    transition: opacity 350ms var(--ease), transform 350ms var(--ease), filter 350ms var(--ease);
+    transition: opacity var(--duration-slow) var(--ease), transform var(--duration-slow) var(--ease), filter var(--duration-slow) var(--ease);
 }
 .streaming-bubble.stream-active {
-    animation: streamBubbleIn 350ms var(--ease);
+    animation: streamBubbleIn var(--duration-slow) var(--ease);
 }
 .streaming-bubble.stream-ending {
     pointer-events: none;
@@ -332,7 +332,7 @@
 }
 /* Message delete animation -- fade + shrink before removal */
 .msg-deleting {
-    animation: msgDelete 250ms var(--ease) forwards;
+    animation: msgDelete var(--duration) var(--ease) forwards;
     pointer-events: none;
 }
 
@@ -386,7 +386,7 @@
                 background var(--duration) var(--ease), color var(--duration) var(--ease),
                 border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
     z-index: 5;
-    animation: scrollBtnSlideIn 200ms var(--ease);
+    animation: scrollBtnSlideIn var(--duration) var(--ease);
 }
 
 @keyframes scrollBtnSlideIn {
@@ -409,7 +409,7 @@
     gap: 12px;
     border-color: color-mix(in srgb, var(--accent-yellow) 35%, transparent);
     pointer-events: all;
-    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 5s forwards;
+    animation: toastIn var(--duration) var(--ease), toastOut var(--duration) var(--ease) calc(var(--toast-hold) * 2) forwards; /* ChatView.tsx removes it at 5.2s */
 }
 
 .policy-alert-toast-link {
