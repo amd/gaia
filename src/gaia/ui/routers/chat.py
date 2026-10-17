@@ -678,12 +678,23 @@ async def get_chat_performance(session_id: str, db: ChatDatabase = Depends(get_d
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    from .._chat_helpers import cached_session_agent
+    from .._chat_helpers import (
+        cached_session_agent,
+        get_agent_registry,
+        resolve_session_model,
+    )
     from ..turn_insights import chat_totals, model_now
 
     agent = cached_session_agent(session_id)
     model = getattr(agent, "model_id", None) if agent is not None else None
-    model = model or session.get("model")
+    if not model:
+        # Before the agent exists, the model the turn will run, not the stored default.
+        model = resolve_session_model(
+            session,
+            session.get("agent_type") or "chat",
+            db.get_setting("custom_model"),
+            get_agent_registry(),
+        )[0]
 
     def _read():
         turns = db.turn_performance(session_id)

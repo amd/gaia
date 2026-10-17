@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import * as api from '../services/api';
+import { cloudProviderName } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import type { ChatPerformance, ContextUsage, TurnPerformance } from '../types';
 import './ContextPanel.css';
@@ -32,6 +33,11 @@ function Rate({ r }: { r: number | null | undefined }) {
 }
 
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
+/** A share that rounds to nothing but isn't nothing reads "<1", never "0". */
+const pctLabel = (part: number, whole: number) => {
+    const p = pct(part, whole);
+    return p === 0 && part > 0 ? '<1' : String(p);
+};
 /** Rounded down, so 99.7% reuse never reads as "100%". */
 const hitRate = (cached: number | null, total: number | null) =>
     total && cached != null ? Math.floor((cached / total) * 100) : null;
@@ -42,7 +48,7 @@ const MIN_TOKENS_TO_RATE = 256;
 function placement(now: ChatPerformance['now']): string {
     if (now.provider === 'unknown') return UNKNOWN;
     if (now.provider === 'cloud') return 'Cloud';
-    if (now.provider !== 'local') return `Cloud · ${now.provider}`;
+    if (now.provider !== 'local') return `Cloud · ${cloudProviderName(now.provider)}`;
     if (!now.device) return now.loaded === false ? 'Not loaded now' : UNKNOWN;
     const device = now.device.toUpperCase();
     const backend = now.backend === 'npu' ? 'FLM' : now.backend;
@@ -321,7 +327,7 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
                                     {(usage.categories ?? []).map((c) => (
                                         <div key={c.key} className="cp-row">
                                             <dt><span className={`swatch cp-cat-${c.key}`} aria-hidden="true" />{c.label}</dt>
-                                            <dd><Tokens n={c.tokens} /> <span className="cp-pct">{pct(c.tokens, usage.window)}%</span></dd>
+                                            <dd><Tokens n={c.tokens} /> <span className="cp-pct">{pctLabel(c.tokens, usage.window)}%</span></dd>
                                         </div>
                                     ))}
                                     <div className="cp-row is-quiet">

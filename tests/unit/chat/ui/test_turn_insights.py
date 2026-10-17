@@ -479,3 +479,16 @@ def test_performance_names_the_newest_answer(db, monkeypatch):
 
     assert result["latest_message_id"] == newest
     assert result["turns"][-1]["message_id"] != newest
+
+
+def test_performance_before_the_first_answer_reports_the_picked_cloud_model(
+    db, monkeypatch
+):
+    """A new cloud chat must not show the idle local model as where it runs."""
+    sid = db.create_session(model="Gemma-4-E4B-it-GGUF")["id"]
+    db.set_setting("custom_model", "fireworks.deepseek-v4p1-flash")
+    monkeypatch.setattr(turn_insights, "model_now", lambda model: {"model": model})
+
+    result = asyncio.run(chat.get_chat_performance(sid, db))
+
+    assert result["now"] == {"model": "fireworks.deepseek-v4p1-flash"}

@@ -233,6 +233,22 @@ describe('ContextPanel', () => {
         expect(document.activeElement).toBe(thisChat);
     });
 
+    it('shows a small share as <1%, never 0%', async () => {
+        const tiny = CATEGORIES.map((c) => (c.key === 'messages' ? { ...c, tokens: 200 } : c));
+        mockedApi.getContextUsage.mockResolvedValue({ available: true, ...usage({ categories: tiny }) });
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        const row = (await within(panel()).findByText('Messages')).closest('.cp-row') as HTMLElement;
+        expect(within(row).getByText('<1%')).toBeInTheDocument();
+    });
+
+    it('names a cloud provider the way people know it, not by its id', async () => {
+        const cloud = perf();
+        cloud.now = { ...cloud.now, model: 'fireworks.deepseek-v4p1-flash', provider: 'fireworks', device: null, backend: null };
+        mockedApi.getChatPerformance.mockResolvedValue(cloud);
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        expect(await within(panel()).findByText('Cloud · Fireworks AI')).toBeInTheDocument();
+    });
+
     it('closes on Escape', async () => {
         const onClose = vi.fn();
         render(<ContextPanel sessionId="s1" busy={false} onClose={onClose} />);
