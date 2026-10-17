@@ -617,10 +617,23 @@ def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
     lemonade.models = [
         {"id": "gemma4-it-e2b-FLM", "downloaded": True, "labels": ["chat", "audio"]},
         {"id": "audio-only-FLM", "downloaded": True, "labels": ["audio"]},
+        {
+            "id": "Whisper-Large-v3-Turbo",
+            "downloaded": True,
+            "labels": ["Audio", "Transcription"],
+        },
+        {"id": "nomic-embed-text", "downloaded": True, "labels": ["embeddings"]},
+        {"id": "kokoro-v1", "downloaded": True, "labels": ["tts"]},
     ]
     ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
     assert "gemma4-it-e2b-FLM" in ids
-    assert "audio-only-FLM" not in ids
+    for non_chat in (
+        "audio-only-FLM",
+        "Whisper-Large-v3-Turbo",
+        "nomic-embed-text",
+        "kokoro-v1",
+    ):
+        assert non_chat not in ids
 
 
 def test_cloud_models_are_prefixed_and_ranked_first(client, lemonade):
