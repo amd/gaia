@@ -609,6 +609,20 @@
     "title": "CancelStreamRequest",
     "type": "object"
   },
+  "ChatModelRequest": {
+    "description": "One of setup's default chat models.",
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "ChatModelRequest",
+    "type": "object"
+  },
   "ChatRequest": {
     "description": "Request to send a chat message.",
     "properties": {
@@ -3941,6 +3955,17 @@
         ],
         "title": "Cached Tokens"
       },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
       "elapsed_seconds": {
         "anyOf": [
           {
@@ -3962,6 +3987,17 @@
           }
         ],
         "title": "Error"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
       },
       "prompt_tokens": {
         "anyOf": [
