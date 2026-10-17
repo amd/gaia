@@ -1142,6 +1142,74 @@ class TestFileOpen:
             # Should open the parent dir, not use /select,
             assert "/select," not in call_args
 
+    @patch("subprocess.Popen")
+    @patch("os.startfile", create=True)
+    def test_launch_opens_a_document_in_its_default_app(
+        self, mock_startfile, mock_popen, client, sample_text_file
+    ):
+        resp = client.post(
+            "/api/files/open", json={"path": str(sample_text_file), "launch": True}
+        )
+        assert resp.status_code == 200
+        target = str(sample_text_file.resolve())
+        if platform.system() == "Windows":
+            mock_startfile.assert_called_once_with(target)
+        else:
+            assert mock_popen.call_args[0][0][-1] == target
+
+    @pytest.mark.parametrize(
+        "name", ["build.py", "run.bat", "setup.exe", "page.html", "noext"]
+    )
+    @patch("subprocess.Popen")
+    @patch("os.startfile", create=True)
+    def test_launch_refuses_files_the_default_app_would_run(
+        self, mock_startfile, mock_popen, name, client, home_tmp_dir
+    ):
+        path = home_tmp_dir / name
+        path.write_text("x", encoding="utf-8")
+        resp = client.post("/api/files/open", json={"path": str(path), "launch": True})
+        assert resp.status_code == 400
+        assert "Show in folder" in resp.json()["detail"]
+        mock_startfile.assert_not_called()
+        mock_popen.assert_not_called()
+
+    @patch("subprocess.Popen")
+    def test_launch_refuses_a_folder(self, mock_popen, client, home_tmp_dir):
+        resp = client.post(
+            "/api/files/open", json={"path": str(home_tmp_dir), "launch": True}
+        )
+        assert resp.status_code == 400
+        mock_popen.assert_not_called()
+
+
+class TestFileStatus:
+    """POST /api/files/status: the side rail re-checks files after an Undo."""
+
+    def test_reports_existing_removed_and_unchecked_paths(
+        self, client, sample_text_file, home_tmp_dir, tmp_path_factory
+    ):
+        gone = home_tmp_dir / "removed.md"
+        outside = tmp_path_factory.getbasetemp() / "outside.md"
+        resp = client.post(
+            "/api/files/status",
+            json={"paths": [str(sample_text_file), str(gone), str(outside)]},
+        )
+        assert resp.status_code == 200
+        here, removed, unchecked = resp.json()["files"]
+        assert here["exists"] is True
+        assert here["mtime"] == pytest.approx(sample_text_file.stat().st_mtime)
+        assert removed == {"path": str(gone), "exists": False, "mtime": None}
+        assert unchecked == {"path": str(outside), "exists": None, "mtime": None}
+
+    def test_a_folder_is_not_reported_as_a_file(self, client, home_tmp_dir):
+        resp = client.post("/api/files/status", json={"paths": [str(home_tmp_dir)]})
+        assert resp.json()["files"][0]["exists"] is False
+
+    def test_refuses_too_many_paths(self, client, home_tmp_dir):
+        paths = [str(home_tmp_dir / f"f{i}.md") for i in range(51)]
+        resp = client.post("/api/files/status", json={"paths": paths})
+        assert resp.status_code == 422
+
 
 # ── TestSecurityEdgeCases ────────────────────────────────────────────────────
 

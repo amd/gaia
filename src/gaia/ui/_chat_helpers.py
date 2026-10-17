@@ -60,6 +60,7 @@ from .sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
@@ -1913,8 +1914,43 @@ def _turn_inference_stats(
     return stats or None
 
 
+def _turn_location(agent) -> InferenceLocation | None:
+    """Where *agent*'s turn was answered, or None when it cannot say.
+
+    Only the agent's live client knows its backend; a bare model id would call
+    an agent on a remote backend local.
+    """
+    locate = getattr(agent, "_inference_location", None)
+    return locate() if callable(locate) else None
+
+
+def _turn_summary(
+    sse_handler, agent, message: str, answer_event: Optional[dict]
+) -> dict:
+    """The side rail's account of this turn (see :mod:`gaia.ui.turn_summary`).
+
+    A failure here becomes an ``error`` the rail shows, so it never costs the
+    user the answer it describes.
+    """
+    try:
+        evidence = getattr(agent, "_completion_evidence", None)
+        return sse_handler.turn_ledger.summary(
+            location=_turn_location(agent) if agent is not None else None,
+            written_files=evidence.written_files() if evidence is not None else (),
+            display_names=upload_display_names(message),
+            usage=answer_event,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Could not build this turn's summary: %s", exc, exc_info=True)
+        return {"error": f"{type(exc).__name__}: {exc}", "cost": {"kind": "unknown"}}
+
+
 def _done_event(
-    msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
+    msg_id: int,
+    content: str,
+    turn_cancelled: bool,
+    stats: Optional[dict] = None,
+    turn_summary: Optional[dict] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -1927,6 +1963,8 @@ def _done_event(
         event["cancelled"] = True
     if stats:
         event["stats"] = stats
+    if turn_summary:
+        event["turn_summary"] = turn_summary
     return event
 
 
@@ -2968,6 +3006,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # model reload at our 32K ctx_size before re-issuing the
                 # query so we don't replay against a still-broken backend.
                 t_query = _time.monotonic()
+                result_holder["agent"] = agent
                 try:
                     result = agent.process_query(request.message)
                 except Exception as first_exc:  # pylint: disable=broad-except
@@ -3453,6 +3492,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            turn_summary = _turn_summary(
+                sse_handler, result_holder.get("agent"), request.message, answer_event
+            )
 
             msg_id = db.upsert_message(
                 request.session_id,
@@ -3462,6 +3504,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
+                turn_summary=turn_summary,
             )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
@@ -3483,7 +3526,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 )
             )
             done_event = _done_event(
-                msg_id, full_response, turn_cancelled, stats=inference_stats
+                msg_id,
+                full_response,
+                turn_cancelled,
+                stats=inference_stats,
+                turn_summary=turn_summary,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -3515,14 +3562,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db.add_message(request.session_id, "assistant", content)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                turn_summary = _turn_summary(
+                    sse_handler, result_holder.get("agent"), request.message, None
+                )
                 msg_id = db.add_message(
                     request.session_id,
                     "assistant",
                     content,
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
+                    turn_summary=turn_summary,
                 )
-                done_event = _done_event(msg_id, content, turn_cancelled)
+                done_event = _done_event(
+                    msg_id, content, turn_cancelled, turn_summary=turn_summary
+                )
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
