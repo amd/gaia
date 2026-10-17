@@ -48,6 +48,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.turn_changes import TurnRecording
 
 from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
@@ -1913,6 +1914,12 @@ def _turn_inference_stats(
     return stats or None
 
 
+def _undo_link_warning_event(message: str) -> str:
+    """SSE line telling the user this answer will not offer Undo."""
+    payload = {"type": "status", "status": "warning", "message": message}
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 def _done_event(
     msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
 ) -> dict:
@@ -2150,6 +2157,7 @@ async def _get_chat_response(
     request: ChatRequest,
     *,
     model_messages: list | None = None,
+    turn_box: dict | None = None,
 ) -> str:
     """Get a non-streaming chat response from the ChatAgent.
 
@@ -2398,10 +2406,17 @@ async def _get_chat_response(
         activity = _ActivityConsole(agent.console, _time.monotonic)
         agent.console = activity
         activity_box["console"] = activity
+        recording = TurnRecording(session_id)
+        if turn_box is not None:
+            turn_box["recording"] = recording
         try:
             result = _query()
         finally:
             agent.console = activity._inner
+            warning = recording.close()
+            if warning:
+                # The non-streaming response has no channel for a notice.
+                logger.error(warning)
 
         if isinstance(result, dict):
             if model_messages is not None:
@@ -2644,8 +2659,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None}
+        turn_box: dict = {}
 
         def _run_agent():
+            recording = TurnRecording(session_id)
+            turn_box["recording"] = recording
             try:
                 t0 = _time.monotonic()
 
@@ -3035,6 +3053,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 else:
                     result_holder["error"] = str(e)
             finally:
+                warning = recording.close()
+                if warning:
+                    sse_handler._emit(
+                        {"type": "status", "status": "warning", "message": warning}
+                    )
                 sse_handler.signal_done()
 
         # The limit is on going without progress, not on total time: a long
@@ -3463,6 +3486,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
             )
+            link_warning = (
+                turn_box["recording"].link_message(msg_id)
+                if "recording" in turn_box
+                else None
+            )
+            if link_warning:
+                yield _undo_link_warning_event(link_warning)
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -3522,6 +3552,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                 )
+                link_warning = (
+                    turn_box["recording"].link_message(msg_id)
+                    if "recording" in turn_box
+                    else None
+                )
+                if link_warning:
+                    yield _undo_link_warning_event(link_warning)
                 done_event = _done_event(msg_id, content, turn_cancelled)
                 yield f"data: {json.dumps(done_event)}\n\n"
 
