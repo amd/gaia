@@ -181,12 +181,19 @@ def read_first_preflight(
             validator = getattr(host, "path_validator", None) or getattr(
                 host, "_path_validator", None
             )
-            # Out of scope or write-blocked, the tool's own refusal is the true
-            # one, and it doesn't reveal whether a file exists there.
-            if validator is not None and (
-                not validator.is_path_allowed(str(target), prompt_user=False)
-                or validator.is_write_blocked(str(target))[0]
+            if validator is not None and not validator.is_path_allowed(
+                str(target), prompt_user=False
             ):
+                # No answer could grant it, so refuse before the approval prompt.
+                if validator.unaskable_reason(str(target)):
+                    reason = validator.access_denied_message(str(target))
+                    validator.audit_write("write", str(target), 0, "denied", reason)
+                    return {"status": "error", "error": reason}
+                # Askable: the tool's own path-access question comes next.
+                return None
+            # Write-blocked, the tool's own refusal is the true one, and it
+            # doesn't reveal whether a file exists there.
+            if validator is not None and validator.is_write_blocked(str(target))[0]:
                 return None
             return file_read_record(host).refusal(target, verb)
         except (KeyError, TypeError, ValueError, OSError) as e:

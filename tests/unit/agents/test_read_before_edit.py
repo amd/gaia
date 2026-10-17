@@ -480,6 +480,32 @@ class TestRefusedBeforeConfirmation:
         assert "read_file" not in result["error"]
         assert outside.read_text(encoding="utf-8") == "secret"
 
+    def test_a_path_no_approval_can_grant_never_reaches_the_prompt(
+        self, agent, tmp_path_factory
+    ):
+        """Approving a write the system temp dir refuses anyway taught people to click yes."""
+        target = tmp_path_factory.mktemp("elsewhere") / "packing.md"
+
+        with patch.object(agent.path_validator, "audit_write") as audited:
+            result = agent._execute_tool(
+                "write_file", {"file_path": str(target), "content": "hello"}
+            )
+
+        assert result["status"] == "error"
+        assert check_was_executed(result) is False
+        assert "No approval can grant it" in result["error"]
+        assert agent.console.asked == []
+        assert not target.exists()
+        assert [c.args[3] for c in audited.call_args_list] == ["denied"]
+
+    def test_an_askable_path_is_left_to_the_tools_own_question(self, agent, tmp_path):
+        """Out of scope but grantable: the preflight refuses nothing."""
+        agent.path_validator = PathValidator()
+        args = {"file_path": str(tmp_path / "new.txt"), "content": "x"}
+
+        with patch.object(agent.path_validator, "unaskable_reason", return_value=""):
+            assert agent._policy_refusal("write_file", args) is None
+
 
 class TestRefusalIsAudited:
     """#3656 logged a denied stale write; the read-first refusal keeps that."""
