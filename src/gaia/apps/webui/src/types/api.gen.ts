@@ -88,6 +88,13 @@ export interface ApiSchemas {
   TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnSummaryCost: TurnSummaryCost;
+  TurnSummaryDocument: TurnSummaryDocument;
+  TurnSummaryFile: TurnSummaryFile;
+  TurnSummaryLiveData: TurnSummaryLiveData;
+  TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryPage: TurnSummaryPage;
+  TurnSummaryResponse: TurnSummaryResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
@@ -623,6 +630,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  turn_summary?: TurnSummaryResponse | null;
 }
 /**
  * RAG source citation.
@@ -633,6 +641,67 @@ export interface SourceInfo {
   filename: string;
   page?: number | null;
   score: number;
+}
+/**
+ * Sources, files and data flow of one turn, for the side rail (#5222).
+ */
+export interface TurnSummaryResponse {
+  cost: TurnSummaryCost;
+  documents?: TurnSummaryDocument[];
+  error?: string | null;
+  files?: TurnSummaryFile[];
+  live_data?: TurnSummaryLiveData;
+  model?: TurnSummaryModel | null;
+  pages?: TurnSummaryPage[];
+  sites?: string[];
+}
+/**
+ * What the turn cost.
+ */
+export interface TurnSummaryCost {
+  kind: string;
+  usd?: number | null;
+}
+/**
+ * A document the turn's answer drew passages from.
+ */
+export interface TurnSummaryDocument {
+  name: string;
+  pages?: number[];
+  passages?: number;
+  path: string;
+}
+/**
+ * A file the turn created or changed.
+ */
+export interface TurnSummaryFile {
+  name: string;
+  openable?: boolean;
+  path: string;
+}
+/**
+ * How the turn's internet tools fared.
+ */
+export interface TurnSummaryLiveData {
+  attempted?: number;
+  failed?: number;
+}
+/**
+ * Where the turn's model ran.
+ */
+export interface TurnSummaryModel {
+  name: string;
+  provider: string;
+  provider_name: string;
+  remote: boolean;
+}
+/**
+ * A web page the turn read, or a search hit when it read none.
+ */
+export interface TurnSummaryPage {
+  kind: string;
+  title?: string | null;
+  url: string;
 }
 /**
  * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
@@ -669,6 +738,7 @@ export interface ModelStatus {
  * Request to open a file or folder in the system file explorer.
  */
 export interface OpenFileRequest {
+  launch?: boolean;
   path: string;
   reveal?: boolean;
 }

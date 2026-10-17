@@ -1142,6 +1142,45 @@ class TestFileOpen:
             # Should open the parent dir, not use /select,
             assert "/select," not in call_args
 
+    @patch("subprocess.Popen")
+    @patch("os.startfile", create=True)
+    def test_launch_opens_a_document_in_its_default_app(
+        self, mock_startfile, mock_popen, client, sample_text_file
+    ):
+        resp = client.post(
+            "/api/files/open", json={"path": str(sample_text_file), "launch": True}
+        )
+        assert resp.status_code == 200
+        target = str(sample_text_file.resolve())
+        if platform.system() == "Windows":
+            mock_startfile.assert_called_once_with(target)
+        else:
+            assert mock_popen.call_args[0][0][-1] == target
+
+    @pytest.mark.parametrize(
+        "name", ["build.py", "run.bat", "setup.exe", "page.html", "noext"]
+    )
+    @patch("subprocess.Popen")
+    @patch("os.startfile", create=True)
+    def test_launch_refuses_files_the_default_app_would_run(
+        self, mock_startfile, mock_popen, name, client, home_tmp_dir
+    ):
+        path = home_tmp_dir / name
+        path.write_text("x", encoding="utf-8")
+        resp = client.post("/api/files/open", json={"path": str(path), "launch": True})
+        assert resp.status_code == 400
+        assert "Show in folder" in resp.json()["detail"]
+        mock_startfile.assert_not_called()
+        mock_popen.assert_not_called()
+
+    @patch("subprocess.Popen")
+    def test_launch_refuses_a_folder(self, mock_popen, client, home_tmp_dir):
+        resp = client.post(
+            "/api/files/open", json={"path": str(home_tmp_dir), "launch": True}
+        )
+        assert resp.status_code == 400
+        mock_popen.assert_not_called()
+
 
 # ── TestSecurityEdgeCases ────────────────────────────────────────────────────
 

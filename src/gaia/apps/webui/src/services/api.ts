@@ -926,6 +926,11 @@ export async function openFileOrFolder(path: string, reveal: boolean = true): Pr
     return apiFetch('POST', '/files/open', { path, reveal });
 }
 
+/** Open a file in its default app. The server refuses scripts and programs. */
+export async function openFileInApp(path: string): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, launch: true });
+}
+
 /** Upload a file (image/document) to the server. */
 export async function uploadFile(file: File): Promise<{
     filename: string;
