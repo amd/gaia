@@ -38,10 +38,14 @@ async function openFireworks() {
 beforeEach(() => {
     vi.clearAllMocks();
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
-    useChatStore.setState({ systemStatus: null, detectedDevices: ['gpu'] });
+    useChatStore.setState({ systemStatus: null });
     withProviders(fireworks());
     mockedApi.listProviderModels.mockResolvedValue({ provider: 'local', models: [] });
     mockedApi.getActiveModel.mockResolvedValue(LOCAL_ACTIVE);
+    mockedApi.getContextChoice.mockResolvedValue({
+        model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', chosen: null, automatic: 65536,
+        min: 65536, max_fit: 65536, options: [65536], loaded_ctx: null, memory_source: 'AMD iGPU', note: null,
+    });
 });
 
 describe('ModelSettings provider keys', () => {

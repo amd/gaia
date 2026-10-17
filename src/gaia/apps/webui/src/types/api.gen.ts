@@ -25,6 +25,7 @@ export interface ApiSchemas {
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
+  ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   DiscoveryCommit: DiscoveryCommit;
@@ -69,6 +70,7 @@ export interface ApiSchemas {
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
+  RestartRequest: RestartRequest;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -298,6 +300,13 @@ export interface ConnectRequest {
   auth_header_name?: string | null;
   auth_header_prefix?: string | null;
   base_url?: string | null;
+}
+/**
+ * ``ctx_size`` None returns the model to GAIA's automatic size.
+ */
+export interface ContextRequest {
+  ctx_size?: number | null;
+  model: string;
 }
 /**
  * Request to create a new scheduled task.
@@ -726,6 +735,12 @@ export interface PreflightReport {
   required_memory_gb?: number;
   tier?: string;
   warnings?: string[];
+}
+/**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
 }
 /**
  * List of scheduled tasks.

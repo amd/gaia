@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -281,8 +281,26 @@ export async function forgetProviderKey(provider: string): Promise<{ removed: bo
     return apiFetch('DELETE', `/providers/${encodeURIComponent(provider)}/key`);
 }
 
-export async function listProviderModels(provider: string): Promise<{ provider: string; models: ProviderModel[] }> {
+export async function listProviderModels(provider: string): Promise<ProviderModelsResponse> {
     return apiFetch('GET', `/providers/${encodeURIComponent(provider)}/models`);
+}
+
+export async function getContextChoice(model: string): Promise<ContextChoice> {
+    return apiFetch('GET', `/providers/local/context?model=${encodeURIComponent(model)}`);
+}
+
+/** Remember a context size for a model; null returns it to Automatic. */
+export async function setContextChoice(model: string, ctxSize: number | null): Promise<ContextChoice> {
+    return apiFetch('PUT', '/providers/local/context', { model, ctx_size: ctxSize });
+}
+
+export async function getLocalModelStatus(): Promise<LocalModelStatus> {
+    return apiFetch('GET', '/providers/local/status');
+}
+
+/** Start the model server if stopped, then reload the chat model. */
+export async function restartLocalModel(confirm = false): Promise<{ status: string; model: string; starting_server: boolean }> {
+    return apiFetch('POST', '/providers/local/restart', { confirm });
 }
 
 export async function selectModel(model: string): Promise<ActiveModel> {
