@@ -187,7 +187,7 @@ function BeyondTheWindow({ usage }: { usage: ContextUsage }) {
                 {away && away.results > 0 && (
                     <Row
                         label="Put away"
-                        hint="Tool results GAIA already used, swapped for a short note it can re-read when needed"
+                        hint="Older tool results moved out of the prompt; still readable"
                     >
                         {away.results} {away.results === 1 ? 'result' : 'results'} · <Tokens n={away.tokens} />
                     </Row>
