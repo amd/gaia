@@ -190,7 +190,10 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
         None,
         "assistant",
         "hi",
-        inference_stats={"tokens_per_second": 38.0, "model": DEFAULT_MODEL_NAME},
+        inference_stats={
+            "tokens_per_second": 38.0,
+            "measured_model": DEFAULT_MODEL_NAME,
+        },
     )
     body = client.get("/api/providers/local/models").json()
     by_id = {m["id"]: m for m in body["models"]}

@@ -63,7 +63,7 @@ def measured_speeds(stats: Iterable[Dict[str, Any]]) -> Dict[str, float]:
     """Median tokens/s per model over its newest ``SPEED_SAMPLES`` turns."""
     samples: Dict[str, List[float]] = {}
     for s in stats:
-        model, tps = s.get("model"), s.get("tokens_per_second")
+        model, tps = s.get("measured_model"), s.get("tokens_per_second")
         if not isinstance(model, str) or not isinstance(tps, (int, float)) or tps <= 0:
             continue
         bucket = samples.setdefault(model, [])

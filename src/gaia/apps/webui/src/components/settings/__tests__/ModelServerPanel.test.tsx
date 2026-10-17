@@ -50,6 +50,19 @@ describe('ModelServerPanel', () => {
         expect(screen.getByText(/embeddinggemma-300m-GGUF · Vulkan/)).toBeInTheDocument();
     });
 
+    it('names a cloud chat model without its routing prefix, keeping the id in the tooltip', async () => {
+        mockedApi.getModelServer.mockResolvedValue(info({
+            chat_model: {
+                name: 'fireworks.deepseek-v4p1-flash', recipe: 'cloud', device: null,
+                backend: 'remote', backend_source: null, ctx_size: null,
+            },
+        }));
+        render(<ModelServerPanel />);
+        const name = await screen.findByText('deepseek-v4p1-flash');
+        expect(name).toHaveAttribute('title', 'fireworks.deepseek-v4p1-flash');
+        expect(screen.queryByText('fireworks.deepseek-v4p1-flash')).not.toBeInTheDocument();
+    });
+
     it('offers only the backends Lemonade reports for this machine', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
         render(<ModelServerPanel />);

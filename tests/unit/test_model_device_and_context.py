@@ -294,11 +294,13 @@ def test_friendly_name(model_id, name):
 
 def test_measured_speed_is_the_median_of_recent_turns():
     stats = [
-        {"model": "A", "tokens_per_second": 10.0},
-        {"model": "A", "tokens_per_second": 30.0},
-        {"model": "A", "tokens_per_second": 20.0},
-        {"model": "B", "tokens_per_second": 0},
+        {"measured_model": "A", "tokens_per_second": 10.0},
+        {"measured_model": "A", "tokens_per_second": 30.0},
+        {"measured_model": "A", "tokens_per_second": 20.0},
+        {"measured_model": "B", "tokens_per_second": 0},
         {"tokens_per_second": 99.0},
+        # A kept Retry with… answer names its model under "model"; not a speed sample.
+        {"model": "A", "tokens_per_second": 1.0},
     ]
     assert measured_speeds(stats) == {"A": 20.0}
 
