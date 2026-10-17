@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
 from gaia.ui.run_manager import run_manager
+from gaia.ui.session_environment import apply_environment
 from gaia.ui.turn_queue import turn_queue
 
 logger = logging.getLogger(__name__)
@@ -477,6 +478,7 @@ class AgentLoop:
 
                 # A private chat stays private; a tick must not switch memory on.
                 _helpers._apply_memory_state(agent, session, db)
+                apply_environment(agent, session_id, db)
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event
