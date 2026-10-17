@@ -44,6 +44,20 @@
     font-size: 12px;
 }
 
+.queued-message-steer {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.queued-message-steer:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
 .queued-message-remove {
     display: inline-flex;
     align-items: center;

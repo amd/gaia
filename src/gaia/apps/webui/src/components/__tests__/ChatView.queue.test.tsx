@@ -76,14 +76,43 @@ async function startTurn() {
 const userBubbles = () => useChatStore.getState().messages.filter((m) => m.role === 'user').map((m) => m.content);
 
 describe('messages typed during a reply', () => {
-    it('go to the running reply and show in the chat once it reads them', async () => {
+    it('three messages sent back to back each get their own answer, in order (#5248)', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {});  // the history load, which replaces the message list
+        await type('Reply with just the word ONE.');
+        await type('Then reply with just the word TWO.');
+        await type('Then reply with just the word THREE.');
+
+        expect(streams).toHaveLength(1);
+        expect(mockedApi.sendFollowUp).not.toHaveBeenCalled();
+        expect(screen.getAllByText('Queued. Sends when this reply ends.')).toHaveLength(2);
+
+        for (const [i, word] of ['ONE', 'TWO', 'THREE'].entries()) {
+            expect(mockedApi.sendMessageStream.mock.calls[i][1]).toBe(`${i === 0 ? 'Reply' : 'Then reply'} with just the word ${word}.`);
+            await act(async () => {
+                current().onDone({ type: 'done', content: word, message_id: 100 + i } as StreamEvent);
+            });
+        }
+
+        expect(streams).toHaveLength(3);
+        const answers = useChatStore.getState().messages.filter((m) => m.role === 'assistant').map((m) => m.content);
+        expect(answers).toEqual(['ONE', 'TWO', 'THREE']);
+        expect(screen.queryByLabelText('Messages waiting to send')).toBeNull();
+    });
+
+    it('go to the running reply only when the user asks, and show once it reads them', async () => {
         mockedApi.sendFollowUp.mockResolvedValue({ delivered: true });
         await startTurn();
 
         await type('also check the totals');
+        expect(mockedApi.sendFollowUp).not.toHaveBeenCalled();
+        expect(screen.getByLabelText('Message')).toHaveProperty('value', '');
+
+        await act(async () => {
+            fireEvent.click(screen.getByText('Add to this reply'));
+        });
         expect(mockedApi.sendFollowUp).toHaveBeenCalledWith(SESSION.id, 'also check the totals');
         expect(screen.getByText(/GAIA reads it at its next step/)).toBeTruthy();
-        expect(screen.getByLabelText('Message')).toHaveProperty('value', '');
 
         act(() => {
             current().onAgentEvent({ type: 'followup_taken', text: 'also check the totals' } as StreamEvent);
@@ -93,31 +122,29 @@ describe('messages typed during a reply', () => {
         expect(streams).toHaveLength(1);
     });
 
-    it('wait in a visible queue when the reply cannot take them, and are answered next, in order', async () => {
+    it('stay queued when the running reply cannot take them', async () => {
         mockedApi.sendFollowUp.mockRejectedValue(new Error('409'));
         await startTurn();
-
         await type('second');
-        await type('third');
-        expect(screen.getAllByText('Queued. Sends when this reply ends.')).toHaveLength(2);
+
+        await act(async () => {
+            fireEvent.click(screen.getByText('Add to this reply'));
+        });
+        expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
 
         await act(async () => {
             current().onDone({ type: 'done', content: 'answer one', message_id: 2 } as StreamEvent);
         });
-        expect(streams).toHaveLength(2);
         expect(mockedApi.sendMessageStream.mock.calls[1][1]).toBe('second');
-        expect(screen.getAllByText('Queued. Sends when this reply ends.')).toHaveLength(1);
-
-        await act(async () => {
-            current().onDone({ type: 'done', content: 'answer two', message_id: 4 } as StreamEvent);
-        });
-        expect(mockedApi.sendMessageStream.mock.calls[2][1]).toBe('third');
     });
 
     it('are sent next when the reply ended before reading them', async () => {
         mockedApi.sendFollowUp.mockResolvedValue({ delivered: true });
         await startTurn();
         await type('late addition');
+        await act(async () => {
+            fireEvent.click(screen.getByText('Add to this reply'));
+        });
 
         await act(async () => {
             current().onAgentEvent({ type: 'followup_returned', texts: ['late addition'] } as StreamEvent);
@@ -127,7 +154,6 @@ describe('messages typed during a reply', () => {
     });
 
     it('go back into the composer when the user stops the reply', async () => {
-        mockedApi.sendFollowUp.mockRejectedValue(new Error('409'));
         await startTurn();
         await type('never mind this');
 
@@ -143,7 +169,6 @@ describe('messages typed during a reply', () => {
     });
 
     it('wait and try again when the chat is still busy, instead of turning into an error', async () => {
-        mockedApi.sendFollowUp.mockRejectedValue(new Error('409'));
         await startTurn();
         await type('next one');
         await act(async () => {

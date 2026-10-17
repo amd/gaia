@@ -14,7 +14,7 @@ interface ComposerProps {
     streaming?: boolean;
     /** Stop was pressed and the run is winding down. */
     stopping?: boolean;
-    /** While streaming, Enter still submits: the message goes to the running reply or waits for the next turn. */
+    /** While streaming, Enter still submits: the message is queued for the next turn. */
     queueWhileStreaming?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
@@ -152,8 +152,8 @@ export function Composer({
                             className="composer-send"
                             onClick={onSubmit}
                             disabled={!canSend}
-                            aria-label="Send to the running reply"
-                            title="Send now; GAIA reads it at its next step, or after this reply (Enter)"
+                            aria-label="Queue message"
+                            title="Queue it to send when this reply ends (Enter)"
                         >
                             <ArrowUp size={16} />
                         </button>

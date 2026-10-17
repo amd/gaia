@@ -1106,7 +1106,7 @@ describe('Chat App Integration', () => {
         "messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
       );
       expect(chatContent).toContain('placeholder={isStreaming');
-      expect(chatContent).toContain("? 'Add to this request, or queue the next one'");
+      expect(chatContent).toContain("? 'Queue your next message'");
     });
 
     it('should use the shared Composer for input', () => {

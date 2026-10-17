@@ -863,8 +863,9 @@ class AttachDocumentRequest(BaseModel):
     `followup_taken` (`text`) and the message is saved as a user message. A turn
     that ends first sends `followup_returned` (`texts`) before `done`. 404: no
     turn is running. 409: the running turn can't take it yet (it hasn't reached
-    the model, or a relayed agent runs it). On either, the Agent UI queues the
-    message and sends it when the turn ends.
+    the model, or a relayed agent runs it). The Agent UI calls it only when the
+    user picks **Add to this reply** on a queued message; otherwise a message
+    typed mid-turn waits and is sent as its own turn.
   </Accordion>
 
   <Accordion title="GET /api/chat/context/{session_id}">

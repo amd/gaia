@@ -6,13 +6,20 @@ import type { QueuedMessage } from '../utils/messageQueue';
 import './QueuedMessages.css';
 
 const STATE_LABEL = {
-    sending: 'Sending to the running reply…',
-    delivered: 'Sent to the running reply. GAIA reads it at its next step.',
+    sending: 'Adding to the running reply…',
+    delivered: 'Added to the running reply. GAIA reads it at its next step.',
     queued: 'Queued. Sends when this reply ends.',
 } as const;
 
+interface QueuedMessagesProps {
+    items: QueuedMessage[];
+    onRemove: (id: number) => void;
+    /** Hand a queued message to the running reply instead; absent when no reply can take one. */
+    onSteer?: (id: number) => void;
+}
+
 /** Messages typed while GAIA answers, above the composer, oldest first. */
-export function QueuedMessages({ items, onRemove }: { items: QueuedMessage[]; onRemove: (id: number) => void }) {
+export function QueuedMessages({ items, onRemove, onSteer }: QueuedMessagesProps) {
     if (items.length === 0) return null;
     return (
         <ul className="queued-messages" aria-label="Messages waiting to send" aria-live="polite">
@@ -23,6 +30,16 @@ export function QueuedMessages({ items, onRemove }: { items: QueuedMessage[]; on
                         : <CornerDownRight size={12} aria-hidden="true" />}
                     <span className="queued-message-text" title={item.text}>{item.text}</span>
                     <span className="queued-message-state">{STATE_LABEL[item.state]}</span>
+                    {item.state === 'queued' && onSteer && (
+                        <button
+                            type="button"
+                            className="queued-message-steer"
+                            onClick={() => onSteer(item.id)}
+                            title="GAIA reads it at its next step, without starting over. It may not answer it separately."
+                        >
+                            Add to this reply
+                        </button>
+                    )}
                     {item.state === 'queued' && (
                         <button
                             type="button"

@@ -577,24 +577,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming) return;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current)) {
-            const composed = attach.compose(text);
+            // Its own turn by default: a model handed a message mid-turn may finish without answering it.
+            setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
             setInput('');
             attach.clear();
             inputRef.current?.focus();
-            // Files need the next turn's upload handling; a comparison has no reply to take it.
-            if (hasAttachments || !isStreaming) {
-                setQueue((q) => messageQueue.enqueue(q, composed, 'queued'));
-                return;
-            }
-            const offered = messageQueue.item(composed, 'sending');
-            const id = offered.id;
-            setQueue((q) => [...q, offered]);
-            api.sendFollowUp(sessionId, composed)
-                .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
-                .catch((err) => {
-                    log.chat.info(`Follow-up not delivered to the running reply; queued instead: ${err instanceof Error ? err.message : err}`);
-                    setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
-                });
             return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
@@ -1397,6 +1384,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
         wasBusyRef.current = busy;
     }, [busy, refreshContext]);
 
+    // The user chose to fold a queued message into the running reply.
+    const handleSteer = useCallback((id: number) => {
+        const item = queue.find((m) => m.id === id && m.state === 'queued');
+        if (!item || !isStreaming) return;
+        setQueue((q) => messageQueue.promote(q, id, 'queued', 'sending'));
+        api.sendFollowUp(sessionId, item.text)
+            .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
+            .catch((err) => {
+                log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
+                setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
+            });
+    }, [queue, isStreaming, sessionId]);
+
     const handleRetryWith = useCallback((message: Message, model: string) => {
         if (isStreaming || comparingRef.current) return;
         log.chat.info(`Retrying message ${message.id} with ${model}`);
@@ -1844,7 +1844,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
-                    <QueuedMessages items={queue} onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))} />
+                    <QueuedMessages
+                        items={queue}
+                        onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
+                        onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                    />
                     <Composer
                         value={input}
                         onChange={setInput}
@@ -1857,7 +1861,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         attachments={attach}
                         inputRef={inputRef}
                         placeholder={isStreaming
-                            ? 'Add to this request, or queue the next one'
+                            ? 'Queue your next message'
                             : messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
                         rightControls={(
