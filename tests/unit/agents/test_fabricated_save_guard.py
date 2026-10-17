@@ -238,6 +238,12 @@ def _final_text(result):
 CLAIM = "I have saved the routine to `notes/routine.md`."
 
 
+def _assert_kept_with_caveat(result):
+    """The claim stays, and the caveat after it says what is unproven."""
+    text = result["result"]
+    assert text.startswith(CLAIM) and "I couldn't confirm all of this" in text
+
+
 def test_unbacked_save_claim_is_reprompted(agent):
     sent = _stub_chat(agent, CLAIM, "Nothing was written — tell me the path to use.")
 
@@ -258,7 +264,7 @@ def test_reprompt_is_bounded_per_turn(agent):
 
     assert len(sent) == _MAX_FILE_WRITE_CLAIM_REPROMPTS + 1
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)
 
 
 def test_no_reprompt_when_agent_has_no_write_tool(agent):
@@ -269,7 +275,7 @@ def test_no_reprompt_when_agent_has_no_write_tool(agent):
 
     assert len(sent) == 1
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)
 
 
 def test_no_reprompt_on_last_step(agent):
@@ -279,7 +285,7 @@ def test_no_reprompt_on_last_step(agent):
 
     assert len(sent) == 1
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)
 
 
 @pytest.fixture
@@ -333,7 +339,7 @@ def test_claim_backed_by_a_write_without_readback_is_incomplete(clear_tool_regis
 
     assert writes == ["notes/routine.md"]
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)
 
 
 def _run_turn_with_other_tool(
@@ -412,7 +418,7 @@ def test_executor_without_concrete_file_evidence_is_incomplete(
 
     assert len(sent) == 3, "an executor call alone does not prove a save"
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)
 
 
 @pytest.mark.parametrize("writer", ["take_screenshot", "transcribe_media"])
@@ -426,7 +432,7 @@ def test_unrelated_side_effect_writer_does_not_back_claim(clear_tool_registry, w
 
     assert len(sent) == 3, "an unrelated side-effect write must not prove this save"
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)
 
 
 @pytest.mark.parametrize(
@@ -481,4 +487,4 @@ def test_confirmation_flag_is_not_file_evidence(clear_tool_registry):
 
     assert len(sent) == 3
     assert result["status"] == "incomplete"
-    assert CLAIM not in result["result"]
+    _assert_kept_with_caveat(result)

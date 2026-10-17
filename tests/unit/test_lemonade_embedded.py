@@ -429,6 +429,20 @@ class TestStatus:
         assert status.running is False
         assert status.base_url is None
 
+    def test_recorded_health_asks_the_recorded_port_with_its_key(
+        self, manager, monkeypatch
+    ):
+        assert manager.recorded_health() == (False, None)
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        asked = []
+        monkeypatch.setattr(
+            EmbeddedLemonade,
+            "_health",
+            lambda self, port, key: asked.append((port, key)) or {"status": "ok"},
+        )
+        assert manager.recorded_health() == (True, {"status": "ok"})
+        assert asked == [(4321, "k")]
+
     def test_unreadable_state_file_is_discarded(self, manager):
         manager.root.mkdir(parents=True, exist_ok=True)
         manager.state_path.write_text("{ not json", encoding="utf-8")

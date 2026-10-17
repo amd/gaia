@@ -393,9 +393,10 @@ jobs:
   # runs on the single Lemonade slot.
   #
   # NOTE: the general `gaia eval agent` gate is intentionally NOT wired here yet.
-  # It runs on every qualifying PR (eval_flagship.yml) against the committed
-  # flagship baseline, but in report mode, so it has no enforced verdict to
-  # gate a release on. Wire it once the eval is enforcing.
+  # The same v* tag push starts eval_flagship.yml as a separate run, in report
+  # mode against the committed flagship baseline, so it has no enforced verdict
+  # to gate a release on and this workflow never waits for it. Wire it once the
+  # eval is enforcing.
   email-eval:
     name: Email eval suite (release gate)
     needs: validate

@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 from gaia.daemon import paths
@@ -115,9 +116,16 @@ def _check_version(inst: DaemonInstance) -> None:
         )
 
 
-def attach(timeout: float = 1.5) -> Optional[DaemonInstance]:
-    """Return the running daemon if one is live and version-compatible, else None."""
-    inst = read_instance()
+def attach(
+    timeout: float = 1.5, host_dir: Optional[Path] = None
+) -> Optional[DaemonInstance]:
+    """Return the running daemon if one is live and version-compatible, else None.
+
+    Args:
+        host_dir: Attach to the daemon of another GAIA home, whose
+            ``instance.json`` is in this directory, instead of this process's.
+    """
+    inst = read_instance(host_dir / "instance.json") if host_dir else read_instance()
     if inst is None or not is_live(inst, timeout=timeout):
         return None
     _check_version(inst)
@@ -376,12 +384,18 @@ def ensure_agent(
     return inst
 
 
-def ensure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> dict:
+def ensure_lemonade(
+    timeout=_LEMONADE_ENSURE_TIMEOUT, host_dir: Optional[Path] = None
+) -> dict:
     """Start-or-attach the daemon and have it start GAIA's embedded Lemonade.
 
     Returns the daemon's answer: ``base_url``, ``port``, ``version`` and
     whether this call ``started`` the server. Blocking -- a cold start waits for
     the server's health check -- so call it off any event loop.
+
+    Args:
+        host_dir: Ask another GAIA home's daemon (see :func:`attach`), which
+            must already be running: this never starts another home's daemon.
 
     Raises:
         DaemonError: The daemon is unreachable, has nothing to start (another
@@ -390,7 +404,16 @@ def ensure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> dict:
     """
     import requests
 
-    inst = start_or_attach()
+    if host_dir is None:
+        inst = start_or_attach()
+    else:
+        inst = attach(host_dir=host_dir)
+        if inst is None:
+            raise DaemonError(
+                f"the GAIA daemon in {host_dir}, which owns the Lemonade Server "
+                "this process uses, is not running. Start it with `gaia daemon "
+                "start` (without GAIA_HOME set)."
+            )
     if _minor(inst) < _REQUIRED_LEMONADE_MINOR:
         raise DaemonVersionError(
             f"the running daemon (host API v{inst.api_version}) predates GAIA "
@@ -500,7 +523,11 @@ def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
 
 
 def register_lemonade_client(
-    kind: str, pids: list, name: str = "", client_id: Optional[str] = None
+    kind: str,
+    pids: list,
+    name: str = "",
+    client_id: Optional[str] = None,
+    host_dir: Optional[Path] = None,
 ) -> str:
     """Tell the running daemon this process is using GAIA's Lemonade.
 
@@ -514,6 +541,7 @@ def register_lemonade_client(
         name: Shown in the daemon log.
         client_id: Repeat an earlier registration, so a daemon that restarted
             since learns of this client too. A no-op on the daemon that has it.
+        host_dir: Register with another GAIA home's daemon (see :func:`attach`).
 
     Returns:
         The client id to release with.
@@ -524,7 +552,7 @@ def register_lemonade_client(
     """
     import requests
 
-    inst = attach()
+    inst = attach(host_dir=host_dir) if host_dir else attach()
     if inst is None:
         raise DaemonError(
             "the GAIA daemon is not running, so there is nothing to register "
@@ -562,7 +590,9 @@ def register_lemonade_client(
     return r.json()["client_id"]
 
 
-def release_lemonade_client(client_id: str) -> Optional[dict]:
+def release_lemonade_client(
+    client_id: str, host_dir: Optional[Path] = None
+) -> Optional[dict]:
     """Release a registration from :func:`register_lemonade_client`.
 
     Returns:
@@ -575,7 +605,7 @@ def release_lemonade_client(client_id: str) -> Optional[dict]:
     """
     import requests
 
-    inst = attach()
+    inst = attach(host_dir=host_dir) if host_dir else attach()
     if inst is None:
         return None
     url = f"{inst.base_url}{API_PREFIX}/lemonade/clients/{client_id}"

@@ -77,6 +77,7 @@ class TestEnsure:
 
         assert ensured.started is True
         assert ensured.port == 60000
+        assert ensured.pid == 7
         embedded.start.assert_called_once_with(
             install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
         )
@@ -292,6 +293,7 @@ class TestRoute:
             "port": 51234,
             "version": VERSION,
             "started": False,
+            "pid": 7,
         }
 
     def test_nothing_to_start_is_409_with_the_remedy(self):

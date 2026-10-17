@@ -6,18 +6,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Finished work is no longer replaced by "I can't confirm this is done".** A
+  redaction task that loaded the `document-extract` skill had its answer swapped
+  for a coverage warning about its own `redaction_log.csv`, and a task with two
+  named outputs only knew about the last one. Every file the request names, and
+  every file the turn wrote, is now an output and never a source; the skill
+  checks coverage only when the request names a source document or asks for
+  every item. No check replaces a non-empty answer any more: an unproven
+  save, test result or extraction keeps the answer and adds a short "I
+  couldn't confirm all of this" list after it; a turn that ends early keeps
+  what it said ahead of its report; and a tool that keeps failing ends with the
+  model's answer from what it found, then the failure. A failed image request
+  is no longer rewritten into advice to start GAIA with an `--sd` flag that
+  does not exist. `load_skill` no longer tells the model the extraction tools
+  cannot run when it is about to register them, and a rejected extractor reply
+  is now logged.
 - **`run_python` works in the Agent UI without a project.** It ran from the
   server's own folder, which is not an allowed path, so every approved snippet
   was refused and the agent fell back to slower shell commands. With no project
   and a working directory you did not allow, a snippet now runs in the agent's
   scratch directory, and its result says so. A project outside the allowed
   paths is still refused.
+- **An "always" answer for a shell command no longer covers code in the
+  scratch folder.** A command run there or naming a path there — `cd` into it
+  then `python -m explore`, or `pytest`, `make`, `pip install`, `uv run` or
+  `go run` pointed at it — and a script handed a scratch path as an argument
+  now ask every time, with no `always_scope`, the same as a script there.
+  `always_scope` labels for commands that run code they do not show now say so:
+  `pytest (runs the test code it finds)`, `make (runs the Makefile's
+  commands)`, `python -m explore (runs that Python module)`.
 - **Exploring data no longer asks twice per step.** Each step wrote a helper
   script into the agent's own scratch folder and ran it, so a data task asked
   for approval about 30 times. Writes inside that folder now run unasked
-  (writes anywhere else still ask), and running a script from it offers
-  `always_scope` "Python scripts in GAIA's scratch folder", so one answer
-  covers the next script for the session.
+  (writes anywhere else still ask). Running a script from it asks each time
+  and offers no `always_scope`, since what is in that folder changes without
+  a prompt.
 - **A command no loaded skill grants asks you instead of failing.** `python
   script.py`, `git commit` or `pip install` with no skill granting them used to
   come back as "needs a skill grant … declares 'shell:execute:git' in its
