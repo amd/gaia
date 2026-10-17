@@ -117,6 +117,27 @@ describe('What GAIA knows about you', () => {
         ));
     });
 
+    it('keeps a forgotten item gone when an older load lands afterwards', async () => {
+        // The first About load answers at once; the second (from the page's
+        // own reload) is held until after the forget, then returns the old list.
+        let release: (v: unknown) => void = () => {};
+        const held = new Promise(r => { release = r; });
+        let aboutLoads = 0;
+        const stale = { items: [TEAL, CALGARY, SECRET], total: 3, offset: 0, limit: 200 };
+        mockedApi.getKnowledge.mockImplementation(async (params?: memoryApi.KnowledgeListParams) => {
+            if (params?.about_user && ++aboutLoads === 2) await held;
+            return stale;
+        });
+        await renderAbout();
+        await waitFor(() => expect(aboutLoads).toBe(2));
+
+        fireEvent.click(within(itemRow('Lives in Calgary')).getByRole('button', { name: /Forget/ }));
+        await screen.findByText(/Forgotten:/);
+        await act(async () => { release(undefined); await held; });
+
+        expect(screen.queryByRole('button', { name: /Forget: Lives in Calgary/ })).not.toBeInTheDocument();
+    });
+
     it('edits an item in place', async () => {
         await renderAbout();
 

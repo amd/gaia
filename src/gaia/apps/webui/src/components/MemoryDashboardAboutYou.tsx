@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pencil, Plus, Trash2, Undo2, Eye } from 'lucide-react';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
@@ -69,8 +69,12 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const [newText, setNewText] = useState('');
     const [newCategory, setNewCategory] = useState('fact');
     const [busyId, setBusyId] = useState<string | null>(null);
+    // Bumped by every load and every change, so an older load that lands late
+    // cannot put back an item the user just forgot.
+    const generation = useRef(0);
 
     const load = useCallback(async () => {
+        const mine = ++generation.current;
         try {
             // Filtered on the server, so paging never fills up with GAIA's own notes.
             const data = await memoryApi.getKnowledge({
@@ -80,9 +84,11 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                 order: 'desc',
                 limit: 200,
             });
+            if (mine !== generation.current) return;
             setItems(data.items as AboutYouItem[]);
             setLoadError(null);
         } catch (err) {
+            if (mine !== generation.current) return;
             log.system.warn('Failed to load what GAIA knows about the user', err);
             setLoadError(err instanceof Error ? err.message : String(err));
         }
@@ -112,6 +118,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         setBusyId(item.id);
         try {
             await memoryApi.deleteKnowledge(item.id);
+            generation.current++;
             setItems(prev => (prev ?? []).filter(i => i.id !== item.id));
             setForgotten(prev => [item, ...prev]);
             onChanged();
