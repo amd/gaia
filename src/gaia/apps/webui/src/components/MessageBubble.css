@@ -574,13 +574,14 @@
     border-top: 1px solid var(--border);
     font-size: 10.5px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     opacity: 0;
     transition: opacity 180ms var(--ease);
     pointer-events: none;
     user-select: none;
 }
-.msg:hover .msg-stats {
+.msg:hover .msg-stats,
+.msg-stats:focus-within {
     opacity: 1;
     pointer-events: auto;
     user-select: text;
@@ -592,6 +593,18 @@
 }
 .msg:hover .msg-stats-ts {
     opacity: 1;
+}
+/* Reads as text; a click shows the exact numbers */
+.msg-stats-summary {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.msg-stats-summary:hover {
+    color: var(--text-secondary);
 }
 /* Separator dots between stat items */
 .msg-stats > span + span::before {
