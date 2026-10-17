@@ -49,6 +49,16 @@ WRITE_TOOLS = frozenset(
     }
 )
 
+#: Indexing tools, keyed to the argument naming what they indexed.
+_INDEX_TOOLS = {"index_document": "file_path", "index_directory": "directory_path"}
+
+_SHELL_TOOLS = frozenset({"run_shell_command", "run_command"})
+
+#: ``gaia schedule add`` run from the shell creates a scheduled task.
+_SCHEDULE_ADD_RE = re.compile(
+    r"\bgaia\s+schedule\s+add\b(?:.*?--name[ =](?:\"(?P<name>[^\"]+)\"|'(?P<n2>[^']+)'|(?P<n3>\S+)))?"
+)
+
 #: The host the built-in ``search_web`` sends its queries to (``WebClient``).
 _SEARCH_HOST = "duckduckgo.com"
 
@@ -232,6 +242,72 @@ class TurnLedger:
                 paths.append(path)
         return paths
 
+    def _produced(self) -> List[Dict[str, Any]]:
+        """Things the turn made besides files: images, indexed documents,
+        memories and schedules, for the session panel's Outputs (#5277)."""
+        out: List[Dict[str, Any]] = []
+        for call in self._finished():
+            tool, args, data = call["tool"], call["args"], call["data"]
+            status = data.get("status") if isinstance(data, dict) else None
+            if not call["success"] or status in ("error", "skipped"):
+                continue
+            if tool == "generate_image" and isinstance(data, dict):
+                path = data.get("image_path")
+                if isinstance(path, str):
+                    out.append(
+                        {
+                            "kind": "image",
+                            "name": Path(path).name,
+                            "path": path,
+                            "detail": args.get("prompt"),
+                        }
+                    )
+            elif tool in _INDEX_TOOLS:
+                path = args.get(_INDEX_TOOLS[tool])
+                if isinstance(path, str) and path:
+                    path = os.path.expanduser(path)
+                    out.append(
+                        {"kind": "document", "name": Path(path).name, "path": path}
+                    )
+            elif tool == "remember" and isinstance(args.get("fact"), str):
+                out.append(
+                    {
+                        "kind": "memory",
+                        "name": args["fact"][:120],
+                        "detail": args.get("category"),
+                        "ref": (
+                            data.get("knowledge_id") if isinstance(data, dict) else None
+                        ),
+                    }
+                )
+            elif tool == "schedule_send":
+                out.append(
+                    {
+                        "kind": "schedule",
+                        "name": str(args.get("subject") or "Scheduled email"),
+                        "detail": args.get("send_at"),
+                    }
+                )
+            elif tool in _SHELL_TOOLS:
+                command = args.get("command")
+                match = (
+                    _SCHEDULE_ADD_RE.search(command)
+                    if isinstance(command, str)
+                    else None
+                )
+                if match:
+                    out.append(
+                        {
+                            "kind": "schedule",
+                            "name": match.group("name")
+                            or match.group("n2")
+                            or match.group("n3")
+                            or "Scheduled task",
+                            "detail": command[:200],
+                        }
+                    )
+        return out[:_MAX_FILES]
+
     def live_data(self) -> Dict[str, int]:
         calls = [c for c in self._finished() if c["tool"] in LIVE_DATA_TOOLS]
         return {
@@ -276,6 +352,7 @@ class TurnLedger:
             "documents": documents,
             "files": files[:_MAX_FILES],
             "sites": self._sites(),
+            "outputs": self._produced(),
             "live_data": self.live_data(),
             "cost": _cost(location, usage or {}),
         }

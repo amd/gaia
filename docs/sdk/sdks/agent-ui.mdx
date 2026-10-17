@@ -801,6 +801,73 @@ Deleting a chat deletes its copies.
     are gone, usually removed by the retention limit.
   </Accordion>
 
+  <Accordion title="GET /api/sessions/{session_id}/changes/total">
+    Every file the chat changed, from its state before the chat's first turn to
+    its state after the last. Undone turns are left out, and a turn still
+    running sets `pending` without being counted.
+
+    **Response:**
+    ```json
+    {
+      "files": [
+        {"path": "C:\\work\\app.py", "change": "edited", "unified": "...",
+         "additions": 3, "deletions": 1, "binary": false, "too_large": false,
+         "truncated": false, "message_ids": [42, 47], "changed_since": null}
+      ],
+      "totals": {"files": 1, "additions": 3, "deletions": 1, "uncounted": 0},
+      "turns": 2, "pending": false, "untracked": [], "incomplete": false
+    }
+    ```
+
+    A file put back by a later turn, or created and then deleted, is not
+    listed. `additions` and `deletions` are null for a binary or too-large file,
+    which `totals.uncounted` counts. `changed_since` says why the file on disk no
+    longer matches what the chat left (`"changed after this turn"`), or is null.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/undo">
+    Undo all: put every file the chat changed back as it was before its first
+    turn, then mark every turn undone.
+
+    **Request:** `{"force": false}`
+
+    All or nothing, like undoing one turn: saved copies are checked, a file
+    changed since the chat last touched it is a **409** with
+    `detail.conflicts` unless `force` is true, and a write that fails part-way
+    puts every file back. Also **409** when nothing is left to undo, when a turn
+    never finished, or while a turn is running.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/changes/git">
+    The git repositories holding the chat's changed files:
+    `{"available": true, "repos": [{"root", "branch", "remote", "default_branch",
+    "gh", "files", "uncommitted", "draft": {"title", "body"}, "pr_blocked"}]}`.
+    `draft` is drafted from the chat's requests for the turns that changed those
+    files; `pr_blocked` says why a pull request can't be opened (no `gh`, no
+    remote, or on the default branch), or is null.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/git/commit">
+    **Request:** `{"root": "...", "message": "...", "confirmed": true}`
+
+    Stages only the files the chat changed in `root` (deletions included, names
+    taken literally, never as patterns) and
+    commits them with `message`; other staged or changed files are left alone
+    and hooks run as usual. Returns `{"root", "commit", "files"}`. **400**
+    without `"confirmed": true`, for an empty message, for a repository in a
+    folder removed from the chat, or when git refuses; **409** while a turn is
+    running.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/git/pr">
+    **Request:** `{"root": "...", "title": "...", "body": "...", "confirmed": true}`
+
+    Pushes the current branch with `--set-upstream` (never forced), then runs
+    `gh pr create`. Returns `{"root", "url"}`. **400** without confirmation,
+    while the chat's internet is off, on the default branch, or without `gh` or
+    a remote.
+  </Accordion>
+
   <Accordion title="GET /api/settings/undo">
     The retention limits and current use:
     `{"retention_days": 7, "max_mb": 500, "used_bytes": 18233, "turns": 3, "path": "..."}`.
@@ -923,6 +990,7 @@ Deleting a chat deletes its copies.
     | `documents` | Documents it drew passages from: `name` (the name the file was attached under, not the upload copy's ID), `path`, `pages`, `passages`. |
     | `files` | Files it created or changed and that still exist: `path`, `name`, `openable` (false for scripts, programs and web pages), `mtime` (when the turn ended). |
     | `sites` | Hosts GAIA's web tools contacted. |
+    | `outputs` | What it made besides files, for the session panel's Outputs: `kind` (`image`, `document` indexed, `memory` saved, `schedule` created), `name`, and `path`, `detail` or `ref` (a memory's id) where they apply. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
     | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), or `unknown`. |
@@ -1252,6 +1320,83 @@ of that router's connector types.
   </Accordion>
 </AccordionGroup>
 
+### Session environment and outputs
+
+What one chat may reach and what it produced, behind the session panel's
+Environment and Outputs sections. Folder and internet changes are stored with
+the chat, applied to its agent before every turn, and applied to a running
+agent at once, so they take effect on its next step.
+
+<AccordionGroup>
+  <Accordion title="GET /api/sessions/{session_id}/environment">
+    ```json
+    {
+      "session_id": "...",
+      "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
+      "removed": ["C:\\work\\private"],
+      "internet": true,
+      "enforced": true
+    }
+    ```
+
+    `folders` is every folder and file the agent may read and write;
+    `source` is `added`, `gaia_documents`, `scratch`, `document`,
+    `working_folder` or `approved` (granted during the chat). `removable` is
+    false for an attached document, which leaves through the chat's document
+    list. `enforced` is false for an agent that runs as its own process (a
+    relayed sidecar); the folder and internet endpoints then refuse changes
+    with **409** (**400** for adding a folder).
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/environment/folders">
+    **Request:** `{"path": "C:\\work\\project"}`. Let the chat read and
+    write the folder. **400** for a path that isn't a folder, for a filesystem
+    root, the home folder or a protected folder, and for a folder inside one
+    the user removed.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/environment/folders/remove">
+    **Request:** `{"path": "..."}`. Take a folder or file away from the chat.
+    The agent's path validator then refuses everything under it, even inside a
+    wider grant and under full access, and never offers it as an approval,
+    until it is added back.
+  </Accordion>
+
+  <Accordion title="PUT /api/sessions/{session_id}/environment/internet">
+    **Request:** `{"on": false}`. With the internet off, the agent refuses
+    web tools, the in-app browser, connector (MCP) tools, and any call whose
+    arguments or shell command reach a host other than this PC (for example
+    `curl https://…`, `git push`, `pip install`, `npx`), before asking for
+    confirmation. A web or browser call whose URL is on this PC
+    (`localhost`, `127.*`) still runs. The refusal tells the model the
+    internet is off for this chat.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/outputs">
+    Everything the chat produced, newest first:
+
+    ```json
+    {
+      "session_id": "...",
+      "items": [
+        {"id": "export:47:c:\\work\\totals.csv", "kind": "export", "name": "totals.csv",
+         "path": "C:\\work\\totals.csv", "detail": null, "message_id": 47,
+         "created_at": "2026-10-16 20:01:12", "change": "created", "state": "present",
+         "openable": true, "revealable": true}
+      ]
+    }
+    ```
+
+    `kind` is `file`, `export`, `image`, `document`, `memory` or `schedule`.
+    A file appears once, at the latest turn that changed it. `state` is
+    `undone` when Undo restored its turn and `gone` when it is no longer on
+    disk. `openable` is false for scripts, programs and web pages, which only
+    show in their folder. `created_at` is UTC. Built from each answer's turn
+    summary (`turn_summary.outputs`) and the undo snapshots, so it survives a
+    restart.
+  </Accordion>
+</AccordionGroup>
+
 ### Tunnel
 
 Expose the local Agent UI over the internet via an ngrok/Cloudflare tunnel.
@@ -1267,7 +1412,9 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="GET /api/tunnel/status">
-    Current tunnel status — active/inactive, public URL, provider, uptime.
+    Current tunnel status — active/inactive, public URL, provider, uptime, and
+    `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
+    authenticated request through the tunnel, or null.
   </Accordion>
 </AccordionGroup>
 
