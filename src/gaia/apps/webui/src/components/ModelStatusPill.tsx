@@ -116,7 +116,7 @@ export function ModelStatusPill() {
                             <div className="model-status-head">
                                 <span className={`model-status-dot is-${s.state}`} aria-hidden="true" />
                                 <span role="status">
-                                    {STATE_TEXT[s.state]}{s.state === 'loaded' && s.busy ? ' · answering' : ''}
+                                    {STATE_TEXT[s.state]}{s.state === 'loaded' && s.busy_reason === 'request' ? ' · answering' : ''}
                                 </span>
                             </div>
                             {s.active_remote && (
@@ -167,7 +167,9 @@ export function ModelStatusPill() {
                             onClick={() => (notOurs ? setConfirming(true) : void restart(false))}
                             disabled={busy || !s || s.busy || (s.active_remote && s.state !== 'loaded')}
                             title={s?.busy
-                                ? 'GAIA is answering with this model. Restart it once the reply finishes.'
+                                ? (s.busy_reason === 'warm_up'
+                                    ? 'GAIA is getting the model ready for a new chat. Restart it once that finishes.'
+                                    : 'The model is answering a request. Restart it once that finishes.')
                                 : s?.state === 'stopped'
                                     ? 'Start the model server and load the model'
                                     : 'Reload the model at its context size'}

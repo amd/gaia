@@ -391,8 +391,40 @@ def test_restart_refuses_while_the_model_answers(client, lemonade, jobs):
     lemonade.loaded = [{**_entry(DEFAULT_MODEL_NAME), "is_busy": True}]
     resp = client.post("/api/providers/local/restart")
     assert resp.status_code == 409
-    assert "once the reply finishes" in resp.json()["detail"]
+    assert resp.json()["detail"] == (
+        "The model is answering a request. Restart it once that finishes."
+    )
     assert jobs == []
+    status = client.get("/api/providers/local/status").json()
+    assert (status["busy"], status["busy_reason"]) == (True, "request")
+
+
+def test_warm_up_is_reported_as_getting_ready_not_answering(
+    client, lemonade, jobs, monkeypatch
+):
+    """The new-chat warm-up keeps the model busy while no chat is running."""
+    monkeypatch.setattr(warmup, "warm_up_status", lambda: {"state": warmup.WARMING})
+    lemonade.loaded = [{**_entry(DEFAULT_MODEL_NAME), "is_busy": True}]
+    status = client.get("/api/providers/local/status").json()
+    assert (status["state"], status["busy_reason"]) == ("warming", "warm_up")
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 409
+    assert "getting the model ready" in resp.json()["detail"]
+    assert "answering" not in resp.json()["detail"]
+    assert jobs == []
+
+
+def test_users_server_reloads_after_confirm_once_the_warm_up_ends(
+    client, lemonade, jobs, monkeypatch
+):
+    lemonade.owner = "user"
+    lemonade.loaded = [_entry(DEFAULT_MODEL_NAME)]
+    monkeypatch.setattr(warmup, "warm_up_status", lambda: {"state": warmup.READY})
+    assert client.post("/api/providers/local/restart").status_code == 409
+    resp = client.post("/api/providers/local/restart", json={"confirm": True})
+    assert resp.status_code == 202
+    _join_restart()
+    assert jobs == [(DEFAULT_MODEL_NAME, True)]
 
 
 def test_a_second_restart_while_one_runs_is_409(client, lemonade):

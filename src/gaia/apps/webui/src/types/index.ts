@@ -928,8 +928,9 @@ export interface LocalModelStatus {
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
     owner: 'gaia' | 'user' | 'remote' | null;
-    /** The loaded model is answering a request right now. */
+    /** The loaded model is answering a request, or GAIA is warming it up for a new chat. */
     busy: boolean;
+    busy_reason?: 'warm_up' | 'request' | null;
     restarting: boolean;
     restart_error: string | null;
 }

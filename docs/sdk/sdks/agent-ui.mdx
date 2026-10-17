@@ -1953,7 +1953,7 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="GET /api/providers/local/status">
     The sidebar's live status: `state` (`loaded`, `warming`, `idle` or
     `stopped`), `owner` (`gaia`, `user` or `remote`, as in the Model server
-    panel), `busy` while the model answers, the loaded `model` with its
+    panel), `busy` with `busy_reason` (`request`, or `warm_up` while GAIA primes a new chat), the loaded `model` with its
     `placement` and `ctx_size`, `memory` (`free_gb`, `total_gb`, and
     `model_gb`, its estimated share; `free_gb` never exceeds `total_gb`, and
     is absent for a Lemonade on another machine), `error` with the raw cause in `error_detail`, and `restarting` /

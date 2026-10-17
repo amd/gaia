@@ -1017,6 +1017,27 @@ def _memory_view(
     }
 
 
+#: Why Restart waits, worded for each cause of a busy model.
+_BUSY_DETAIL = {
+    "warm_up": "GAIA is getting the model ready for a new chat. Restart it once that finishes.",
+    "request": "The model is answering a request. Restart it once that finishes.",
+}
+
+
+def _warming_up() -> bool:
+    from .. import warmup
+
+    return warmup.warm_up_status().get("state") == warmup.WARMING
+
+
+def _busy_reason(entry: Dict[str, Any], warming: bool) -> Optional[str]:
+    """``warm_up`` while GAIA primes a new chat, ``request`` while it answers one."""
+    # The warm-up keeps the model busy too; say which, since no chat is running then.
+    if warming:
+        return "warm_up"
+    return "request" if entry.get("is_busy") else None
+
+
 #: ``all_models_loaded[].status`` values for a model that cannot answer yet.
 _LOADING_STATUSES = frozenset({"loading", "starting", "initializing", "warming"})
 
@@ -1046,6 +1067,7 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         "base_url": None,
         "owner": None,
         "busy": False,
+        "busy_reason": None,
         "restarting": _restart_lock.locked(),
         "restart_error": _restart_error,
     }
@@ -1077,7 +1099,9 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         # "in_use" is a loaded model answering a request, not one still loading.
         loading = entry.get("status") in _LOADING_STATUSES
         view["state"] = "warming" if loading or warming else "loaded"
-        view["busy"] = bool(entry.get("is_busy"))
+        busy_reason = _busy_reason(entry, warming)
+        view["busy"] = busy_reason is not None
+        view["busy_reason"] = busy_reason
         view["model"] = name
         view["display_name"] = display_name(name)
         try:
@@ -1154,11 +1178,9 @@ def restart_local(
     try:
         health = _read_health()
         entry = _chat_entry(health)
-        if entry is not None and entry.get("is_busy"):
-            raise HTTPException(
-                status_code=409,
-                detail="GAIA is answering with this model. Restart it once the reply finishes.",
-            )
+        busy_reason = _busy_reason(entry, _warming_up()) if entry else None
+        if busy_reason is not None:
+            raise HTTPException(status_code=409, detail=_BUSY_DETAIL[busy_reason])
         model_id = str(entry.get("model_name")) if entry else active["model"]
         server_up = True
     except ProviderError as e:

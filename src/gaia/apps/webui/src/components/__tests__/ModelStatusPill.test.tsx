@@ -86,12 +86,36 @@ describe('ModelStatusPill', () => {
         await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalled());
     });
 
-    it('does not offer Restart while GAIA is answering', async () => {
-        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, busy: true });
+    it('does not offer Restart while the model answers', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, busy: true, busy_reason: 'request' });
         render(<ModelStatusPill />);
         const dialog = await open();
         expect(await within(dialog).findByText('Loaded · answering')).toBeInTheDocument();
-        expect(within(dialog).getByRole('button', { name: /Restart/ })).toBeDisabled();
+        const restart = within(dialog).getByRole('button', { name: /Restart/ });
+        expect(restart).toBeDisabled();
+        expect(restart).toHaveAttribute('title', 'The model is answering a request. Restart it once that finishes.');
+    });
+
+    it('says the model is getting ready during the new-chat warm-up, not that GAIA is answering', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, state: 'warming', busy: true, busy_reason: 'warm_up' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        expect(await within(dialog).findByText('Warming up')).toBeInTheDocument();
+        const restart = within(dialog).getByRole('button', { name: /Restart/ });
+        expect(restart).toBeDisabled();
+        expect(restart).toHaveAttribute('title', expect.stringMatching(/getting the model ready/));
+        expect(restart.getAttribute('title')).not.toMatch(/answering/);
+    });
+
+    it('confirms then reloads on the user\'s own Lemonade once the warm-up ends', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, owner: 'user', busy: false, busy_reason: null });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        const restart = await within(dialog).findByRole('button', { name: /Restart/ });
+        expect(restart).toBeEnabled();
+        fireEvent.click(restart);
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reload it' }));
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalledWith(true));
     });
 
     it('asks before reloading a model on the user\'s own Lemonade', async () => {
