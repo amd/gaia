@@ -851,14 +851,14 @@ Deleting a chat deletes its copies.
     | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
     | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
     | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
-    | `plan` | `steps` (string[]), `current_step` (int or null) | Agent execution plan. Each entry in `steps` is a human-readable description of a planned action. |
+    | `plan` | `steps` (string[]), `step_narrations` (string[]), `current_step` (int or null) | Agent execution plan, re-sent before each step it executes. `steps` names each planned tool call with its arguments; `step_narrations` is the same list as one plain line per step (e.g. `"Reading file: notes.txt"`). `current_step` is the zero-based index of the step being executed. |
 
     **Tool Execution**
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `tool_start` | `tool` (string), `detail` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. |
-    | `tool_args` | `tool` (string), `args` (object), `detail` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments. |
+    | `tool_start` | `tool` (string), `detail` (string), `narration` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. `narration` is what the call does in plain words (`"Searching your documents"`). |
+    | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
     | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
     | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
@@ -903,8 +903,8 @@ Deleting a chat deletes its copies.
     ```
     data: {"type": "thinking", "content": "Sending to Qwen3.5-35B..."}
     data: {"type": "step", "step": 1, "total": 10, "status": "started"}
-    data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content"}
-    data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init"}
+    data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content", "narration": "Searching your documents"}
+    data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init", "narration": "Searching your documents: database init"}
     data: {"type": "tool_result", "title": "Result", "summary": "Found 3 relevant chunk(s) (best score: 0.87)", "success": true, "result_data": {"type": "search_results", "count": 3, "scores": [0.87, 0.72, 0.65], "previews": ["def init_db()..."]}}
     data: {"type": "tool_end", "success": true}
     data: {"type": "chunk", "content": "This function"}

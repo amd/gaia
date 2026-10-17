@@ -39,7 +39,7 @@ from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
 from gaia.ui import scripted_user
-from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
+from gaia.ui.event_narration import DEBUG_CHANNEL, derive_narration, format_count
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -668,6 +668,7 @@ class SSEOutputHandler(OutputHandler):
     def print_plan(self, plan: List[Any], current_step: int = None):
         # Convert plan items to strings for JSON serialization
         plan_strs = []
+        narrations = []
         for step in plan:
             if isinstance(step, dict):
                 if "tool" in step:
@@ -677,15 +678,24 @@ class SSEOutputHandler(OutputHandler):
                             f"{k}={v!r}" for k, v in step["tool_args"].items()
                         )
                     plan_strs.append(f"{step['tool']}{args_str}")
+                    narrations.append(
+                        derive_narration(step["tool"], step.get("tool_args"))
+                    )
                 else:
                     plan_strs.append(json.dumps(step))
+                    text = (
+                        step.get("description") or step.get("goal") or step.get("step")
+                    )
+                    narrations.append(str(text) if text else plan_strs[-1])
             else:
                 plan_strs.append(str(step))
+                narrations.append(plan_strs[-1])
 
         self._emit(
             {
                 "type": "plan",
                 "steps": plan_strs,
+                "step_narrations": narrations,
                 "current_step": current_step,
             }
         )
@@ -703,6 +713,7 @@ class SSEOutputHandler(OutputHandler):
             "type": "tool_start",
             "tool": tool_name,
             "detail": detail_label,
+            "narration": derive_narration(tool_name),
         }
         # Attach MCP server name if this is an MCP tool.
         # _mcp_server is set by MCPTool.to_gaia_format() during registration
@@ -735,6 +746,7 @@ class SSEOutputHandler(OutputHandler):
                     "tool": self._last_tool_name,
                     "args": data,
                     "detail": detail,
+                    "narration": derive_narration(self._last_tool_name, data),
                 }
             )
             return
@@ -1076,6 +1088,9 @@ class SSEOutputHandler(OutputHandler):
                 "type": "tool_start",
                 "tool": "run_shell_command",
                 "detail": command,
+                "narration": derive_narration(
+                    "run_shell_command", {"command": command}
+                ),
             }
         )
 
@@ -2178,12 +2193,16 @@ def _format_tool_args(  # pylint: disable=unused-argument
             continue
         if value is True:
             parts.append(key)
+        elif isinstance(value, (list, tuple)):
+            parts.append(f"{key}: {', '.join(str(v) for v in value)}")
         elif isinstance(value, str) and len(value) > 150:
             parts.append(f"{key}: {value[:150]}...")
         else:
             parts.append(f"{key}: {value}")
 
-    return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
+    # A value that itself holds ", " would be split into fake rows by the UI.
+    one_line = len(parts) <= 2 and not any(", " in p for p in parts)
+    return ", ".join(parts) if one_line else "\n".join(parts)
 
 
 def _count_summary(data: Dict[str, Any]) -> Optional[str]:
