@@ -1,9 +1,9 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { NewChat, greeting, warmUpLine } from '../NewChat';
+import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
@@ -176,6 +176,28 @@ describe('NewChat empty state', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
         expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
         expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
+    });
+
+    it('fetches the suggestions again on its own once the assistant has started', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            vi.mocked(api.getStartScreen)
+                .mockResolvedValueOnce({ ...START, cards: [], skills_error: 'The GAIA agent could not be started yet.' })
+                .mockResolvedValueOnce({ ...START, cards: [], skills_error: 'The GAIA agent could not be started yet.' })
+                .mockResolvedValue(START);
+            render(<NewChat onSend={vi.fn()} />);
+            expect(await screen.findByText(/didn.t start/)).toBeInTheDocument();
+
+            await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
+            // Still failing: the reason stays up rather than flickering away.
+            expect(screen.getByText(/didn.t start/)).toBeInTheDocument();
+
+            await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
+            expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
+            expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('makes no model call of its own', async () => {
