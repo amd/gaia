@@ -1,16 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Time spent waiting on a request_user_input answer does not count against
-the Agent UI's per-turn stream timeout.
+"""A wait on the user, or a running tool, is not a turn going without progress.
 
-Without this, a question asked late in a long turn got only what was left of
-the turn's 600 s, and running out was reported as "try a simpler query".
+The Agent UI stops a turn only after a window with no progress (#5177). A
+question, a tool confirmation, or a long tool run is quiet by design and has its
+own deadline, so the handler reports each one for the stream loop to discount.
 """
 
 import threading
 import time
 
-from gaia.ui._chat_helpers import _UserWaitClock
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -44,20 +43,26 @@ def test_a_pending_question_is_reported_until_it_is_answered():
     assert handler.awaiting_user_input() is False
 
 
-def test_the_clock_counts_only_time_spent_waiting_on_the_user():
-    clock = _UserWaitClock()
+def test_a_running_tool_is_reported_until_its_result():
+    handler = SSEOutputHandler()
+    assert handler.tool_running() is False
+    handler.print_tool_usage("run_python")
+    assert handler.tool_running() is True
+    handler.pretty_print_json({"code": "print(1)"}, "Arguments")
+    assert handler.tool_running() is True  # arguments are not the result
+    handler.pretty_print_json({"status": "success"}, "Tool Result")
+    assert handler.tool_running() is False
 
-    assert clock.update(False, 100.0) == 0.0
-    assert clock.update(True, 120.0) == 0.0
-    assert clock.update(True, 300.0) == 180.0  # an open wait counts as it runs
-    assert clock.update(False, 420.0) == 300.0
-    assert clock.update(False, 500.0) == 300.0  # the turn's own time does not
-    assert clock.update(True, 510.0) == 300.0
-    assert clock.update(False, 520.0) == 310.0
+
+def test_a_tool_that_skips_its_result_still_ends_on_complete():
+    handler = SSEOutputHandler()
+    handler.print_tool_usage("run_python")
+    handler.print_tool_complete()
+    assert handler.tool_running() is False
 
 
 def test_a_pending_tool_confirmation_counts_as_waiting_on_the_user():
-    """A prompt can wait as long as the turn's budget; that wait is the user's."""
+    """A prompt waits on the user, so it never counts as no progress."""
     handler = SSEOutputHandler()
     answers = []
     asker = threading.Thread(

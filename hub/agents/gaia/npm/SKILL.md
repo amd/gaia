@@ -374,7 +374,7 @@ land is additionally **code-inert**: its instructions load, but any
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
 — runs without asking. A write or edit inside the agent's own scratch
 folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
-so running a script from it asks every time and carries no `always_scope`.
+so running a script from it asks every time and carries no `always_scope`. So does a shell command run there or naming a path there, and a script handed a scratch path as an argument.
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.
@@ -389,7 +389,7 @@ Design a workflow around the approval path, not around a fixed tool list.
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest","risk":"execute"}
+data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest (runs the test code it finds)","risk":"execute"}
 ```
 
 Answer it on the same run, then keep reading the stream:

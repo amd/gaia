@@ -15,12 +15,19 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tool_grants import SCRATCH_ARG, grant_scope, is_inside_folder
+from gaia.agents.base.tool_grants import (
+    SCRATCH_ARG,
+    command_reaches_folder,
+    grant_scope,
+    is_inside_folder,
+)
+from gaia.agents.base.tools import tool as register_tool
 from gaia.agents.tools.shell_tools import (
     NOTE_PUSH,
     NOTE_UNINSPECTABLE,
@@ -30,6 +37,7 @@ from gaia.agents.tools.shell_tools import (
     ShellToolsMixin,
     outside_note,
 )
+from gaia.security import PathValidator
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 from tests.unit import test_scratch_prompts as scratch_mod
@@ -952,3 +960,387 @@ def test_a_scratch_marker_on_any_tool_grants_nothing(tmp_path):
             },
         )
         assert scope is None, tool
+
+
+# ---------------------------------------------------------------------------
+# A shell or script grant never reaches code in the scratch folder
+# ---------------------------------------------------------------------------
+
+
+class _RunProbe(scratch_mod._Probe):
+    """The shell and script tools, recording what reached them."""
+
+    def _register_tools(self):
+        super()._register_tools()
+        agent = self
+
+        @register_tool
+        def run_shell_command(command: str, working_directory: str = "") -> dict:
+            """Probe shell."""
+            agent.ran.append(("run_shell_command", command, working_directory))
+            return {"status": "success", "return_code": 0}
+
+        @register_tool
+        def execute_python_file(file_path: str, args: str = "") -> dict:
+            """Probe runner with arguments."""
+            agent.ran.append(("execute_python_file", file_path, args))
+            return {"status": "success", "return_code": 0}
+
+
+def _run_agent(folders):
+    project, scratch = folders
+    handler = SSEOutputHandler()
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _RunProbe._console_override = handler
+        agent = _RunProbe(silent_mode=True, skip_lemonade=True)
+    agent.path_validator = PathValidator(allowed_paths=[str(project)])
+    agent.path_validator.set_scratch_dir(str(scratch))
+    return agent, handler
+
+
+def _scratch_spelling(kind, project, scratch):
+    """The scratch folder as a shell call in *project* might name it."""
+    if kind == "absolute":
+        return str(scratch)
+    if kind == "relative":
+        return os.path.join("..", scratch.name)
+    if kind == "dotdot":
+        return os.path.join("sub", "..", "..", scratch.name)
+    if kind == "link":
+        link = project / "via"
+        if not _junction(link, scratch):
+            pytest.skip("this host cannot create a directory link")
+        return "via"
+    if kind == "extended":
+        if sys.platform != "win32":
+            pytest.skip("\\\\?\\ paths are Windows-only")
+        return "\\\\?\\" + str(scratch)
+    swapped = str(scratch).swapcase()
+    if not os.path.isdir(swapped):
+        pytest.skip("this filesystem is case-sensitive")
+    return swapped
+
+
+SPELLINGS = ["absolute", "relative", "dotdot", "link", "extended", "case"]
+
+# (the call answered "always" in the project, a call that runs scratch code)
+SCRATCH_FOLLOW_UPS = {
+    "python -m via cd": ("python -m explore", "cd {p} && python -m explore"),
+    "pytest": ("pytest -q", "pytest {p}" + os.sep + "test_x.py"),
+    "uv run": ("uv run pytest -q", "uv run pytest {p}" + os.sep + "test_x.py"),
+    "make": ("make", "cd {p} && make"),
+    "pip install": ("pip install .", "pip install {p}"),
+    "go run": ("go run main.go", "go run {p}" + os.sep + "main.go"),
+    "project script": ("python tool.py", "python tool.py {p}" + os.sep + "x.py"),
+}
+
+
+def _shell_drive(agent, handler, command, folder, answer=None):
+    return scratch_mod._drive(
+        agent,
+        handler,
+        "run_shell_command",
+        {"command": command, "working_directory": str(folder)},
+        answer,
+    )
+
+
+@pytest.mark.parametrize("spelling", SPELLINGS)
+@pytest.mark.parametrize("case", sorted(SCRATCH_FOLLOW_UPS))
+def test_a_shell_grant_does_not_reach_scratch_code(folders, case, spelling):
+    project, scratch = folders
+    granted, follow_up = SCRATCH_FOLLOW_UPS[case]
+    agent, handler = _run_agent(folders)
+    _r, prompts = _shell_drive(agent, handler, granted, project, (True, True))
+    assert prompts[0].get("always_scope"), granted
+    assert handler.session_grants()
+
+    command = follow_up.format(p=_scratch_spelling(spelling, project, scratch))
+    result, prompts = _shell_drive(agent, handler, command, project)
+
+    assert len(prompts) == 1, command
+    assert prompts[0]["args"][SCRATCH_ARG] == str(scratch.resolve())
+    assert "always_scope" not in prompts[0], command
+    assert result["status"] == "denied"
+    assert len(agent.ran) == 1
+
+
+@pytest.mark.parametrize("spelling", SPELLINGS)
+def test_python_m_run_in_scratch_as_its_working_folder_asks(folders, spelling):
+    project, scratch = folders
+    agent, handler = _run_agent(folders)
+    _shell_drive(agent, handler, "python -m explore", project, (True, True))
+
+    folder = os.path.join(str(project), _scratch_spelling(spelling, project, scratch))
+    result, prompts = _shell_drive(agent, handler, "python -m explore", folder)
+
+    assert len(prompts) == 1, folder
+    assert "always_scope" not in prompts[0]
+    assert result["status"] == "denied"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "PYTHONPATH={p} python -m explore",
+        "pytest --rootdir={p}",
+        "make -C{p}",
+        "cd sub && pytest ..{s}..{s}{name}",
+        "cd {p} && cd .. && python -m explore",
+        "pushd {p} && python -m explore",
+    ],
+)
+def test_other_ways_of_naming_scratch_still_ask(folders, command):
+    project, scratch = folders
+    agent, handler = _run_agent(folders)
+    for granted in ("python -m explore", "pytest -q", "make"):
+        _shell_drive(agent, handler, granted, project, (True, True))
+
+    command = command.format(p=str(scratch), s=os.sep, name=scratch.name)
+    result, prompts = _shell_drive(agent, handler, command, project)
+
+    assert len(prompts) == 1, command
+    assert "always_scope" not in prompts[0]
+    assert result["status"] == "denied"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        lambda project, scratch: str(scratch / "x.py"),
+        lambda project, scratch: os.path.join("..", scratch.name, "x.py"),
+        lambda project, scratch: "--input=" + str(scratch / "data.py"),
+        lambda project, scratch: "-v " + str(scratch),
+    ],
+)
+def test_a_project_script_handed_scratch_args_asks(folders, args):
+    project, scratch = folders
+    agent, handler = _run_agent(folders)
+    script = str(project / "tool.py")
+    _r, prompts = scratch_mod._drive(
+        agent,
+        handler,
+        "execute_python_file",
+        {"file_path": script},
+        answer=(True, True),
+    )
+    assert prompts[0]["always_scope"] == "running Python files"
+
+    handed = args(project, scratch)
+    result, prompts = scratch_mod._drive(
+        agent, handler, "execute_python_file", {"file_path": script, "args": handed}
+    )
+
+    assert len(prompts) == 1, handed
+    assert "always_scope" not in prompts[0]
+    assert result["status"] == "denied"
+    assert agent.ran == [("execute_python_file", script, "")]
+
+
+@pytest.mark.parametrize(
+    "granted,follow_up",
+    [
+        ("pytest -q", "pytest tests/unit -q"),
+        ("pytest -q", "cd sub && pytest -q 2>&1 | tail -5"),
+        ("pytest -q", "pytest ..{s}{name}-x{s}test_x.py"),
+        ("python -m explore", "python -m explore --out results"),
+        ("make", "make"),
+        ("pip install .", "pip install -e ."),
+        ("go run main.go", "go run cmd/main.go"),
+        ("git log --format=%H%n%s", "git log --format=%H%n%s -5"),
+        ("python tool.py", "python tool.py data.csv"),
+        ("pip install .", "pip install git+https://github.com/x/y.git"),
+    ],
+)
+def test_a_grant_that_never_touches_scratch_still_holds(folders, granted, follow_up):
+    project, scratch = folders
+    agent, handler = _run_agent(folders)
+    _shell_drive(agent, handler, granted, project, (True, True))
+
+    command = follow_up.format(s=os.sep, name=scratch.name)
+    result, prompts = _shell_drive(agent, handler, command, project)
+
+    assert prompts == [], command
+    assert result["status"] == "success"
+
+
+def test_a_project_script_with_project_args_keeps_its_grant(folders):
+    project, _scratch = folders
+    agent, handler = _run_agent(folders)
+    script = str(project / "tool.py")
+    scratch_mod._drive(
+        agent, handler, "execute_python_file", {"file_path": script}, (True, True)
+    )
+
+    result, prompts = scratch_mod._drive(
+        agent,
+        handler,
+        "execute_python_file",
+        {"file_path": script, "args": "data.csv --out results"},
+    )
+
+    assert prompts == []
+    assert result["status"] == "success"
+
+
+def test_full_access_still_runs_scratch_shell_code_unasked(folders):
+    project, scratch = folders
+    agent, handler = _run_agent(folders)
+    handler.auto_approve_gated_tools = True
+    handler.full_access = True
+
+    command = f"cd {scratch} && python -m explore"
+    result, prompts = _shell_drive(agent, handler, command, project)
+
+    assert prompts == []
+    assert result["status"] == "success"
+    assert agent.ran == [("run_shell_command", command, str(project))]
+
+
+@pytest.mark.parametrize(
+    "command,says",
+    [
+        ("python -m explore", "runs that Python module"),
+        ("pytest -q", "runs the test code"),
+        ("make", "runs the Makefile"),
+        ("pip install .", "setup code"),
+        ("go run main.go", "runs Go code"),
+        ("uv run pytest", "runs the test code"),
+        ("uv run script.py", "any script"),
+        ("npm test", "scripts"),
+    ],
+)
+def test_a_grant_label_says_when_the_command_runs_code(command, says):
+    scope = grant_scope("run_shell_command", {"command": command})
+
+    assert scope is not None, command
+    assert says in scope.label, scope.label
+
+
+def test_python_m_is_not_the_same_grant_as_a_program_of_that_name():
+    module = grant_scope("run_shell_command", {"command": "python -m explore"})
+    program = grant_scope("run_shell_command", {"command": "explore"})
+
+    assert module.keys != program.keys
+
+
+def test_a_wrapper_that_runs_a_shell_is_not_granted():
+    for command in ("uv run bash -c x", "poetry run sh x", "uv run --with x pytest"):
+        assert grant_scope("run_shell_command", {"command": command}) is None, command
+
+
+def test_reaching_the_folder_counts_an_unreadable_line_as_inside(tmp_path):
+    folder = str(tmp_path)
+    assert command_reaches_folder("pytest 'unbalanced", [str(tmp_path.parent)], folder)
+    assert not command_reaches_folder("", [str(tmp_path.parent)], folder)
+
+
+def test_the_real_shell_asks_after_cd_moved_its_session_into_scratch(
+    folders, monkeypatch
+):
+    project, scratch = folders
+    python = _python()
+    (project / "tool.py").write_text("print('project')", encoding="utf-8")
+    (scratch / "tool.py").write_text("print('scratch')", encoding="utf-8")
+    monkeypatch.chdir(project)
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+    agent.path_validator = PathValidator(allowed_paths=[str(project)])
+    agent.path_validator.set_scratch_dir(str(scratch))
+
+    result, events = _drive(
+        agent,
+        handler,
+        {"command": f"{python} tool.py"},
+        on_prompt=_answer(handler, always=True),
+    )
+    assert _prompts(events)[0]["always_scope"] == "python (any script)"
+    assert "project" in str(result)
+    _drive(agent, handler, {"command": f"cd {scratch}"}, on_prompt=_answer(handler))
+
+    result, events = _drive(
+        agent,
+        handler,
+        {"command": f"{python} tool.py"},
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    [request] = _prompts(events)
+    assert "always_scope" not in request
+    assert result["status"] == "denied"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A variable the line sets itself is filled in by the shell, not by GAIA.
+        "A={parent}; cd $A{s}{name} && pytest -q",
+        "cd ${{SCRATCH_ROOT}} && pytest -q",
+        "A={parent}{s}{name}{s}test_x.py; pytest -q $A",
+        "PYTHONPATH=$SCRATCH_ROOT pytest -q",
+        # The scratch folder's name prefix is predictable.
+        "cd {parent}{s}gaia-scratch-te* && pytest -q",
+        "pytest {parent}{s}gaia-scratch-tes?{s}test_x.py",
+        # Back to a folder an earlier call moved into.
+        "cd - && pytest -q",
+        "popd && pytest -q",
+        # POSIX reads `\\a` as `a`; Windows keeps the backslash.
+        "cd ..{s}gaia-scr\\atch-test && pytest -q",
+    ],
+)
+def test_a_line_whose_folder_only_the_shell_knows_still_asks(folders, command):
+    project, scratch = folders
+    agent, handler = _run_agent(folders)
+    _shell_drive(agent, handler, "pytest -q", project, (True, True))
+
+    command = command.format(parent=str(scratch.parent), s="/", name=scratch.name)
+    result, prompts = _shell_drive(agent, handler, command, project)
+
+    assert len(prompts) == 1, command
+    assert "always_scope" not in prompts[0]
+    assert result["status"] == "denied"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="UNC paths are Windows-only")
+@pytest.mark.parametrize(
+    "word",
+    ["\\\\evil\\share\\t.py", "//evil/share/t.py", "\\\\?\\UNC\\evil\\share\\t.py"],
+)
+def test_a_network_path_is_never_looked_at_before_the_prompt(
+    tmp_path, monkeypatch, word
+):
+    looked = []
+    real_stat, real_realpath = os.stat, os.path.realpath
+
+    def stat(path, *a, **k):
+        looked.append(str(path))
+        return real_stat(path, *a, **k)
+
+    def realpath(path, *a, **k):
+        looked.append(str(path))
+        return real_realpath(path, *a, **k)
+
+    monkeypatch.setattr(os, "stat", stat)
+    monkeypatch.setattr(os.path, "realpath", realpath)
+
+    assert command_reaches_folder(
+        f"pytest {word}", [str(tmp_path)], str(tmp_path / "s")
+    )
+    assert not [p for p in looked if "evil" in p]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install git+https://github.com/x/y.git",
+        "curl --url=https://example.com/a?b=1",
+        "awk '{print $1}' data.txt",
+        "awk '{print $NF}' data.txt",
+        "jq '.[] | $item' data.json",
+        "grep -E 'end$' data.txt",
+        "pytest tests/*.py",
+    ],
+)
+def test_ordinary_words_do_not_read_as_scratch(folders, command):
+    project, scratch = folders
+    assert not command_reaches_folder(command, [str(project)], str(scratch))

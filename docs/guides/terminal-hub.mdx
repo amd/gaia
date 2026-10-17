@@ -640,7 +640,7 @@ says what it would have run, so you can run it yourself.
 | Key | What it does |
 |---|---|
 | `y` | Run it this once |
-| `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. `python (any script)` and `Python snippets (run_python)` cover any Python code, and say so. A script the agent runs from its own scratch folder never offers `a`: writing there never asks, so each run is answered on its own. Deletes never offer `a` |
+| `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
 | `n` / `Esc` | Don't run it. The agent is told you said no |
 
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed

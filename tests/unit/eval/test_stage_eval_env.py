@@ -131,3 +131,17 @@ def test_restaging_clears_read_only_files_and_built_repositories(staged):
     assert not locked.exists()
     assert journal_git.is_dir() and not marker.exists()
     assert (home / "gaia-eval" / "csv" / "sales.csv").is_file()
+
+
+def test_skills_and_trust_go_to_an_isolated_gaia_home(tmp_path):
+    """Under GAIA_HOME the agent reads skills from <gaia-home>/skills, not ~/.gaia."""
+    home = tmp_path / "home"
+    home.mkdir()
+    gaia_home = tmp_path / "gaia-home"
+
+    skills_root = stage_eval_env.stage(home, gaia_home)
+
+    assert skills_root == gaia_home / "skills"
+    assert (skills_root / "trusted-keys.json").is_file()
+    assert not (home / ".gaia").exists(), "nothing may land in the real ~/.gaia"
+    assert (home / "gaia-eval" / "csv" / "sales.csv").is_file()
