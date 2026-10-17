@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -287,6 +287,26 @@ export async function listProviderModels(provider: string): Promise<{ provider: 
 
 export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
+}
+
+// -- Cloud prices and spending (#5258) ------------------------------------------
+
+export async function getCloudPrices(provider: string): Promise<CloudPriceList> {
+    return apiFetch('GET', `/spending/prices/${encodeURIComponent(provider)}`);
+}
+
+export async function getSpending(): Promise<SpendingReport> {
+    return apiFetch('GET', '/spending');
+}
+
+/** Set the monthly limit for cloud chats; null removes it. */
+export async function setSpendingLimit(limitUsd: number | null): Promise<SpendingReport> {
+    return apiFetch('PUT', '/spending/limit', { limit_usd: limitUsd });
+}
+
+/** Let cloud chats go on past the limit until the month ends. */
+export async function allowSpendingThisMonth(): Promise<SpendingReport> {
+    return apiFetch('POST', '/spending/allow-month');
 }
 
 // -- Skills ----------------------------------------------------------------------

@@ -50,6 +50,7 @@ from gaia.ui.email_sidecar.profiles import (
 from gaia.ui.memory_settings import memory_enabled
 
 from . import permissions as session_permissions
+from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -2226,6 +2227,9 @@ async def _get_chat_response(
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            return refusal
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -2640,6 +2644,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        # Stop before a cloud turn once this month's spending reached the limit.
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
+            msg_id = db.add_message(session_id, "assistant", refusal)
+            yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
+            yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
+            return
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
@@ -3453,6 +3465,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            spending.record_turn(db, model_id, inference_stats)
 
             msg_id = db.upsert_message(
                 request.session_id,
