@@ -1182,6 +1182,35 @@ class TestFileOpen:
         mock_popen.assert_not_called()
 
 
+class TestFileStatus:
+    """POST /api/files/status: the side rail re-checks files after an Undo."""
+
+    def test_reports_existing_removed_and_unchecked_paths(
+        self, client, sample_text_file, home_tmp_dir, tmp_path_factory
+    ):
+        gone = home_tmp_dir / "removed.md"
+        outside = tmp_path_factory.getbasetemp() / "outside.md"
+        resp = client.post(
+            "/api/files/status",
+            json={"paths": [str(sample_text_file), str(gone), str(outside)]},
+        )
+        assert resp.status_code == 200
+        here, removed, unchecked = resp.json()["files"]
+        assert here["exists"] is True
+        assert here["mtime"] == pytest.approx(sample_text_file.stat().st_mtime)
+        assert removed == {"path": str(gone), "exists": False, "mtime": None}
+        assert unchecked == {"path": str(outside), "exists": None, "mtime": None}
+
+    def test_a_folder_is_not_reported_as_a_file(self, client, home_tmp_dir):
+        resp = client.post("/api/files/status", json={"paths": [str(home_tmp_dir)]})
+        assert resp.json()["files"][0]["exists"] is False
+
+    def test_refuses_too_many_paths(self, client, home_tmp_dir):
+        paths = [str(home_tmp_dir / f"f{i}.md") for i in range(51)]
+        resp = client.post("/api/files/status", json={"paths": paths})
+        assert resp.status_code == 422
+
+
 # ── TestSecurityEdgeCases ────────────────────────────────────────────────────
 
 

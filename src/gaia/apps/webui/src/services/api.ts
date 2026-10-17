@@ -931,6 +931,13 @@ export async function openFileInApp(path: string): Promise<{ status: string; pat
     return apiFetch('POST', '/files/open', { path, launch: true });
 }
 
+/** Whether each path still exists and when it last changed (unchecked outside home). */
+export async function getFileStatus(paths: string[]): Promise<{
+    files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;
+}> {
+    return apiFetch('POST', '/files/status', { paths });
+}
+
 /** Upload a file (image/document) to the server. */
 export async function uploadFile(file: File): Promise<{
     filename: string;

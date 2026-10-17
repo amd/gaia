@@ -41,8 +41,12 @@ let callbacks: api.StreamCallbacks | null = null;
 beforeEach(() => {
     vi.clearAllMocks();
     callbacks = null;
+    // Any API call the view adds later stays pending instead of returning undefined.
+    for (const fn of Object.values(mockedApi)) {
+        if (vi.isMockFunction(fn)) fn.mockReturnValue(new Promise(() => {}) as never);
+    }
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} } as never);
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.updateSession.mockResolvedValue(undefined as never);
@@ -80,6 +84,24 @@ describe('ChatView side rail', () => {
         const rail = screen.getByRole('complementary', { name: 'Sources and turn details' });
         expect(rail).toHaveTextContent('AMD LLM Gateway (cloud)');
         expect(screen.getByRole('link', { name: /AMD/ })).toHaveAttribute('href', 'https://www.amd.com/en');
+    });
+
+    it("shows the turn in progress, not the previous answer's data", async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'first' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        await act(async () => {
+            callbacks!.onDone({ type: 'done', content: 'answer', message_id: 7, turn_summary: SUMMARY } as StreamEvent);
+        });
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'second' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        const rail = screen.getByRole('complementary', { name: 'Sources and turn details' });
+        expect(rail).toHaveTextContent('Working on this answer');
+        expect(rail).not.toHaveTextContent('AMD LLM Gateway');
     });
 
     it('rebuilds the rail from a reloaded message', async () => {

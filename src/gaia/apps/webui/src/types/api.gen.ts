@@ -40,6 +40,9 @@ export interface ApiSchemas {
   FilePreviewResponse: FilePreviewResponse;
   FileSearchResponse: FileSearchResponse;
   FileSearchResult: FileSearchResult;
+  FileStatusEntry: FileStatusEntry;
+  FileStatusRequest: FileStatusRequest;
+  FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
@@ -457,6 +460,29 @@ export interface FileSearchResult {
   size_display: string;
 }
 /**
+ * Whether a file exists now, and when it last changed.
+ */
+export interface FileStatusEntry {
+  exists?: boolean | null;
+  mtime?: number | null;
+  path: string;
+}
+/**
+ * Paths whose current state the side rail re-checks.
+ */
+export interface FileStatusRequest {
+  /**
+   * @maxItems 50
+   */
+  paths: string[];
+}
+/**
+ * Current state of each requested path, in request order.
+ */
+export interface FileStatusResponse {
+  files: FileStatusEntry[];
+}
+/**
  * Response from a file upload.
  */
 export interface FileUploadResponse {
@@ -675,6 +701,7 @@ export interface TurnSummaryDocument {
  * A file the turn created or changed.
  */
 export interface TurnSummaryFile {
+  mtime?: number | null;
   name: string;
   openable?: boolean;
   path: string;

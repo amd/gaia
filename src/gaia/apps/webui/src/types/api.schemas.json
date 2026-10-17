@@ -1455,6 +1455,77 @@
     "title": "FileSearchResult",
     "type": "object"
   },
+  "FileStatusEntry": {
+    "description": "Whether a file exists now, and when it last changed.",
+    "properties": {
+      "exists": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Exists"
+      },
+      "mtime": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mtime"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "FileStatusEntry",
+    "type": "object"
+  },
+  "FileStatusRequest": {
+    "description": "Paths whose current state the side rail re-checks.",
+    "properties": {
+      "paths": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "title": "Paths",
+        "type": "array"
+      }
+    },
+    "required": [
+      "paths"
+    ],
+    "title": "FileStatusRequest",
+    "type": "object"
+  },
+  "FileStatusResponse": {
+    "description": "Current state of each requested path, in request order.",
+    "properties": {
+      "files": {
+        "items": {
+          "$ref": "#/components/schemas/FileStatusEntry"
+        },
+        "title": "Files",
+        "type": "array"
+      }
+    },
+    "required": [
+      "files"
+    ],
+    "title": "FileStatusResponse",
+    "type": "object"
+  },
   "FileUploadResponse": {
     "description": "Response from a file upload.",
     "properties": {
@@ -3783,6 +3854,17 @@
   "TurnSummaryFile": {
     "description": "A file the turn created or changed.",
     "properties": {
+      "mtime": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mtime"
+      },
       "name": {
         "title": "Name",
         "type": "string"

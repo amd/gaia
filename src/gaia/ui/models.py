@@ -532,6 +532,8 @@ class TurnSummaryFile(BaseModel):
     name: str
     # False for a script or program, which the default app would run.
     openable: bool = False
+    # Modification time when the turn ended, to tell a later change or undo.
+    mtime: Optional[float] = None
 
 
 class TurnSummaryModel(BaseModel):
@@ -729,6 +731,27 @@ class OpenFileRequest(BaseModel):
     reveal: bool = True
     # Open the file itself in its default app; documents and images only.
     launch: bool = False
+
+
+class FileStatusRequest(BaseModel):
+    """Paths whose current state the side rail re-checks."""
+
+    paths: List[str] = Field(..., max_length=50)
+
+
+class FileStatusEntry(BaseModel):
+    """Whether a file exists now, and when it last changed."""
+
+    path: str
+    # None when the path is outside the home folder and was not checked.
+    exists: Optional[bool] = None
+    mtime: Optional[float] = None
+
+
+class FileStatusResponse(BaseModel):
+    """Current state of each requested path, in request order."""
+
+    files: List[FileStatusEntry]
 
 
 class FilePreviewResponse(BaseModel):

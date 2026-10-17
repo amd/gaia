@@ -151,6 +151,13 @@ def test_files_written_this_turn_are_listed_once_with_whether_they_can_be_opened
     ]
 
 
+def test_each_file_records_when_it_was_last_changed(tmp_path):
+    out = tmp_path / "notes.md"
+    out.write_text("x", encoding="utf-8")
+    files = TurnLedger().summary(location=LOCAL, written_files=[str(out)])["files"]
+    assert files[0]["mtime"] == out.stat().st_mtime
+
+
 def test_a_relative_or_deleted_path_is_not_offered(tmp_path):
     ledger = TurnLedger()
     _call(ledger, "write_file", {"file_path": "out.md"}, {"status": "success"})

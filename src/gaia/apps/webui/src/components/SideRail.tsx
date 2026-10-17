@@ -22,12 +22,15 @@ import './SideRail.css';
 export const SIDE_RAIL_FOLD_QUERY = '(max-width: 1099px)';
 const COLLAPSED_KEY = 'gaia.sideRail.collapsed';
 
-/** The latest assistant turn, if it has a summary to show. */
-export function latestSummarizedTurn(messages: Message[]): Message | null {
-    for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'assistant') return messages[i].turnSummary ? messages[i] : null;
-    }
-    return null;
+/** What the rail shows: the latest answer's summary, a turn in progress, or nothing. */
+export type RailState = { kind: 'turn'; turn: Message } | { kind: 'busy' } | null;
+
+export function railState(messages: Message[], busy: boolean): RailState {
+    // A running turn never shows the previous answer's data as its own.
+    if (busy) return messages.some((m) => m.turnSummary) ? { kind: 'busy' } : null;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant' || !last.turnSummary) return null;
+    return { kind: 'turn', turn: last };
 }
 
 /** Every internet tool this turn failed, so the answer has no live data. */
@@ -98,20 +101,23 @@ function errorText(err: unknown): string {
 
 interface SideRailProps {
     messages: Message[];
+    /** A turn is running, so the latest answer is not the one being written. */
+    busy?: boolean;
 }
 
-export function SideRail({ messages }: SideRailProps) {
-    const turn = latestSummarizedTurn(messages);
+export function SideRail({ messages, busy = false }: SideRailProps) {
+    const state = railState(messages, busy);
+    const turn = state?.kind === 'turn' ? state.turn : null;
     const summary = turn?.turnSummary ?? null;
     const folded = useFolded();
     const [collapsed, setCollapsed] = useState(readCollapsed);
     const [overlayOpen, setOverlayOpen] = useState(false);
 
     // A new turn closes the overlay so it never shows a stale turn on top.
-    useEffect(() => { setOverlayOpen(false); }, [turn?.id]);
+    useEffect(() => { setOverlayOpen(false); }, [turn?.id, busy]);
 
-    if (!summary) return null;
-    const noLiveData = liveDataFailed(summary);
+    if (!state) return null;
+    const noLiveData = summary ? liveDataFailed(summary) : false;
 
     if (folded ? !overlayOpen : collapsed) {
         const open = () => {
@@ -156,6 +162,11 @@ export function SideRail({ messages }: SideRailProps) {
                 </button>
             </div>
             <div className="side-rail-body">
+                {!summary && (
+                    <p className="side-rail-pending" role="status">
+                        Working on this answer. Its sources, files and where its data went appear here when it finishes.
+                    </p>
+                )}
                 {noLiveData && (
                     <div className="side-rail-warn" role="status">
                         <AlertTriangle size={14} aria-hidden="true" />
@@ -165,7 +176,7 @@ export function SideRail({ messages }: SideRailProps) {
                         </div>
                     </div>
                 )}
-                {summary.error ? (
+                {summary && (summary.error ? (
                     <p className="side-rail-error" role="alert">
                         Couldn't put together this turn's sources and details: {summary.error}
                     </p>
@@ -175,7 +186,7 @@ export function SideRail({ messages }: SideRailProps) {
                         <FilesSection summary={summary} />
                         <ThisTurnSection summary={summary} />
                     </>
-                )}
+                ))}
             </div>
         </aside>
     );
@@ -240,9 +251,54 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
     );
 }
 
+/** How often listed files are re-checked, so a later delete or edit shows up. */
+export const FILE_RECHECK_MS = 4000;
+
+interface FileState {
+    exists?: boolean | null;
+    mtime?: number | null;
+}
+
+/** The current state of *paths*, re-read on show, on focus, and every few seconds. */
+function useFileStatus(paths: string[]) {
+    const key = paths.join('\n');
+    const [status, setStatus] = useState<Map<string, FileState>>(() => new Map());
+    const [error, setError] = useState<string | null>(null);
+    useEffect(() => {
+        if (!key) return;
+        const list = key.split('\n');
+        let cancelled = false;
+        const check = () => {
+            if (document.visibilityState === 'hidden') return;
+            api.getFileStatus(list).then(
+                (res) => {
+                    if (cancelled) return;
+                    setStatus(new Map(res.files.map((f) => [f.path, f])));
+                    setError(null);
+                },
+                (err) => {
+                    if (cancelled) return;
+                    log.ui.warn('Could not re-check the files this turn wrote', err);
+                    setError(errorText(err));
+                },
+            );
+        };
+        check();
+        const timer = window.setInterval(check, FILE_RECHECK_MS);
+        window.addEventListener('focus', check);
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+            window.removeEventListener('focus', check);
+        };
+    }, [key]);
+    return { status, error };
+}
+
 function FilesSection({ summary }: { summary: TurnSummary }) {
     const files = summary.files ?? [];
     const [error, setError] = useState<string | null>(null);
+    const { status, error: checkError } = useFileStatus(files.map((f) => f.path));
     if (files.length === 0) return null;
 
     const run = (action: Promise<unknown>, name: string) => {
@@ -256,27 +312,47 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
     return (
         <Section title="Files">
             <ul className="side-rail-list">
-                {files.map((f) => (
-                    <li key={f.path} className="side-rail-item">
-                        <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
-                        <div className="side-rail-item-text">
-                            <span className="side-rail-name" title={f.path}>{f.name}</span>
-                            <span className="side-rail-actions">
-                                {f.openable && (
-                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), f.name)}>
-                                        Open
+                {files.map((f) => {
+                    const now = status.get(f.path);
+                    if (now?.exists === false) {
+                        return (
+                            <li key={f.path} className="side-rail-item side-rail-item-gone">
+                                <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
+                                <div className="side-rail-item-text">
+                                    <span className="side-rail-name" title={f.path}>{f.name}</span>
+                                    <span className="side-rail-meta">No longer on disk</span>
+                                </div>
+                            </li>
+                        );
+                    }
+                    const changed = now?.exists === true && typeof now.mtime === 'number'
+                        && typeof f.mtime === 'number' && now.mtime !== f.mtime;
+                    return (
+                        <li key={f.path} className="side-rail-item">
+                            <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
+                            <div className="side-rail-item-text">
+                                <span className="side-rail-name" title={f.path}>{f.name}</span>
+                                {changed && <span className="side-rail-meta">Changed since this turn</span>}
+                                <span className="side-rail-actions">
+                                    {f.openable && (
+                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), f.name)}>
+                                            Open
+                                        </button>
+                                    )}
+                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), f.name)}>
+                                        <FolderOpen size={11} aria-hidden="true" />
+                                        Show in folder
                                     </button>
-                                )}
-                                <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), f.name)}>
-                                    <FolderOpen size={11} aria-hidden="true" />
-                                    Show in folder
-                                </button>
-                            </span>
-                        </div>
-                    </li>
-                ))}
+                                </span>
+                            </div>
+                        </li>
+                    );
+                })}
             </ul>
             {error && <p className="side-rail-error" role="alert">{error}</p>}
+            {checkError && (
+                <p className="side-rail-error">Couldn't check whether these files changed: {checkError}</p>
+            )}
         </Section>
     );
 }

@@ -29,6 +29,9 @@ from ..models import (
     FilePreviewResponse,
     FileSearchResponse,
     FileSearchResult,
+    FileStatusEntry,
+    FileStatusRequest,
+    FileStatusResponse,
     FileUploadResponse,
     OpenFileRequest,
 )
@@ -398,6 +401,39 @@ def _launch_file(resolved: Path) -> dict:
             detail=f"Could not open {resolved.name}: {e}. Try Show in folder.",
         ) from e
     return {"status": "ok", "path": str(resolved)}
+
+
+@router.post("/api/files/status", response_model=FileStatusResponse)
+async def file_status(request: FileStatusRequest):
+    """Whether each path still exists, and its modification time.
+
+    The side rail calls this to show files deleted or changed since the turn
+    that wrote them. Paths outside the home folder are reported unchecked.
+    """
+    home = Path.home()
+    entries = []
+    for raw in request.paths:
+        if not raw or "\x00" in raw:
+            raise HTTPException(status_code=400, detail="Invalid path")
+        resolved = Path(raw).resolve(strict=False)
+        try:
+            resolved.relative_to(home)
+        except ValueError:
+            entries.append(FileStatusEntry(path=raw))
+            continue
+        try:
+            stat = resolved.stat()
+        except FileNotFoundError:
+            entries.append(FileStatusEntry(path=raw, exists=False))
+            continue
+        except OSError as e:
+            raise HTTPException(
+                status_code=500, detail=f"Could not check {resolved.name}: {e}"
+            ) from e
+        entries.append(
+            FileStatusEntry(path=raw, exists=resolved.is_file(), mtime=stat.st_mtime)
+        )
+    return FileStatusResponse(files=entries)
 
 
 # ── File Search ──────────────────────────────────────────────────────────────

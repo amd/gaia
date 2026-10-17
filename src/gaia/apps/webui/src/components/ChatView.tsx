@@ -1552,7 +1552,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             </div>
 
-            <SideRail messages={messages} />
+            <SideRail messages={messages} busy={isStreaming} />
 
             {showScrollBtn && (
                 <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">

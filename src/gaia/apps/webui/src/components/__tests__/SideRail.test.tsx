@@ -5,7 +5,7 @@
 
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SideRail, SIDE_RAIL_FOLD_QUERY, liveDataFailed } from '../SideRail';
+import { FILE_RECHECK_MS, SideRail, SIDE_RAIL_FOLD_QUERY, liveDataFailed } from '../SideRail';
 import type { Message, TurnSummary } from '../../types';
 import * as api from '../../services/api';
 
@@ -58,11 +58,17 @@ beforeEach(() => {
     stubWindowWidth(false);
     mockedApi.openFileInApp.mockResolvedValue({ status: 'ok', path: '' });
     mockedApi.openFileOrFolder.mockResolvedValue({ status: 'ok', path: '' });
+    mockedApi.getFileStatus.mockImplementation(async (paths) => ({
+        files: paths.map((path) => ({ path, exists: true, mtime: 100 })),
+    }));
 });
 
 afterEach(() => {
     delete (window as { matchMedia?: unknown }).matchMedia;
+    vi.useRealTimers();
 });
+
+const USER_FOLLOW_UP: Message = { id: 9, session_id: 's', role: 'user', content: 'next', created_at: '', rag_sources: null };
 
 describe('SideRail', () => {
     it('stays hidden until a turn has something to show', () => {
@@ -70,12 +76,62 @@ describe('SideRail', () => {
         expect(container).toBeEmptyDOMElement();
         rerender(<SideRail messages={turn(undefined)} />);
         expect(container).toBeEmptyDOMElement();
+        rerender(<SideRail messages={[USER_FOLLOW_UP]} busy />);
+        expect(container).toBeEmptyDOMElement();
     });
 
     it("tracks the latest turn, not an older one's summary", () => {
         const messages = [...turn(summary()), ...turn(undefined, 4)];
         const { container } = render(<SideRail messages={messages} />);
         expect(container).toBeEmptyDOMElement();
+    });
+
+    it("never shows the previous answer's data while a new turn runs", () => {
+        const before = summary({ model: CLOUD_MODEL, sites: ['amd.com'] });
+        const { rerender } = render(<SideRail messages={turn(before)} />);
+        expect(rail()).toHaveTextContent('Fireworks AI (cloud)');
+
+        rerender(<SideRail messages={[...turn(before), USER_FOLLOW_UP]} busy />);
+        expect(rail()).toHaveTextContent('Working on this answer');
+        expect(rail()).not.toHaveTextContent('Fireworks AI');
+        expect(rail()).not.toHaveTextContent('amd.com');
+    });
+
+    it("hides a previous answer's data when the latest message has no answer yet", () => {
+        const { container } = render(<SideRail messages={[...turn(summary()), USER_FOLLOW_UP]} />);
+        expect(container).toBeEmptyDOMElement();
+    });
+
+    it('shows a file an Undo removed as gone, with nothing to open', async () => {
+        vi.useFakeTimers();
+        render(<SideRail messages={turn(summary({
+            files: [{ path: 'C:/out/report.md', name: 'report.md', openable: true, mtime: 100 }],
+        }))} />);
+        await act(async () => { await Promise.resolve(); });
+        expect(screen.getByRole('button', { name: 'Open' })).toBeInTheDocument();
+
+        mockedApi.getFileStatus.mockResolvedValue({ files: [{ path: 'C:/out/report.md', exists: false }] });
+        await act(async () => { vi.advanceTimersByTime(FILE_RECHECK_MS); await Promise.resolve(); });
+        expect(screen.getByText('No longer on disk')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Show in folder/ })).not.toBeInTheDocument();
+    });
+
+    it('marks a file restored or edited after the turn as changed', async () => {
+        mockedApi.getFileStatus.mockResolvedValue({ files: [{ path: 'C:/out/data.csv', exists: true, mtime: 250 }] });
+        render(<SideRail messages={turn(summary({
+            files: [{ path: 'C:/out/data.csv', name: 'data.csv', openable: true, mtime: 100 }],
+        }))} />);
+        expect(await screen.findByText('Changed since this turn')).toBeInTheDocument();
+        expect(mockedApi.getFileStatus).toHaveBeenCalledWith(['C:/out/data.csv']);
+    });
+
+    it('says so when the files cannot be re-checked', async () => {
+        mockedApi.getFileStatus.mockRejectedValue(new Error('server down'));
+        render(<SideRail messages={turn(summary({
+            files: [{ path: 'C:/out/a.md', name: 'a.md', openable: true, mtime: 1 }],
+        }))} />);
+        expect(await screen.findByText(/Couldn't check whether these files changed: server down/)).toBeInTheDocument();
     });
 
     it('lists the pages a web-research answer used, as links', () => {

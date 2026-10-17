@@ -264,7 +264,12 @@ class TurnLedger:
                 continue
             seen.add(key)
             files.append(
-                {"path": path, "name": Path(path).name, "openable": is_openable(path)}
+                {
+                    "path": path,
+                    "name": Path(path).name,
+                    "openable": is_openable(path),
+                    "mtime": os.path.getmtime(path),
+                }
             )
         out: Dict[str, Any] = {
             "pages": self._pages(),

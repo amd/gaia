@@ -827,7 +827,7 @@ class AttachDocumentRequest(BaseModel):
     |-------|-------------|
     | `pages` | Web pages the turn read (`url`, `title`, `kind: "page"`). When it only searched, the search hits (`kind: "search_result"`). |
     | `documents` | Documents it drew passages from: `name` (the name the file was attached under, not the upload copy's ID), `path`, `pages`, `passages`. |
-    | `files` | Files it created or changed and that still exist: `path`, `name`, `openable` (false for scripts, programs and web pages). |
+    | `files` | Files it created or changed and that still exist: `path`, `name`, `openable` (false for scripts, programs and web pages), `mtime` (when the turn ended). |
     | `sites` | Hosts GAIA's web tools contacted. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
@@ -967,6 +967,23 @@ class AttachDocumentRequest(BaseModel):
     | `400` | Invalid path (empty or contains null bytes), path is a symbolic link, or `launch` was asked for a folder or a file type that could run |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
+  </Accordion>
+
+  <Accordion title="POST /api/files/status">
+    Report whether each path still exists and when it last changed. The side rail uses it to show files deleted or changed since the turn that wrote them.
+
+    **Request:** `{"paths": ["/home/user/out/report.md"]}` (at most 50 paths).
+
+    **Response:**
+    ```json
+    {
+      "files": [
+        {"path": "/home/user/out/report.md", "exists": true, "mtime": 1792195636.2}
+      ]
+    }
+    ```
+
+    `exists` is `false` for a missing path or a folder, and `null` for a path outside the home folder, which is not checked. Returns **422** for more than 50 paths and **400** for a path containing a null byte.
   </Accordion>
 
   <Accordion title="POST /api/files/upload">
