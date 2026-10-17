@@ -265,8 +265,8 @@ EXTRACTION_QUEUE_MAX = 4
 #: How long a one-shot caller (CLI, batch) waits for extraction before exiting.
 EXTRACTION_EXIT_WAIT_S = 15.0
 
-#: Quiet time after a user turn before extraction starts. Extraction shares the
-#: local model with the conversation, so a turn sent while it runs queues behind it.
+#: Quiet time after a user turn before extraction starts. Extraction runs on the
+#: side slot beside the conversation, but its prefill still slows a decode on it.
 EXTRACTION_IDLE_S = 3.0
 
 #: Tool calls shown to extraction, most recent last, and each entry's detail cap.

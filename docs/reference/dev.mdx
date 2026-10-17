@@ -519,7 +519,7 @@ mixes in another client's request:
 | Field | Meaning |
 |---|---|
 | `llm_calls[].server` | `prompt_n` tokens prefilled, `cache_n` tokens reused from the KV cache, `prompt_ms` / `predicted_ms`, and `compute_s` (their sum) |
-| `llm_calls[].client` | Time spent before the request reached the server: `lease_wait_s` (daemon model-slot lease), `lock_wait_s` (this process's per-model request lock), `ensure_loaded_s` (the model status probe), `stats_fetch_s` |
+| `llm_calls[].client` | Time spent before the request reached the server: `lease_wait_s` (daemon model-slot lease), `lock_wait_s` (this process's slot gate, see `gaia.llm.slot_gate`), `ensure_loaded_s` (the model status probe), `stats_fetch_s` |
 | `totals.server_compute_s` | Seconds the server computed for this turn |
 | `totals.non_model_s` | Turn wall time minus server compute: what GAIA, its tools, and the user cost |
 | `spans` | Named stretches of agent work, such as `memory_context`, `skill_recall`, `memory_post_init`, `context_evict`, `memory_tool_log`, `parse_response` |

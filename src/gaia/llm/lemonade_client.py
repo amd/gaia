@@ -62,6 +62,7 @@ from gaia.llm.retry import (
     retry_state_of,
     tag_http_failure,
 )
+from gaia.llm.slot_gate import estimate_tokens, gate_for, normalize_model
 from gaia.llm.stream_watchdog import (
     STREAM_READ_BACKSTOP,
     ByteActivity,
@@ -506,21 +507,20 @@ CHAT_LLAMACPP_ARGS = (
 CONVERSATION_SLOT = 0
 SIDE_SLOT = 1
 
-#: One request at a time per local model in this process. With --kv-unified
-#: every slot is promised the whole window from one shared pool, and two active
-#: requests that together outgrow it both fail with "Context size has been
-#: exceeded" (llama.cpp never evicts an active slot). Idle slots are purged
-#: when room is needed, so one active request always fits. The daemon's broker
-#: lease does the same across processes.
-_LOCAL_REQUEST_LOCKS: Dict[str, threading.RLock] = {}
-_LOCAL_REQUEST_LOCKS_GUARD = threading.Lock()
+
+#: (base_url, model) -> the window Lemonade reports the model loaded with, as
+#: last seen by a load check. The slot gate's KV budget; see _kv_capacity.
+_LOADED_CTX: Dict[Tuple[str, str], int] = {}
 
 
-def _local_request_lock(model: str) -> threading.RLock:
-    """The lock serializing this process's requests to local *model*."""
-    key = model[len("user.") :] if model.startswith("user.") else model
-    with _LOCAL_REQUEST_LOCKS_GUARD:
-        return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
+def _request_kv_tokens(
+    messages: Any, tools: Optional[List[Dict[str, Any]]], max_new_tokens: Optional[int]
+) -> int:
+    """Worst-case KV-pool tokens one chat request can occupy (see slot_gate)."""
+    chars = len(json.dumps(messages, default=str))
+    if tools:
+        chars += len(json.dumps(tools, default=str))
+    return estimate_tokens(chars, max_new_tokens or 0)
 
 
 def _slots_in_flags(flags: List[str]) -> Optional[int]:
@@ -4087,7 +4087,12 @@ class LemonadeClient:
         # non-streaming path skipped it, so an embedder warm-up that unloaded the
         # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
         # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(
+            model,
+            slot=data.get("id_slot"),
+            tokens=_request_kv_tokens(messages, tools, max_completion_tokens),
+            max_hold_s=timeout,
+        ):
             if auto_download:
                 self._ensure_model_loaded(model, auto_download=True)
 
@@ -4154,7 +4159,12 @@ class LemonadeClient:
         # Re-entrant per thread, so the load's own inner lease folds into this.
         # As a generator the lease is acquired on first iteration and released
         # when the consumer finishes or closes the stream.
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(
+            model,
+            slot=kwargs.get("id_slot"),
+            tokens=_request_kv_tokens(messages, tools, max_completion_tokens),
+            max_hold_s=timeout,
+        ):
             self._ensure_model_loaded(model, auto_download)
 
             # Known not to stream: go straight to the non-streaming call rather
@@ -5913,12 +5923,24 @@ class LemonadeClient:
             )
         self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
 
-    def _model_slot_lease(self, model: str):
+    def _model_slot_lease(
+        self,
+        model: str,
+        *,
+        slot: Optional[int] = None,
+        tokens: int = 0,
+        max_hold_s: Optional[float] = None,
+    ):
         """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
 
         Serializes this load against every other process sharing the
-        single-tenant Lemonade slot, and every request to a local model against
-        the others in this process (``_local_request_lock``). The broker part is
+        single-tenant Lemonade slot. Within this process, a request pinned to a
+        llama.cpp *slot*, needing about *tokens* of the KV pool and finishing
+        within *max_hold_s*, is admitted by the model's
+        :class:`~gaia.llm.slot_gate.SlotGate` and may share this process's
+        broker lease, so side work runs beside the conversation. Anything else
+        (a load, an unpinned request, a model whose loaded window is not yet
+        known) holds the model exclusively. The broker part is
         a no-op when the broker is not configured (standalone ``gaia llm`` etc.)
         — that is the absence of a broker, not a silent fallback. When the broker IS configured but unreachable, the
         underlying context manager raises loudly rather than racing the slot.
@@ -5951,22 +5973,40 @@ class LemonadeClient:
             except ImportError:
                 print(f"⏳ {reason}")
 
-        lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
-        lock = _local_request_lock(model)
+        gate = gate_for(model)
+        capacity = self._kv_capacity(model) if slot is not None else None
+        shared = capacity is not None and not gate.exclusive_pending()
+        lease = model_lease(
+            model,
+            priority=self.model_lease_priority,
+            on_wait=_on_wait,
+            shared=shared,
+            max_hold_s=max_hold_s,
+        )
+        admit = (
+            gate.hold(slot, tokens, capacity)
+            if capacity is not None
+            else gate.exclusive()
+        )
 
         @contextmanager
         def _held():
             # Broker first: a thread holding the broker lease must never wait on
-            # this lock while its holder waits on the broker.
+            # this gate while its holder waits on the broker.
             t0 = time.perf_counter()
             with lease:
                 t1 = time.perf_counter()
-                with lock:
+                with admit:
                     perf_trace.note_wait("lease_wait_s", t1 - t0)
                     perf_trace.note_wait("lock_wait_s", time.perf_counter() - t1)
                     yield
 
         return _held()
+
+    def _kv_capacity(self, model: str) -> Optional[int]:
+        """Tokens in *model*'s KV pool as loaded, or ``None`` until a load check
+        has seen it — another client may have loaded it with a smaller window."""
+        return _LOADED_CTX.get((self.base_url, normalize_model(model)))
 
     def _ensure_model_loaded(
         self, model: str, auto_download: bool = True, *, force: bool = False
@@ -6004,7 +6044,10 @@ class LemonadeClient:
             self.log.debug(f"'{model}' is cloud-routed; skipping download/load")
             return
 
-        with self._model_slot_lease(model):
+        # Inside a request the request's own hold covers the check; only a load
+        # it decides on takes the model exclusively (in load_model).
+        held = gate_for(model).held_by_current_thread()
+        with nullcontext() if held else self._model_slot_lease(model):
             t0 = time.perf_counter()
             try:
                 self._ensure_model_loaded_locked(model, force=force)
@@ -6101,6 +6144,10 @@ class LemonadeClient:
                     loaded_ctx = (
                         loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
                     )
+                    if loaded_ctx:
+                        _LOADED_CTX[(self.base_url, normalize_model(model))] = int(
+                            loaded_ctx
+                        )
                     if loaded_ctx >= expected_ctx and not force:
                         self.log.debug(
                             f"Model '{model}' already loaded at ctx={loaded_ctx} "
@@ -6343,6 +6390,10 @@ class LemonadeClient:
                 "Send chat requests through Lemonade; select its provider in "
                 "the TUI provider settings if it is not connected."
             )
+        # The window it ends up with is read back by the next load check.
+        _LOADED_CTX.pop(
+            (getattr(self, "base_url", None), normalize_model(model_name)), None
+        )
         with self._model_slot_lease(model_name):
             response = self._load_model_leased(
                 model_name,
@@ -6756,6 +6807,9 @@ class LemonadeClient:
         """
         url = f"{self.base_url}/unload"
         data = {"model_name": model_name} if model_name else None
+        for key in [k for k in _LOADED_CTX if k[0] == self.base_url]:
+            if model_name is None or key[1] == normalize_model(model_name):
+                del _LOADED_CTX[key]
         try:
             response = self._send_request("post", url, data)
         except LemonadeClientError as e:

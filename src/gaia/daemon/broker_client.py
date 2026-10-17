@@ -24,11 +24,14 @@ from __future__ import annotations
 
 import contextvars
 import os
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
+from gaia.daemon.broker import DEFAULT_LEASE_TTL_S
 from gaia.daemon.constants import (
     AUTH_SCHEME,
     BROKER_PRIORITY_ENV_VAR,
@@ -379,6 +382,65 @@ _held: contextvars.ContextVar[Optional[_HeldLease]] = contextvars.ContextVar(
 )
 
 
+@dataclass
+class _SharedLease:
+    """This process's broker lease, joined by its concurrent same-model requests."""
+
+    model: str
+    lease: dict
+    holders: int
+    granted_at: float
+
+
+#: A request joins a shared lease only if it will finish this far inside the
+#: broker's reclaim TTL, so the lease is never reclaimed under a live request.
+SHARED_TTL_MARGIN_S = 60.0
+
+_shared_guard = threading.Lock()
+_shared_lease: Optional[_SharedLease] = None
+
+
+def _same_model(a: str, b: str) -> bool:
+    """``user.X`` and ``X`` are one Lemonade model."""
+    return a.removeprefix("user.") == b.removeprefix("user.")
+
+
+def _join_shared(model: str, max_hold_s: float) -> Optional[_SharedLease]:
+    with _shared_guard:
+        shared = _shared_lease
+        if (
+            shared is not None
+            and _same_model(shared.model, model)
+            and time.monotonic() - shared.granted_at + max_hold_s
+            < DEFAULT_LEASE_TTL_S - SHARED_TTL_MARGIN_S
+        ):
+            shared.holders += 1
+            return shared
+    return None
+
+
+def _offer_shared(model: str, lease: dict) -> Optional[_SharedLease]:
+    """Make a freshly granted lease joinable, unless one already is."""
+    global _shared_lease  # noqa: PLW0603 - the process's one shared lease
+    with _shared_guard:
+        if _shared_lease is not None:
+            return None
+        _shared_lease = _SharedLease(model, lease, 1, time.monotonic())
+        return _shared_lease
+
+
+def _leave_shared(shared: _SharedLease) -> bool:
+    """Drop one holder; True when it was the last and the lease must go."""
+    global _shared_lease  # noqa: PLW0603 - the process's one shared lease
+    with _shared_guard:
+        shared.holders -= 1
+        if shared.holders > 0:
+            return False
+        if _shared_lease is shared:
+            _shared_lease = None
+        return True
+
+
 def _current_hold() -> Optional[_HeldLease]:
     hold = _held.get()
     return hold if hold is not None and hold.live else None
@@ -395,8 +457,17 @@ def model_lease(
     *,
     priority: Optional[str] = None,
     on_wait=None,
+    shared: bool = False,
+    max_hold_s: Optional[float] = None,
 ) -> Iterator[Optional[dict]]:
     """Hold a model-slot lease for the duration of the ``with`` block.
+
+    ``shared=True`` is for a request (not a load) to a model this process may
+    already be using on another thread: it joins that thread's live lease for
+    the same model instead of queueing behind it, provided it will finish
+    within *max_hold_s* and that still ends inside the broker's reclaim TTL. The broker still sees one
+    lease per process, so no other process can swap the model mid-request;
+    within the process, :mod:`gaia.llm.slot_gate` decides what may overlap.
 
     When the broker is not configured this is a no-op (standalone mode) and
     yields ``None``. Otherwise it acquires a lease (blocking until the slot is
@@ -448,6 +519,20 @@ def model_lease(
         )
         yield None
         return
+    joined = (
+        _join_shared(model, max_hold_s) if shared and max_hold_s is not None else None
+    )
+    if joined is not None:
+        hold = _HeldLease(model)
+        _held.set(hold)
+        try:
+            yield joined.lease
+        finally:
+            hold.live = False
+            _held.set(None)
+            if _leave_shared(joined):
+                release_lease(joined.lease["lease_id"])
+        return
     lease = _acquire_with_reattach(model, priority)
     if lease is None:  # daemon has no broker — proceed unbrokered (warned above)
         yield None
@@ -459,6 +544,7 @@ def model_lease(
             else "waiting for the model slot…"
         )
         on_wait(reason)
+    owned = _offer_shared(model, lease) if shared and max_hold_s is not None else None
     hold = _HeldLease(model)
     _held.set(hold)
     try:
@@ -466,4 +552,5 @@ def model_lease(
     finally:
         hold.live = False
         _held.set(None)
-        release_lease(lease["lease_id"])
+        if owned is None or _leave_shared(owned):
+            release_lease(lease["lease_id"])
