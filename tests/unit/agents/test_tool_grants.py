@@ -13,6 +13,8 @@ import pytest
 
 from gaia.agents.base.tool_grants import grant_scope
 
+PYTEST = "pytest (runs the test code it finds)"
+
 
 class TestShellGrantsAreScopedToTheCommand:
     @pytest.mark.parametrize(
@@ -144,7 +146,7 @@ class TestCommandFamilies:
         scope = grant_scope("run_shell_command", {"command": command})
         assert scope is not None, command
         assert scope.keys == ("run_shell_command:pytest",)
-        assert scope.label == "pytest"
+        assert scope.label == PYTEST
 
     def test_a_line_running_two_families_grants_both(self):
         scope = grant_scope(
@@ -163,7 +165,7 @@ class TestCommandFamilies:
             ("python -c 'print(1)'", "python -c (any inline Python)"),
             ("node build.js", "node (any script)"),
             # -c after -m belongs to pytest (its ini file), not to python.
-            ("python -m pytest -c pytest.ini", "pytest"),
+            ("python -m pytest -c pytest.ini", PYTEST),
         ],
     )
     def test_interpreter_grants_say_they_cover_any_code(self, command, label):
@@ -196,7 +198,7 @@ class TestCommandFamilies:
         scope = grant_scope(
             "run_shell_command", {"command": "pytest; uniq a.txt b.txt"}
         )
-        assert scope.label == "pytest, uniq"
+        assert scope.label == f"{PYTEST}, uniq"
 
     def test_a_filter_with_a_writing_flag_is_not_granted(self):
         command = "pytest -q | sort -o out.txt"

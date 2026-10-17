@@ -9,11 +9,13 @@ A hand-rolled local run drifts from CI in ways that change scores or do harm:
 the backend started from the checkout instead of the staged ``~/gaia-eval``
 fixtures, the real ``gh`` on PATH while tool calls are auto-approved (writes
 aimed at real GitHub), the judge's credentials inherited by the agent under
-test. This script takes the lane environment from ``util/eval_lane_matrix.py``
-and repeats the workflow's setup step for step.
+test, and agent state left in the real ``~/.gaia`` by an earlier run. This
+script takes the lane environment from ``util/eval_lane_matrix.py`` and repeats
+the workflow's setup step for step, including a fresh GAIA home per category
+(``util/eval_gaia_home.py``) under ``--out``, deleted when the category ends.
 
-Categories run one at a time against one backend (CLAUDE.md: one eval per
-Lemonade). Logs and scorecard paths land in ``--out``.
+Categories run one at a time, each against its own backend (CLAUDE.md: one eval
+per Lemonade). Logs and scorecard paths land in ``--out``.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +32,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from eval_gaia_home import env_for  # noqa: E402
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
@@ -71,13 +75,23 @@ def plan(categories: list[str], home: Path, port: int) -> dict:
                 "GAIA_WEB_ALLOWED_HOSTS": "127.0.0.1",
                 "GAIA_AUTO_APPROVE_TOOLS": "1",
                 "GAIA_EVAL_MAILBOX": str(
-                    REPO_ROOT / "tests" / "fixtures" / "gaia" / "email" / "eval_inbox.mbox"
+                    REPO_ROOT
+                    / "tests"
+                    / "fixtures"
+                    / "gaia"
+                    / "email"
+                    / "eval_inbox.mbox"
                 ),
                 # The staged fake gh first: tool calls are auto-approved here.
                 "PATH": str(home / ".gaia-eval-bin") + os.pathsep + os.environ["PATH"],
             }
         )
-        extra_args = ["--exclude-tag", "live", "--exclude-tag", "local_blocked_win_shim"]
+        extra_args = [
+            "--exclude-tag",
+            "live",
+            "--exclude-tag",
+            "local_blocked_win_shim",
+        ]
     return {
         "env": env,
         "cwd": cwd,
@@ -136,73 +150,47 @@ def main() -> int:
         )
 
     env = {**os.environ, **p["env"]}
+    # Absolute: eval_gaia_home.py check compares the exported paths verbatim.
+    homes = (args.out / "gaia-homes").resolve()
+    if homes.exists():
+        shutil.rmtree(homes)
+    staged_home = homes / "_staged"
     if p["fixtures"]:
+        staged_home.mkdir(parents=True)
         subprocess.run(
-            [sys.executable, "tests/fixtures/gaia/stage_eval_env.py", "--home", str(home)],
+            [
+                sys.executable,
+                "tests/fixtures/gaia/stage_eval_env.py",
+                "--home",
+                str(home),
+                "--gaia-home",
+                str(staged_home),
+            ],
             cwd=REPO_ROOT,
             env=env,
             check=True,
         )
-    # The agent under test runs shell commands; only the judge gets credentials.
-    backend_env = {k: v for k, v in env.items() if k not in JUDGE_CREDENTIALS}
     children = []
     try:
         if p["fixtures"]:
             children.append(
                 subprocess.Popen(
-                    [sys.executable, "tests/fixtures/gaia/serve_fixtures.py",
-                     "--port", str(FIXTURE_PORT)],
+                    [
+                        sys.executable,
+                        "tests/fixtures/gaia/serve_fixtures.py",
+                        "--port",
+                        str(FIXTURE_PORT),
+                    ],
                     cwd=REPO_ROOT,
-                    env=backend_env,
+                    env=_without_judge(env),
                     stdout=open(args.out / "fixtures.log", "w", encoding="utf-8"),
                     stderr=subprocess.STDOUT,
                 )
             )
-        backend = subprocess.Popen(
-            [sys.executable, "-m", "gaia.ui.server", "--port", str(args.port),
-             "--host", "127.0.0.1"],
-            cwd=p["cwd"],
-            env=backend_env,
-            stdout=open(args.out / "backend.log", "w", encoding="utf-8"),
-            stderr=subprocess.STDOUT,
-        )
-        children.append(backend)
-        deadline = time.monotonic() + 600
-        while not _get(f"{p['backend']}/api/health"):
-            if backend.poll() is not None:
-                raise SystemExit(
-                    f"gaia.ui.server exited during startup ({backend.returncode}); "
-                    f"see {args.out / 'backend.log'}"
-                )
-            if time.monotonic() > deadline:
-                raise SystemExit(f"Backend not healthy in 10 min; see {args.out / 'backend.log'}")
-            time.sleep(3)
-        if p["memory"]:
-            _enable_memory(p["backend"])
-
         failed = []
         for category in categories:
-            if category == "gaia_mcp":
-                subprocess.run([sys.executable, MCP_STUB, "install"], cwd=REPO_ROOT, check=True)
-            print(f"=== {category}", flush=True)
-            with open(args.out / f"{category}.log", "w", encoding="utf-8") as log:
-                code = subprocess.run(
-                    ["gaia", "eval", "agent", "--category", category,
-                     "--backend", p["backend"], "--model", args.judge_model,
-                     *p["extra_args"]],
-                    cwd=REPO_ROOT,
-                    env=env,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                ).returncode
-            if category == "gaia_mcp":
-                subprocess.run([sys.executable, MCP_STUB, "remove"], cwd=REPO_ROOT, check=True)
-            summary = [
-                line.strip()
-                for line in (args.out / f"{category}.log").read_text(encoding="utf-8").splitlines()
-                if line.startswith(("Results:", "Avg score:", "Output:"))
-            ]
-            print(f"    exit {code}  " + "  ".join(summary), flush=True)
+            cat_env = {**env, **category_home(homes / category, staged_home)}
+            code = _run_category(category, cat_env, p, args)
             if code != 0:
                 failed.append(category)
         if failed:
@@ -212,6 +200,142 @@ def main() -> int:
     finally:
         for child in children:
             _stop_tree(child)
+        shutil.rmtree(homes, ignore_errors=True)
+
+
+def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
+    """Create *cat_home* empty (plus staged skills) and return its environment."""
+    if cat_home.exists():
+        raise SystemExit(
+            f"{cat_home} already exists; every category must start on a GAIA "
+            "home nothing has written to."
+        )
+    cat_home.mkdir(parents=True)
+    if (staged_home / "skills").is_dir():
+        shutil.copytree(staged_home / "skills", cat_home / "skills")
+    return env_for(cat_home)
+
+
+def _without_judge(env: dict) -> dict:
+    # The agent under test runs shell commands; only the judge gets credentials.
+    return {k: v for k, v in env.items() if k not in JUDGE_CREDENTIALS}
+
+
+def _run_category(category: str, env: dict, p: dict, args) -> int:
+    """Start a backend on *category*'s GAIA home, run the eval, stop it."""
+    cat_home = Path(env["GAIA_HOME"])
+    subprocess.run(
+        [sys.executable, "util/eval_gaia_home.py", "check", "--home", str(cat_home)],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+    )
+    if _get(f"{p['backend']}/api/health"):
+        raise SystemExit(
+            f"Something already answers on {p['backend']}. Stop it or pass --port: "
+            "the eval must drive a backend started with this category's environment."
+        )
+    if category == "gaia_mcp":
+        subprocess.run(
+            [sys.executable, MCP_STUB, "install"], cwd=REPO_ROOT, env=env, check=True
+        )
+    log_path = args.out / f"backend-{category}.log"
+    backend = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "gaia.ui.server",
+            "--port",
+            str(args.port),
+            "--host",
+            "127.0.0.1",
+        ],
+        cwd=p["cwd"],
+        env=_without_judge(env),
+        stdout=open(log_path, "w", encoding="utf-8"),
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        deadline = time.monotonic() + 600
+        while not _get(f"{p['backend']}/api/health"):
+            if backend.poll() is not None:
+                raise SystemExit(
+                    f"gaia.ui.server exited during startup ({backend.returncode}); "
+                    f"see {log_path}"
+                )
+            if time.monotonic() > deadline:
+                raise SystemExit(f"Backend not healthy in 10 min; see {log_path}")
+            time.sleep(3)
+        if p["memory"]:
+            _enable_memory(p["backend"])
+        _require_empty_memory(p["backend"], Path(env["GAIA_MEMORY_DB"]), category)
+
+        print(f"=== {category}  (GAIA_HOME={cat_home})", flush=True)
+        with open(args.out / f"{category}.log", "w", encoding="utf-8") as log:
+            code = subprocess.run(
+                [
+                    "gaia",
+                    "eval",
+                    "agent",
+                    "--category",
+                    category,
+                    "--backend",
+                    p["backend"],
+                    "--model",
+                    args.judge_model,
+                    *p["extra_args"],
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            ).returncode
+        summary = [
+            line.strip()
+            for line in (args.out / f"{category}.log")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.startswith(("Results:", "Avg score:", "Output:"))
+        ]
+        print(f"    exit {code}  " + "  ".join(summary), flush=True)
+        return code
+    finally:
+        if category == "gaia_mcp":
+            subprocess.run(
+                [sys.executable, MCP_STUB, "remove"], cwd=REPO_ROOT, env=env, check=True
+            )
+        # The daemon the backend spawned lives in this home; stop it there.
+        subprocess.run(
+            ["gaia", "daemon", "stop"],
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+        )
+        _stop_tree(backend)
+        shutil.rmtree(cat_home, ignore_errors=True)
+
+
+def _require_empty_memory(backend: str, memory_db: Path, category: str) -> None:
+    """Refuse to run *category* unless the backend's own memory store is empty."""
+    req = urllib.request.Request(
+        f"{backend}/api/memory/stats", headers={"X-Gaia-UI": "1"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        stats = json.loads(resp.read())
+    held = {
+        "knowledge": stats["knowledge"]["total"],
+        "procedures": stats["procedures"]["total"],
+        "conversation_turns": stats["conversations"]["total_turns"],
+    }
+    if any(held.values()):
+        raise SystemExit(
+            f"The backend's memory is not empty at the start of {category}: {held}."
+        )
+    if not memory_db.exists():
+        raise SystemExit(
+            f"The backend did not create {memory_db}, so its memory store is not "
+            f"{category}'s isolated GAIA home."
+        )
 
 
 def _stop_tree(proc: subprocess.Popen) -> None:
