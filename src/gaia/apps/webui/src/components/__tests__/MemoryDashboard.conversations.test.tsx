@@ -54,6 +54,8 @@ beforeEach(() => {
 
 it('labels a conversation by its chat title, not its session ID', async () => {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
     expect(await screen.findByText('Remember teal and Calgary office')).toBeInTheDocument();
     expect(screen.queryByText(/c2639b15/)).not.toBeInTheDocument();
@@ -61,12 +63,16 @@ it('labels a conversation by its chat title, not its session ID', async () => {
 
 it('keeps the short ID for a chat the sidebar no longer has', async () => {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
     expect(await screen.findByText('deadbeef...')).toBeInTheDocument();
 });
 
 it('opens the chat from the conversation detail', async () => {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
     fireEvent.click(await screen.findByText('Remember teal and Calgary office'));
     fireEvent.click(await screen.findByRole('button', { name: 'Open chat' }));
 
