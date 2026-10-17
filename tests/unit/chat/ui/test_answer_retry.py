@@ -41,6 +41,7 @@ RETRIED = {
     "content": "The report says revenue grew 4%.",
     "stats": {
         "model": "Other-GGUF",
+        "retried": True,
         "seconds": 12.5,
         "load_seconds": 9.0,
         "input_tokens": 300,
@@ -143,6 +144,7 @@ async def test_keeping_the_retry_continues_the_chat_from_it(db):
     record = db.get_message_record(sid, mid)
     assert record["content"] == RETRIED["content"]
     assert record["inference_stats"]["model"] == "Other-GGUF"
+    assert record["inference_stats"]["retried"] is True
     # The next turn's history replays the kept answer with the original evidence.
     turns = history.transcript_turns(db.get_context_messages(sid))
     assert turns[-1][:-1] == TURN[:-1]
@@ -326,6 +328,7 @@ async def test_answer_with_loads_the_model_then_asks_it():
     assert result["content"] == "An answer."
     assert result["stats"]["tokens_per_second"] == 41.3
     assert result["stats"]["output_tokens"] == 3
+    assert result["stats"]["retried"] is True
 
 
 async def test_an_empty_answer_is_an_error_not_a_blank_bubble():

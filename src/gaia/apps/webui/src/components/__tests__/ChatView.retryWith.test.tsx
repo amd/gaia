@@ -42,7 +42,7 @@ const RESULT: RetryResult = {
     model: 'Qwen3.6-35B-A3B-GGUF',
     content: 'Eleven is prime.',
     stats: {
-        model: 'Qwen3.6-35B-A3B-GGUF', seconds: 21.4, load_seconds: 15.2,
+        model: 'Qwen3.6-35B-A3B-GGUF', retried: true, seconds: 21.4, load_seconds: 15.2,
         input_tokens: 400, output_tokens: 6, tokens_per_second: 44.5, time_to_first_token: 0.3,
     },
 };
@@ -132,6 +132,7 @@ describe('Retry with…', () => {
         const kept = useChatStore.getState().messages.find((m) => m.id === 2);
         expect(kept?.content).toBe('Eleven is prime.');
         expect(kept?.stats?.model).toBe('Qwen3.6-35B-A3B-GGUF');
+        expect(kept?.stats?.retried).toBe(true);
         expect(screen.queryByLabelText('Compare answers')).toBeNull();
     });
 

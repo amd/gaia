@@ -206,6 +206,7 @@ def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
     usage = data.get("usage") or {}
     stats: dict[str, Any] = {
         "model": model,
+        "retried": True,
         "seconds": round(finished - started, 1),
         "load_seconds": round(loaded - started, 1),
         # Zero reads as "not reported", as on a chat turn's stats.

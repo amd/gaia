@@ -1436,6 +1436,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             input_tokens: s.input_tokens ?? 0,
                             output_tokens: s.output_tokens ?? 0,
                             model: s.model,
+                            retried: true,
                             seconds: s.seconds,
                         },
                     }
