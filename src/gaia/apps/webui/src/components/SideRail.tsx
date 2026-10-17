@@ -15,6 +15,7 @@ import {
     Globe, Monitor,
 } from 'lucide-react';
 import * as api from '../services/api';
+import { displayModelName } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import { safeUrlTransform } from '../utils/markdown';
 import type { Message, TurnSummary } from '../types';
@@ -290,7 +291,7 @@ function ThisTurnSection({ summary }: { summary: TurnSummary }) {
                     ) : (
                         <span className="side-rail-where">Not reported</span>
                     )}
-                    {model?.name && <span className="side-rail-meta">{model.name}</span>}
+                    {model?.name && <span className="side-rail-meta" title={model.name}>{displayModelName(model.name)}</span>}
                 </dd>
                 {usedDocs && (
                     <>

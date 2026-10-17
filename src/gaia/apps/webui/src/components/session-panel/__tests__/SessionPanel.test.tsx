@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionPanel, SessionPanelToggle } from '../SessionPanel';
 import { useSessionPanelStore, PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH } from '../../../stores/sessionPanelStore';
 import { useChatStore } from '../../../stores/chatStore';
+import { useModelStore } from '../../../stores/modelStore';
 import type { Message, TurnSummary } from '../../../types';
 import { resetPanelState, SID, stubPanelApi, stubWindowWidth } from './testUtils';
 
@@ -60,6 +61,14 @@ afterEach(() => {
 });
 
 describe('SessionPanel', () => {
+    it("names this turn's model the way the model chip does, not by its raw id", () => {
+        useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
+        const local = { ...SUMMARY, model: { ...SUMMARY.model!, name: 'Gemma-4-E4B-it-GGUF' } };
+        render(<Panel messages={[ANSWERED[0], { ...ANSWERED[1], turnSummary: local }]} />);
+        expect(screen.getByText('Gemma 4 E4B')).toHaveAttribute('title', 'Gemma-4-E4B-it-GGUF');
+        useModelStore.setState({ names: {} });
+    });
+
     it('is docked open by default with every section', async () => {
         render(<Panel />);
         expect(panel()).toHaveClass('is-docked');

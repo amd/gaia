@@ -12,7 +12,7 @@ import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats } from './AnswerStats';
-import { useInferencePlace } from '../stores/modelStore';
+import { displayModelName, useInferencePlace } from '../stores/modelStore';
 import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
@@ -584,7 +584,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
-                                <span title="This answer was kept from Retry with…">{message.stats.model}</span>
+                                <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
