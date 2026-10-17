@@ -12,9 +12,9 @@ Stored at ``~/.gaia/config.json``.
 import json
 import logging
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +164,9 @@ class GaiaConfig:
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
             oldest turns go first. The newest turn is always kept.
+        context_sizes: Context window, in tokens, the user chose per local
+            model in the Agent UI (model id -> tokens). Every load of that
+            model uses it; a model not listed gets GAIA's automatic size.
     """
 
     profile: str = "chat"
@@ -179,6 +182,7 @@ class GaiaConfig:
     llamacpp_backend: Optional[str] = None
     undo_retention_days: int = 7
     undo_max_mb: int = 500
+    context_sizes: Dict[str, int] = field(default_factory=dict)
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -297,6 +301,21 @@ class GaiaConfig:
             )
         return word
 
+    @staticmethod
+    def _check_context_sizes(value: Any, config_file: Path) -> None:
+        if not isinstance(value, dict) or not all(
+            isinstance(k, str)
+            and isinstance(v, int)
+            and not isinstance(v, bool)
+            and v > 0
+            for k, v in value.items()
+        ):
+            raise GaiaConfigError(
+                f"GAIA config at {config_file}: 'context_sizes' must map model ids "
+                f"to a positive number of tokens, but it is {value!r}. Fix it by "
+                "hand, or delete the key to go back to automatic sizes."
+            )
+
     @classmethod
     def field_names(cls) -> List[str]:
         """Return the configurable field names (drives the CLI ``config`` cmd)."""
@@ -372,6 +391,8 @@ class GaiaConfig:
                 f'or "external", but it is {mode!r}. Fix or delete that key in '
                 "the file, then retry."
             )
+        if "context_sizes" in data:
+            cls._check_context_sizes(data["context_sizes"], config_file)
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
@@ -433,6 +454,11 @@ class GaiaConfig:
         if key == "llamacpp_backend":
             setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
             return
+        if key == "context_sizes":
+            raise GaiaConfigError(
+                "context_sizes is set per model: choose a context size in the "
+                "Agent UI under Settings › Model, or edit config.json by hand."
+            )
         setattr(self, key, self._coerce(key, value))
 
     def resolve_model(

@@ -3,13 +3,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, HelpCircle, PanelLeftClose, PanelLeftOpen,
-    Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
+    Bell, Brain, Clock, EyeOff, FileText, PanelLeftClose, PanelLeftOpen, Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { useNotificationStore, selectUnreadCount, selectPromptingSessionIds } from '../stores/notificationStore';
+import { ModelStatusPill } from './ModelStatusPill';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import {
@@ -130,8 +129,6 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
     const showMemory = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
-    const active = useModelStore((s) => s.active);
-    const place = useInferencePlace();
     const unread = useNotificationStore(selectUnreadCount);
     const showNotifications = useNotificationStore((s) => s.showPanel);
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
@@ -241,7 +238,6 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
     }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const LocationIcon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
     const isCollapsed = collapsed && !isMobile;
 
@@ -355,22 +351,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
             )}
 
             <div className="sb-bottom">
-                {!isCollapsed && (
-                    <button
-                        type="button"
-                        className="sb-location"
-                        onClick={() => openSettings('model')}
-                        title={!place
-                            ? UNKNOWN_PLACE_TITLE
-                            : place.description
-                                ?? (place.remote ? `Chat history is sent to ${place.label}` : 'Runs on this PC')}
-                    >
-                        <LocationIcon size={13} aria-hidden="true" />
-                        <span className="sb-location-text">
-                            {[place?.label, active && shortModelName(active.model)].filter(Boolean).join(' · ') || 'Model'}
-                        </span>
-                    </button>
-                )}
+                {!isCollapsed && <ModelStatusPill />}
                 <div className="sb-bottom-actions">
                     <button
                         type="button"

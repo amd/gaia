@@ -1861,7 +1861,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         rightControls={(
                             <>
                                 <ContextMeter usage={contextUsage} unavailable={contextUnavailable} />
-                                <ModelChip disabled={busy} />
+                                <ModelChip />
                             </>
                         )}
                     />

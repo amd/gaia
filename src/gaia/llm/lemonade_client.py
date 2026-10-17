@@ -823,6 +823,39 @@ def _model_ctx_size(requirement: "ModelRequirement", base_url: Optional[str]) ->
     return context_for_capacity(requirement, capacity)
 
 
+def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
+    """The window the user chose for *model* in Settings, checked against this PC.
+
+    Raises :class:`LemonadeClientError` when the saved size no longer fits.
+    """
+    from gaia.llm.context_choice import (
+        ContextChoiceError,
+        check_saved_size,
+        saved_context_size,
+    )
+    from gaia.llm.model_fit import ModelFitError
+
+    tokens = saved_context_size(model)
+    if tokens is None:
+        return None
+    try:
+        capacity = machine_capacity(base_url)
+    except (LemonadeClientError, ModelFitError) as e:
+        get_logger(__name__).warning(
+            "Cannot read this machine's memory (%s); loading %s at the %d-token "
+            "window you chose without checking that it fits.",
+            e,
+            model,
+            tokens,
+        )
+        return tokens
+    try:
+        check_saved_size(model, tokens, capacity)
+    except ContextChoiceError as e:
+        raise LemonadeClientError(str(e)) from e
+    return tokens
+
+
 def resolve_ctx_size(
     model: Optional[str] = None,
     device: Optional[str] = None,
@@ -846,7 +879,13 @@ def resolve_ctx_size(
     if model:
         on_npu = runs_on_npu(model)
         requirement = find_model_requirement(model)
-        if requirement is not None:
+        # GAIA_CTX_SIZE (applied below) wins, so it can rescue a size that no longer fits.
+        pinned = bool(os.environ.get("GAIA_CTX_SIZE", "").strip())
+        chosen = None if pinned else _chosen_ctx_size(model, base_url)
+        if chosen is not None:
+            # The user's pick is not shrunk to free memory; the load refuses instead.
+            ctx = chosen
+        elif requirement is not None:
             ctx = fit_ctx_to_free_memory(
                 model, _model_ctx_size(requirement, base_url), base_url
             )

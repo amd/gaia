@@ -75,6 +75,8 @@ class FakeLemonade:
             return _Resp(200, {"cloud": {"providers": list(self.cloud.values())}})
         if (method, path) == ("GET", "models?show_all=true"):
             return _Resp(200, {"data": self.models})
+        if (method, path) == ("GET", "health"):
+            return _Resp(200, {"all_models_loaded": []})
         if (method, path) == ("POST", "install"):
             self.cloud.setdefault(json["provider"], {"name": json["provider"]})
             self.cloud[json["provider"]]["base_url"] = json["base_url"]
@@ -279,7 +281,11 @@ def test_active_with_nothing_saved(client, lemonade, keys, db):
     assert body["restore"] == {"status": "none", "message": None}
     assert body["model"] == DEFAULT_MODEL_NAME
     assert db.get_setting("custom_model") is None
-    assert lemonade.calls == []
+    # Only a read, to say whether the default is downloaded.
+    assert [(c["method"], c["path"]) for c in lemonade.calls] == [
+        ("GET", "models?show_all=true")
+    ]
+    assert body["downloaded"] is False
 
 
 def test_active_restores_the_last_model_once_per_run(client, lemonade, keys, db):
@@ -834,6 +840,8 @@ def test_restore_of_a_cloud_model_never_goes_to_a_remote_lemonade(
 ):
     _write_config({"last_model": "fireworks.glm-5p3-flash"})
     monkeypatch.setattr(providers, "_base_url", lambda: "http://10.0.0.5:13305/api/v1")
+    # The keyless "is the default downloaded?" read is not what this test guards.
+    monkeypatch.setattr(providers, "_local_downloaded", lambda view: None)
     body = client.get("/api/providers/active").json()
     assert body["restore"]["status"] == "failed"
     assert keys["ensure"] == []
