@@ -65,6 +65,16 @@ describe('model wait hint', () => {
         expect(screen.queryByText(MODEL_WAIT_HINT)).not.toBeInTheDocument();
     });
 
+    it('still shows when the model goes silent after a long tool run', () => {
+        const { rerender } = renderBubble('Running run_python');
+        act(() => { vi.advanceTimersByTime(10 * MODEL_WAIT_HINT_S * 1000); });
+        rerenderWith(rerender, 'Reading the tool results');
+        act(() => { vi.advanceTimersByTime((MODEL_WAIT_HINT_S - 1) * 1000); });
+        expect(screen.queryByText(MODEL_WAIT_HINT)).not.toBeInTheDocument();
+        act(() => { vi.advanceTimersByTime(1000); });
+        expect(screen.getByText(MODEL_WAIT_HINT)).toBeInTheDocument();
+    });
+
     it('keeps counting while the model-wait status repeats or retries', () => {
         const { rerender } = renderBubble('Reading your request');
         act(() => { vi.advanceTimersByTime(20_000); });
