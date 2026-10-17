@@ -177,6 +177,7 @@ export interface AgentListResponse {
 export interface AgentStepResponse {
   active?: boolean;
   commandOutput?: CommandOutputResponse | null;
+  currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
   detail?: string | null;
@@ -185,6 +186,8 @@ export interface AgentStepResponse {
   label: string;
   latencyMs?: number | null;
   mcpServer?: string | null;
+  narration?: string | null;
+  planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;
