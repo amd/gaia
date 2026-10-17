@@ -1,0 +1,155 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# The Linux bugs users reported, re-checked on a real Linux Strix Halo
+# (tests/hardware/test_linux_halo_user_issues.py). They were only ever checked
+# in WSL, which has no GPU, so model memory, the free-memory guard and port
+# reuse were never seen on the hardware users run.
+#
+# Runs on release and RC tags plus dispatch, like the other self-hosted
+# workflows (#5157): the pool is shared and scarce. A tag run installs the
+# tag's source, built into a wheel; it does not wait for PyPI, because
+# publish.yml takes hours and this result is most useful before it finishes.
+# Dispatch with `pypi_version` to test a wheel that is already published, or
+# with `gaia_ref` to install another ref's source (e.g. an unpublished RC tag)
+# while still running this branch's tests.
+#
+# The machine is a persistent lab box with other Lemonades on it, not a fresh
+# image. Each scenario therefore runs from its own empty HOME under
+# RUNNER_TEMP, and the last step stops anything started from there. Models
+# come from the pool's shared HF_HOME, except the fresh-install scenario,
+# which uses an empty cache and deletes it.
+name: Linux Strix Halo (Hardware)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
+  workflow_dispatch:
+    inputs:
+      pypi_version:
+        description: 'Install amd-gaia==<this> from PyPI instead of this ref (e.g. 0.25.0rc14)'
+        required: false
+        default: ''
+      gaia_ref:
+        description: 'Install GAIA from this ref (tag, branch or SHA) instead of this ref; the tests still come from this ref'
+        required: false
+        default: ''
+
+concurrency:
+  # Dispatches never cancel each other, so one can be sent per pool host.
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  user-issues:
+    name: User-reported Linux issues (Strix Halo)
+    runs-on: [self-hosted, Linux, xsj-dispatch, strix-halo]
+    timeout-minutes: 90
+    env:
+      GAIA_HW_REQUIRE: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out the GAIA under test
+        if: inputs.gaia_ref != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.gaia_ref }}
+          path: gaia-under-test
+
+      - name: Paths for this run
+        run: |
+          {
+            echo "GAIA_HW_WORKDIR=$RUNNER_TEMP/linux-halo"
+            echo "GAIA_HW_EVIDENCE=$RUNNER_TEMP/linux-halo-evidence.md"
+            echo "GAIA_HW_ARTIFACTS=$RUNNER_TEMP/linux-halo-artifacts"
+            echo "VENV=$RUNNER_TEMP/linux-halo-venv"
+          } >> "$GITHUB_ENV"
+
+      - name: Install GAIA into a fresh venv
+        env:
+          PYPI_VERSION: ${{ inputs.pypi_version }}
+          GAIA_REF: ${{ inputs.gaia_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PYPI_VERSION" ] && [ -n "$GAIA_REF" ]; then
+            echo "::error::Set pypi_version or gaia_ref, not both"; exit 1
+          fi
+          echo "Host: $(hostname)"
+          # Not every pool host has curl, which the uv installer needs.
+          mkdir -p "$RUNNER_TEMP/uv-bin"
+          python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+            https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz \
+            "$RUNNER_TEMP/uv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/uv-bin" --strip-components=1
+          UV="$RUNNER_TEMP/uv-bin/uv"
+          "$UV" venv "$VENV" --python 3.12 --seed
+          if [ -n "$PYPI_VERSION" ]; then
+            target="amd-gaia[ui,rag]==$PYPI_VERSION"
+          elif [ -n "$GAIA_REF" ]; then
+            echo "GAIA ref $GAIA_REF at $(git -C gaia-under-test rev-parse HEAD)"
+            target="./gaia-under-test[ui,rag]"
+          else
+            target=".[ui,rag]"
+          fi
+          "$UV" pip install --python "$VENV/bin/python" "$target" pytest pytest-timeout
+          "$VENV/bin/gaia" --version
+          echo "Installed: $("$VENV/bin/python" -c 'import gaia, gaia.version as v; print(v.__version__, gaia.__file__)')"
+
+      - name: Machine before the run
+        run: |
+          for c in /sys/class/drm/card*/device; do
+            if [ -f "$c/mem_info_vram_used" ]; then
+              echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"
+            fi
+          done
+          ps -eo pid,user,etime,cmd | grep -E "[l]emond|[l]lama-server" || true
+
+      - name: Run the user-issue checks
+        env:
+          # The tests drive the installed `gaia`; the orchestrator only imports
+          # this checkout's conftest.
+          GAIA_ALLOW_EXTERNAL_IMPORTS: '1'
+        run: |
+          "$VENV/bin/python" -m pytest tests/hardware/test_linux_halo_user_issues.py \
+            -v -s -rA --timeout=3600 -p no:cacheprovider
+
+      - name: Evidence to the job summary
+        if: always()
+        run: |
+          {
+            echo "## Linux Strix Halo: user-reported issues"
+            echo "Runner: $RUNNER_NAME"
+            cat "$GAIA_HW_EVIDENCE" 2>/dev/null || echo "(no evidence written)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Leave the machine clean
+        if: always()
+        run: |
+          leftovers=$(pgrep -f "$GAIA_HW_WORKDIR" || true)
+          if [ -n "$leftovers" ]; then
+            echo "::warning::Stopping processes the tests left behind: $leftovers"
+            ps -o pid,cmd -p $leftovers || true
+            kill $leftovers || true
+            sleep 5
+            kill -9 $(pgrep -f "$GAIA_HW_WORKDIR") 2>/dev/null || true
+          fi
+          rm -rf "$GAIA_HW_WORKDIR" "$VENV" "$RUNNER_TEMP/uv-bin" "$RUNNER_TEMP/uv.tar.gz"
+          for c in /sys/class/drm/card*/device; do
+            if [ -f "$c/mem_info_vram_used" ]; then
+              echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"
+            fi
+          done
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-halo-user-issues-logs
+          path: ${{ runner.temp }}/linux-halo-artifacts
+          if-no-files-found: warn
