@@ -1933,8 +1933,8 @@ class MemoryStore:
     def _forgotten_rows(self, said_before: Optional[str]) -> List[tuple]:
         """``(content, sensitive)`` of what was forgotten, newest first.
 
-        With *said_before* (an ISO timestamp), only what was forgotten after
-        that moment: something said after the user forgot it is the user
+        With *said_before* (an ISO timestamp), only what was forgotten at or
+        after that moment: something said after the user forgot it is the user
         telling GAIA again, not an old conversation resurfacing it.
         """
         with self._locked():
@@ -1943,7 +1943,8 @@ class MemoryStore:
             ).fetchall()
         if said_before is not None:
             said = _as_datetime(said_before)
-            rows = [r for r in rows if _as_datetime(r[2]) > said]
+            # A forget in the same clock tick as the turn still counts.
+            rows = [r for r in rows if _as_datetime(r[2]) >= said]
         return [(r[0], bool(r[1])) for r in rows]
 
     def get_forgotten(
