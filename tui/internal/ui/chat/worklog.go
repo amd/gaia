@@ -4,7 +4,9 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -126,7 +128,7 @@ func (m *ChatModel) commitWork() {
 		}
 	}
 	var copyText []string
-	for _, item := range collapseActivity(steps) {
+	for _, item := range collapseActivity(settleFailures(steps, true)) {
 		copyText = append(copyText, stepText(item))
 	}
 	if len(copyText) == 0 {
@@ -192,7 +194,7 @@ func (m ChatModel) visibleWork(items []ActivityItem) []ActivityItem {
 // renderWork draws a finished turn's work record.
 func (m ChatModel) renderWork(msg *Message) string {
 	var lines []string
-	for _, item := range collapseActivity(m.visibleWork(msg.Work)) {
+	for _, item := range collapseActivity(m.visibleWork(settleFailures(msg.Work, true))) {
 		lines = append(lines, m.renderActivityItem(item, false, 0, 0)...)
 	}
 	return strings.Join(lines, "\n")
@@ -243,4 +245,102 @@ func isLatency(s string) bool {
 		return false
 	}
 	return strings.Trim(num, "0123456789.") == ""
+}
+
+// How a failed step reads once the rest of its turn is known. An agent that
+// fixes its own script and runs it again is working normally; drawing each
+// attempt as a red failure made a successful turn look broken.
+const (
+	// recoveryPending: the turn is still running, so the agent may yet retry.
+	// Not "retrying": nothing has said it will.
+	recoveryPending = "error"
+	// recoveryRetried: a later call of the same kind succeeded.
+	recoveryRetried = "error, retried"
+)
+
+// stepFailed reports whether a step's outcome is a failure. The word counts as
+// well as the flag: a sidecar's preview can report a failure its data did not.
+func stepFailed(item ActivityItem) bool {
+	return (item.Success != nil && !*item.Success) ||
+		strings.HasPrefix(strings.ToLower(clean(item.Detail)), "failed")
+}
+
+// settleFailures returns items with each failed tool step's Recovery set.
+//
+// Decided from what has already happened, never from a guess at what will: a
+// failure followed by a success of the same kind was recovered from; one with
+// no such success yet is only provisional while the turn runs (final false),
+// and stands as a failure once the turn is over. A user's own refusal is never
+// softened — a denied step failed because they said so.
+func settleFailures(items []ActivityItem, final bool) []ActivityItem {
+	out := append([]ActivityItem(nil), items...)
+	for i := range out {
+		item := &out[i]
+		item.Recovery = ""
+		if item.Kind != "tool" || !item.Done || !stepFailed(*item) {
+			continue
+		}
+		if item.Approval != "" && !strings.HasPrefix(item.Approval, "approved") {
+			continue
+		}
+		key := stepRetryKey(*item)
+		for _, later := range out[i+1:] {
+			if later.Kind == "tool" && later.Done && !stepFailed(later) &&
+				stepRetryKey(later) == key {
+				item.Recovery = recoveryRetried
+				break
+			}
+		}
+		if item.Recovery == "" && !final {
+			item.Recovery = recoveryPending
+		}
+	}
+	return out
+}
+
+func stepRetryKey(item ActivityItem) string {
+	if item.RetryKey != "" {
+		return item.RetryKey
+	}
+	return activityKey(item)
+}
+
+// retryKey is the tool, plus — for a shell command — its program and first
+// argument. A failed `pip install` is not recovered by a later `dir`, or by
+// `python -c` succeeding after `python -m pip` failed.
+func retryKey(tool string, args json.RawMessage) string {
+	var fields struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(args, &fields) != nil {
+		return tool
+	}
+	words := strings.Fields(fields.Command)
+	if len(words) == 0 {
+		return tool
+	}
+	program := strings.ToLower(filepath.Base(strings.ReplaceAll(words[0], "\\", "/")))
+	program = strings.TrimSuffix(program, ".exe")
+	key := tool + " " + program
+	if len(words) > 1 {
+		key += " " + words[1]
+	}
+	return key
+}
+
+// calmDetail rewords a recovered step's failure line: the state leads instead
+// of "failed", and the tool's own one-line error follows it.
+func calmDetail(detail, recovery string) string {
+	rest := clean(detail)
+	if strings.HasPrefix(strings.ToLower(rest), "failed") {
+		rest = rest[len("failed"):]
+	}
+	rest = strings.TrimLeft(rest, " —:")
+	if strings.HasPrefix(strings.ToLower(rest), "error:") {
+		rest = strings.TrimSpace(rest[len("error:"):])
+	}
+	if rest == "" {
+		return recovery
+	}
+	return recovery + ": " + rest
 }
