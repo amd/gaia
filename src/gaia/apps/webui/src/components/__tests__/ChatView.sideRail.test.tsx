@@ -87,21 +87,27 @@ describe('ChatView side rail', () => {
     });
 
     it("shows the turn in progress, not the previous answer's data", async () => {
+        const finished = {
+            messages: [
+                { id: 1, session_id: SESSION.id, role: 'user', content: 'first', created_at: '', rag_sources: null },
+                { id: 2, session_id: SESSION.id, role: 'assistant', content: 'a', created_at: '', rag_sources: null, turn_summary: SUMMARY },
+            ],
+            total: 2,
+        };
+        mockedApi.getMessages.mockResolvedValue(finished as never);
         render(<ChatView sessionId={SESSION.id} />);
-        await act(async () => {
-            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'first' } });
-            fireEvent.click(screen.getByLabelText('Send'));
-        });
-        await act(async () => {
-            callbacks!.onDone({ type: 'done', content: 'answer', message_id: 7, turn_summary: SUMMARY } as StreamEvent);
-        });
+        await waitFor(() => expect(
+            screen.getByRole('complementary', { name: 'Sources and turn details' }),
+        ).toHaveTextContent('AMD LLM Gateway (cloud)'));
         await act(async () => {
             fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'second' } });
             fireEvent.click(screen.getByLabelText('Send'));
         });
-        const rail = screen.getByRole('complementary', { name: 'Sources and turn details' });
-        expect(rail).toHaveTextContent('Working on this answer');
-        expect(rail).not.toHaveTextContent('AMD LLM Gateway');
+        await waitFor(() => expect(
+            screen.getByRole('complementary', { name: 'Sources and turn details' }),
+        ).toHaveTextContent('Working on this answer'));
+        expect(screen.getByRole('complementary', { name: 'Sources and turn details' }))
+            .not.toHaveTextContent('AMD LLM Gateway');
     });
 
     it('rebuilds the rail from a reloaded message', async () => {
