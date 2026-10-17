@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
+    missing_file_error,
     read_access_error,
     readable_entry,
     write_access_error,
@@ -1445,7 +1446,7 @@ class RAGToolsMixin:
                     return denied
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
