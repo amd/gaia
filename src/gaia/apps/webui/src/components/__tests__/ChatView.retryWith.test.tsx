@@ -13,6 +13,8 @@ import * as api from '../../services/api';
 vi.mock('../../services/api');
 
 const mockedApi = vi.mocked(api);
+// A variable, not a literal: compiles before and after #5242 adds `queued` and `awaiting_user`.
+const NO_ACTIVE_RUNS = { session_ids: [], queued: [], awaiting_user: {} };
 
 const SESSION: Session = {
     id: 'session-r',
@@ -50,7 +52,7 @@ let resolveRetry: (r: RetryResult) => void = () => {};
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.getMessages.mockResolvedValue({ messages: MESSAGES, total: 2 });
-    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getActiveRuns.mockResolvedValue(NO_ACTIVE_RUNS);
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
