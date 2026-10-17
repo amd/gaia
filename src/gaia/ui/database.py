@@ -298,6 +298,7 @@ class ChatDatabase:
         self._add_column("messages", "model_messages", "TEXT")
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
+        self._add_column("messages", "turn_summary", "TEXT")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -631,19 +632,22 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -655,6 +659,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -679,6 +684,7 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -692,6 +698,7 @@ class ChatDatabase:
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             if msg_id is not None:
@@ -703,8 +710,9 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -716,6 +724,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -778,6 +787,16 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("turn_summary"):
+                try:
+                    msg["turn_summary"] = json.loads(msg["turn_summary"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Message %s has an unreadable turn summary: %s",
+                        msg.get("id"),
+                        exc,
+                    )
+                    msg["turn_summary"] = None
             messages.append(msg)
 
         return messages

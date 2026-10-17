@@ -26,6 +26,7 @@ export interface ApiSchemas {
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
+  ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   DiscoveryCommit: DiscoveryCommit;
@@ -41,6 +42,9 @@ export interface ApiSchemas {
   FilePreviewResponse: FilePreviewResponse;
   FileSearchResponse: FileSearchResponse;
   FileSearchResult: FileSearchResult;
+  FileStatusEntry: FileStatusEntry;
+  FileStatusRequest: FileStatusRequest;
+  FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
   FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
@@ -71,6 +75,7 @@ export interface ApiSchemas {
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
+  RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
   ScheduleListResponse: ScheduleListResponse;
@@ -93,6 +98,13 @@ export interface ApiSchemas {
   TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnSummaryCost: TurnSummaryCost;
+  TurnSummaryDocument: TurnSummaryDocument;
+  TurnSummaryFile: TurnSummaryFile;
+  TurnSummaryLiveData: TurnSummaryLiveData;
+  TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryPage: TurnSummaryPage;
+  TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
   UndoSettings: UndoSettings;
   UpdateScheduleRequest: UpdateScheduleRequest;
@@ -316,6 +328,13 @@ export interface ConnectRequest {
   base_url?: string | null;
 }
 /**
+ * ``ctx_size`` None returns the model to GAIA's automatic size.
+ */
+export interface ContextRequest {
+  ctx_size?: number | null;
+  model: string;
+}
+/**
  * Request to create a new scheduled task.
  */
 export interface CreateScheduleRequest {
@@ -464,6 +483,29 @@ export interface FileSearchResult {
   path: string;
   size: number;
   size_display: string;
+}
+/**
+ * Whether a file exists now, and when it last changed.
+ */
+export interface FileStatusEntry {
+  exists?: boolean | null;
+  mtime?: number | null;
+  path: string;
+}
+/**
+ * Paths whose current state the side rail re-checks.
+ */
+export interface FileStatusRequest {
+  /**
+   * @maxItems 50
+   */
+  paths: string[];
+}
+/**
+ * Current state of each requested path, in request order.
+ */
+export interface FileStatusResponse {
+  files: FileStatusEntry[];
 }
 /**
  * Response from a file upload.
@@ -645,6 +687,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  turn_summary?: TurnSummaryResponse | null;
 }
 /**
  * RAG source citation.
@@ -655,6 +698,68 @@ export interface SourceInfo {
   filename: string;
   page?: number | null;
   score: number;
+}
+/**
+ * Sources, files and data flow of one turn, for the side rail (#5222).
+ */
+export interface TurnSummaryResponse {
+  cost: TurnSummaryCost;
+  documents?: TurnSummaryDocument[];
+  error?: string | null;
+  files?: TurnSummaryFile[];
+  live_data?: TurnSummaryLiveData;
+  model?: TurnSummaryModel | null;
+  pages?: TurnSummaryPage[];
+  sites?: string[];
+}
+/**
+ * What the turn cost.
+ */
+export interface TurnSummaryCost {
+  kind: string;
+  usd?: number | null;
+}
+/**
+ * A document the turn's answer drew passages from.
+ */
+export interface TurnSummaryDocument {
+  name: string;
+  pages?: number[];
+  passages?: number;
+  path: string;
+}
+/**
+ * A file the turn created or changed.
+ */
+export interface TurnSummaryFile {
+  mtime?: number | null;
+  name: string;
+  openable?: boolean;
+  path: string;
+}
+/**
+ * How the turn's internet tools fared.
+ */
+export interface TurnSummaryLiveData {
+  attempted?: number;
+  failed?: number;
+}
+/**
+ * Where the turn's model ran.
+ */
+export interface TurnSummaryModel {
+  name: string;
+  provider: string;
+  provider_name: string;
+  remote: boolean;
+}
+/**
+ * A web page the turn read, or a search hit when it read none.
+ */
+export interface TurnSummaryPage {
+  kind: string;
+  title?: string | null;
+  url: string;
 }
 /**
  * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
@@ -691,6 +796,7 @@ export interface ModelStatus {
  * Request to open a file or folder in the system file explorer.
  */
 export interface OpenFileRequest {
+  launch?: boolean;
   path: string;
   reveal?: boolean;
 }
@@ -748,6 +854,12 @@ export interface PreflightReport {
   required_memory_gb?: number;
   tier?: string;
   warnings?: string[];
+}
+/**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
 }
 export interface RetryChoiceRequest {
   keep: "original" | "retry";

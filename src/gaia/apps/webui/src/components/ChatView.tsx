@@ -26,6 +26,7 @@ import { RetryWithMenu } from './RetryWithMenu';
 import { AnswerComparison, type ComparisonState } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
+import { SideRail } from './SideRail';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { STARTING_REASON } from '../utils/constants';
@@ -187,6 +188,7 @@ function fromApiMessages(raw: unknown[] | undefined): Message[] {
         ...m,
         agentSteps: m.agentSteps || m.agent_steps || undefined,
         stats: m.stats || m.inference_stats || undefined,
+        turnSummary: m.turnSummary || m.turn_summary || undefined,
     }));
 }
 
@@ -1090,6 +1092,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         rag_sources: null,
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
                         stats: event.stats || undefined,
+                        turnSummary: event.turn_summary || undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
@@ -1793,6 +1796,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <div ref={messagesEndRef} />
                 </div>
             </div>
+
+            <SideRail messages={messages} busy={isStreaming} />
 
             {showScrollBtn && (
                 <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">

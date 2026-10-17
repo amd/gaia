@@ -220,6 +220,21 @@ def message_to_response(msg: dict) -> MessageResponse:
         except Exception:
             stats = None
 
+    turn_summary = None
+    if msg.get("turn_summary"):
+        from pydantic import ValidationError
+
+        from .models import TurnSummaryResponse
+
+        try:
+            turn_summary = TurnSummaryResponse(**msg["turn_summary"])
+        except (ValidationError, TypeError) as exc:
+            logger.warning(
+                "Message %s turn summary does not match the schema: %s",
+                msg.get("id"),
+                exc,
+            )
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -229,6 +244,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         rag_sources=sources,
         agent_steps=agent_steps,
         stats=stats,
+        turn_summary=turn_summary,
     )
 
 
