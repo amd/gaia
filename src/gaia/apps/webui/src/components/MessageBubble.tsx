@@ -11,6 +11,7 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { AnswerStats } from './AnswerStats';
 import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
@@ -403,12 +404,6 @@ function formatFullTimestamp(iso: string): string {
     });
 }
 
-/** Format latency in ms to a human-readable string. */
-function formatLatency(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-}
-
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
@@ -574,26 +569,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
-                        <div className="msg-stats" aria-label="Message performance stats">
+                        <div className="msg-stats" aria-label="About this answer">
                             {message.created_at && (
                                 <span className="msg-stats-ts" title="Message timestamp">
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
                             )}
-                            {latencyMs != null && latencyMs > 0 && (
-                                <span title="Total response time">{formatLatency(latencyMs)}</span>
-                            )}
-                            {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
-                                <span title="Tokens per second, final model call of this answer">{message.stats.tokens_per_second} tok/s</span>
-                            )}
-                            {message.stats?.time_to_first_token != null && message.stats.time_to_first_token > 0 && (
-                                <span title="Time to first token, final model call of this answer">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
-                            )}
-                            {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
-                                <span title="Input → output tokens, all model calls of this answer">
-                                    {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
-                                </span>
-                            )}
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
                     )}
                 </div>
