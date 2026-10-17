@@ -88,6 +88,18 @@
     font-size: 14px;
     font-family: var(--font-sans);
 }
+/* A long path wraps under its own column; the label stays on one line. */
+.setting-row-path {
+    gap: 16px;
+}
+.setting-row-path > :first-child {
+    flex-shrink: 0;
+}
+.setting-row-path > :last-child {
+    min-width: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
 .setting-path {
     font-family: var(--font-mono);
     font-size: 12px;

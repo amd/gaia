@@ -75,7 +75,7 @@ export function UndoHistorySettings() {
                             onChange={(e) => setMb(e.target.value)}
                         />
                     </div>
-                    <div className="setting-row">
+                    <div className="setting-row setting-row-path">
                         <span>In use</span>
                         <span>
                             {formatBytes(settings.used_bytes)} for {settings.turns} turn{settings.turns === 1 ? '' : 's'}
