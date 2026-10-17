@@ -186,6 +186,8 @@ class WarmUpStatus(BaseModel):
     prompt_tokens: Optional[int] = None
     cached_tokens: Optional[int] = None
     error: Optional[str] = None
+    model: Optional[str] = None  # what the warm-up loads, once resolved
+    device: Optional[str] = None  # npu | gpu | cpu; None when unknown
 
 
 class InitTaskInfo(BaseModel):
