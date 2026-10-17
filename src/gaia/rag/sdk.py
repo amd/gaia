@@ -1931,7 +1931,7 @@ These positions indicate where to split the text."""
             return text, metadata
 
         # Text-based files
-        elif file_type in [".txt", ".md", ".markdown", ".rst", ".log"]:
+        elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
