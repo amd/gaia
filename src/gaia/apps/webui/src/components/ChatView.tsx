@@ -22,6 +22,7 @@ import { PermissionPrompt } from './PermissionPrompt';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { STARTING_REASON } from '../utils/constants';
+import { scrollBehavior } from '../utils/motion';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -396,7 +397,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         const doScroll = () => {
             lastScrollRef.current = Date.now();
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
         };
 
         if (elapsed >= THROTTLE_MS) {
@@ -455,7 +456,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
     }, []);
 
     // Stop: ask the server to cancel, but keep reading the stream. The run
@@ -1577,7 +1578,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 window.setTimeout(() => {
                                     document
                                         .getElementById(policyReceiptAnchor(receiptId))
-                                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                        ?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
                                 }, 80);
                             }}
                         >

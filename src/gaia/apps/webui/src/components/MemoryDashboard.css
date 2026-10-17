@@ -491,7 +491,7 @@
 .mem-confidence-fill {
     height: 100%;
     border-radius: var(--radius-full);
-    transition: width 300ms var(--ease);
+    transition: width var(--duration-slow) var(--ease);
 }
 .mem-confidence-fill.high { background: var(--accent-green); }
 .mem-confidence-fill.medium { background: var(--accent-yellow); }
@@ -961,7 +961,7 @@
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 /* ── Inline edit form (used in knowledge create/edit) ────────── */
@@ -1031,7 +1031,7 @@
     padding: 14px 20px 16px;
     background: var(--bg-secondary);
     border-top: 1px solid var(--border-light);
-    animation: detailExpand 200ms var(--ease);
+    animation: detailExpand var(--duration) var(--ease);
 }
 @keyframes detailExpand {
     from { opacity: 0; max-height: 0; }
@@ -1102,7 +1102,7 @@
     height: 100%;
     background: var(--accent-green);
     border-radius: var(--radius-full);
-    transition: width 400ms var(--ease);
+    transition: width var(--duration-slow) var(--ease);
 }
 .mem-embedding-label {
     font-size: 11px;
@@ -1129,7 +1129,7 @@
     box-shadow: var(--shadow-lg);
     padding: 4px;
     z-index: 20;
-    animation: modalPanelIn 150ms var(--ease);
+    animation: modalPanelIn var(--duration-fast) var(--ease);
 }
 .mem-maintenance-item {
     display: flex;
@@ -1162,7 +1162,7 @@
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 /* ── Embedding status dot (per knowledge row) ───────────────── */
@@ -1239,7 +1239,7 @@
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--text-primary);
-    animation: toastIn 250ms var(--ease);
+    animation: toastIn var(--duration) var(--ease);
     pointer-events: auto;
 }
 .mem-toast-success { border-left: 3px solid var(--accent-green); }
@@ -1736,7 +1736,7 @@
 .mem-goal-card {
     border: 1px solid var(--border); border-radius: var(--radius-lg);
     background: var(--bg-card); overflow: hidden;
-    transition: border-color 150ms;
+    transition: border-color var(--duration-fast) var(--ease);
 }
 .mem-goal-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -1788,7 +1788,7 @@
     background: color-mix(in srgb, var(--danger) 15%, transparent);
     border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
-.mem-chevron-open { transform: rotate(180deg); transition: transform 150ms; }
+.mem-chevron-open { transform: rotate(180deg); transition: transform var(--duration-fast) var(--ease); }
 
 /* Goal body (expanded) */
 .mem-goal-body {
