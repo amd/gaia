@@ -2,25 +2,22 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The rail beside the answer (#5222): the pages and document passages the
- * latest turn used, the files it wrote, and where its data went — the model's
- * location, the sites contacted, and the cost. Built from the backend's
- * `turn_summary`, so a cloud turn names its provider and a local one says so.
+ * "This answer" (#5222), the session panel's first section: the pages and
+ * document passages the latest turn used, the files it wrote, and where its
+ * data went — the model's location, the sites contacted, and the cost. Built
+ * from the backend's `turn_summary`, so a cloud turn names its provider and a
+ * local one says so.
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
 import {
     AlertTriangle, ChevronRight, Cloud, ExternalLink, FileText, FolderOpen,
-    Globe, Monitor, PanelRightClose, PanelRightOpen, X,
+    Globe, Monitor,
 } from 'lucide-react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import type { Message, TurnSummary } from '../types';
 import './SideRail.css';
-
-/** Below this window width the rail folds into a button. */
-export const SIDE_RAIL_FOLD_QUERY = '(max-width: 1099px)';
-const COLLAPSED_KEY = 'gaia.sideRail.collapsed';
 
 /** What the rail shows: the latest answer's summary, a turn in progress, or nothing. */
 export type RailState = { kind: 'turn'; turn: Message } | { kind: 'busy' } | null;
@@ -37,38 +34,6 @@ export function railState(messages: Message[], busy: boolean): RailState {
 export function liveDataFailed(summary: TurnSummary): boolean {
     const attempted = summary.live_data?.attempted ?? 0;
     return attempted > 0 && (summary.live_data?.failed ?? 0) >= attempted;
-}
-
-function useFolded(): boolean {
-    const query = () => typeof window.matchMedia === 'function'
-        && window.matchMedia(SIDE_RAIL_FOLD_QUERY).matches;
-    const [folded, setFolded] = useState(query);
-    useEffect(() => {
-        if (typeof window.matchMedia !== 'function') return;
-        const mq = window.matchMedia(SIDE_RAIL_FOLD_QUERY);
-        const sync = () => setFolded(mq.matches);
-        sync();
-        mq.addEventListener('change', sync);
-        return () => mq.removeEventListener('change', sync);
-    }, []);
-    return folded;
-}
-
-function readCollapsed(): boolean {
-    try {
-        return window.localStorage.getItem(COLLAPSED_KEY) === '1';
-    } catch (err) {
-        log.ui.warn('Side rail state unavailable; starting open', err);
-        return false;
-    }
-}
-
-function writeCollapsed(collapsed: boolean): void {
-    try {
-        window.localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
-    } catch (err) {
-        log.ui.warn('Could not remember the side rail state', err);
-    }
 }
 
 function hostOf(url: string): string {
@@ -99,96 +64,46 @@ function errorText(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
 }
 
-interface SideRailProps {
+interface ThisAnswerProps {
     messages: Message[];
     /** A turn is running, so the latest answer is not the one being written. */
     busy?: boolean;
 }
 
-export function SideRail({ messages, busy = false }: SideRailProps) {
+/** The latest answer's sources, files and where its data went: the session panel's first section. */
+export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
     const state = railState(messages, busy);
-    const turn = state?.kind === 'turn' ? state.turn : null;
-    const summary = turn?.turnSummary ?? null;
-    const folded = useFolded();
-    const [collapsed, setCollapsed] = useState(readCollapsed);
-    const [overlayOpen, setOverlayOpen] = useState(false);
-
-    // A new turn closes the overlay so it never shows a stale turn on top.
-    useEffect(() => { setOverlayOpen(false); }, [turn?.id, busy]);
-
     if (!state) return null;
+    const summary = state.kind === 'turn' ? state.turn.turnSummary ?? null : null;
     const noLiveData = summary ? liveDataFailed(summary) : false;
-
-    if (folded ? !overlayOpen : collapsed) {
-        const open = () => {
-            if (folded) {
-                setOverlayOpen(true);
-            } else {
-                setCollapsed(false);
-                writeCollapsed(false);
-            }
-        };
-        return (
-            <button
-                type="button"
-                className={`side-rail-tab${noLiveData ? ' side-rail-tab-warn' : ''}`}
-                onClick={open}
-                aria-label="Show sources and turn details"
-            >
-                {noLiveData ? <AlertTriangle size={13} aria-hidden="true" /> : <PanelRightOpen size={13} aria-hidden="true" />}
-                <span>{noLiveData ? "Couldn't get live data" : 'Sources & details'}</span>
-            </button>
-        );
-    }
-
-    const close = () => {
-        if (folded) {
-            setOverlayOpen(false);
-        } else {
-            setCollapsed(true);
-            writeCollapsed(true);
-        }
-    };
-
     return (
-        <aside
-            className={`side-rail ${folded ? 'side-rail-overlay' : 'side-rail-docked'}`}
-            aria-label="Sources and turn details"
-        >
-            <div className="side-rail-head">
-                <span className="side-rail-title">This answer</span>
-                <button type="button" className="btn-icon-sm" onClick={close} aria-label="Hide sources and turn details">
-                    {folded ? <X size={14} /> : <PanelRightClose size={14} />}
-                </button>
-            </div>
-            <div className="side-rail-body">
-                {!summary && (
-                    <p className="side-rail-pending" role="status">
-                        Working on this answer. Its sources, files and where its data went appear here when it finishes.
-                    </p>
-                )}
-                {noLiveData && (
-                    <div className="side-rail-warn" role="status">
-                        <AlertTriangle size={14} aria-hidden="true" />
-                        <div>
-                            <strong>Couldn't get live data</strong>
-                            <span>Every web lookup this turn failed, so the answer isn't based on current information.</span>
-                        </div>
+        <div className="side-rail-body">
+            {!summary && (
+                <p className="side-rail-pending" role="status">
+                    Working on this answer. Its sources, files and where its data went appear here when it finishes.
+                </p>
+            )}
+            {noLiveData && (
+                <div className="side-rail-warn" role="status">
+                    <AlertTriangle size={14} aria-hidden="true" />
+                    <div>
+                        <strong>Couldn't get live data</strong>
+                        <span>Every web lookup this turn failed, so the answer isn't based on current information.</span>
                     </div>
-                )}
-                {summary && (summary.error ? (
-                    <p className="side-rail-error" role="alert">
-                        Couldn't put together this turn's sources and details: {summary.error}
-                    </p>
-                ) : (
-                    <>
-                        <SourcesSection summary={summary} />
-                        <FilesSection summary={summary} />
-                        <ThisTurnSection summary={summary} />
-                    </>
-                ))}
-            </div>
-        </aside>
+                </div>
+            )}
+            {summary && (summary.error ? (
+                <p className="side-rail-error" role="alert">
+                    Couldn't put together this turn's sources and details: {summary.error}
+                </p>
+            ) : (
+                <>
+                    <SourcesSection summary={summary} />
+                    <FilesSection summary={summary} />
+                    <ThisTurnSection summary={summary} />
+                </>
+            ))}
+        </div>
     );
 }
 

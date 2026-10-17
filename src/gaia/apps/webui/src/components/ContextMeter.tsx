@@ -28,10 +28,12 @@ interface ContextMeterProps {
     sessionId?: string;
     busy?: boolean;
     onUsage?: (usage: ContextUsage) => void;
+    /** Show the details somewhere else (the session panel) instead of a sheet. */
+    onDetails?: () => void;
 }
 
 /** How full the model's context window is, with a breakdown on click. */
-export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUsage }: ContextMeterProps) {
+export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUsage, onDetails }: ContextMeterProps) {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [details, setDetails] = useState(false);
@@ -100,7 +102,11 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                         <button
                             type="button"
                             className="context-meter-details"
-                            onClick={() => { setOpen(false); setDetails(true); }}
+                            onClick={() => {
+                                setOpen(false);
+                                if (onDetails) onDetails();
+                                else setDetails(true);
+                            }}
                         >
                             Details: context &amp; performance
                         </button>

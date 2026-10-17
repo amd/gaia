@@ -6,6 +6,7 @@
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ContextUsage, RetryResult, ActiveRuns, ProviderModelsResponse, ContextChoice, LocalModelStatus, ChatPerformance } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -1183,4 +1184,48 @@ export async function getUndoSettings(): Promise<UndoSettings> {
 
 export async function updateUndoSettings(retentionDays: number, maxMb: number): Promise<UndoSettings> {
     return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
+}
+
+// -- Session panel: Environment, Outputs, Changes (#5279) --------------------
+
+const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
+
+export async function getEnvironment(sessionId: string): Promise<SessionEnvironment> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/environment`);
+}
+
+export async function addEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
+}
+
+export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
+}
+
+export async function setInternet(sessionId: string, on: boolean): Promise<SessionEnvironment> {
+    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/internet`, { on });
+}
+
+export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
+}
+
+export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/total`);
+}
+
+export async function undoAllChanges(sessionId: string, force = false): Promise<UndoAllResult> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/undo`, { force });
+}
+
+export async function getSessionGit(sessionId: string): Promise<SessionGit> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
+}
+
+export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[] }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
+}
+
+export async function createPullRequest(sessionId: string, root: string, title: string, body: string): Promise<{ root: string; url: string }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/pr`, { root, title, body, confirmed: true });
 }

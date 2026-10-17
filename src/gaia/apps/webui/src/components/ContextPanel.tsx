@@ -211,27 +211,23 @@ function BeyondTheWindow({ usage }: { usage: ContextUsage }) {
     );
 }
 
-interface ContextPanelProps {
+interface ContextDetailsProps {
     sessionId: string;
-    /** A reply is running; the panel refreshes once it ends. */
+    /** A reply is running; the details refresh once it ends. */
     busy: boolean;
-    onClose: () => void;
-    /** The measured usage, so the meter shows the same total as the panel. */
+    /** The measured usage, so the meter shows the same total as the details. */
     onUsage?: (usage: ContextUsage) => void;
 }
 
-/** What fills the context window and where each turn's time went. Fetches only while open. */
-export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanelProps) {
+/** What fills the context window and where each turn's time went. Fetches only while shown. */
+export function ContextDetails({ sessionId, busy, onUsage }: ContextDetailsProps) {
     const [usage, setUsage] = useState<ContextUsage | null>(null);
     const [unavailable, setUnavailable] = useState<string | null>(null);
     const [perf, setPerf] = useState<ChatPerformance | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [scope, setScope] = useState<'turn' | 'chat'>('turn');
-    const closeRef = useRef<HTMLButtonElement>(null);
     const onUsageRef = useRef(onUsage);
     onUsageRef.current = onUsage;
-    const onCloseRef = useRef(onClose);
-    onCloseRef.current = onClose;
 
     const load = useCallback(() => {
         let stale = false;
@@ -266,6 +262,135 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
         return ended ? load() : undefined;
     }, [busy, load]);
 
+    const last = perf?.turns[perf.turns.length - 1] ?? null;
+    // A newer answer with no record (e.g. a kept "Retry with") makes the last turn unknown.
+    const latest = last && last.message_id === perf?.latest_message_id ? last : null;
+    const free = usage ? Math.max(0, usage.window - usage.used) : 0;
+
+    return (
+        <>
+            {error && <p className="cp-error" role="alert">{error}</p>}
+
+            <section aria-labelledby="cp-context">
+                <h3 id="cp-context">Context</h3>
+                {!usage && <p className="cp-note">{unavailable ?? 'Measuring…'}</p>}
+                {usage && (
+                    <>
+                        <p className="cp-lead">
+                            <strong>{pct(usage.used, usage.window)}% used</strong>
+                            {' · '}<Tokens n={usage.used} /> of <Tokens n={usage.window} /> tokens
+                            {usage.model && <> · <span className="cp-model">{usage.model}</span></>}
+                            {usage.tokenizer && !usage.tokenizer.exact && (
+                                <span className="cp-chip" title={usage.tokenizer.reason}>approx.</span>
+                            )}
+                        </p>
+                        <div className="cp-stack" aria-hidden="true">
+                            {(usage.categories ?? []).map((c) => (
+                                <span key={c.key} className={`cp-cat-${c.key}`} style={{ width: `${(c.tokens / usage.window) * 100}%` }} />
+                            ))}
+                        </div>
+                        <dl className="cp-rows">
+                            {(usage.categories ?? []).map((c) => (
+                                <div key={c.key} className="cp-row">
+                                    <dt><span className={`swatch cp-cat-${c.key}`} aria-hidden="true" />{c.label}</dt>
+                                    <dd><Tokens n={c.tokens} /> <span className="cp-pct">{pct(c.tokens, usage.window)}%</span></dd>
+                                </div>
+                            ))}
+                            <div className="cp-row is-quiet">
+                                <dt><span className="swatch cp-cat-free" aria-hidden="true" />Free</dt>
+                                <dd><Tokens n={free} /> <span className="cp-pct">{pct(free, usage.window)}%</span></dd>
+                            </div>
+                            <div className="cp-row is-quiet cp-indent">
+                                <dt>of which kept for the reply</dt>
+                                <dd><Tokens n={Math.min(free, usage.reply_reserve)} /></dd>
+                            </div>
+                        </dl>
+                        <p className="cp-note">
+                            {usage.tokenizer?.exact
+                                ? `Each part counted with ${usage.tokenizer.model}'s own tokenizer.`
+                                : `Estimated: ${usage.tokenizer?.reason ?? 'counted with a shared tokenizer.'}`}
+                            {latest?.last_prompt_tokens != null && (
+                                <>
+                                    {' '}The last request carried{' '}
+                                    <span title={`${exact(latest.last_prompt_tokens)} tokens`}>
+                                        {exact(latest.last_prompt_tokens)}
+                                    </span>{' '}
+                                    tokens as the model server counted them, chat formatting included.
+                                </>
+                            )}
+                        </p>
+                        {usage.tool_loading && usage.tool_loading.on_demand.length > 0 && (
+                            <details className="cp-details">
+                                <summary>
+                                    {usage.tool_loading.on_demand.length} more tools load only when needed
+                                </summary>
+                                <p className="cp-note">
+                                    Sent now: {usage.tool_loading.loaded.length}. These cost nothing until a turn needs them:
+                                </p>
+                                <ul className="cp-tools">
+                                    {usage.tool_loading.on_demand.map((t) => <li key={t}>{t}</li>)}
+                                </ul>
+                            </details>
+                        )}
+                        <BeyondTheWindow usage={usage} />
+                    </>
+                )}
+            </section>
+
+            <section aria-labelledby="cp-hood">
+                <div className="cp-section-head">
+                    <h3 id="cp-hood">Under the hood</h3>
+                    <div className="cp-toggle" role="group" aria-label="Show">
+                        <button type="button" aria-pressed={scope === 'turn'} onClick={() => setScope('turn')}>Last turn</button>
+                        <button type="button" aria-pressed={scope === 'chat'} onClick={() => setScope('chat')}>This chat</button>
+                    </div>
+                </div>
+                {perf && (
+                    <dl className="cp-rows">
+                        <Row label="Runs on" hint={perf.now.error ?? undefined}>{placement(perf.now)}</Row>
+                        {perf.now.provider === 'local' && (
+                            <Row label="Model memory" hint="Model weights + KV cache at this window; free memory now">
+                                {perf.now.weights_gb == null
+                                    ? <span className="cp-unknown">{UNKNOWN}</span>
+                                    : <>
+                                        {perf.now.weights_gb.toFixed(1)} GB model
+                                        {perf.now.kv_cache_gb != null && ` + ${perf.now.kv_cache_gb.toFixed(1)} GB cache`}
+                                    </>}
+                                {' · '}
+                                {perf.now.free_gb == null ? <span className="cp-unknown">free {UNKNOWN}</span> : `${perf.now.free_gb.toFixed(1)} GB free`}
+                            </Row>
+                        )}
+                    </dl>
+                )}
+                {!perf && !error && <p className="cp-note">Measuring…</p>}
+                {perf && scope === 'turn' && (latest
+                    ? <TurnStats turn={latest} />
+                    : <p className="cp-note">
+                        {perf.latest_message_id == null
+                            ? "Shown after GAIA's next answer in this chat."
+                            : <>Latest answer: <span className="cp-unknown">{UNKNOWN}</span>. It was not measured.</>}
+                    </p>)}
+                {perf && scope === 'chat' && <ChatTotals totals={perf.totals} />}
+            </section>
+        </>
+    );
+}
+
+interface ContextPanelProps {
+    sessionId: string;
+    /** A reply is running; the panel refreshes once it ends. */
+    busy: boolean;
+    onClose: () => void;
+    /** The measured usage, so the meter shows the same total as the panel. */
+    onUsage?: (usage: ContextUsage) => void;
+}
+
+/** The context details as a sheet of their own, for hosts without the session panel. */
+export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanelProps) {
+    const closeRef = useRef<HTMLButtonElement>(null);
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
+
     // Mount only: re-running on each parent render would pull focus back to Close.
     useEffect(() => {
         closeRef.current?.focus();
@@ -273,11 +398,6 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
     }, []);
-
-    const last = perf?.turns[perf.turns.length - 1] ?? null;
-    // A newer answer with no record (e.g. a kept "Retry with") makes the last turn unknown.
-    const latest = last && last.message_id === perf?.latest_message_id ? last : null;
-    const free = usage ? Math.max(0, usage.window - usage.used) : 0;
 
     return (
         <div className="cp-overlay" onClick={onClose}>
@@ -295,109 +415,7 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
                     </button>
                 </header>
                 <div className="cp-body">
-                    {error && <p className="cp-error" role="alert">{error}</p>}
-
-                    <section aria-labelledby="cp-context">
-                        <h3 id="cp-context">Context</h3>
-                        {!usage && <p className="cp-note">{unavailable ?? 'Measuring…'}</p>}
-                        {usage && (
-                            <>
-                                <p className="cp-lead">
-                                    <strong>{pct(usage.used, usage.window)}% used</strong>
-                                    {' · '}<Tokens n={usage.used} /> of <Tokens n={usage.window} /> tokens
-                                    {usage.model && <> · <span className="cp-model">{usage.model}</span></>}
-                                    {usage.tokenizer && !usage.tokenizer.exact && (
-                                        <span className="cp-chip" title={usage.tokenizer.reason}>approx.</span>
-                                    )}
-                                </p>
-                                <div className="cp-stack" aria-hidden="true">
-                                    {(usage.categories ?? []).map((c) => (
-                                        <span key={c.key} className={`cp-cat-${c.key}`} style={{ width: `${(c.tokens / usage.window) * 100}%` }} />
-                                    ))}
-                                </div>
-                                <dl className="cp-rows">
-                                    {(usage.categories ?? []).map((c) => (
-                                        <div key={c.key} className="cp-row">
-                                            <dt><span className={`swatch cp-cat-${c.key}`} aria-hidden="true" />{c.label}</dt>
-                                            <dd><Tokens n={c.tokens} /> <span className="cp-pct">{pct(c.tokens, usage.window)}%</span></dd>
-                                        </div>
-                                    ))}
-                                    <div className="cp-row is-quiet">
-                                        <dt><span className="swatch cp-cat-free" aria-hidden="true" />Free</dt>
-                                        <dd><Tokens n={free} /> <span className="cp-pct">{pct(free, usage.window)}%</span></dd>
-                                    </div>
-                                    <div className="cp-row is-quiet cp-indent">
-                                        <dt>of which kept for the reply</dt>
-                                        <dd><Tokens n={Math.min(free, usage.reply_reserve)} /></dd>
-                                    </div>
-                                </dl>
-                                <p className="cp-note">
-                                    {usage.tokenizer?.exact
-                                        ? `Each part counted with ${usage.tokenizer.model}'s own tokenizer.`
-                                        : `Estimated: ${usage.tokenizer?.reason ?? 'counted with a shared tokenizer.'}`}
-                                    {latest?.last_prompt_tokens != null && (
-                                        <>
-                                            {' '}The last request carried{' '}
-                                            <span title={`${exact(latest.last_prompt_tokens)} tokens`}>
-                                                {exact(latest.last_prompt_tokens)}
-                                            </span>{' '}
-                                            tokens as the model server counted them, chat formatting included.
-                                        </>
-                                    )}
-                                </p>
-                                {usage.tool_loading && usage.tool_loading.on_demand.length > 0 && (
-                                    <details className="cp-details">
-                                        <summary>
-                                            {usage.tool_loading.on_demand.length} more tools load only when needed
-                                        </summary>
-                                        <p className="cp-note">
-                                            Sent now: {usage.tool_loading.loaded.length}. These cost nothing until a turn needs them:
-                                        </p>
-                                        <ul className="cp-tools">
-                                            {usage.tool_loading.on_demand.map((t) => <li key={t}>{t}</li>)}
-                                        </ul>
-                                    </details>
-                                )}
-                                <BeyondTheWindow usage={usage} />
-                            </>
-                        )}
-                    </section>
-
-                    <section aria-labelledby="cp-hood">
-                        <div className="cp-section-head">
-                            <h3 id="cp-hood">Under the hood</h3>
-                            <div className="cp-toggle" role="group" aria-label="Show">
-                                <button type="button" aria-pressed={scope === 'turn'} onClick={() => setScope('turn')}>Last turn</button>
-                                <button type="button" aria-pressed={scope === 'chat'} onClick={() => setScope('chat')}>This chat</button>
-                            </div>
-                        </div>
-                        {perf && (
-                            <dl className="cp-rows">
-                                <Row label="Runs on" hint={perf.now.error ?? undefined}>{placement(perf.now)}</Row>
-                                {perf.now.provider === 'local' && (
-                                    <Row label="Model memory" hint="Model weights + KV cache at this window; free memory now">
-                                        {perf.now.weights_gb == null
-                                            ? <span className="cp-unknown">{UNKNOWN}</span>
-                                            : <>
-                                                {perf.now.weights_gb.toFixed(1)} GB model
-                                                {perf.now.kv_cache_gb != null && ` + ${perf.now.kv_cache_gb.toFixed(1)} GB cache`}
-                                            </>}
-                                        {' · '}
-                                        {perf.now.free_gb == null ? <span className="cp-unknown">free {UNKNOWN}</span> : `${perf.now.free_gb.toFixed(1)} GB free`}
-                                    </Row>
-                                )}
-                            </dl>
-                        )}
-                        {!perf && !error && <p className="cp-note">Measuring…</p>}
-                        {perf && scope === 'turn' && (latest
-                            ? <TurnStats turn={latest} />
-                            : <p className="cp-note">
-                                {perf.latest_message_id == null
-                                    ? "Shown after GAIA's next answer in this chat."
-                                    : <>Latest answer: <span className="cp-unknown">{UNKNOWN}</span>. It was not measured.</>}
-                            </p>)}
-                        {perf && scope === 'chat' && <ChatTotals totals={perf.totals} />}
-                    </section>
+                    <ContextDetails sessionId={sessionId} busy={busy} onUsage={onUsage} />
                 </div>
             </aside>
         </div>
