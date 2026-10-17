@@ -236,11 +236,13 @@ class TestConsolidation:
 class TestExtraction:
     def test_a_turn_queued_before_the_forget_does_not_store_it(self, store):
         host = _Host(store, [_add_op(FACT)])
+        # A turn in flight holds the queued job, so the forget lands first.
+        host._note_user_turn_started()
         host._after_process_query(
             "Please remember that my favourite colour is teal", "Noted."
         )
-        # The forget lands while the job is still waiting for the user to go idle.
         _forget_fact(store)
+        host._note_user_turn_finished()
 
         assert host.wait_for_memory_extraction(timeout=10)
 
