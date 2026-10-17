@@ -88,6 +88,10 @@ degradation — the palette's rule is that a colour may fade toward neutral, but
 may never land on a *different* saturated meaning. Truecolor terminals render
 `#9A4930` as copper.
 
+The Agent UI used the same `#9A4930` until it moved to brass. The TUI keeps
+copper for now; see [The Agent UI's palette](#the-agent-uis-palette) for why the
+light brass cannot simply follow it into the terminal.
+
 ## The Agent UI's palette
 
 The Agent UI is a full-window app with a canvas it owns, so it carries its own
@@ -119,6 +123,13 @@ its light wash and 6.43:1 on its dark one.
 apart, which breaks the "never let two roles share a hue family" rule if colour
 is all that tells them apart. So a warning in the Agent UI must carry its alert
 icon and a word, never colour alone, and brass never appears on a warning.
+
+**The TUI keeps copper until a terminal-safe brass exists.** On a 256-colour
+terminal the light brass `#7A5A22` rounds to `#875F00`, the entry the TUI
+already uses for Warning and Selected, which is the collision the copper was
+chosen to avoid. The two surfaces carry different accents until that is solved;
+`website/src/design/cross-surface.test.ts` pins the TUI's copper on its own
+meanwhile.
 
 **Depth is layered and answers interaction.** Raised surfaces carry a 1px light
 top rim, a hairline edge and stacked soft shadows (`--shadow-sm`, `-md`, `-lg`).
