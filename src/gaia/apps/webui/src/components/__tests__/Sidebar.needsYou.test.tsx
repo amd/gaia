@@ -159,12 +159,12 @@ describe('eval and scheduled runs', () => {
 
     it('shows them behind the filter, and remembers the choice', () => {
         const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Show 2 eval and scheduled runs' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Show 2 background runs' }));
         expect(screen.getByText('Eval: rag_quality_01')).toBeInTheDocument();
         unmount();
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByText('Schedule: morning brief')).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Hide eval and scheduled runs' })).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByRole('button', { name: 'Hide background runs' })).toHaveAttribute('aria-pressed', 'true');
     });
 });
 

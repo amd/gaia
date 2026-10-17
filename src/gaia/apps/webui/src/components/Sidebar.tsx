@@ -345,8 +345,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             aria-pressed={showAutomated}
                         >
                             {showAutomated
-                                ? 'Hide eval and scheduled runs'
-                                : `Show ${hiddenCount} eval and scheduled run${hiddenCount === 1 ? '' : 's'}`}
+                                ? 'Hide background runs'
+                                : `Show ${hiddenCount} background run${hiddenCount === 1 ? '' : 's'}`}
                         </button>
                     )}
                     {deleteError && <p className="sb-error" role="alert">{deleteError}</p>}
