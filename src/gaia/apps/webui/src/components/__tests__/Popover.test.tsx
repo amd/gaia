@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useRef } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Popover } from '../Popover';
 
@@ -57,6 +57,28 @@ describe('Popover placement', () => {
         const menu = screen.getByRole('dialog', { name: 'Menu' });
         expect(menu).toHaveClass('popover-above');
         expect(menu.style.getPropertyValue('--popover-room')).toBe('486px');
+    });
+
+    it('re-measures when its content arrives after opening', async () => {
+        vi.spyOn(HTMLButtonElement.prototype, 'getBoundingClientRect').mockReturnValue(
+            { top: 250, bottom: 280 } as DOMRect,
+        );
+        const height = vi.spyOn(HTMLDivElement.prototype, 'scrollHeight', 'get').mockReturnValue(40);
+        const anchorRef = { current: null as HTMLButtonElement | null };
+        const view = (items: number) => (
+            <div>
+                <button ref={anchorRef} type="button">Anchor</button>
+                <Popover open onClose={() => {}} anchor={anchorRef} label="Menu">
+                    {Array.from({ length: items }, (_, i) => <button key={i} type="button">Model {i}</button>)}
+                </Popover>
+            </div>
+        );
+        const { rerender } = render(view(1));
+        expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveClass('popover-above');
+
+        height.mockReturnValue(400);
+        rerender(view(12));
+        await waitFor(() => expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveClass('popover-below'));
     });
 
     it('flips above when asked for below but the space is above', () => {
