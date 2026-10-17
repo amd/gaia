@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -23,6 +23,7 @@ from starlette.background import BackgroundTask
 
 from gaia.agents.base.tool_grants import grant_scope
 
+from .. import answer_retry, followups
 from .. import permissions as session_permissions
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -606,3 +607,217 @@ async def attach_stream(session_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class FollowUpRequest(BaseModel):
+    session_id: str
+    text: str
+
+
+@router.post("/api/chat/followup")
+async def send_followup(request: FollowUpRequest):
+    """Hand a message to the session's running turn, picked up at its next step.
+
+    404 means no turn is running, 409 that the running one cannot take it
+    (not yet at the model, or relayed to an agent outside this process). Either
+    way the message was not delivered, so the caller must queue it.
+    """
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="A follow-up needs some text.")
+    if not run_manager.is_running(request.session_id):
+        raise HTTPException(
+            status_code=404,
+            detail="No reply is running in this chat; send it as a new message.",
+        )
+    if not followups.deliver(request.session_id, text):
+        raise HTTPException(
+            status_code=409,
+            detail="The running reply cannot take a message right now; it is "
+            "sent as the next message once the reply ends.",
+        )
+    return {"delivered": True}
+
+
+@router.get("/api/chat/context/{session_id}")
+async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """How full the model's context is for this chat's next message, by kind."""
+    if not db.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    from .._chat_helpers import cached_session_agent, model_turns
+
+    agent = cached_session_agent(session_id)
+    if agent is None:
+        return {
+            "available": False,
+            "reason": "Measured once GAIA has answered in this chat.",
+        }
+    from ..turn_insights import (
+        context_categories,
+        context_state,
+        measure_context,
+        tools_by_load,
+    )
+
+    def _measure():
+        usage = measure_context(
+            agent, model_turns(agent, db, session_id), getattr(agent, "model_id", None)
+        )
+        usage["categories"] = context_categories(usage)
+        usage["tool_loading"] = tools_by_load(agent)
+        usage["model"] = getattr(agent, "model_id", None)
+        usage["context_state"] = context_state(agent)
+        return usage
+
+    return {"available": True, **(await asyncio.to_thread(_measure))}
+
+
+@router.get("/api/chat/performance/{session_id}")
+async def get_chat_performance(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Where each turn's time went, the chat's totals, and the model's state now."""
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    from .._chat_helpers import (
+        cached_session_agent,
+        get_agent_registry,
+        resolve_session_model,
+    )
+    from ..turn_insights import chat_totals, model_now
+
+    agent = cached_session_agent(session_id)
+    model = getattr(agent, "model_id", None) if agent is not None else None
+    if not model:
+        # Before the agent exists, the model the turn will run, not the stored default.
+        model = resolve_session_model(
+            session,
+            session.get("agent_type") or "chat",
+            db.get_setting("custom_model"),
+            get_agent_registry(),
+        )[0]
+
+    def _read():
+        turns = db.turn_performance(session_id)
+        return {
+            # The newest answer; "last turn" is unknown when it has no record.
+            "latest_message_id": db.latest_message_id(session_id, role="assistant"),
+            "turns": turns,
+            "totals": chat_totals(turns),
+            "now": model_now(model),
+        }
+
+    return await asyncio.to_thread(_read)
+
+
+class RetryWithRequest(BaseModel):
+    session_id: str
+    message_id: int
+    model: str
+
+
+@router.post("/api/chat/retry-with")
+async def retry_with(
+    request: RetryWithRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Answer the latest question again on another local model, to compare.
+
+    The answer is held until ``/api/chat/retry-with/choose`` keeps one.
+    """
+    from gaia.llm.lemonade_client import cloud_model_provider, resolve_ctx_size
+
+    sid = request.session_id
+    if not db.get_session(sid):
+        raise HTTPException(status_code=404, detail="Session not found")
+    if cloud_model_provider(request.model, None):
+        raise HTTPException(
+            status_code=400,
+            detail="Retry with… compares models on this PC; pick a local model.",
+        )
+    if db.latest_message_id(sid) != request.message_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Only the latest answer can be retried with another model.",
+        )
+    record = db.get_message_record(sid, request.message_id)
+    if record is None or record["role"] != "assistant":
+        raise HTTPException(
+            status_code=409, detail="Only an answer from GAIA can be retried."
+        )
+
+    session_lock = http_request.app.state.session_locks.setdefault(sid, asyncio.Lock())
+    if session_lock.locked() or run_manager.is_running(sid):
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is still answering in this chat. Retry once it finishes.",
+        )
+    # Loading the other model unloads the one any running chat is using.
+    chat_semaphore = http_request.app.state.chat_semaphore
+    if chat_semaphore.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is answering in another chat. Retry once it finishes.",
+        )
+    async with session_lock, chat_semaphore:
+        try:
+            earlier, question, recorded = answer_retry.split_latest_turn(
+                db.get_context_messages(sid), record
+            )
+            messages = answer_retry.build_retry_messages(
+                earlier, question, resolve_ctx_size(request.model)
+            )
+            result = await asyncio.to_thread(
+                answer_retry.answer_with, request.model, messages
+            )
+        except answer_retry.RetryError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    answer_retry.store_pending(
+        sid,
+        answer_retry.PendingRetry(
+            message_id=request.message_id,
+            model=request.model,
+            content=result["content"],
+            turn=question,
+            recorded=recorded,
+            stats=result["stats"],
+        ),
+    )
+    return {"message_id": request.message_id, "model": request.model, **result}
+
+
+class RetryChoiceRequest(BaseModel):
+    session_id: str
+    message_id: int
+    keep: Literal["original", "retry"]
+
+
+@router.post("/api/chat/retry-with/choose")
+async def choose_retry(request: RetryChoiceRequest, db: ChatDatabase = Depends(get_db)):
+    """Keep the original or the retried answer; the chat continues from it."""
+    sid = request.session_id
+    pending = answer_retry.take_pending(sid, request.message_id)
+    if pending is None:
+        raise HTTPException(
+            status_code=404,
+            detail="That comparison is no longer open (GAIA restarted, or a "
+            "newer one replaced it). Run Retry with… again.",
+        )
+    if request.keep == "original":
+        return {"kept": "original"}
+    if db.latest_message_id(sid) != request.message_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The chat moved on since this comparison; only the latest "
+            "answer can be replaced.",
+        )
+    model_messages = (
+        [*pending.turn, {"role": "assistant", "content": pending.content}]
+        if pending.recorded
+        else None
+    )
+    if not db.replace_answer(
+        sid, request.message_id, pending.content, model_messages, pending.stats
+    ):
+        raise HTTPException(status_code=404, detail="That answer no longer exists.")
+    return {"kept": "retry", "content": pending.content, "stats": pending.stats}

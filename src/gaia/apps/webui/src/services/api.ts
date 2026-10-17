@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ContextUsage, ChatPerformance, RetryResult, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -583,6 +583,7 @@ const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
+    'followup_taken', 'followup_returned', 'context_usage',
 ]);
 
 export function sendMessageStream(
@@ -652,7 +653,7 @@ async function consumeSSEResponse(
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
-        callbacks.onError(new Error(`HTTP ${res.status}: ${errText}`));
+        callbacks.onError(new ApiError(`HTTP ${res.status}: ${errText}`, res.status, errText, null));
         return;
     }
 
@@ -831,6 +832,35 @@ export async function respondToInput(
 /** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
 export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
     return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
+}
+
+/** Hand a message to the session's running turn. Rejects when it was not delivered. */
+export async function sendFollowUp(sessionId: string, text: string): Promise<{ delivered: boolean }> {
+    return apiFetch('POST', '/chat/followup', { session_id: sessionId, text });
+}
+
+export async function getContextUsage(
+    sessionId: string,
+): Promise<({ available: true } & ContextUsage) | { available: false; reason: string }> {
+    return apiFetch('GET', `/chat/context/${encodeURIComponent(sessionId)}`);
+}
+
+/** Each turn's measured timing, the chat's totals, and the model's state now. */
+export async function getChatPerformance(sessionId: string): Promise<ChatPerformance> {
+    return apiFetch('GET', `/chat/performance/${encodeURIComponent(sessionId)}`);
+}
+
+/** Answer the latest question again on another local model; held until one is kept. */
+export async function retryWith(sessionId: string, messageId: number, model: string): Promise<RetryResult> {
+    return apiFetch('POST', '/chat/retry-with', { session_id: sessionId, message_id: messageId, model });
+}
+
+export async function chooseRetry(
+    sessionId: string,
+    messageId: number,
+    keep: 'original' | 'retry',
+): Promise<{ kept: 'original' } | { kept: 'retry'; content: string; stats: RetryResult['stats'] }> {
+    return apiFetch('POST', '/chat/retry-with/choose', { session_id: sessionId, message_id: messageId, keep });
 }
 
 // -- Documents -----------------------------------------------------------------

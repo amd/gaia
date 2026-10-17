@@ -41,6 +41,7 @@ export interface ApiSchemas {
   FileSearchResponse: FileSearchResponse;
   FileSearchResult: FileSearchResult;
   FileUploadResponse: FileUploadResponse;
+  FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
@@ -69,6 +70,8 @@ export interface ApiSchemas {
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
+  RetryChoiceRequest: RetryChoiceRequest;
+  RetryWithRequest: RetryWithRequest;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -460,6 +463,10 @@ export interface FileUploadResponse {
   size: number;
   url: string;
 }
+export interface FollowUpRequest {
+  session_id: string;
+  text: string;
+}
 /**
  * Body for ``POST /v1/connections/{provider}`` (#1292).
  *
@@ -542,7 +549,9 @@ export interface InferenceCommitItem {
  */
 export interface InferenceStatsResponse {
   input_tokens?: number;
+  model?: string | null;
   output_tokens?: number;
+  seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -727,6 +736,16 @@ export interface PreflightReport {
   required_memory_gb?: number;
   tier?: string;
   warnings?: string[];
+}
+export interface RetryChoiceRequest {
+  keep: "original" | "retry";
+  message_id: number;
+  session_id: string;
+}
+export interface RetryWithRequest {
+  message_id: number;
+  model: string;
+  session_id: string;
 }
 /**
  * List of scheduled tasks.

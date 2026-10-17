@@ -243,6 +243,129 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
+    /** Set when the answer came from Retry with…: the model that wrote it. */
+    model?: string | null;
+    /** Set with `model`: how long that model took, loading included. */
+    seconds?: number | null;
+}
+
+/** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
+export interface ContextUsage {
+    window: number;
+    reply_reserve: number;
+    system: number;
+    tools: number;
+    documents: number;
+    history: number;
+    query: number;
+    used: number;
+    history_budget: number;
+    history_used: number;
+    turns_in_view: number;
+    turns_hidden: number;
+    /** Oldest turns the next overflow drops, by their question. */
+    at_risk: string[];
+    at_risk_tokens: number;
+    /** Parts of `system` the skills and memory fragments take. */
+    skills?: number;
+    memory?: number;
+    /** Part of `tools` the tool schemas take; the rest is replayed tool activity. */
+    tool_definitions?: number;
+    /** Between turns only: whether the counts came from the model's own tokenizer. */
+    tokenizer?: { exact: true; model: string } | { exact: false; reason: string };
+    /** Between turns only: the panel's categories; their tokens add up to `used`. */
+    categories?: Array<{ key: string; label: string; tokens: number }>;
+    tool_loading?: { loaded: string[]; on_demand: string[] };
+    model?: string | null;
+    /** What the agent moved out of the window to keep going; absent when it reports nothing. */
+    context_state?: ContextState | null;
+}
+
+/** The agent's own account of context it put away or summarized (``context_state()``). */
+export interface ContextState {
+    /** Tool results already used, replaced by a re-read handle. */
+    put_away?: { results: number; tokens: number } | null;
+    /** Older turns folded into a rolling summary; originals stay searchable. */
+    summarized?: { turns: number; tokens: number; summary_tokens: number } | null;
+}
+
+/** GET /api/chat/performance/{id}: one turn's measured performance. Null = not measured. */
+export interface TurnPerformance {
+    message_id: number;
+    created_at: string;
+    model: string | null;
+    time: {
+        wall_seconds: number;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tool_seconds: number;
+        waiting_seconds: number;
+        own_seconds: number | null;
+    };
+    first_token_seconds: number | null;
+    prefill_tokens_per_second: number | null;
+    generation_tokens_per_second: number | null;
+    model_calls: number;
+    tokens_in: number | null;
+    tokens_new: number | null;
+    tokens_cached: number | null;
+    tokens_out: number | null;
+    /** The last request's whole templated prompt, as the server counted it. */
+    last_prompt_tokens: number | null;
+    tool_calls: number;
+    tools: Array<{ name: string; seconds: number | null }>;
+    loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
+    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+}
+
+export interface ChatPerformance {
+    /** The newest answer's id; the last turn is unknown when `turns` has no record of it. */
+    latest_message_id: number | null;
+    turns: TurnPerformance[];
+    totals: {
+        turns: number;
+        wall_seconds: number | null;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tokens_in: number | null;
+        tokens_cached: number | null;
+        tokens_out: number | null;
+        tool_calls: number;
+        loads: number;
+        load_seconds: number | null;
+        usd: number;
+        unpriced_turns: number;
+    };
+    /** The model as Lemonade reports it now. */
+    now: {
+        model: string | null;
+        /** `local`, a cloud provider name, `cloud`, or `unknown`. */
+        provider: string;
+        loaded: boolean | null;
+        device: string | null;
+        backend: string | null;
+        ctx_size: number | null;
+        weights_gb: number | null;
+        kv_cache_gb: number | null;
+        free_gb: number | null;
+        error: string | null;
+    };
+}
+
+/** A retried answer from another model, held until one is kept. */
+export interface RetryResult {
+    message_id: number;
+    model: string;
+    content: string;
+    stats: {
+        model: string;
+        seconds: number;
+        load_seconds: number;
+        input_tokens: number;
+        output_tokens: number;
+        tokens_per_second: number;
+        time_to_first_token: number;
+    };
 }
 
 export interface Message {
@@ -631,7 +754,10 @@ export type StreamEventType =
     | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
-    | 'agent_created'; // New agent created — triggers agent list refresh
+    | 'agent_created' // New agent created — triggers agent list refresh
+    | 'followup_taken'    // The running turn took a message sent mid-turn
+    | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -639,6 +765,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `followup_taken`: the message the running turn took. */
+    text?: string;
+    /** On `followup_returned`: messages the turn ended without taking. */
+    texts?: string[];
     // Agent-specific fields
     status?: string;
     message?: string;

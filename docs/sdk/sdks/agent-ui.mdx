@@ -856,6 +856,84 @@ class AttachDocumentRequest(BaseModel):
     own query loop; a session with neither pending is a 404, never a silent
     no-op accept.
   </Accordion>
+
+  <Accordion title="POST /api/chat/followup">
+    Hand `{session_id, text}` to the session's running turn. The agent reads it
+    at its next step without restarting. The stream then carries
+    `followup_taken` (`text`) and the message is saved as a user message. A turn
+    that ends first sends `followup_returned` (`texts`) before `done`. 404: no
+    turn is running. 409: the running turn can't take it yet (it hasn't reached
+    the model, or a relayed agent runs it). The Agent UI calls it only when the
+    user picks **Add to this reply** on a queued message; otherwise a message
+    typed mid-turn waits and is sent as its own turn.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/context/{session_id}">
+    Tokens the chat's next message would carry, against the model's window:
+    `system`, `tools`, `documents` (results of document-reading tools),
+    `history`, `reply_reserve`, `used`, `window`, plus `turns_in_view`,
+    `turns_hidden` and `at_risk`, the questions of the oldest turns that leave
+    the model's view at the next overflow. `skills` and `memory` are the parts
+    of `system` those prompt sections take, and `tool_definitions` the part of
+    `tools` the tool schemas take. `categories` lists system prompt, tool
+    definitions, skills, memory, documents and messages; their `tokens` add up
+    to `used`. `tool_loading` names the tools sent now (`loaded`) and the ones
+    loaded only when a turn needs them (`on_demand`). `context_state` is what
+    the agent moved out of the window, from its optional `context_state()`
+    method: `put_away` (`results`, `tokens`: tool results swapped for a re-read
+    handle) and `summarized` (`turns`, `tokens`, `summary_tokens`: older turns
+    folded into a rolling summary). No agent folds turns yet, so `summarized`
+    is `null` today. `context_state` is `null` when the agent doesn't report
+    one; a malformed report is a 500, never a guess.
+
+    Counts come from the loaded model's own tokenizer (Lemonade's `/tokenize`)
+    when the chat's model is the one loaded: `tokenizer` is
+    `{"exact": true, "model"}`. Otherwise (a cloud model, another model
+    loaded, or the model server not answering) they are estimates and
+    `tokenizer` is `{"exact": false, "reason"}`. Asking never loads or swaps a
+    model. `{"available": false, "reason"}` until an agent has answered in the
+    chat. A streaming turn sends estimates of the same numbers as a
+    `context_usage` event.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/performance/{session_id}">
+    Where each answered turn's time went. `turns` lists each turn, oldest
+    first, with `time`: `wall_seconds` (message received to answer saved),
+    `model_seconds` (every model request plus any model load before the turn)
+    and `gaia_seconds`, which add up to `wall_seconds`. `gaia_seconds` splits
+    into `tool_seconds`, `waiting_seconds` (approving a tool) and
+    `own_seconds`. Each turn also has `first_token_seconds`,
+    `prefill_tokens_per_second`, `generation_tokens_per_second`, `tokens_in`,
+    `tokens_new`, `tokens_cached` (reused from the server's prompt cache),
+    `tokens_out`, `tool_calls`, `loads` and `cost` (`local` at $0, a cloud
+    `estimate` at list price, or `unknown`). `totals` sums the chat. `now` is
+    the model as Lemonade reports it: `provider` (`local`, a cloud provider,
+    or `unknown`), `device`, `backend`, `ctx_size`, `weights_gb`,
+    `kv_cache_gb` and `free_gb`. `latest_message_id` is the newest answer, so
+    a client can tell when it has no record. A value nobody measured is
+    `null`, never 0: a retried turn has no model / GAIA split, and token totals
+    are `null` unless every model call reported them. Turns answered before
+    this existed have no entry.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/retry-with">
+    Answer the chat's latest question again on another local model:
+    `{session_id, message_id, model}`. Tools aren't run again; the other model
+    gets the turn's recorded tool calls and results as text. Returns
+    `{content, stats}`, where `stats` holds `seconds`, `load_seconds`,
+    `tokens_per_second` and token counts. Nothing is saved until
+    `/api/chat/retry-with/choose`. 409: the message isn't the latest answer, or
+    GAIA is answering in any chat (loading another model would unload the one
+    it uses). 400: a cloud model. 413: the turn doesn't fit the model's window.
+    503: the model couldn't be loaded or didn't answer.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/retry-with/choose">
+    Keep one answer from a comparison: `{session_id, message_id, keep}`, where
+    `keep` is `original` or `retry`. `retry` replaces the answer in place,
+    keeping the turn's tool evidence, so the next message continues from it.
+    404: no open comparison for that message.
+  </Accordion>
 </AccordionGroup>
 
 ### Documents

@@ -152,10 +152,45 @@ def select_history(
         reporter.update(
             len(turns),
             max(len(turns) - 1, 0),
-            sum(count_tokens(json.dumps(t, ensure_ascii=False)) for t in turns),
+            sum(_turn_cost(t) for t in turns),
             on_cut,
         )
         return []
+    plan = _plan_history(turns, budget)
+    if plan.evicted or plan.unreplayable:
+        logger.warning(
+            "Context budget excluded %d older turn(s) and %d turn(s) larger than "
+            "the whole history budget; full evidence remains in the session "
+            "database (history budget: %d estimated tokens).",
+            plan.evicted,
+            plan.unreplayable,
+            budget,
+        )
+    reporter.update(
+        plan.evicted + plan.unreplayable,
+        plan.hidden_before_newest,
+        plan.hidden_tokens,
+        on_cut,
+    )
+    return [message for index, _ in plan.retained for message in turns[index]]
+
+
+def _turn_cost(turn: list[dict[str, Any]]) -> int:
+    return count_tokens(json.dumps(turn, ensure_ascii=False))
+
+
+@dataclass
+class _HistoryPlan:
+    """Which turns ``select_history`` replays, as ``(index, cost)`` pairs."""
+
+    retained: list[tuple[int, int]]
+    evicted: int
+    unreplayable: int
+    hidden_tokens: int
+    hidden_before_newest: int
+
+
+def _plan_history(turns: list[list[dict[str, Any]]], budget: int) -> _HistoryPlan:
     retained: deque = deque()
     used = 0
     evicted = 0
@@ -166,7 +201,7 @@ def select_history(
     for index, turn in enumerate(turns):
         if index == len(turns) - 1:
             hidden_before_newest = evicted + unreplayable
-        cost = count_tokens(json.dumps(turn, ensure_ascii=False))
+        cost = _turn_cost(turn)
         if cost > budget:
             hole = True
             unreplayable += 1
@@ -180,7 +215,7 @@ def select_history(
             retained.clear()
             used = 0
             hole = False
-        retained.append((turn, cost))
+        retained.append((index, cost))
         used += cost
         if used > budget:
             target = budget // 2
@@ -189,17 +224,9 @@ def select_history(
                 used -= removed
                 hidden_tokens += removed
                 evicted += 1
-    if evicted or unreplayable:
-        logger.warning(
-            "Context budget excluded %d older turn(s) and %d turn(s) larger than "
-            "the whole history budget; full evidence remains in the session "
-            "database (history budget: %d estimated tokens).",
-            evicted,
-            unreplayable,
-            budget,
-        )
-    reporter.update(evicted + unreplayable, hidden_before_newest, hidden_tokens, on_cut)
-    return [message for turn, _ in retained for message in turn]
+    return _HistoryPlan(
+        list(retained), evicted, unreplayable, hidden_tokens, hidden_before_newest
+    )
 
 
 def transcript_turns(messages: list[dict]) -> list[list[dict]]:
@@ -252,8 +279,8 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
     return result
 
 
-def history_budget(agent: Any, query: str) -> int:
-    """Reserve prompt, tools, output and safety margin for any transport."""
+def context_window(agent: Any) -> int:
+    """The context window, in tokens, the agent's model is admitted with."""
     from gaia.llm.lemonade_client import (
         GPU_CTX_SIZE,
         LemonadeClient,
@@ -272,21 +299,172 @@ def history_budget(agent: Any, query: str) -> int:
     if getattr(agent, "_use_claude", False):
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 
-        ctx = CLAUDE_CTX_SIZE
-    elif cloud:
+        return CLAUDE_CTX_SIZE
+    if cloud:
         # Remote admission policy, not a claim about the provider's context ceiling.
-        ctx = GPU_CTX_SIZE
-    else:
-        ctx = resolve_ctx_size(
-            model=getattr(agent, "model_id", None),
-            device=getattr(agent, "device", None),
-        )
+        return GPU_CTX_SIZE
+    return resolve_ctx_size(
+        model=getattr(agent, "model_id", None),
+        device=getattr(agent, "device", None),
+    )
+
+
+def _reply_reserve(agent: Any) -> int:
+    config = getattr(getattr(agent, "chat", None), "config", None)
+    return getattr(config, "max_tokens", 8192)
+
+
+def history_budget(agent: Any, query: str) -> int:
+    """Reserve prompt, tools, output and safety margin for any transport."""
+    ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
-    config = getattr(getattr(agent, "chat", None), "config", None)
-    output = getattr(config, "max_tokens", 8192)
-    return min(ctx // 2, ctx - overhead - output - 2048)
+    return min(ctx // 2, ctx - overhead - _reply_reserve(agent) - 2048)
+
+
+#: Tools whose results are document text, so the meter can show what files cost.
+DOCUMENT_TOOLS = frozenset(
+    {
+        "query_documents",
+        "query_specific_file",
+        "search_indexed_chunks",
+        "summarize_document",
+        "dump_document",
+        "read_file",
+        "read_document",
+    }
+)
+
+#: History this full warns that the next turns will push the oldest out.
+HISTORY_WARN_FRACTION = 0.75
+
+_RECORDED_RESULT_PREFIX = "[Recorded tool result: "
+
+
+def _message_kind(message: dict[str, Any]) -> str:
+    """``documents``, ``tools`` or ``history`` for one replayed message."""
+    role = message.get("role")
+    if role == "tool":
+        return "documents" if message.get("name") in DOCUMENT_TOOLS else "tools"
+    if message.get("tool_calls"):
+        return "tools"
+    content = message.get("content")
+    if role == "user" and isinstance(content, str):
+        if content.startswith(_RECORDED_RESULT_PREFIX):
+            name = content[len(_RECORDED_RESULT_PREFIX) :].split("]", 1)[0]
+            return "documents" if name in DOCUMENT_TOOLS else "tools"
+    return "history"
+
+
+def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
+    for message in turn:
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, str) and content:
+            text = " ".join(content.split())
+            return text if len(text) <= limit else text[: limit - 1] + "…"
+    return "(a turn with no question text)"
+
+
+#: System-prompt fragments the context breakdown names on their own.
+_SKILL_FRAGMENTS = ("get_skill_catalog_system_prompt", "get_skills_system_prompt")
+_MEMORY_FRAGMENTS = ("get_memory_system_prompt",)
+
+
+def _fragments(agent: Any, prompt: str, methods: tuple) -> str:
+    """The composed prompt's fragments that *methods* produced, joined."""
+    origins = getattr(agent, "_mixin_prompt_origins", None) or {}
+    return "\n\n".join(
+        text for text, origin in origins.items() if origin in methods and text in prompt
+    )
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    """The text of one replayed message that reaches the model."""
+    parts = []
+    content = message.get("content")
+    if isinstance(content, str):
+        parts.append(content)
+    elif isinstance(content, list):
+        parts.extend(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("text")
+        )
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        parts.append(f"{function.get('name', '')} {function.get('arguments', '')}")
+    return "\n".join(p for p in parts if p)
+
+
+def context_usage(
+    agent: Any,
+    turns: list[list[dict[str, Any]]],
+    query: str = "",
+    count: Callable[[str], int] = count_tokens,
+) -> dict[str, Any]:
+    """What the next model call holds, by kind, and which turns go next.
+
+    Mirrors ``select_history`` without reporting a cut, so it can be asked as
+    often as the chat likes. Which turns are in view is decided with
+    ``count_tokens``, as ``select_history`` decides it; the sizes reported are
+    measured with *count*, which may be the loaded model's own tokenizer.
+
+    ``skills`` and ``memory`` are the parts of ``system`` those fragments
+    take; ``tool_definitions`` is the part of ``tools`` the schemas take, the
+    rest being tool calls and results replayed from earlier turns.
+    """
+    window = context_window(agent)
+    budget = history_budget(agent, query)
+    prompt = getattr(agent, "system_prompt", "") or ""
+    schemas = getattr(agent, "_openai_tools", None) or []
+    tool_definitions = count(json.dumps(schemas, ensure_ascii=False)) if schemas else 0
+    usage = {
+        "window": window,
+        "reply_reserve": _reply_reserve(agent),
+        "system": count(prompt),
+        "skills": count(_fragments(agent, prompt, _SKILL_FRAGMENTS)),
+        "memory": count(_fragments(agent, prompt, _MEMORY_FRAGMENTS)),
+        "tools": tool_definitions,
+        "tool_definitions": tool_definitions,
+        "documents": 0,
+        "history": 0,
+        "query": count(query) if query else 0,
+        "history_budget": max(budget, 0),
+        "history_used": 0,
+        "turns_in_view": 0,
+        "turns_hidden": len(turns),
+        "at_risk": [],
+        "at_risk_tokens": 0,
+    }
+    if budget > 0:
+        plan = _plan_history(turns, budget)
+        usage["turns_in_view"] = len(plan.retained)
+        usage["turns_hidden"] = plan.evicted + plan.unreplayable
+        texts: dict[str, list[str]] = {"documents": [], "tools": [], "history": []}
+        for index, cost in plan.retained:
+            usage["history_used"] += cost
+            for message in turns[index]:
+                texts[_message_kind(message)].append(_message_text(message))
+        # One count per kind: *count* may be a request to the model server.
+        for kind, parts in texts.items():
+            if parts:
+                usage[kind] += count("\n".join(parts))
+        if usage["history_used"] >= budget * HISTORY_WARN_FRACTION:
+            # Overflow evicts the oldest turns down to half the budget.
+            remaining = usage["history_used"]
+            for index, cost in plan.retained[:-1]:
+                if remaining <= budget // 2:
+                    break
+                remaining -= cost
+                usage["at_risk"].append(_turn_preview(turns[index]))
+                usage["at_risk_tokens"] += cost
+    usage["used"] = (
+        usage["system"]
+        + usage["tools"]
+        + usage["documents"]
+        + usage["history"]
+        + usage["query"]
+    )
+    return usage
 
 
 class SessionHistory(list):

@@ -49,6 +49,7 @@ from gaia.ui.email_sidecar.profiles import (
 )
 from gaia.ui.memory_settings import memory_enabled
 
+from . import followups
 from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -1412,6 +1413,26 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
+def model_turns(agent, db, session_id: str) -> list:
+    """The session's completed turns as *agent*'s model would be shown them."""
+    from gaia.agents.base.history import text_tool_history, transcript_turns
+
+    turns = transcript_turns(db.get_context_messages(session_id))
+    if (
+        hasattr(agent, "_uses_native_tool_calls")
+        and not agent._uses_native_tool_calls()
+    ):
+        turns = text_tool_history(turns)
+    return turns
+
+
+def cached_session_agent(session_id: str):
+    """The agent that answered this session last, or None when none is cached."""
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        return entry["agent"] if entry is not None else None
+
+
 def _restore_model_history(
     agent, db, session_id: str, query: str, sse_handler=None
 ) -> None:
@@ -1422,18 +1443,12 @@ def _restore_model_history(
     """
     from gaia.agents.base.history import (
         CutReporter,
+        context_usage,
         history_budget,
         select_history,
-        text_tool_history,
-        transcript_turns,
     )
 
-    turns = transcript_turns(db.get_context_messages(session_id))
-    if (
-        hasattr(agent, "_uses_native_tool_calls")
-        and not agent._uses_native_tool_calls()
-    ):
-        turns = text_tool_history(turns)
+    turns = model_turns(agent, db, session_id)
 
     def on_cut(cut):
         sse_handler._emit(
@@ -1446,6 +1461,10 @@ def _restore_model_history(
             }
         )
 
+    if sse_handler is not None:
+        sse_handler._emit(
+            {"type": "context_usage", **context_usage(agent, turns, query)}
+        )
     agent.conversation_history = select_history(
         turns,
         history_budget(agent, query),
@@ -1939,7 +1958,9 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+def _maybe_load_expected_model(
+    model_id: str, sse_handler=None, loads: Optional[list] = None
+) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -1966,6 +1987,9 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
     VLMs (``type="vlm"``) count as valid chat models for the model-name
     check, since the multimodal backbone serves text completions.
+
+    A load that happens is appended to *loads*, when given, as
+    ``{"model", "seconds", "replaced"}``.
 
     Note: there is a small TOCTOU window between this check and the
     actual chat request.  An eviction in that window is handled by
@@ -2093,6 +2117,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     return
 
             client = LemonadeClient(verbose=False)
+            load_started = _time.monotonic()
             # Lemonade does not evict the resident model on a new /load, so
             # unload the stale local chat models first — by name, so the
             # embedder that memory and RAG need stays resident. A server the
@@ -2106,6 +2131,14 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )
+            if loads is not None:
+                loads.append(
+                    {
+                        "model": model_id,
+                        "seconds": round(_time.monotonic() - load_started, 3),
+                        "replaced": [m.get("model_name") for m in resident_chat_models],
+                    }
+                )
     except InsufficientMemoryError as exc:
         # The fix is closing apps, not checking Lemonade: pass the reason on.
         logger.error("Pre-flight model load refused: %s", exc)
@@ -2495,6 +2528,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    turn_started = _time.monotonic()
     sse_handler = None
     producer = None
     cleanup_done = False
@@ -2643,7 +2677,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
-        result_holder = {"answer": "", "error": None}
+        result_holder = {"answer": "", "error": None, "model_loads": []}
+        inbox_holder: dict = {}
 
         def _run_agent():
             try:
@@ -2942,6 +2977,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
+                def _followup_taken(text):
+                    db.add_message(session_id, "user", text)
+                    sse_handler._emit({"type": "followup_taken", "text": text})
+
+                inbox_holder["agent"] = agent
+                inbox_holder["inbox"] = followups.open_inbox(
+                    session_id, agent, _followup_taken
+                )
+
                 _restore_model_history(
                     agent, db, session_id, request.message, sse_handler
                 )
@@ -2959,7 +3003,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler
+                    _effective_model(agent, model_id),
+                    sse_handler,
+                    loads=result_holder["model_loads"],
                 )
 
                 # -- Phase 5: Query processing.  One automatic retry on
@@ -2968,6 +3014,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # model reload at our 32K ctx_size before re-issuing the
                 # query so we don't replay against a still-broken backend.
                 t_query = _time.monotonic()
+                result_holder["attempts"] = 1
                 try:
                     result = agent.process_query(request.message)
                 except Exception as first_exc:  # pylint: disable=broad-except
@@ -2985,10 +3032,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # mid-conversation when the model got evicted.
                     try:
                         _maybe_load_expected_model(
-                            _effective_model(agent, model_id), sse_handler
+                            _effective_model(agent, model_id),
+                            sse_handler,
+                            loads=result_holder["model_loads"],
                         )
                     except Exception as exc:  # pylint: disable=broad-except
                         logger.warning("Model reload before retry failed: %s", exc)
+                    if "inbox" in inbox_holder:
+                        inbox_holder["inbox"].requeue_taken()
                     # Surface a brief status line to the SSE so the user
                     # sees we're recovering, not silently retrying.
                     sse_handler._emit(
@@ -3000,6 +3051,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     # One more attempt. If THIS fails, surface the
                     # friendlier classified message.
+                    result_holder["attempts"] = 2
                     try:
                         result = agent.process_query(request.message)
                     except Exception as second_exc:  # pylint: disable=broad-except
@@ -3016,6 +3068,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["result"] = result
+                    result_holder["model"] = _effective_model(agent, model_id)
                     result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
@@ -3035,6 +3089,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 else:
                     result_holder["error"] = str(e)
             finally:
+                if "inbox" in inbox_holder:
+                    untaken = followups.close_inbox(
+                        session_id, inbox_holder["agent"], inbox_holder["inbox"]
+                    )
+                    if untaken:
+                        sse_handler._emit(
+                            {"type": "followup_returned", "texts": untaken}
+                        )
                 sse_handler.signal_done()
 
         # The limit is on going without progress, not on total time: a long
@@ -3453,6 +3515,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            if isinstance(result_holder.get("result"), dict):
+                from .turn_insights import summarize_turn
+
+                inference_stats = dict(inference_stats or {})
+                inference_stats["performance"] = summarize_turn(
+                    result_holder["result"],
+                    wall_seconds=_time.monotonic() - turn_started,
+                    model_id=result_holder.get("model"),
+                    loads=result_holder["model_loads"],
+                    attempts=result_holder.get("attempts", 1),
+                )
 
             msg_id = db.upsert_message(
                 request.session_id,
