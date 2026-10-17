@@ -73,10 +73,29 @@ stored on your machine.
 
 The meter beside the model chip shows how much of the model's context window the
 next message carries. Click it for the breakdown: system prompt, tools,
-documents, conversation, and the room kept free for the reply. Before older
-turns leave the model's view, a note above the message box names them by their
-question. GAIA never summarises or compacts a chat to make room: older turns stay
-saved, and you can ask GAIA to recall them.
+documents, conversation, and the room kept free for the reply. As the window
+fills, a note above the message box names the oldest turns by their question:
+GAIA summarizes older messages to keep going. The originals stay saved and
+searchable.
+
+For more, choose **Details: context & performance** in the meter's breakdown.
+The panel shows what fills the window (system prompt, tool definitions,
+skills, memory, documents, messages and free space), counted with the
+model's own tokenizer when it is loaded and marked **approx.** when not. Tools
+that load only when a turn needs them are listed apart. Below that, the panel
+shows what is live in the window and, once GAIA has made room, how many tool
+results it put away (it can read them again when needed) and how many earlier
+turns it summarized. Summarized messages stay saved and searchable. When the
+window fills up, GAIA summarizes older messages to keep going rather than
+asking you to start over.
+
+**Under the hood** shows the last turn or the whole chat: where the model
+runs, time to the first word, how fast it read the prompt and wrote the
+answer, tokens in and out, how many were reused from the prompt cache, time
+in the model against time in GAIA (tools, waiting on you, GAIA's own work),
+tool calls, model loads, model memory and cost. Hover a number for the exact
+value. Anything that was not measured says "unknown". The panel reads nothing
+until you open it.
 
 ### Type While GAIA Works
 

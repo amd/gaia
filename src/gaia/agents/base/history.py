@@ -366,28 +366,68 @@ def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
     return "(a turn with no question text)"
 
 
+#: System-prompt fragments the context breakdown names on their own.
+_SKILL_FRAGMENTS = ("get_skill_catalog_system_prompt", "get_skills_system_prompt")
+_MEMORY_FRAGMENTS = ("get_memory_system_prompt",)
+
+
+def _fragments(agent: Any, prompt: str, methods: tuple) -> str:
+    """The composed prompt's fragments that *methods* produced, joined."""
+    origins = getattr(agent, "_mixin_prompt_origins", None) or {}
+    return "\n\n".join(
+        text for text, origin in origins.items() if origin in methods and text in prompt
+    )
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    """The text of one replayed message that reaches the model."""
+    parts = []
+    content = message.get("content")
+    if isinstance(content, str):
+        parts.append(content)
+    elif isinstance(content, list):
+        parts.extend(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("text")
+        )
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        parts.append(f"{function.get('name', '')} {function.get('arguments', '')}")
+    return "\n".join(p for p in parts if p)
+
+
 def context_usage(
-    agent: Any, turns: list[list[dict[str, Any]]], query: str = ""
+    agent: Any,
+    turns: list[list[dict[str, Any]]],
+    query: str = "",
+    count: Callable[[str], int] = count_tokens,
 ) -> dict[str, Any]:
     """What the next model call holds, by kind, and which turns go next.
 
     Mirrors ``select_history`` without reporting a cut, so it can be asked as
-    often as the chat likes. Token counts are estimates (``count_tokens``).
+    often as the chat likes. Which turns are in view is decided with
+    ``count_tokens``, as ``select_history`` decides it; the sizes reported are
+    measured with *count*, which may be the loaded model's own tokenizer.
+
+    ``skills`` and ``memory`` are the parts of ``system`` those fragments
+    take; ``tool_definitions`` is the part of ``tools`` the schemas take, the
+    rest being tool calls and results replayed from earlier turns.
     """
     window = context_window(agent)
     budget = history_budget(agent, query)
+    prompt = getattr(agent, "system_prompt", "") or ""
+    schemas = getattr(agent, "_openai_tools", None) or []
+    tool_definitions = count(json.dumps(schemas, ensure_ascii=False)) if schemas else 0
     usage = {
         "window": window,
         "reply_reserve": _reply_reserve(agent),
-        "system": count_tokens(
-            json.dumps(getattr(agent, "system_prompt", ""), ensure_ascii=False)
-        ),
-        "tools": count_tokens(
-            json.dumps(getattr(agent, "_openai_tools", []), ensure_ascii=False)
-        ),
+        "system": count(prompt),
+        "skills": count(_fragments(agent, prompt, _SKILL_FRAGMENTS)),
+        "memory": count(_fragments(agent, prompt, _MEMORY_FRAGMENTS)),
+        "tools": tool_definitions,
+        "tool_definitions": tool_definitions,
         "documents": 0,
         "history": 0,
-        "query": count_tokens(query) if query else 0,
+        "query": count(query) if query else 0,
         "history_budget": max(budget, 0),
         "history_used": 0,
         "turns_in_view": 0,
@@ -399,11 +439,15 @@ def context_usage(
         plan = _plan_history(turns, budget)
         usage["turns_in_view"] = len(plan.retained)
         usage["turns_hidden"] = plan.evicted + plan.unreplayable
+        texts: dict[str, list[str]] = {"documents": [], "tools": [], "history": []}
         for index, cost in plan.retained:
             usage["history_used"] += cost
             for message in turns[index]:
-                kind = _message_kind(message)
-                usage[kind] += count_tokens(json.dumps(message, ensure_ascii=False))
+                texts[_message_kind(message)].append(_message_text(message))
+        # One count per kind: *count* may be a request to the model server.
+        for kind, parts in texts.items():
+            if parts:
+                usage[kind] += count("\n".join(parts))
         if usage["history_used"] >= budget * HISTORY_WARN_FRACTION:
             # Overflow evicts the oldest turns down to half the budget.
             remaining = usage["history_used"]
