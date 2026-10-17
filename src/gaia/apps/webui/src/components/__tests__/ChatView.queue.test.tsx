@@ -80,9 +80,19 @@ async function type(text: string) {
     });
 }
 
-async function startTurn() {
+/**
+ * Render, let the history load land, then hold every later history fetch.
+ * Each answer refetches the history 300 ms later; this mock's history is
+ * empty, so on a slow run that refetch would wipe the turns under test.
+ */
+async function renderLoaded() {
     render(<ChatView sessionId={SESSION.id} />);
-    await act(async () => {});  // the history load, which replaces the message list
+    await act(async () => {});
+    mockedApi.getMessages.mockReturnValue(new Promise(() => {}));
+}
+
+async function startTurn() {
+    await renderLoaded();
     await type('first question');
     expect(streams).toHaveLength(1);
 }
@@ -91,8 +101,7 @@ const userBubbles = () => useChatStore.getState().messages.filter((m) => m.role 
 
 describe('messages typed during a reply', () => {
     it('three messages sent back to back each get their own answer, in order (#5248)', async () => {
-        render(<ChatView sessionId={SESSION.id} />);
-        await act(async () => {});  // the history load, which replaces the message list
+        await renderLoaded();
         await type('Reply with just the word ONE.');
         await type('Then reply with just the word TWO.');
         await type('Then reply with just the word THREE.');
