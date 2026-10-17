@@ -2701,6 +2701,10 @@ Do NOT wrap conversational replies in JSON.
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
                 started=min((t0 for _, t0, _ in pre_spans), default=None),
+                prompt_fragments={
+                    origin: len(text)
+                    for text, origin in (self._mixin_prompt_origins or {}).items()
+                },
             )
             for name, t0, t1 in pre_spans:
                 recorder.add_span(name, t0, t1, {})

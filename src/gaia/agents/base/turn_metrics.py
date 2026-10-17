@@ -34,6 +34,7 @@ agent's own work.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -181,6 +182,7 @@ class TurnRecorder:
         history_messages: int = 0,
         path: Optional[Path] = None,
         started: Optional[float] = None,
+        prompt_fragments: Optional[Dict[str, int]] = None,
     ) -> None:
         tok = _tokenizer()
         self.path = path if path is not None else turn_log_path()
@@ -211,6 +213,11 @@ class TurnRecorder:
             "skills_active": list(skills_active or []),
             "history_messages": history_messages,
             "token_estimator": tok.name,
+            # Which system prompt went out, and how big each mixin's part of it
+            # was: a changed hash between two turns of one chat is a full
+            # re-read on a model whose template puts the tools after it.
+            "system_sha": hashlib.sha1(system_prompt.encode("utf-8")).hexdigest()[:12],
+            "fragments": dict(prompt_fragments or {}),
         }
 
         self.llm_calls: List[Dict[str, Any]] = []
