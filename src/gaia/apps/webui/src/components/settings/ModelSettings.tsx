@@ -203,11 +203,11 @@ export function ModelSettings() {
                 ) : m.available === false ? null : progress ? (
                     <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
                 ) : !m.downloaded ? (
-                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null}>
+                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${m.display_name ?? displayModelName(m.id)}`}>
                         {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
                     </button>
                 ) : (
-                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null}>
+                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${m.display_name ?? displayModelName(m.id)}`}>
                         {busy === m.id ? <Loader2 size={13} className="spin" /> : null} Use
                     </button>
                 )}

@@ -95,7 +95,7 @@ describe('ModelSettings local models', () => {
         const section = screen.getByText(/Not available on this PC \(1\)/).closest('details') as HTMLElement;
         expect(within(section).getByText('Gemma 4 E2B')).toBeInTheDocument();
         expect(within(section).getByText(/needs an AMD Ryzen AI NPU/)).toBeInTheDocument();
-        expect(within(section).queryByRole('button', { name: 'Use' })).not.toBeInTheDocument();
+        expect(within(section).queryByRole('button', { name: /^Use / })).not.toBeInTheDocument();
     });
 
     it('offers context sizes up to what fits, with Automatic first', async () => {
