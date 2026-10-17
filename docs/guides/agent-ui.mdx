@@ -267,8 +267,12 @@ The app opens straight to an empty chat: a message box, the model it will use,
 and where that model runs.
 
 - **Sidebar:** New chat, search, **Memory**, **Scheduled tasks**, **Documents**,
-  then your chats grouped by Today, Yesterday, Previous 7 days and older. At the
-  bottom: where answers are generated right now (for example
+  then your chats. **Needs you** at the top holds chats waiting on a permission
+  or a question; **Pinned** comes next, then Today, Yesterday, Previous 7 days
+  and older. A dot on each chat says whether it is running, waiting for you, done
+  or failed, and a chat with a reply you haven't read shows in bold. Eval and
+  scheduled runs are hidden behind **Show eval and scheduled runs** at the end of
+  the list. At the bottom: where answers are generated right now (for example
   `Local · Gemma-4-E4B-it-GGUF` or `Fireworks AI · glm-5p3-flash`),
   notifications, mobile access and Settings. Collapse it with `Ctrl+B`.
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
@@ -427,9 +431,21 @@ much they use now.
 
 One window with General (appearance: Light, Dark, Match system; shortcuts),
 Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
-Connectors, Memory, Privacy and Advanced (model server and llama.cpp backend,
-context size, custom model ID, beta options, MCP servers, version and roll
-back).
+Connectors, Memory, Notifications, Privacy and Advanced (model server and
+llama.cpp backend, context size, custom model ID, beta options, MCP servers,
+version and roll back).
+
+**Settings → Notifications** picks, for each event (needs your approval, has a
+question, finished), a **Banner**, a **Badge** only, or **Off**, plus a sound
+and a taskbar flash when GAIA isn't focused. Alerts fire whether or not the
+notification panel is open, and never for the chat you're looking at. In the
+desktop app it also keeps the PC from idle-sleeping while a chat is working; on
+battery it lets the PC sleep below the level you choose (20% by default).
+
+**One chat at a time on the model.** A second chat sent while another is
+working waits its turn and says so ("Waiting for the GPU — 1st in line", also
+on its row in the sidebar), then runs when the first finishes. **Stop** takes a
+waiting chat out of the line.
 
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade
 Server and one you already run: enter its address (and its API key, if it needs

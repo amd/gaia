@@ -79,7 +79,7 @@ describe('ChatView live step count', () => {
         vi.clearAllMocks();
         callbacks = null;
         mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-        mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+        mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
         mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
         mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
