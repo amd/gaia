@@ -104,6 +104,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Memory off and private chats apply to scheduled and background runs too.** (PRs [#4842](https://github.com/amd/gaia/pull/4842), [#4821](https://github.com/amd/gaia/pull/4821))
 - **Memory stops false apologies and reusing deleted values**, saves "remember this" requests, and skips loading the embedder when memory is off. (PRs [#4708](https://github.com/amd/gaia/pull/4708), [#4756](https://github.com/amd/gaia/pull/4756))
 - **A reply cut off by the token limit is continued** instead of ending mid-sentence, and a tool call cut off at the output cap is retried shorter. (PRs [#4054](https://github.com/amd/gaia/pull/4054), [#4556](https://github.com/amd/gaia/pull/4556))
+- **The GPU no longer sits at 100% on ROCm** — with llama.cpp on ROCm, the embedding model runs on the CPU, and Settings → Model server says so. (PR [#5274](https://github.com/amd/gaia/pull/5274))
 - **`gaia.log` stays bounded** — it rotates at 10 MB with three backups (`GAIA_LOG_MAX_MB`, `GAIA_LOG_BACKUPS`). (PRs [#4668](https://github.com/amd/gaia/pull/4668), [#4760](https://github.com/amd/gaia/pull/4760))
 
 ## Known Issues
