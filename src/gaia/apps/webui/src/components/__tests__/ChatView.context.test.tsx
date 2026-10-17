@@ -41,7 +41,12 @@ let callbacks: api.StreamCallbacks | null = null;
 beforeEach(() => {
     vi.clearAllMocks();
     callbacks = null;
-    mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
+    // The server holds what the chat shows, so a background refresh never wipes the test's messages.
+    mockedApi.getMessages.mockImplementation(async () => {
+        const { messages } = useChatStore.getState();
+        return { messages, total: messages.length };
+    });
+    mockedApi.getMessageCount.mockImplementation(async () => useChatStore.getState().messages.length);
     mockedApi.getActiveRuns.mockResolvedValue(NO_ACTIVE_RUNS);
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });

@@ -51,7 +51,12 @@ let resolveRetry: (r: RetryResult) => void = () => {};
 
 beforeEach(() => {
     vi.clearAllMocks();
-    mockedApi.getMessages.mockResolvedValue({ messages: MESSAGES, total: 2 });
+    // The server holds what the chat shows, so a background refresh never wipes the test's messages.
+    mockedApi.getMessages.mockImplementation(async () => {
+        const { messages } = useChatStore.getState();
+        return { messages, total: messages.length };
+    });
+    mockedApi.getMessageCount.mockImplementation(async () => useChatStore.getState().messages.length);
     mockedApi.getActiveRuns.mockResolvedValue(NO_ACTIVE_RUNS);
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
