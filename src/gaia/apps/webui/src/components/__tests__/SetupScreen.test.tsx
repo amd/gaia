@@ -323,6 +323,22 @@ describe('SetupScreen: the chat model', () => {
         expect(screen.queryByRole('radiogroup', { name: 'Chat model' })).not.toBeInTheDocument();
     });
 
+    it('says "You chose" once the user picked the model', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.chooseSetupChatModel.mockResolvedValue({
+            ...PLAN, chat_model: { id: 'Gemma-4-E4B-it-GGUF', user_set: true, size_gb: 5.6, downloaded: false },
+        });
+        mockedApi.startSetup.mockResolvedValue({ state: 'running', chat_model: 'Gemma-4-E4B-it-GGUF', steps: [] });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' })
+            .mockResolvedValue({ state: 'running', chat_model: 'Gemma-4-E4B-it-GGUF', steps: [] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('radio', { name: /Gemma-4-E4B-it/ }));
+        await waitFor(() => expect(screen.getByRole('radio', { name: /Gemma-4-E4B-it/ })).toHaveAttribute('aria-checked', 'true'));
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        expect(await screen.findByText(/You chose/)).toHaveTextContent('You chose Gemma-4-E4B-it-GGUF.');
+        expect(screen.queryByText(/Setup chose/)).not.toBeInTheDocument();
+    });
+
     it("greys out a model this PC can't hold, with the reason", async () => {
         mockedApi.getSetupPlan.mockResolvedValue({
             ...PLAN,
@@ -475,6 +491,37 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
         expect(await screen.findByRole('alert')).toHaveTextContent(message);
         expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
+    });
+
+    it("says it couldn't check a server that didn't answer in time, and checks again", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade
+            .mockResolvedValueOnce({ found: null, unchecked: [FOUND.url] })
+            .mockResolvedValueOnce({ found: FOUND, unchecked: [] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Couldn.t check whether your Lemonade Server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
+        expect(await screen.findByRole('button', { name: 'Use mine' })).toBeInTheDocument();
+        expect(screen.queryByText(/Couldn.t check/)).not.toBeInTheDocument();
+    });
+
+    it('says it is looking while detection runs', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        let answer!: (r: { found: LemonadeFound | null; unchecked: string[] }) => void;
+        mockedApi.detectLemonade.mockImplementation(() => new Promise((r) => { answer = r; }));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Looking for a Lemonade Server you already run/)).toBeInTheDocument();
+        answer({ found: null, unchecked: [] });
+        await waitFor(() => expect(screen.queryByText(/Looking for a Lemonade/)).not.toBeInTheDocument());
+    });
+
+    it('stays quiet when no server is running', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found: null, unchecked: [] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await waitFor(() => expect(mockedApi.detectLemonade).toHaveBeenCalled());
+        expect(screen.queryByText(/Couldn.t check/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
     });
 
     it('explains a too-old server and offers no way to use it', async () => {

@@ -56,27 +56,41 @@ const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too
 function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'gaia') => void }) {
     const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
     const [checkError, setCheckError] = useState<string | null>(null);
+    // Something answered the connection but not the question: "couldn't tell", not "none".
+    const [unchecked, setUnchecked] = useState<string[]>([]);
+    const [checking, setChecking] = useState(false);
     const [key, setKey] = useState('');
     const [needsKey, setNeedsKey] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
 
-    useEffect(() => {
-        let live = true;
-        (async () => {
+    const live = useRef(true);
+    const detect = useCallback(async () => {
+        setCheckError(null);
+        try {
             const target = await api.getLemonadeTarget();
             if (!target.offer) return;
-            const { found } = await api.detectLemonade();
-            if (live && found && OFFERED.includes(found.status)) {
+            setChecking(true);
+            const { found, unchecked: missed = [] } = await api.detectLemonade();
+            if (!live.current) return;
+            setUnchecked(found ? [] : missed);
+            if (found && OFFERED.includes(found.status)) {
                 setOffer({ target, found });
                 setNeedsKey(found.status === 'needs_key');
             }
-        })().catch((err) => {
-            if (live) setCheckError(err instanceof Error ? err.message : String(err));
-        });
-        return () => { live = false; };
+        } catch (err) {
+            if (live.current) setCheckError(err instanceof Error ? err.message : String(err));
+        } finally {
+            if (live.current) setChecking(false);
+        }
     }, []);
+
+    useEffect(() => {
+        live.current = true;
+        void detect();
+        return () => { live.current = false; };
+    }, [detect]);
 
     const choose = useCallback(async (mode: 'external' | 'gaia') => {
         if (!offer) return;
@@ -97,10 +111,27 @@ function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'ga
         }
     }, [offer, key, onChosen]);
 
-    if (checkError) {
-        return <p className="setup-hint">Could not check for a Lemonade Server you already run: {checkError}</p>;
+    if (checkError || unchecked.length > 0) {
+        return (
+            <div className="setup-row">
+                <span className="setup-hint">
+                    {checkError
+                        ? `Couldn't check for a Lemonade Server you already run: ${checkError}`
+                        : `Couldn't check whether your Lemonade Server at ${unchecked.join(' or ')} is running: it didn't answer in time.`}
+                </span>
+                <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
+                    {checking && <Loader2 size={13} className="spin" />} Check again
+                </button>
+            </div>
+        );
     }
-    if (!offer) return null;
+    if (!offer) {
+        return checking ? (
+            <p className="setup-hint" role="status">
+                <Loader2 size={13} className="spin" aria-hidden="true" /> Looking for a Lemonade Server you already run…
+            </p>
+        ) : null;
+    }
     const { target, found } = offer;
     if (chosen) {
         return (

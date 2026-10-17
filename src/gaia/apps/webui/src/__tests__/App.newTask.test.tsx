@@ -177,6 +177,29 @@ describe('a new chat', () => {
 });
 
 describe('first-run setup', () => {
+    it('a cold start shows a neutral loading screen until the setup check answers, never the chat', async () => {
+        let answer!: (c: SetupCheck) => void;
+        mocked.checkSetup.mockImplementation(() => new Promise((r) => { answer = r; }));
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: false, model_loaded: null, initialized: false } as never);
+        render(<App />);
+
+        expect(await screen.findByText('Starting GAIA…')).toBeInTheDocument();
+        await waitFor(() => expect(mocked.getSystemStatus).toHaveBeenCalled());
+        expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
+
+        answer(NOT_READY);
+        expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
+        expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
+    });
+
+    it('a PC set up before goes straight to chat while the check runs', async () => {
+        mocked.checkSetup.mockImplementation(() => new Promise(() => { /* still checking */ }));
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: null, initialized: true } as never);
+        render(<App />);
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
+    });
+
     async function finishSetupWith(card: StartCard) {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });

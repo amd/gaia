@@ -254,7 +254,8 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
 }
 
 /** A Lemonade the user already runs on this PC, or null. */
-export async function detectLemonade(): Promise<{ found: LemonadeFound | null }> {
+/** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
+export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
     return apiFetch('GET', '/lemonade/detect');
 }
 

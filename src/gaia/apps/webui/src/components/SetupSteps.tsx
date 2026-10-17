@@ -79,9 +79,17 @@ interface ChatModelProps {
 export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: ChatModelProps) {
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    // A model the user picked here, or set beforehand, is theirs, not setup's.
+    const [picked, setPicked] = useState(false);
 
     if (chosen) {
-        return <p className="setup-hint">Setup chose <strong>{shortModelName(chosen)}</strong> for this PC.</p>;
+        const theirs = picked || (plan?.chat_model.user_set && plan.chat_model.id === chosen);
+        return (
+            <p className="setup-hint">
+                {theirs ? 'You chose ' : 'Setup chose '}
+                <strong>{shortModelName(chosen)}</strong>{theirs ? '.' : ' for this PC.'}
+            </p>
+        );
     }
     if (planError) {
         return <p className="setup-hint">Setup names the chat model once it has checked this PC ({planError}).</p>;
@@ -111,6 +119,7 @@ export function ChatModelChoice({ plan, planError, chosen, locked, onPlan }: Cha
         setError(null);
         try {
             onPlan(await api.chooseSetupChatModel(id));
+            setPicked(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {

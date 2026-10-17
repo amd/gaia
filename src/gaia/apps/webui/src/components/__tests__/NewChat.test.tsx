@@ -143,11 +143,27 @@ describe('NewChat empty state', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
     });
 
-    it('says why there are no suggestions instead of hiding it', async () => {
-        vi.mocked(api.getStartScreen).mockRejectedValue(new Error('skills unavailable'));
+    it('says in one plain sentence why there are no suggestions, with the detail behind Details', async () => {
+        const detail = `The GAIA agent could not be started: sidecar binary lock ${'PENDING-sha256 '.repeat(60).trim()}`;
+        vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [], skills_error: detail });
         render(<NewChat onSend={vi.fn()} />);
-        expect(await screen.findByText(/Suggestions are unavailable: skills unavailable/)).toBeInTheDocument();
-        expect(screen.getByLabelText('Message')).toBeInTheDocument();
+        expect(await screen.findByText(/assistant didn.t start, so it can.t suggest tasks yet/)).toBeInTheDocument();
+        expect(screen.queryByText(detail)).not.toBeInTheDocument();
+        // The folder still shows: only the cards depend on the agent.
+        expect(screen.getByText('my-project')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+        expect(screen.getByText(detail)).toBeInTheDocument();
+    });
+
+    it('tries the suggestions again', async () => {
+        vi.mocked(api.getStartScreen)
+            .mockRejectedValueOnce(new Error('backend restarting'))
+            .mockResolvedValue(START);
+        render(<NewChat onSend={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+        expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
+        expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
     });
 
     it('makes no model call of its own', async () => {
@@ -159,13 +175,6 @@ describe('NewChat empty state', () => {
 });
 
 describe('NewChat warm-up line', () => {
-    it('waits for the setup check before asking for a warm-up', async () => {
-        const { rerender } = render(<NewChat onSend={vi.fn()} setupChecked={false} />);
-        await screen.findByRole('list', { name: 'Things to try' });
-        expect(api.requestWarmUp).not.toHaveBeenCalled();
-        rerender(<NewChat onSend={vi.fn()} setupChecked />);
-        await waitFor(() => expect(api.requestWarmUp).toHaveBeenCalledOnce());
-    });
 
     it('names the model and device being loaded', async () => {
         vi.mocked(api.requestWarmUp).mockResolvedValue({

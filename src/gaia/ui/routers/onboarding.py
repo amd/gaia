@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from gaia.config import gaia_home
@@ -226,8 +226,17 @@ async def onboarding_preflight() -> PreflightReport:
 
 @router.get("/api/onboarding/start")
 def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
-    """A new chat's task cards and working folder, from what is set up here."""
+    """A new chat's task cards and working folder, from what is set up here.
+
+    When the agent can't list its skills there are no cards, and
+    ``skills_error`` carries why, so the screen can say so.
+    """
     from gaia.ui.routers.skills import list_skills
     from gaia.ui.start_screen import start_screen
 
-    return start_screen(db, list_skills()["skills"])
+    try:
+        skills = list_skills()["skills"]
+    except HTTPException as e:
+        logger.warning("New-chat cards unavailable: %s", e.detail)
+        return {**start_screen(db, []), "skills_error": str(e.detail)}
+    return {**start_screen(db, skills), "skills_error": None}

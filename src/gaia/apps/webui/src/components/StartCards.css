@@ -3,7 +3,8 @@
 
 .start-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    /* Two columns, so four cards make a 2x2 grid, never 3 + 1. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     margin-top: 14px;
     list-style: none;
@@ -45,4 +46,10 @@
 .start-card-note {
     color: var(--text-secondary);
     font-size: 12.5px;
+}
+
+@media (max-width: 480px) {
+    .start-cards {
+        grid-template-columns: 1fr;
+    }
 }

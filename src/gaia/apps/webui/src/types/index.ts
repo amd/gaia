@@ -804,6 +804,8 @@ export interface StartCard {
 export interface StartScreen {
     cards: StartCard[];
     working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** Why there are no cards: the agent couldn't list its skills. */
+    skills_error?: string | null;
 }
 
 // ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────

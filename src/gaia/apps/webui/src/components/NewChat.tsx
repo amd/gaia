@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Folder } from 'lucide-react';
+import { ChevronRight, Folder } from 'lucide-react';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
@@ -23,8 +23,6 @@ interface NewChatProps {
     onSend: (text: string) => Promise<void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
-    /** False until the setup check has answered; the warm-up waits for it. */
-    setupChecked?: boolean;
 }
 
 export function greeting(now: Date = new Date()): string {
@@ -39,8 +37,25 @@ export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
     return `Loading ${shortModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
 }
 
+/** No suggestions: one plain sentence, a retry, and the full error behind Details. */
+function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: () => void }) {
+    const [open, setOpen] = useState(false);
+    return (
+        <div className="new-chat-note">
+            <p>
+                GAIA&rsquo;s assistant didn&rsquo;t start, so it can&rsquo;t suggest tasks yet.{' '}
+                <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
+            </p>
+            <button type="button" className="new-chat-details" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+                <ChevronRight size={12} className={open ? 'is-open' : ''} aria-hidden="true" /> Details
+            </button>
+            {open && <pre className="new-chat-details-text">{detail}</pre>}
+        </div>
+    );
+}
+
 /** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
-export function NewChat({ onSend, initialText = '', setupChecked = true }: NewChatProps) {
+export function NewChat({ onSend, initialText = '' }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const [text, setText] = useState(initialText);
     const [error, setError] = useState<string | null>(null);
@@ -49,18 +64,28 @@ export function NewChat({ onSend, initialText = '', setupChecked = true }: NewCh
     const [startError, setStartError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const attachments = useAttachments();
-    const warming = useWarmUp(setupChecked);
+    const warming = useWarmUp();
 
-    useEffect(() => {
-        let live = true;
+    const live = useRef(true);
+    const loadStart = useCallback(() => {
+        setStartError(null);
         api.getStartScreen()
-            .then((s) => { if (live) setStart(s); })
+            .then((s) => {
+                if (!live.current) return;
+                setStart(s);
+                if (s.skills_error) setStartError(s.skills_error);
+            })
             .catch((err) => {
                 log.api.warn('New-chat suggestions unavailable', err);
-                if (live) setStartError(err instanceof Error ? err.message : String(err));
+                if (live.current) setStartError(err instanceof Error ? err.message : String(err));
             });
-        return () => { live = false; };
     }, []);
+
+    useEffect(() => {
+        live.current = true;
+        loadStart();
+        return () => { live.current = false; };
+    }, [loadStart]);
 
     const send = useCallback(async (message: string) => {
         if (!message || sending) return;
@@ -123,7 +148,7 @@ export function NewChat({ onSend, initialText = '', setupChecked = true }: NewCh
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {start && <StartCards cards={start.cards} onPick={pick} disabled={starting || sending} />}
-                {startError && <p className="new-chat-note">Suggestions are unavailable: {startError}</p>}
+                {startError && <SuggestionsUnavailable detail={startError} onRetry={loadStart} />}
             </div>
         </main>
     );

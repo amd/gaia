@@ -64,3 +64,29 @@
     color: var(--text-muted);
     font-size: 12.5px;
 }
+
+.new-chat-details {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.new-chat-details svg.is-open {
+    transform: rotate(90deg);
+}
+
+.new-chat-details-text {
+    max-height: 200px;
+    margin-top: 6px;
+    padding: 8px 10px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+}

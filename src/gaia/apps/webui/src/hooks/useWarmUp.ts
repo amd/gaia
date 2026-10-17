@@ -18,16 +18,14 @@ export interface WarmUpProgress {
 /**
  * Prime the backend for this new chat's first turn and report progress.
  *
- * Waits for *enabled*: the backend refuses a warm-up until it has seen setup
- * finished. Returns what is loading and for how long, or null when nothing is. Never
+ * Returns what is loading and for how long, or null when nothing is. Never
  * blocks sending: a message sent mid-warm-up waits for it server-side instead
  * of reading the prompt twice.
  */
-export function useWarmUp(enabled = true): WarmUpProgress | null {
+export function useWarmUp(): WarmUpProgress | null {
     const [progress, setProgress] = useState<WarmUpProgress | null>(null);
 
     useEffect(() => {
-        if (!enabled) return;
         let stopped = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const show = (status: WarmUpStatus) => {
@@ -55,7 +53,7 @@ export function useWarmUp(enabled = true): WarmUpProgress | null {
             stopped = true;
             if (timer) clearTimeout(timer);
         };
-    }, [enabled]);
+    }, []);
 
     return progress;
 }

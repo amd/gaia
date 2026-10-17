@@ -136,3 +136,18 @@ def test_start_endpoint(client):
     body = client.get("/api/onboarding/start").json()
     assert len(body["cards"]) == ss.MAX_CARDS
     assert body["working_folder"]["gaia_folder"] is False
+
+
+def test_start_endpoint_says_why_when_the_agent_cannot_list_skills(client, monkeypatch):
+    from fastapi import HTTPException
+
+    def fail():
+        raise HTTPException(
+            status_code=503, detail="The GAIA agent could not be started"
+        )
+
+    monkeypatch.setattr("gaia.ui.routers.skills.list_skills", fail)
+    body = client.get("/api/onboarding/start").json()
+    assert body["cards"] == []
+    assert body["skills_error"] == "The GAIA agent could not be started"
+    assert body["working_folder"]["name"]

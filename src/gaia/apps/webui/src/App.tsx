@@ -69,6 +69,7 @@ function App() {
     const restoreNotice = useModelStore((s) => s.restoreNotice);
     const dismissRestoreNotice = useModelStore((s) => s.dismissRestoreNotice);
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const initialized = useChatStore((s) => s.systemStatus?.initialized === true);
     const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
     // A successful restore is news for a moment; a failed one waits for the user to pick a model.
@@ -384,6 +385,19 @@ function App() {
 
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
 
+    // A PC set up before can chat while the check runs; a new one waits, so
+    // the chat screen never appears and is then replaced by setup.
+    if (setup.state === 'checking' && !initialized) {
+        return (
+            <div className="app">
+                <main className="startup" role="status" aria-label="Starting GAIA">
+                    <div className="loading-spinner" aria-hidden="true" />
+                    <p className="startup-text">Starting GAIA…</p>
+                </main>
+            </div>
+        );
+    }
+
     if (setup.state === 'needed') {
         return (
             <div className="app">
@@ -399,7 +413,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={draftText} onSend={startChat} initialText={draftText} setupChecked={setup.state !== 'checking'} />
+        <NewChat key={draftText} onSend={startChat} initialText={draftText} />
     );
 
     return (

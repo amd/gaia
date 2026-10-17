@@ -1787,7 +1787,8 @@ First-run hardware scan (issues #1726, #1727).
     Each card (`{skill, title, note, prompt, needs_input}`) is backed by an
     installed skill; cards for what the user set up (indexed documents, a
     connected mail account) come first. `needs_input` means the prompt ends
-    where the user types the subject. Makes no model call.
+    where the user types the subject. When the agent can't list its skills,
+    `cards` is empty and `skills_error` says why. Makes no model call.
   </Accordion>
 </AccordionGroup>
 
@@ -1873,7 +1874,10 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     A Lemonade the user already runs on this PC's default ports:
     `{"found": {"url", "status", "version", "minimum", "message"}}`, or
     `{"found": null}` when none answers. `status` is `ok`, `needs_key`,
-    `bad_key`, `too_old`, `not_lemonade`, or `unreachable`.
+    `bad_key`, `too_old`, `not_lemonade`, or `unreachable`. `unchecked` lists
+    the URLs where something accepted the connection but didn't answer within
+    10 s, such as a busy server. Then "none found" isn't known, and the setup
+    screen offers to check again.
   </Accordion>
 
   <Accordion title="POST /api/lemonade/target">
