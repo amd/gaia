@@ -16,7 +16,6 @@ import pytest
 import responses
 
 from gaia import config as config_mod
-from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.llm import lemonade_client as lc
 from gaia.llm.context_choice import (
     ContextChoiceError,
@@ -355,10 +354,11 @@ def test_config_rejects_a_malformed_context_sizes():
     config_mod.GAIA_CONFIG_FILE.write_text(
         json.dumps({"context_sizes": {"m": "big"}}), encoding="utf-8"
     )
-    with pytest.raises(GaiaConfigError, match="context_sizes"):
-        GaiaConfig.load()
-    with pytest.raises(GaiaConfigError, match="Settings › Model"):
-        GaiaConfig().set("context_sizes", "{}")
+    # Looked up at call time: test_cli_config reloads gaia.config, replacing the class.
+    with pytest.raises(config_mod.GaiaConfigError, match="context_sizes"):
+        config_mod.GaiaConfig.load()
+    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Model"):
+        config_mod.GaiaConfig().set("context_sizes", "{}")
 
 
 @pytest.fixture
