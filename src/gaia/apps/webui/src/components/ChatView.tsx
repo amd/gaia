@@ -681,6 +681,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // user already allowed "always" never get here: the backend skips them.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
+                    const toolLabel = event.tool_label || toolName;
                     const { addNotification: addNotif, notifications } = useNotificationStore.getState();
                     const isPathAccess = toolName === PATH_ACCESS_TOOL;
                     const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
@@ -690,10 +691,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentId: sessionId,
                         sessionId,
                         agentName: 'GAIA',
-                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolName}?`,
+                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolLabel}?`,
                         message: isPathAccess
                             ? pathAccessQuestion(event.args, followUp)
-                            : `The agent wants to execute: ${toolName}`,
+                            : `GAIA is asking before ${toolLabel}.`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,
@@ -702,6 +703,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolArgs: event.args as Record<string, unknown> | undefined,
                         confirmId: event.confirm_id,
                         alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
+                        alwaysLabel: typeof event.always_label === 'string' && event.always_label ? event.always_label : undefined,
+                        toolLabel: event.tool_label || undefined,
                         risk: typeof event.risk === 'string' ? event.risk : undefined,
                         // A relayed agent sends a summary of the call instead of its args.
                         summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
