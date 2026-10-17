@@ -7104,7 +7104,7 @@ def _handle_memory_status():
                     "(re-embeds up to 100 per start),"
                 )
                 print(
-                    "      or use Rebuild Embeddings in the Memory Dashboard (gaia chat --ui)"
+                    "      or use Rebuild Embeddings on the Memory page's Advanced tab (gaia chat --ui)"
                 )
 
         # Conversations section

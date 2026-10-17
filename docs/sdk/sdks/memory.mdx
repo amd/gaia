@@ -385,7 +385,7 @@ def _extract_via_llm(
 ) -> List[Dict]:
 ```
 
-Sends the conversation turn, this turn's tool record (each call, its arguments, whether it succeeded, failed or was refused, and a short result), and existing memory to the LLM, which returns a JSON array of operations:
+Sends the conversation turn and existing memory to the LLM, which returns a JSON array of operations. Tool output is never shown to the extractor; `tool_record` is only checked against (see below).
 
 | Operation | Description | Required fields |
 |-----------|-------------|-----------------|
@@ -396,7 +396,9 @@ Sends the conversation turn, this turn's tool record (each call, its arguments, 
 
 The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
 
-`grounded` must be `"user"` (the user said it) or `"tool"` (a tool result shows it). An op grounded in anything else, or citing a tool when no tool succeeded this turn, is dropped: the assistant's answer alone is not evidence.
+Memory holds what is true about the **user**, not the subject of the conversation. `grounded` must be `"user"` (the user said it about themselves); an op grounded in anything else is dropped. A document's contents, a search result, the weather, or the assistant's answer are not facts about the user, and stored as one they are replayed in every later chat as if the user had said them (#5027).
+
+Because the model labels lifted content `"user"` too, an `add` or `update` whose words come from the assistant's answer or a tool's arguments and result rather than the user's message is dropped as well (`_copied_from_material`). An op that repeats something the user forgot after saying it is dropped (see [Forgetting](#forgetting)).
 
 **Error handling:** Invalid JSON → logged warning carrying the reply's length and opening characters, skip this turn. Timeout (`EXTRACTION_TIMEOUT_S`, 60s) → logged warning; the call is abandoned and whatever it eventually returns is discarded. Individual operation failure → logged, continue with remaining operations. No fallback to regex heuristics.
 
@@ -413,7 +415,7 @@ Extraction runs **after** the turn returns, not before it. `_after_process_query
 | `EXTRACTION_EXIT_WAIT_S` | 15 | How long a drain waits before giving up and saying the turn's facts were not stored |
 | `EXTRACTION_IDLE_S` | 3 | Quiet time after the last user turn before a queued job starts |
 
-**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running is not interrupted. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
+**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running when a user turn starts is stopped (#5022): its model call streams with `AgentSDK.send_messages(cancel=...)`, the new turn sets the event, the stream is closed so the server stops generating, nothing partial is stored, and the job goes back to the front of the queue to rerun once the user is idle. A flush from `wait_for_memory_extraction` is never stopped. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
 
 One extraction thread per agent. Each job freezes the turn's text and context at turn end, so mutating the agent afterwards cannot change what gets extracted.
 
@@ -447,11 +449,17 @@ Distills old conversation sessions into durable knowledge before they age out at
 1. Take the oldest 20 turns with `consolidated_at IS NULL` — one window (`get_unconsolidated_turns()`)
 2. Call LLM with consolidation prompt → returns summary + extracted knowledge
 3. Store summary as `knowledge(category="note", source="consolidation", domain="session:{id[:8]}")`
-4. Store each extracted item via `store()` (normal dedup applies; `system`/`profile`/`permission` items are dropped)
+4. Store each extracted item via `store()` (normal dedup applies; `system`/`profile`/`permission` items are dropped, and so is an item whose words come from the assistant's lines rather than the user's, or one the user forgot after the window was said)
 5. Mark exactly that window's turns with `consolidated_at = now` — only after steps 2–4 succeed. A failed window stays unmarked and is retried next run
 6. Repeat until complete or a budget is reached: ten windows per session, five model calls total, or ten seconds elapsed across the run. An in-flight call finishes; remaining windows resume next run
 
 A session stays eligible until every turn is consolidated. `prune()` holds its old turns until then, with an absolute ceiling of twice the retention window (180 days by default), including sessions whose model calls always fail or that stay active.
+
+### Forgetting
+
+A forgotten memory is not learned again from old conversations (#4730). The `forget` tool and the Memory page's **Forget** call `MemoryStore.forget()`, which deletes the row and records its content and the time in the `forgotten` table, in one transaction. A sensitive row keeps only its word stems there, and is never named in a prompt. The conversation that stated the fact stays in the log, so consolidation could otherwise distil it again. Instead each consolidation window is told what the user forgot after the window began (`get_forgotten(said_before=...)`), so a forget later in the same chat counts and the model skips reworded copies and leaves them out of the session summary. Any item that is the same memory (`is_forgotten`), or summary that repeats one (`mentions_forgotten`), is dropped. Extraction applies the same check from the moment the turn started, so a forget made by that turn's own tools counts.
+
+Something the user says *after* forgetting it is the user telling GAIA again, and is learned as usual; storing it from a teaching source (`user` from the Memory page, `tool` from `remember`) also clears the forgotten record. A plain `delete()` — used when newer information replaces a memory — records nothing, and neither does deleting one of GAIA's own records (a tool lesson or session summary) from the Memory page: `DELETE /api/memory/knowledge/{id}` forgets only rows `is_about_user()` accepts.
 
 ### Reconciliation
 
@@ -493,7 +501,7 @@ Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool run
 
 Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table **synchronously**, so the transcript is durable the instant the turn ends, then *schedules* Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP operations against existing memory) and returns without waiting for it.
 
-For turns of at least `MIN_EXTRACTION_WORDS` (5) words, the scheduled job fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM, with the turn's tool record, to decide what operations to perform — no regex heuristic fallback. See [Background extraction](#background-extraction) for the timing, the queue, and how to wait for it before exiting.
+For turns of at least `MIN_EXTRACTION_WORDS` (5) words, the scheduled job fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM to decide what operations to perform — no regex heuristic fallback. See [Background extraction](#background-extraction) for the timing, the queue, and how to wait for it before exiting.
 
 ---
 
@@ -568,7 +576,7 @@ def store(
 ) -> str:                       # Returns knowledge_id (UUID)
 ```
 
-**Category gate:** `store()`, `update()`, and `delete()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Updates check both the existing and requested category, including content-only changes and recategorization out of a privileged category. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory`/`forget` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`. Inference commits accept only `profile`. Both commit endpoints reject an invalid batch with HTTP 422 before mutation; storage failures return HTTP 500 with a correlation ID and the number of items already stored, so callers must not assume atomic rollback.
+**Category gate:** `store()`, `update()`, and `delete()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Updates check both the existing and requested category, including content-only changes and recategorization out of a privileged category. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory`/`forget` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`. Inference commits accept only `profile`. Both commit endpoints reject an invalid batch with HTTP 422 before mutation. `commit-inference` replaces the old inferred profile in one transaction (`MemoryStore.replace_by_source`), so a failed save keeps the previous profile; `commit-discovery` storage failures return HTTP 500 with a correlation ID and the number of items already stored, so callers must not assume atomic rollback there.
 
 **Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context` + `entity` scope, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
 
@@ -666,6 +674,29 @@ Only provided fields are changed. Sets `updated_at` to the current time. When `c
 ```python
 def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
 ```
+
+#### forget()
+
+```python
+def forget(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
+def get_forgotten(self, said_before: Optional[str] = None, limit: int = 50) -> List[str]
+def is_forgotten(self, content: str, said_before: Optional[str] = None) -> bool
+def mentions_forgotten(self, text: str, said_before: Optional[str] = None) -> bool
+```
+
+`forget()` deletes the entry and records that the user forgot it; see [Forgetting](#forgetting). `get_forgotten()` lists the text of what was forgotten, newest first, for a prompt (sensitive entries are left out). `is_forgotten()` says whether *content* is the same memory as one of them, and `mentions_forgotten()` whether a longer text, such as a session summary, repeats one. With `said_before`, each covers only what was forgotten after that moment.
+
+`get_all_knowledge(about_user=True)` (and `GET /api/memory/knowledge?about_user=true`) returns only rows about the user, leaving out tool lessons, session summaries, errors and system facts.
+
+#### replace_by_source()
+
+```python
+def replace_by_source(
+    self, source: str, items: List[Dict], *, allow_privileged: bool = False
+) -> List[str]
+```
+
+Replaces every row from *source* with *items* in one transaction, so a failure part-way keeps the old rows. Used by the dashboard's inference commit.
 
 #### apply_confidence_decay()
 
@@ -1098,6 +1129,9 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_upcoming(within_days, ...)` | Time-sensitive items (v2: `superseded_by IS NULL` filter) |
 | `update(knowledge_id, ...)` | Update existing entry (v2: adds `superseded_by` parameter) |
 | `delete(knowledge_id)` | Delete entry |
+| `forget(knowledge_id)` | Delete an entry the user asked to forget, and record that they did |
+| `get_forgotten(said_before)` / `is_forgotten(content, said_before)` | What was forgotten, and whether content repeats it |
+| `replace_by_source(source, items)` | Replace every row from a source in one transaction |
 | `apply_confidence_decay(...)` | Decay unused knowledge |
 | `update_confidence(knowledge_id, delta)` | Adjust confidence by delta, clamped to [0.0, 1.0] |
 | `delete_by_source(source)` | Delete all knowledge entries with a given source |
