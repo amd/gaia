@@ -513,6 +513,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         logger.warning("system status: %s", exc)
         status = SystemStatus(lemonade_url=None, config_error=str(exc))
     status.warm_up = WarmUpStatus(**warmup.warm_up_status())
+    if db.db_path != ":memory:":
+        status.data_dir = str(Path(db.db_path).parent)
 
     # Resolve how to start Lemonade on THIS host once, here, so every surface
     # renders the same answer. Never fatal: a banner losing its hint is far

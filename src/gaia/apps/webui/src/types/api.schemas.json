@@ -3258,6 +3258,17 @@
         "title": "Context Size Sufficient",
         "type": "boolean"
       },
+      "data_dir": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Data Dir"
+      },
       "default_model_is_cloud": {
         "default": false,
         "title": "Default Model Is Cloud",

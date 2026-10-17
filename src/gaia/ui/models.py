@@ -126,6 +126,8 @@ class SystemStatus(BaseModel):
     # One message per status probe that failed (catalog, stats, device info,
     # disk space); the matching fields keep their "unknown" defaults.
     probe_warnings: List[str] = Field(default_factory=list)
+    # The folder that holds the chat database; None for an in-memory one.
+    data_dir: Optional[str] = None
 
 
 class LoadedModelInfo(BaseModel):

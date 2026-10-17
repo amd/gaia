@@ -320,6 +320,11 @@ class ChatDatabase:
             tuple(PLACEHOLDER_TITLES),
         )
 
+    @property
+    def db_path(self) -> str:
+        """The SQLite file this database opened, or ``:memory:``."""
+        return self._db_path
+
     def close(self):
         """Close database connection."""
         if self._conn:

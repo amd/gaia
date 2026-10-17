@@ -848,6 +848,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
+  data_dir?: string | null;
   default_model_is_cloud?: boolean;
   default_model_name?: string | null;
   default_model_size_gb?: number | null;
