@@ -43,6 +43,7 @@ beforeEach(() => {
     mockedApi.getActiveRuns.mockResolvedValue({
         session_ids: ['a', 'b'], queued: ['b'], awaiting_user: { a: 'permission' },
     });
+    mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'a', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.attachToRun.mockImplementation((sid, cbs) => {
