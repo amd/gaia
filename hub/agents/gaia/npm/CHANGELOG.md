@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A new chat starts about 45 s sooner once memory has changed.** Each chat
+  rendered the memory section of its system prompt afresh, and on Gemma-4 any
+  change there made the model re-read the whole ~19K-token prompt, tool
+  schemas included. New chats in the same agent process now reuse the section
+  for up to an hour; what was learned since still reaches them through
+  per-turn recall, and forgetting or editing a shown memory re-renders it at
+  once.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two
