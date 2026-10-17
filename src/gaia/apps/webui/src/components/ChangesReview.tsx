@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2, X } from 'lucide-react';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -40,7 +41,9 @@ export function ChangesReview({ sessionId, turn, onClose }: {
         return () => { live = false; };
     }, [sessionId, turn.turn_id]);
 
-    return (
+    // Portaled: opened from a message, a transformed ancestor would otherwise
+    // clip the fixed backdrop to the chat column.
+    return createPortal(
         <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Review changes">
             <div className="modal-panel changes-review" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
@@ -71,6 +74,7 @@ export function ChangesReview({ sessionId, turn, onClose }: {
                     )}
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 }
