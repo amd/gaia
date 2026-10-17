@@ -111,11 +111,12 @@ describe('Sidebar', () => {
         expect(screen.getByText('Tax questions')).toBeInTheDocument();
     });
 
-    it('shows where the model runs', () => {
+    it('shows where the model runs, and opens its live status', async () => {
+        mockedApi.getLocalModelStatus.mockReturnValue(new Promise(() => {}));
         render(<Sidebar onNewChat={vi.fn()} />);
-        const location = screen.getByRole('button', { name: 'Local · Gemma-4-E4B-it-GGUF' });
+        const location = screen.getByRole('button', { name: /^Local · Gemma-4-E4B-it-GGUF/ });
         fireEvent.click(location);
-        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(await screen.findByRole('dialog', { name: 'Model status' })).toBeInTheDocument();
     });
 
     it('shows a cloud location for a cloud model', () => {
@@ -129,7 +130,7 @@ describe('Sidebar', () => {
     it('does not claim Local when the backend cannot tell where chat runs', () => {
         useChatStore.setState({ sessions: SESSIONS.map((s) => ({ ...s, inference_remote: null })) });
         render(<Sidebar onNewChat={vi.fn()} />);
-        const location = screen.getByRole('button', { name: 'Gemma-4-E4B-it-GGUF' });
+        const location = screen.getByRole('button', { name: /^Gemma-4-E4B-it-GGUF/ });
         expect(location.textContent).not.toMatch(/local/i);
     });
 

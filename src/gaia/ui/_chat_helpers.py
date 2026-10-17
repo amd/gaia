@@ -3453,6 +3453,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            # Settings › Model shows each model's speed measured on this PC.
+            if inference_stats is not None and model_id:
+                inference_stats["model"] = model_id
 
             msg_id = db.upsert_message(
                 request.session_id,

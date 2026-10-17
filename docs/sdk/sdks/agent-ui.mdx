@@ -1877,7 +1877,11 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   </Accordion>
 
   <Accordion title="GET /api/providers/active">
-    The model new turns run. On the first call of a backend run it also
+    The model new turns run — the one a new chat starts on: the picked model,
+    else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
+    `display_name`, and `downloaded` for a local model (`null` for a cloud
+    model or while the server starts). With an unreadable config, `model` is
+    `null` and `config_error` says why. On the first call of a backend run it also
     restores `last_model` from `~/.gaia/config.json`; `restore.status` is
     `restored`, `failed` (with the reason — another model is never switched in
     quietly), `none`, or `pending` while the local model server is still
@@ -1910,9 +1914,53 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
 
   <Accordion title="GET /api/providers/{provider}/models">
     Chat models for a provider (embedding, reranker, speech, and image models
-    are left out). `local` lists downloaded models plus the default model;
+    are left out). `local` lists downloaded models plus the default models
+    (`Qwen3.6-35B-A3B-GGUF`, `Gemma-4-E4B-it-GGUF` and the configured default);
     cloud providers list their own. Recommended models come first with a
     `rank`, `note`, and the measured `evidence` behind the pick.
+
+    Each local model also carries `display_name`; `state` (`loaded`,
+    `downloaded` or `not_downloaded`); `placement` — `label` such as
+    "GPU · Vulkan" or "NPU · FLM", with `source` `reported` (Lemonade's
+    `/health` for a loaded model) or `expected` (its recipe), and a `warning`
+    when the two differ; `size_gb`; `fits` this PC's memory; `available` with
+    an `unavailable_reason` (no NPU, no usable backend, too large); and
+    `tokens_per_second`, the median of its recent turns on this PC.
+  </Accordion>
+
+  <Accordion title="GET /api/providers/local/context">
+    The context sizes a local model (the `model` query parameter) may use here: `options` from its `min` up
+    to `max_fit`, the largest window that fits this PC, plus the `automatic`
+    size GAIA picks, the `chosen` one (or `null`), and `loaded_ctx`. **422**
+    for a cloud model.
+  </Accordion>
+
+  <Accordion title="PUT /api/providers/local/context">
+    Remember a context size for a model in `~/.gaia/config.json`
+    (`context_sizes`); every load of it uses that size. Body:
+    `{"model", "ctx_size"}`, with `ctx_size: null` for Automatic. If the model
+    is loaded, GAIA reloads it in the background through its normal load path
+    (free-memory check included); `reload` says `{"started": true}`, or
+    `started: false` with `reason` `busy` (a reply is running) or `restarting`,
+    in which case the size applies on the next load. **422** for a size not
+    offered on this PC. A saved size that stops fitting is refused at load with
+    how to fix it; `GAIA_CTX_SIZE` still overrides it.
+  </Accordion>
+
+  <Accordion title="GET /api/providers/local/status">
+    The sidebar's live status: `state` (`loaded`, `warming`, `idle` or
+    `stopped`), `busy` while the model answers, the loaded `model` with its
+    `placement` and `ctx_size`, `memory` (`free_gb`, `total_gb`, and
+    `model_gb`, its estimated share; no `free_gb` for a Lemonade on another
+    machine), `error` with the raw cause in `error_detail`, and `restarting` /
+    `restart_error`. Requires `X-Gaia-UI: 1`.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/local/restart">
+    Start the model server if it is stopped, else reload the loaded chat model
+    (or the active one) at its context size. Returns **202**; progress shows in
+    `/local/status`. **409** while a restart runs or while the model is
+    answering; **422** for a cloud model.
   </Accordion>
 
   <Accordion title="POST /api/providers/select">

@@ -14,8 +14,17 @@ interface ModelState {
     error: string | null;
     /** One-line notice about restoring the last model, shown once per launch. */
     restoreNotice: { ok: boolean; message: string } | null;
+    /** A model picked while a reply was running; applied when that reply ends. */
+    queued: string | null;
+    /** Why applying the queued model failed, shown on the chip. */
+    queueError: string | null;
+    /** Friendly names the backend gave, by model id. */
+    names: Record<string, string>;
     refresh: () => Promise<void>;
     select: (model: string) => Promise<void>;
+    queue: (model: string | null) => void;
+    applyQueued: () => Promise<void>;
+    rememberNames: (models: Array<{ id: string; display_name?: string }>) => void;
     dismissRestoreNotice: () => void;
 }
 
@@ -27,6 +36,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
     active: null,
     error: null,
     restoreNotice: null,
+    queued: null,
+    queueError: null,
+    names: {},
     refresh: async () => {
         try {
             const active = await api.getActiveModel();
@@ -60,8 +72,42 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // An empty list has no model to report, and must not wipe the sidebar.
         if (sessions?.length) useChatStore.getState().setSessions(sessions);
     },
+    queue: (model) => set({ queued: model, queueError: null }),
+    applyQueued: async () => {
+        const model = get().queued;
+        if (!model) return;
+        try {
+            await get().select(model);
+            set({ queued: null });
+        } catch (err) {
+            set({
+                queued: null,
+                queueError: `Couldn't switch to ${displayModelName(model)}: ${err instanceof Error ? err.message : String(err)}`,
+            });
+        }
+    },
+    rememberNames: (models) => {
+        const next = { ...get().names };
+        for (const m of models) if (m.display_name) next[m.id] = m.display_name;
+        set({ names: next });
+    },
     dismissRestoreNotice: () => set({ restoreNotice: null }),
 }));
+
+// A pick made during a reply keeps that reply on its model, then applies.
+useChatStore.subscribe((state, prev) => {
+    if (prev.isStreaming && !state.isStreaming && useModelStore.getState().queued) {
+        void useModelStore.getState().applyQueued();
+    }
+});
+
+/** The friendly name the backend gave a model, else its short id. */
+export function displayModelName(model: string): string {
+    const state = useModelStore.getState();
+    if (state.names[model]) return state.names[model];
+    if (state.active?.model === model && state.active.display_name) return state.active.display_name;
+    return shortModelName(model);
+}
 
 /** The backend's answer to where a session's chat is answered (`inference_remote: null` = unknown). */
 export type InferenceLocation = Pick<
