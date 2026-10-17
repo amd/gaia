@@ -5,23 +5,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Shuffle } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
-import { shortModelName } from '../stores/modelStore';
+import { displayModelName } from '../stores/modelStore';
+
+interface LocalModel { id: string; name: string }
 
 /** Downloaded models on this PC, from every local provider. */
-async function localModels(): Promise<string[]> {
+async function localModels(): Promise<LocalModel[]> {
     const { providers, lemonade_error } = await api.listProviders();
     if (lemonade_error) throw new Error(lemonade_error);
     const lists = await Promise.all(
         providers.filter((p) => !p.remote).map((p) => api.listProviderModels(p.id)),
     );
-    return lists.flatMap((l) => l.models.filter((m) => m.downloaded).map((m) => m.id));
+    return lists.flatMap((l) => l.models
+        .filter((m) => m.downloaded)
+        .map((m) => ({ id: m.id, name: m.display_name ?? displayModelName(m.id) })));
 }
 
 /** "Retry with…": pick another local model to answer the same question. */
 export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | null; onPick: (model: string) => void }) {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
-    const [models, setModels] = useState<string[] | null>(null);
+    const [models, setModels] = useState<LocalModel[] | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
@@ -36,7 +40,7 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
 
     useEffect(() => { if (open) void load(); }, [open, load]);
 
-    const others = models?.filter((m) => m !== answeredBy) ?? [];
+    const others = models?.filter((m) => m.id !== answeredBy) ?? [];
     return (
         <>
             <button
@@ -62,13 +66,13 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
                     )}
                     {others.map((m) => (
                         <button
-                            key={m}
+                            key={m.id}
                             type="button"
                             className="retry-menu-item"
-                            title={m}
-                            onClick={() => { setOpen(false); onPick(m); }}
+                            title={m.id}
+                            onClick={() => { setOpen(false); onPick(m.id); }}
                         >
-                            {shortModelName(m)}
+                            {m.name}
                         </button>
                     ))}
                 </div>

@@ -3,7 +3,7 @@
 
 import { Loader2, X } from 'lucide-react';
 import { RenderedContent } from './MessageBubble';
-import { shortModelName } from '../stores/modelStore';
+import { displayModelName } from '../stores/modelStore';
 import type { Message, RetryResult } from '../types';
 import './AnswerComparison.css';
 
@@ -46,7 +46,7 @@ export function AnswerComparison({ original, originalModel, originalLatencyMs, s
             </header>
             <div className="answer-compare-cols">
                 <article className="compare-col" aria-label={`Answer from ${originalModel ?? 'the original model'}`}>
-                    <h4>{originalModel ? shortModelName(originalModel) : 'Original answer'}</h4>
+                    <h4>{originalModel ? displayModelName(originalModel) : 'Original answer'}</h4>
                     <Meta parts={[seconds(originalLatencyMs), tps ? `${tps} tok/s` : null]} />
                     <div className="compare-body"><RenderedContent content={original.content} /></div>
                     <button
@@ -59,11 +59,11 @@ export function AnswerComparison({ original, originalModel, originalLatencyMs, s
                     </button>
                 </article>
                 <article className="compare-col" aria-label={`Answer from ${retryModel}`}>
-                    <h4>{shortModelName(retryModel)}</h4>
+                    <h4>{displayModelName(retryModel)}</h4>
                     {state.status === 'running' && (
                         <div className="compare-wait">
                             <Loader2 size={14} className="spin" aria-hidden="true" />
-                            <span>Loading {shortModelName(retryModel)}, then answering from the same evidence. Tools are not run again.</span>
+                            <span>Loading {displayModelName(retryModel)}, then answering from the same evidence. Tools are not run again.</span>
                         </div>
                     )}
                     {state.status === 'failed' && <div className="compare-error" role="alert">{state.error}</div>}
