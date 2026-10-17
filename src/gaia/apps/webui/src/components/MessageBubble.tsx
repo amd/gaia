@@ -13,6 +13,7 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import type { Message, AgentStep, RenderCardData } from '../types';
+import { TurnChanges } from './TurnChanges';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -592,6 +593,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </span>
                             )}
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
+                        <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
                 </div>
             </div>

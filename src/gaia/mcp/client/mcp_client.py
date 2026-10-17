@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from gaia.agents.base.file_snapshots import note_untracked
 from gaia.logger import get_logger
 
 from .transports.base import MCPTransport
@@ -647,6 +648,8 @@ class MCPClient:
         """
 
         def wrapper(**kwargs: Any) -> Dict[str, Any]:
+            if mcp_tool_requires_confirmation(tool.name, tool.annotations):
+                note_untracked("mcp", f"{self.name}: {tool.name}")
             return self.call_tool(tool.name, kwargs)
 
         return wrapper
