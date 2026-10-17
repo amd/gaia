@@ -278,6 +278,13 @@ def _decorator_route(dec: ast.expr, module_constants: Dict[str, str]):
         return None
     if not dec.args:
         return None
+    if any(
+        kw.arg == "include_in_schema"
+        and isinstance(kw.value, ast.Constant)
+        and kw.value.value is False
+        for kw in dec.keywords
+    ):
+        return None  # a dev-only route, off the published contract
     path_node = dec.args[0]
     if isinstance(path_node, ast.Constant) and isinstance(path_node.value, str):
         path = path_node.value

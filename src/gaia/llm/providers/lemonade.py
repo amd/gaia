@@ -8,6 +8,8 @@ import re
 import time
 from typing import Callable, Iterator, List, Optional, Tuple, Union
 
+from gaia.utils import perf_trace
+
 from ..base_client import LLMClient
 from ..inference_location import provider_phrase
 from ..lemonade_client import (
@@ -882,6 +884,7 @@ class LemonadeProvider(LLMClient):
             (timings or {}).get("predicted_per_second") or 0.0
         )
         self._last_usage = captured
+        perf_trace.note_server_timings(timings)
 
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
@@ -944,7 +947,7 @@ class LemonadeProvider(LLMClient):
             # stream_options request in lemonade_client.
             if chunk.get("usage"):
                 usage_seen = True
-                self._capture_usage(chunk["usage"], timings=None)
+                self._capture_usage(chunk["usage"], timings=chunk.get("timings"))
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason
