@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { AlertTriangle, FileDiff as FileDiffIcon, Undo2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useTurnChanges } from '../hooks/useTurnChanges';
+import { announceUndo } from '../utils/undoEvents';
 import type { UntrackedWork } from '../types/changes';
 import { ChangesReview } from './ChangesReview';
 import './TurnChanges.css';
@@ -47,6 +48,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
             }
             setMessage(text);
             setPhase('done');
+            announceUndo(sessionId);
             await refresh();
         } catch (err) {
             const conflict = err instanceof api.ApiError && err.reason === 'conflict';
