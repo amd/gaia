@@ -578,7 +578,7 @@ class TestPromptsSayWhatTheCallDoes:
             drive(PermissionState(), ["deny"], agent=agent), "needs_confirmation"
         )[0]
         assert prompt["risk"] == "execute"
-        assert prompt["always_scope"] == "pytest"
+        assert prompt["always_scope"] == "pytest (runs the test code it finds)"
         assert prompt["summary"].splitlines()[0] == "python -m pytest -q 2>&1"
 
     def test_a_delete_is_destructive_and_offers_no_always(self):

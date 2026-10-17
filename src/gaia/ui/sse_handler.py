@@ -1939,6 +1939,10 @@ class SSEOutputHandler(OutputHandler):
         except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
             logger.debug("email relay: failed to close active response", exc_info=True)
 
+    def tool_running(self) -> bool:
+        """True from a tool's start until its result or end."""
+        return self._tool_start_time is not None
+
     def awaiting_user_input(self) -> bool:
         """True while a question or a tool confirmation is waiting on the user."""
         if self._confirm_id is not None or self._relay_confirm_id is not None:

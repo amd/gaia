@@ -67,3 +67,27 @@ def test_every_ci_lane_resolves():
 def test_an_unknown_lane_names_the_real_ones():
     with pytest.raises(SystemExit, match="gaia-signal"):
         run_eval_lane.lane_categories("no-such-lane")
+
+
+def test_each_category_gets_an_empty_home_with_the_staged_skills(tmp_path):
+    staged = tmp_path / "_staged"
+    (staged / "skills" / "word-count").mkdir(parents=True)
+    (staged / "skills" / "trusted-keys.json").write_text("{}")
+
+    env = run_eval_lane.category_home(tmp_path / "gaia_memory", staged)
+
+    home = tmp_path / "gaia_memory"
+    assert env["GAIA_HOME"] == str(home)
+    assert env["GAIA_MEMORY_DB"] == str(home / "memory.db")
+    assert env["GAIA_CONFIG_DIR"] == str(home)
+    assert env["GAIA_DAEMON_HOME"] == str(home / "host")
+    assert (home / "skills" / "trusted-keys.json").is_file()
+    assert not (home / "memory.db").exists()
+
+
+def test_a_category_home_that_already_exists_is_refused(tmp_path):
+    # A reused home is exactly how one run's memory reaches the next.
+    (tmp_path / "gaia_rag").mkdir()
+
+    with pytest.raises(SystemExit, match="already exists"):
+        run_eval_lane.category_home(tmp_path / "gaia_rag", tmp_path / "_staged")

@@ -27,6 +27,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a working directory you did not allow, a snippet now runs in the agent's
   scratch directory, and its result says so. A project outside the allowed
   paths is still refused.
+- **An "always" answer for a shell command no longer covers code in the
+  scratch folder.** A command run there or naming a path there — `cd` into it
+  then `python -m explore`, or `pytest`, `make`, `pip install`, `uv run` or
+  `go run` pointed at it — and a script handed a scratch path as an argument
+  now ask every time, with no `always_scope`, the same as a script there.
+  `always_scope` labels for commands that run code they do not show now say so:
+  `pytest (runs the test code it finds)`, `make (runs the Makefile's
+  commands)`, `python -m explore (runs that Python module)`.
 - **Exploring data no longer asks twice per step.** Each step wrote a helper
   script into the agent's own scratch folder and ran it, so a data task asked
   for approval about 30 times. Writes inside that folder now run unasked
