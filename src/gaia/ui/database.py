@@ -47,6 +47,19 @@ def resolved_default_model() -> str:
 
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
+SESSION_KINDS = ("chat", "eval", "scheduled")
+
+
+def session_kind_for_title(title: str | None) -> str:
+    """Eval and scheduler chats are named by their runner; a person's never are."""
+    t = (title or "").lstrip()
+    if t.startswith("Eval:"):
+        return "eval"
+    if t.startswith("Schedule:"):
+        return "scheduled"
+    return "chat"
+
+
 PLACEHOLDER_TITLES = {
     "",
     "new chat",
@@ -320,6 +333,21 @@ class ChatDatabase:
             tuple(PLACEHOLDER_TITLES),
         )
 
+        # The chat list as a queue (#5221): pin, unread, how the last turn
+        # ended, and whether a person or the eval/scheduler started the chat.
+        self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("sessions", "last_run_status", "TEXT")
+        self._add_column(
+            "sessions",
+            "kind",
+            "TEXT NOT NULL DEFAULT 'chat'",
+            "UPDATE sessions SET kind = CASE "
+            "WHEN title LIKE 'Eval:%' THEN 'eval' "
+            "WHEN title LIKE 'Schedule:%' THEN 'scheduled' "
+            "ELSE 'chat' END",
+        )
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -355,8 +383,13 @@ class ChatDatabase:
         agent_type: str | None = None,
         device: str | None = None,
         mail_provider: str | None = None,
+        kind: str | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Create a new chat session."""
+        """Create a new chat session.
+
+        ``kind`` defaults from the title (``Eval:`` / ``Schedule:`` prefixes),
+        since the eval driver creates chats through the plain API.
+        """
         session_id = str(uuid.uuid4())
         now = self._now()
         # An explicit caller-supplied model wins; otherwise resolve against
@@ -371,13 +404,18 @@ class ChatDatabase:
         # picker no longer offers.
         agent_type = agent_type or "gaia"
         device = device or "gpu"
+        kind = kind or session_kind_for_title(title)
+        if kind not in SESSION_KINDS:
+            raise ValueError(
+                f"Unknown session kind {kind!r}; expected one of {SESSION_KINDS}"
+            )
         # mail_provider is a FILTER (#1596): no pick stays NULL ("every
         # connected mailbox") — never silently coerce to google.
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider, kind)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -390,6 +428,7 @@ class ChatDatabase:
                     agent_type,
                     device,
                     mail_provider,
+                    kind,
                 ),
             )
 
@@ -452,6 +491,34 @@ class ChatDatabase:
                 sessions.append(session)
 
             return sessions
+
+    def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
+        """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET pinned = ? WHERE id = ?",
+                (1 if pinned else 0, session_id),
+            )
+        return cur.rowcount > 0
+
+    def mark_session_read(self, session_id: str) -> bool:
+        """Clear a chat's unread flag (the user opened it)."""
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET unread = 0 WHERE id = ?", (session_id,)
+            )
+        return cur.rowcount > 0
+
+    def finish_session_run(self, session_id: str, status: str) -> bool:
+        """Record how a turn ended (``done``/``failed``/``stopped``) and mark it unread."""
+        if status not in ("done", "failed", "stopped"):
+            raise ValueError(f"Unknown run status {status!r}")
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET last_run_status = ?, unread = 1 WHERE id = ?",
+                (status, session_id),
+            )
+        return cur.rowcount > 0
 
     def count_sessions(self) -> int:
         """Count total sessions."""

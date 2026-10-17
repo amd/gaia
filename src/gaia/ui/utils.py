@@ -158,6 +158,10 @@ def session_to_response(
         # Filter semantics (#1596): null = "every connected mailbox" — must
         # reach the frontend as null so the selector shows no phantom pick.
         mail_provider=session.get("mail_provider"),
+        pinned=bool(session.get("pinned", 0)),
+        unread=bool(session.get("unread", 0)),
+        last_run_status=session.get("last_run_status"),
+        kind=session.get("kind") or "chat",
     )
 
 
@@ -195,7 +199,8 @@ def message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_sources, str):
                 raw_sources = json.loads(raw_sources)
             sources = [SourceInfo(**s) for s in raw_sources]
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.error("Message %s has unreadable rag_sources: %s", msg.get("id"), e)
             sources = None
 
     agent_steps = None

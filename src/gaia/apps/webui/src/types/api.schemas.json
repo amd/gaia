@@ -2911,6 +2911,20 @@
     "title": "SessionListResponse",
     "type": "object"
   },
+  "SessionPinRequest": {
+    "description": "Pin or unpin a chat.",
+    "properties": {
+      "pinned": {
+        "title": "Pinned",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "pinned"
+    ],
+    "title": "SessionPinRequest",
+    "type": "object"
+  },
   "SessionResponse": {
     "description": "A chat session.",
     "properties": {
@@ -2994,6 +3008,22 @@
         ],
         "title": "Inference Remote"
       },
+      "kind": {
+        "default": "chat",
+        "title": "Kind",
+        "type": "string"
+      },
+      "last_run_status": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Run Status"
+      },
       "mail_provider": {
         "anyOf": [
           {
@@ -3013,6 +3043,11 @@
       "model": {
         "title": "Model",
         "type": "string"
+      },
+      "pinned": {
+        "default": false,
+        "title": "Pinned",
+        "type": "boolean"
       },
       "private": {
         "default": false,
@@ -3037,6 +3072,11 @@
       "title_is_custom": {
         "default": false,
         "title": "Title Is Custom",
+        "type": "boolean"
+      },
+      "unread": {
+        "default": false,
+        "title": "Unread",
         "type": "boolean"
       },
       "updated_at": {
