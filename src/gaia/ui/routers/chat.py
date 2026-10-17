@@ -679,12 +679,50 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
             "available": False,
             "reason": "Measured once GAIA has answered in this chat.",
         }
-    from gaia.agents.base.history import context_usage
+    from ..turn_insights import (
+        context_categories,
+        context_state,
+        measure_context,
+        tools_by_load,
+    )
 
     def _measure():
-        return context_usage(agent, model_turns(agent, db, session_id))
+        usage = measure_context(
+            agent, model_turns(agent, db, session_id), getattr(agent, "model_id", None)
+        )
+        usage["categories"] = context_categories(usage)
+        usage["tool_loading"] = tools_by_load(agent)
+        usage["model"] = getattr(agent, "model_id", None)
+        usage["context_state"] = context_state(agent)
+        return usage
 
     return {"available": True, **(await asyncio.to_thread(_measure))}
+
+
+@router.get("/api/chat/performance/{session_id}")
+async def get_chat_performance(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Where each turn's time went, the chat's totals, and the model's state now."""
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    from .._chat_helpers import cached_session_agent
+    from ..turn_insights import chat_totals, model_now
+
+    agent = cached_session_agent(session_id)
+    model = getattr(agent, "model_id", None) if agent is not None else None
+    model = model or session.get("model")
+
+    def _read():
+        turns = db.turn_performance(session_id)
+        return {
+            # The newest answer; "last turn" is unknown when it has no record.
+            "latest_message_id": db.latest_message_id(session_id, role="assistant"),
+            "turns": turns,
+            "totals": chat_totals(turns),
+            "now": model_now(model),
+        }
+
+    return await asyncio.to_thread(_read)
 
 
 class RetryWithRequest(BaseModel):

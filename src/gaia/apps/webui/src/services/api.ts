@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ContextUsage, RetryResult, ActiveRuns, ProviderModelsResponse, ContextChoice, LocalModelStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ContextUsage, RetryResult, ActiveRuns, ProviderModelsResponse, ContextChoice, LocalModelStatus, ChatPerformance } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -915,6 +915,11 @@ export async function getContextUsage(
     sessionId: string,
 ): Promise<({ available: true } & ContextUsage) | { available: false; reason: string }> {
     return apiFetch('GET', `/chat/context/${encodeURIComponent(sessionId)}`);
+}
+
+/** Each turn's measured timing, the chat's totals, and the model's state now. */
+export async function getChatPerformance(sessionId: string): Promise<ChatPerformance> {
+    return apiFetch('GET', `/chat/performance/${encodeURIComponent(sessionId)}`);
 }
 
 /** Answer the latest question again on another local model; held until one is kept. */

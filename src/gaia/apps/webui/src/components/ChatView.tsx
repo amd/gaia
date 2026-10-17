@@ -1868,7 +1868,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
                         rightControls={(
                             <>
-                                <ContextMeter usage={contextUsage} unavailable={contextUnavailable} />
+                                <ContextMeter usage={contextUsage} unavailable={contextUnavailable} sessionId={sessionId} busy={busy} onUsage={setContextUsage} />
                                 <ModelChip />
                             </>
                         )}

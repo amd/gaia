@@ -13,6 +13,8 @@ import * as api from '../../services/api';
 vi.mock('../../services/api');
 
 const mockedApi = vi.mocked(api);
+// A variable, not a literal: compiles before and after #5242 adds `queued` and `awaiting_user`.
+const NO_ACTIVE_RUNS = { session_ids: [], queued: [], awaiting_user: {} };
 
 const SESSION: Session = {
     id: 'session-c',
@@ -40,7 +42,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     callbacks = null;
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mockedApi.getActiveRuns.mockResolvedValue(NO_ACTIVE_RUNS);
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.updateSession.mockResolvedValue(undefined as never);

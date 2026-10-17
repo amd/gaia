@@ -2004,7 +2004,9 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+def _maybe_load_expected_model(
+    model_id: str, sse_handler=None, loads: Optional[list] = None
+) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -2031,6 +2033,9 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
     VLMs (``type="vlm"``) count as valid chat models for the model-name
     check, since the multimodal backbone serves text completions.
+
+    A load that happens is appended to *loads*, when given, as
+    ``{"model", "seconds", "replaced"}``.
 
     Note: there is a small TOCTOU window between this check and the
     actual chat request.  An eviction in that window is handled by
@@ -2158,6 +2163,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     return
 
             client = LemonadeClient(verbose=False)
+            load_started = _time.monotonic()
             # Lemonade does not evict the resident model on a new /load, so
             # unload the stale local chat models first — by name, so the
             # embedder that memory and RAG need stays resident. A server the
@@ -2171,6 +2177,14 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )
+            if loads is not None:
+                loads.append(
+                    {
+                        "model": model_id,
+                        "seconds": round(_time.monotonic() - load_started, 3),
+                        "replaced": [m.get("model_name") for m in resident_chat_models],
+                    }
+                )
     except InsufficientMemoryError as exc:
         # The fix is closing apps, not checking Lemonade: pass the reason on.
         logger.error("Pre-flight model load refused: %s", exc)
@@ -2568,6 +2582,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    turn_started = _time.monotonic()
     sse_handler = None
     producer = None
     cleanup_done = False
@@ -2716,7 +2731,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
-        result_holder = {"answer": "", "error": None}
+        result_holder = {"answer": "", "error": None, "model_loads": []}
         turn_box: dict = {}
         inbox_holder: dict = {}
 
@@ -3045,7 +3060,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler
+                    _effective_model(agent, model_id),
+                    sse_handler,
+                    loads=result_holder["model_loads"],
                 )
 
                 # -- Phase 5: Query processing.  One automatic retry on
@@ -3055,6 +3072,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # query so we don't replay against a still-broken backend.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
+                result_holder["attempts"] = 1
                 try:
                     result = agent.process_query(request.message)
                 except Exception as first_exc:  # pylint: disable=broad-except
@@ -3072,7 +3090,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # mid-conversation when the model got evicted.
                     try:
                         _maybe_load_expected_model(
-                            _effective_model(agent, model_id), sse_handler
+                            _effective_model(agent, model_id),
+                            sse_handler,
+                            loads=result_holder["model_loads"],
                         )
                     except Exception as exc:  # pylint: disable=broad-except
                         logger.warning("Model reload before retry failed: %s", exc)
@@ -3089,6 +3109,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     # One more attempt. If THIS fails, surface the
                     # friendlier classified message.
+                    result_holder["attempts"] = 2
                     try:
                         result = agent.process_query(request.message)
                     except Exception as second_exc:  # pylint: disable=broad-except
@@ -3105,6 +3126,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["result"] = result
+                    result_holder["model"] = _effective_model(agent, model_id)
                     result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
@@ -3587,6 +3610,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             turn_summary = _turn_summary(
                 sse_handler, result_holder.get("agent"), request.message, answer_event
             )
+            if isinstance(result_holder.get("result"), dict):
+                from .turn_insights import summarize_turn
+
+                inference_stats = dict(inference_stats or {})
+                inference_stats["performance"] = summarize_turn(
+                    result_holder["result"],
+                    wall_seconds=_time.monotonic() - turn_started,
+                    model_id=result_holder.get("model"),
+                    loads=result_holder["model_loads"],
+                    attempts=result_holder.get("attempts", 1),
+                )
 
             msg_id = db.upsert_message(
                 request.session_id,

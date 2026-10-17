@@ -156,3 +156,14 @@ button.context-meter:hover {
         display: none;
     }
 }
+
+.context-meter-details {
+    margin-top: 10px;
+    padding: 0;
+    color: var(--accent);
+    font-size: 12px;
+}
+
+.context-meter-details:hover {
+    text-decoration: underline;
+}
