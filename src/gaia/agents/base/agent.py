@@ -8222,6 +8222,13 @@ Do NOT wrap conversational replies in JSON.
             return None
         return verify_after_change_correction(changed)
 
+    def _request_text(self, query: Optional[str]) -> str:
+        """The user's own words this turn, without the memory context prepended.
+
+        A file a recalled memory names is not one the user asked to have read.
+        """
+        return getattr(self, "_original_user_input", None) or query or ""
+
     def _grounding_findings(
         self, answer: Optional[str], query: str, history: str
     ) -> list:
@@ -8235,7 +8242,7 @@ Do NOT wrap conversational replies in JSON.
         roots = [os.getcwd(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
-            query or "",
+            self._request_text(query),
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
@@ -8299,7 +8306,7 @@ Do NOT wrap conversational replies in JSON.
         if answer and answer.strip():
             findings += self._deliverable_findings(
                 strip_verification_scope(answer),
-                query or "",
+                self._request_text(query),
                 history,
                 [os.getcwd(), self._verification_project_root()],
             )

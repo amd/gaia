@@ -627,6 +627,20 @@ def _final_text(result) -> str:
     return strip_verification_scope(result["result"]).strip()
 
 
+def test_a_file_only_recalled_memory_names_is_not_sent_back_to_be_read(agent):
+    """Memory is prepended to the message; a path it names is not the user's request."""
+    sent = _stub_chat(agent, _answer("It's Saturday."))
+    agent._original_user_input = "What day of the week is it?"
+
+    agent.process_query(
+        "Recalled: read_file failed on toybox/dates.py earlier.\n\n"
+        "What day of the week is it?",
+        max_steps=5,
+    )
+
+    assert len(sent) == 1, "a correction asked to read a file only memory mentioned"
+
+
 def test_an_unread_file_gets_one_correction_then_the_grounded_answer(agent):
     sent = _stub_chat(agent, _answer(GUESSED_SUMMARY), _read_call(), _answer(GROUNDED))
 
