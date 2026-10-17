@@ -33,6 +33,8 @@ interface MessageBubbleProps {
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
     onResend?: (message: Message) => void;
+    /** More message actions, before Copy (e.g. Retry with…). */
+    extraActions?: React.ReactNode;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -129,7 +131,7 @@ function usePhaseElapsedSeconds(active: boolean, label: string): number {
 }
 
 /** Detect if message content looks like an error. */
-function isErrorContent(content: string): boolean {
+export function isErrorContent(content: string): boolean {
     if (!content) return false;
     const lower = content.toLowerCase();
     return (
@@ -410,7 +412,7 @@ function formatLatency(ms: number): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -505,6 +507,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     <RefreshCw size={12} />
                                 </button>
                             )}
+                            {extraActions}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -580,6 +583,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                             {latencyMs != null && latencyMs > 0 && (
                                 <span title="Total response time">{formatLatency(latencyMs)}</span>
+                            )}
+                            {message.stats?.model && (
+                                <span title="This answer was kept from Retry with…">{message.stats.model}</span>
                             )}
                             {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
                                 <span title="Tokens per second, final model call of this answer">{message.stats.tokens_per_second} tok/s</span>
@@ -734,7 +740,7 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
+export function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 

@@ -737,6 +737,61 @@ class ChatDatabase:
             messages.append(message)
         return messages
 
+    def latest_message_id(self, session_id: str) -> Optional[int]:
+        """The id of the newest message in a session, or None when it has none."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM messages WHERE session_id = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return row["id"] if row else None
+
+    def get_message_record(
+        self, session_id: str, message_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """One message with its model messages and stats decoded."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, role, content, model_messages, inference_stats "
+                "FROM messages WHERE session_id = ? AND id = ?",
+                (session_id, message_id),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        for key in ("model_messages", "inference_stats"):
+            if record[key] is not None:
+                try:
+                    record[key] = json.loads(record[key])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"Cannot read {key} of message {message_id} in session "
+                        f"{session_id}; inspect the messages table in the chat "
+                        "database."
+                    ) from exc
+        return record
+
+    def replace_answer(
+        self,
+        session_id: str,
+        message_id: int,
+        content: str,
+        model_messages: List[Dict] | None,
+        inference_stats: Dict | None,
+    ) -> bool:
+        """Swap an assistant message's answer in place, keeping its id and steps."""
+        model_json = json.dumps(model_messages) if model_messages is not None else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE messages SET content = ?, model_messages = ?, "
+                "inference_stats = ? "
+                "WHERE session_id = ? AND id = ? AND role = 'assistant'",
+                (content, model_json, stats_json, session_id, message_id),
+            )
+        return cursor.rowcount > 0
+
     def delete_message(self, session_id: str, message_id: int) -> bool:
         """Delete a single message by ID.
 

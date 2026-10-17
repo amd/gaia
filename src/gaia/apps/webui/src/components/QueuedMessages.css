@@ -1,0 +1,86 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.queued-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0 0 6px;
+    padding: 0;
+    list-style: none;
+}
+
+.queued-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 6px 8px 6px 10px;
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.queued-message.is-delivered,
+.queued-message.is-sending {
+    border-style: solid;
+    border-color: var(--accent-light);
+}
+
+.queued-message-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queued-message-state {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.queued-message-steer {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.queued-message-steer:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.queued-message-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.queued-message-remove:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+@media (max-width: 560px) {
+    .queued-message {
+        flex-wrap: wrap;
+    }
+
+    .queued-message-state {
+        flex-basis: 100%;
+        order: 3;
+    }
+}

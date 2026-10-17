@@ -1508,6 +1508,24 @@
     "title": "FileUploadResponse",
     "type": "object"
   },
+  "FollowUpRequest": {
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "text"
+    ],
+    "title": "FollowUpRequest",
+    "type": "object"
+  },
   "ForwardConnectionRequest": {
     "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
     "properties": {
@@ -1774,10 +1792,32 @@
         "title": "Input Tokens",
         "type": "integer"
       },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
       "output_tokens": {
         "default": 0,
         "title": "Output Tokens",
         "type": "integer"
+      },
+      "seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds"
       },
       "steps": {
         "anyOf": [
@@ -2712,6 +2752,56 @@
       "path"
     ],
     "title": "QuickLink",
+    "type": "object"
+  },
+  "RetryChoiceRequest": {
+    "properties": {
+      "keep": {
+        "enum": [
+          "original",
+          "retry"
+        ],
+        "title": "Keep",
+        "type": "string"
+      },
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "keep"
+    ],
+    "title": "RetryChoiceRequest",
+    "type": "object"
+  },
+  "RetryWithRequest": {
+    "properties": {
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "model"
+    ],
+    "title": "RetryWithRequest",
     "type": "object"
   },
   "ScheduleListResponse": {

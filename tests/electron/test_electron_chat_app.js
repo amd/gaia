@@ -1101,10 +1101,12 @@ describe('Chat App Integration', () => {
       chatContent = fs.readFileSync(chatPath, 'utf8');
     });
 
-    it('should prompt differently on an empty chat than on a reply', () => {
+    it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expect(chatContent).toContain(
-        "placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
+        "messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
       );
+      expect(chatContent).toContain('placeholder={isStreaming');
+      expect(chatContent).toContain("? 'Queue your next message'");
     });
 
     it('should use the shared Composer for input', () => {

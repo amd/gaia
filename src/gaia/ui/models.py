@@ -508,6 +508,10 @@ class InferenceStatsResponse(BaseModel):
     output_tokens: int = 0
     # The agent's own step count for the turn, not the number of activity rows.
     steps: Optional[int] = None
+    # Set when the answer was kept from "Retry with…": the model that wrote it,
+    # and how long it took, loading included.
+    model: Optional[str] = None
+    seconds: Optional[float] = None
 
 
 class MessageResponse(BaseModel):
