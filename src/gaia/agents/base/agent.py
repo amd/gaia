@@ -3106,7 +3106,7 @@ Do NOT wrap conversational replies in JSON.
                 validator = self._read_validator()
                 return ledger.run(
                     file_path,
-                    lambda path: read_snapshot(path, validator),
+                    lambda path: read_snapshot(path, validator, prompt_user=True),
                     ask,
                     check,
                     fields,
