@@ -868,6 +868,9 @@ def test_rag_embedder_warmup_holds_one_lease_across_unload_and_load(monkeypatch)
     held_during: List[Tuple[str, bool]] = []
 
     class _Client:
+        def is_users_server(self):
+            return False
+
         def unload_model(self, model, ignore_if_not_loaded=False):
             held_during.append(("unload", broker_client.holding_lease()))
 

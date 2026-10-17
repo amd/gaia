@@ -332,6 +332,16 @@ class TestConfirmTool:
         assert _answer(live_prompt) is False
         assert permissions.for_session(live_prompt.session_id).grants() == []
 
+    def test_answer_after_the_turn_ended_says_so_plainly(self, client):
+        resp = client.post(
+            "/api/chat/confirm-tool",
+            json={"session_id": "turn-already-over", "approved": True},
+        )
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert "session ID" not in detail
+        assert "no longer waiting" in detail
+
     def test_stale_confirm_id_is_refused(self, client, live_prompt):
         live_prompt.ask()
         resp = client.post(

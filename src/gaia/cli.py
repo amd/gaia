@@ -17,6 +17,7 @@ from gaia.agents.install_hints import (
     gaia_extras_install_args,
     pip_install_hint,
 )
+from gaia.config import gaia_agents_dir
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
@@ -211,6 +212,24 @@ def initialize_lemonade_for_agent(
         else:
             resolved_url = f"http://{host}:{port}/api/v1"
     return True, resolved_url
+
+
+def _lemonade_answers(base_url: str | None = None) -> bool:
+    """Whether the Lemonade Server a command uses answers its health check now."""
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.lemonade_supervisor import _probe
+
+    if gaia_runs_lemonade(base_url):
+        # A stopped GAIA server's stand-in address may be another Lemonade.
+        base_url = running_embedded_lemonade_url()
+        if not base_url:
+            return False
+    if base_url:
+        client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
+    else:
+        client = LemonadeClient(keep_alive=True, verbose=False)
+    return _probe(client)
 
 
 def ensure_agent_models(
@@ -3037,6 +3056,13 @@ Examples:
         action="store_true",
         help="Use stdio transport instead of HTTP (for Claude Code / eval runner integration)",
     )
+    mcp_serve_parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow a non-loopback --host. Requires a bearer token of 32+ "
+        "characters in GAIA_AGENT_UI_MCP_TOKEN; clients send it as "
+        "'Authorization: Bearer <token>'",
+    )
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
@@ -3067,7 +3093,7 @@ Examples:
     )
     mcp_list_parser.add_argument(
         "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+        help="Path to MCP servers config file (default: $GAIA_HOME/mcp_servers.json, else ~/.gaia/mcp_servers.json)",
     )
 
     mcp_tools_parser = mcp_subparsers.add_parser(
@@ -3076,7 +3102,7 @@ Examples:
     mcp_tools_parser.add_argument("name", help="Name of the MCP server")
     mcp_tools_parser.add_argument(
         "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+        help="Path to MCP servers config file (default: $GAIA_HOME/mcp_servers.json, else ~/.gaia/mcp_servers.json)",
     )
 
     mcp_test_client_parser = mcp_subparsers.add_parser(
@@ -5084,7 +5110,7 @@ Let me know your answer!
             model=getattr(args, "model", None),
         )
         if not success:
-            return
+            sys.exit(1)
 
         try:
             from gaia.apps.llm.app import main as llm
@@ -5105,18 +5131,13 @@ Let me know your answer!
                 print(response)
                 print("=" * 50)
             return
-        except Exception as e:
-            # Check if it's a connection error and provide helpful message
-            error_msg = str(e).lower()
-            if (
-                "connection" in error_msg
-                or "refused" in error_msg
-                or "timeout" in error_msg
-            ):
+        except Exception as e:  # noqa: BLE001 -- CLI boundary: report and fail
+            print(f"❌ Error: {e}", file=sys.stderr)
+            # The install/start advice only when the server really is gone: a
+            # stalled stream also says "timeout", with Lemonade up.
+            if not _lemonade_answers(getattr(args, "base_url", None)):
                 LemonadeManager.print_server_error()
-            else:
-                print(f"❌ Error: {str(e)}")
-            return
+            sys.exit(1)
 
     # Handle evaluation
     if args.action == "eval":
@@ -6411,7 +6432,7 @@ def handle_config_command(args):
         print(value if value is not None else "")
         return
 
-    if action == "set" and args.key.startswith("lemonade_"):
+    if action == "set" and args.key in _LEMONADE_CHOICE_KEYS:
         _set_lemonade_config(args.key, args.value, config_file, path)
         return
 
@@ -6430,6 +6451,12 @@ def handle_config_command(args):
         return
 
 
+#: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
+_LEMONADE_CHOICE_KEYS = frozenset(
+    ("lemonade_mode", "lemonade_base_url", "lemonade_api_key_stored")
+)
+
+
 def _set_lemonade_config(key, value, config_file, path) -> None:
     """``gaia config set lemonade_*``: check the server, save, switch the daemon."""
     from gaia.config import GaiaConfig, GaiaConfigError
@@ -6442,14 +6469,18 @@ def _set_lemonade_config(key, value, config_file, path) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    previous_mode = None
+    switching_to_gaia = False
     try:
         if key == "lemonade_mode":
+            previous_mode = choice.saved_mode()
             mode = GaiaConfig._coerce(key, value)
             if mode is None:
                 raise GaiaConfigError(
                     "lemonade_mode can't be empty: use 'gaia' or 'external'."
                 )
             choice.set_mode(mode)
+            switching_to_gaia = mode == choice.MODE_GAIA
         elif key == "lemonade_base_url":
             choice.set_url(value)
         else:
@@ -6460,9 +6491,15 @@ def _set_lemonade_config(key, value, config_file, path) -> None:
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+    # Applied before "Set" is printed: a failed switch to GAIA's own is undone.
+    applied = (
+        _apply_lemonade_choice_to_daemon(restore_mode=previous_mode)
+        if switching_to_gaia
+        else _apply_lemonade_choice_to_daemon()
+    )
     print(f"✅ Set {key} = {GaiaConfig.load().get(key)}")
     print(f"   Saved to {config_file}")
-    _apply_lemonade_choice_to_daemon()
+    _print_lemonade_switch(applied)
 
 
 def _print_gateway_models(models, state):
@@ -8778,7 +8815,7 @@ def _resolve_sidecar_log(agent_id: str):
     ``sidecar-*.log`` on disk when the daemon is down or the agent is stopped
     (so ``logs`` still works post-mortem). Returns ``None`` if no log exists.
     """
-    log_dir = Path.home() / ".gaia" / "agents" / agent_id / "logs"
+    log_dir = gaia_agents_dir() / agent_id / "logs"
 
     # Best-effort: ask the daemon for the running port so we follow the live
     # process. Never fatal — a down daemon just means we use the newest file.
@@ -8839,7 +8876,7 @@ def _handle_daemon_logs(args):
         if log_file is None:
             print(
                 f"No log for sidecar '{agent_id}' at "
-                f"{Path.home() / '.gaia' / 'agents' / agent_id / 'logs'} "
+                f"{gaia_agents_dir() / agent_id / 'logs'} "
                 f"(it has not run yet). Start it with `gaia daemon start-agent "
                 f"{agent_id}` or run the agent once."
             )
@@ -9146,16 +9183,36 @@ def handle_lemonade_command(args):
     sys.exit(1)
 
 
-def _apply_lemonade_choice_to_daemon() -> None:
-    """Tell a running daemon about a changed Lemonade choice, loudly on failure."""
+_KEEP_SAVED = object()
+
+
+def _apply_lemonade_choice_to_daemon(restore_mode=_KEEP_SAVED):
+    """Tell a running daemon about a changed Lemonade choice, loudly on failure.
+
+    With *restore_mode* (a switch to GAIA's own), it also waits for GAIA's
+    server to answer; if either fails that mode is saved back, so the setting
+    never claims a switch that did not happen.
+    """
     from gaia.daemon.errors import DaemonError
-    from gaia.llm.lemonade_choice import apply_to_daemon
+    from gaia.llm.lemonade_choice import apply_gaia_switch, apply_to_daemon
 
     try:
-        applied = apply_to_daemon()
+        if restore_mode is _KEEP_SAVED:
+            return apply_to_daemon()
+        return apply_gaia_switch(restore_mode)
     except DaemonError as e:
-        print(f"❌ Saved, but the running GAIA daemon did not switch: {e}")
+        if restore_mode is _KEEP_SAVED:
+            print(f"❌ Saved, but the running GAIA daemon did not switch: {e}")
+        else:
+            print(
+                f"❌ GAIA could not switch to its own Lemonade Server: {e} "
+                "Nothing was changed."
+            )
         sys.exit(1)
+
+
+def _print_lemonade_switch(applied) -> None:
+    """Say what a daemon did for a changed Lemonade choice."""
     from gaia.llm.lemonade_choice import env_override_note
 
     note = env_override_note()
@@ -9173,8 +9230,6 @@ def _apply_lemonade_choice_to_daemon() -> None:
 
 def handle_lemonade_choice_command(args):
     """``gaia lemonade connect|detect|status``: which Lemonade GAIA uses."""
-    import json as _json
-
     from gaia.config import GaiaConfigError
     from gaia.llm import lemonade_choice as choice
 
@@ -9183,7 +9238,7 @@ def handle_lemonade_choice_command(args):
         if action == "status":
             info = choice.describe()
             if getattr(args, "json", False):
-                print(_json.dumps(info))
+                print(json.dumps(info))
                 return
             if info["source"] == "env":
                 print(f"GAIA uses the Lemonade Server at {info['base_url']}")
@@ -9201,7 +9256,7 @@ def handle_lemonade_choice_command(args):
         if action == "detect":
             found = choice.detect_running_lemonade()
             if getattr(args, "json", False):
-                print(_json.dumps(found.to_dict() if found else None))
+                print(json.dumps(found.to_dict() if found else None))
                 return
             if found is None:
                 print("No Lemonade Server found on this PC's default ports.")
@@ -9247,7 +9302,7 @@ def handle_lemonade_choice_command(args):
         print("   model there and loads its models there; it does not change your")
         print("   server's settings.")
         print("   Back to GAIA's own: gaia config set lemonade_mode gaia")
-        _apply_lemonade_choice_to_daemon()
+        _print_lemonade_switch(_apply_lemonade_choice_to_daemon())
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -9962,7 +10017,20 @@ def handle_mcp_serve(args):
     log = get_logger(__name__)
 
     try:
-        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+        from gaia.mcp.servers.agent_ui_mcp import (
+            RemoteBindError,
+            create_agent_ui_mcp,
+            http_bind_token,
+            run_http,
+        )
+
+        token = None
+        if not args.stdio:
+            try:
+                token = http_bind_token(args.host, getattr(args, "allow_remote", False))
+            except RemoteBindError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                raise SystemExit(2) from e
 
         mcp = create_agent_ui_mcp(backend_url=args.backend)
 
@@ -9991,7 +10059,7 @@ def handle_mcp_serve(args):
                 log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http", host=args.host, port=args.port)
+            run_http(mcp, args.host, args.port, token)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
@@ -10058,7 +10126,7 @@ def handle_mcp_list(args):
     config = MCPConfig(args.config) if args.config else MCPConfig()
     servers = config.get_servers()
 
-    config_path = args.config if args.config else "~/.gaia/mcp_servers.json"
+    config_path = args.config if args.config else config.config_file
 
     if not servers:
         print("📋 No MCP servers configured")

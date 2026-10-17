@@ -189,8 +189,14 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
   never starts its own instead.
 - **What GAIA does on your server:** registers its embedding model
   (`user.embeddinggemma-300m-GGUF`), downloads the models it needs and loads them.
-  Its chat model loads with GAIA's context size for that load. It doesn't change
-  your server's settings, and setup leaves your other loaded models alone.
+  Its chat model loads with GAIA's context size for that load.
+- **What GAIA never does there:** change your server's setup. It doesn't register
+  cloud providers or hand your server keys, install backends, save load options
+  into its config, or unload or delete your models.
+- **Cloud providers:** to chat through Fireworks AI or the AMD LLM Gateway, set
+  the provider up on your server yourself, with its key in your server's
+  environment. GAIA then uses it as it is. If it isn't set up, connecting says so
+  instead of changing your server.
 - **Long documents:** if answers about long documents time out, raise your server's
   request timeout (`global_timeout` in its config).
 
@@ -198,6 +204,9 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
 The choice is stored as `lemonade_mode` and `lemonade_base_url` in
 `~/.gaia/config.json`. Switching tells a running GAIA daemon right away. It stops
 GAIA's own server when you switch to yours, and starts it again when you switch back.
+Switching back needs GAIA's own server installed, and waits until it answers: if it
+isn't installed or won't start, the switch is refused or undone and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
+step.
 
 ## Updating GAIA
 
@@ -283,7 +292,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
 
-Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`. It must not be your home directory or one of its parents.
+Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`, the MCP server list to `$GAIA_HOME/mcp_servers.json`, and installed agents to `$GAIA_HOME/agents/`. It must not be your home directory or one of its parents.
 
 ## Privacy
 

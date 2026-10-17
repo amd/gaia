@@ -8,6 +8,10 @@ in the ChatDatabase and automatically restarted on server startup.
 
 Supports interval strings like "every 6h", "every 30m", "every 24h",
 "daily at 9am", "every monday at 3pm", "every hour from 8am to 6pm", etc.
+
+Times of day, hour windows and weekdays are wall-clock values in the
+schedule's IANA time zone (``ScheduleConfig.timezone``), so "daily at 9am"
+stays at 9am local across DST changes. ``next_run_at`` is stored in UTC.
 """
 
 import asyncio
@@ -16,8 +20,9 @@ import logging
 import re
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +161,8 @@ class ScheduleConfig:
     days_of_week: Optional[List[int]] = None  # 0=Mon..6=Sun
     description: str = ""
     raw_input: str = ""
+    # IANA zone the wall-clock fields above are in; None means this machine's.
+    timezone: Optional[str] = None
 
     def to_json(self) -> str:
         """Serialize to JSON string."""
@@ -551,8 +558,61 @@ def _build_description(config: ScheduleConfig) -> str:
 # ── Next-run computation ─────────────────────────────────────────────────────
 
 
+def local_timezone_name() -> str:
+    """IANA name of this machine's time zone (honours the ``TZ`` variable)."""
+    import tzlocal
+
+    name = tzlocal.get_localzone_name()
+    if not name:
+        raise RuntimeError(
+            "Could not determine this PC's time zone, so a schedule like "
+            "'daily at 9am' has no local 9am to run at. Set the TZ environment "
+            "variable to an IANA zone (for example America/Los_Angeles) and "
+            "restart GAIA."
+        )
+    return name
+
+
+def resolve_zone(name: Optional[str]) -> ZoneInfo:
+    """Return the zone a schedule's wall-clock fields are in.
+
+    Raises:
+        ValueError: if ``name`` is not a known IANA time zone.
+    """
+    name = name or local_timezone_name()
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ValueError(
+            f"Unknown time zone {name!r}. Use an IANA name such as "
+            "'America/Los_Angeles' or 'Europe/Berlin'."
+        ) from e
+
+
+def _is_wall_clock(config: ScheduleConfig) -> bool:
+    """True when the schedule depends on the clock face, not just elapsed time."""
+    return bool(
+        config.time_of_day or config.start_hour is not None or config.days_of_week
+    )
+
+
+def _at_local(
+    day: date, hour: int, minute: int, zone: ZoneInfo, second: int = 0
+) -> datetime:
+    """Wall-clock time on ``day`` in ``zone``, returned in UTC.
+
+    A time skipped by a DST jump lands just after the jump; a time that
+    repeats when clocks fall back runs at its first occurrence only.
+    """
+    return datetime(
+        day.year, day.month, day.day, hour, minute, second, tzinfo=zone
+    ).astimezone(timezone.utc)
+
+
 def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime:
     """Compute the next run time based on schedule config.
+
+    Times of day, windows and weekdays are read in ``config.timezone``.
 
     Args:
         config: Parsed schedule configuration.
@@ -561,66 +621,71 @@ def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime
     Returns:
         Next run datetime in UTC.
     """
-    now = after or datetime.now(timezone.utc)
+    now = (after or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    interval = timedelta(seconds=config.interval_seconds)
+
+    if not _is_wall_clock(config):
+        return now + interval
+
+    zone = resolve_zone(config.timezone)
+    local_now = now.astimezone(zone)
+    days = config.days_of_week
 
     if config.time_of_day and config.start_hour is None:
         # Fixed time schedule: "daily at 9pm", "every monday at 3pm"
         hour, minute = map(int, config.time_of_day.split(":"))
-        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if candidate <= now:
-            candidate += timedelta(days=1)
-        # Advance to valid day
-        if config.days_of_week:
-            while candidate.weekday() not in config.days_of_week:
-                candidate += timedelta(days=1)
-        return candidate
+        day = local_now.date()
+        for _ in range(9):
+            candidate = _at_local(day, hour, minute, zone)
+            if candidate > now and (not days or day.weekday() in days):
+                return candidate
+            day += timedelta(days=1)
+        raise ValueError(f"No valid run day in schedule config {config!r}")
 
-    elif config.start_hour is not None:
+    if config.start_hour is not None:
         # Windowed schedule: "every hour from 8am to 6pm"
-        candidate = now + timedelta(seconds=config.interval_seconds)
+        candidate = now + interval
         end_h = config.end_hour if config.end_hour is not None else 24
+        local_hour = candidate.astimezone(zone).hour
 
         # If past end of window or before start, jump to start of next window
-        if candidate.hour >= end_h or candidate.hour < config.start_hour:
-            # Check if today's window hasn't started yet
-            today_start = now.replace(
-                hour=config.start_hour, minute=0, second=0, microsecond=0
-            )
+        if local_hour >= end_h or local_hour < config.start_hour:
+            today_start = _at_local(local_now.date(), config.start_hour, 0, zone)
             if now < today_start:
                 candidate = today_start
             else:
-                candidate = (now + timedelta(days=1)).replace(
-                    hour=config.start_hour, minute=0, second=0, microsecond=0
+                candidate = _at_local(
+                    local_now.date() + timedelta(days=1), config.start_hour, 0, zone
                 )
 
-        # Skip invalid days
-        if config.days_of_week:
-            while candidate.weekday() not in config.days_of_week:
-                candidate += timedelta(days=1)
-                candidate = candidate.replace(
-                    hour=config.start_hour, minute=0, second=0, microsecond=0
-                )
+        if days:
+            day = candidate.astimezone(zone).date()
+            while day.weekday() not in days:
+                day += timedelta(days=1)
+                candidate = _at_local(day, config.start_hour, 0, zone)
 
         return candidate
 
-    elif config.days_of_week:
-        # Day-specific without fixed time: find the next valid day
-        candidate = now + timedelta(seconds=config.interval_seconds)
-        # Advance to the next valid day of week if needed
-        for _ in range(7):
-            if candidate.weekday() in config.days_of_week:
-                return candidate
-            candidate += timedelta(days=1)
-            # For day-based schedules, reset to same time-of-day
-            if config.interval_seconds >= 86400:
-                candidate = candidate.replace(
-                    hour=now.hour, minute=now.minute, second=0, microsecond=0
-                )
-        return candidate
-
-    else:
-        # Simple interval
-        return now + timedelta(seconds=config.interval_seconds)
+    # Day-specific without fixed time: find the next valid day
+    candidate = now + interval
+    for _ in range(7):
+        local = candidate.astimezone(zone)
+        if local.weekday() in days:
+            return candidate
+        if config.interval_seconds >= 86400:
+            # Day-based schedules keep the same local time-of-day
+            candidate = _at_local(
+                local.date() + timedelta(days=1), local_now.hour, local_now.minute, zone
+            )
+        else:
+            candidate = _at_local(
+                local.date() + timedelta(days=1),
+                local.hour,
+                local.minute,
+                zone,
+                local.second,
+            )
+    return candidate
 
 
 # ── ScheduledTask ────────────────────────────────────────────────────────────
@@ -770,6 +835,7 @@ class Scheduler:
         name: str,
         interval: str,
         prompt: str,
+        tz: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new scheduled task.
 
@@ -782,16 +848,20 @@ class Scheduler:
             interval: Human-readable interval (e.g. "every 6h",
                 "daily at 9pm", "every monday at 3pm").
             prompt: The prompt to execute on each run.
+            tz: IANA time zone the user meant the schedule in; defaults to
+                this machine's zone.
 
         Returns:
             Task dict with status info.
 
         Raises:
-            ValueError: If name is duplicate or interval is invalid.
+            ValueError: If name is duplicate, interval is invalid, or ``tz``
+                is not a known time zone.
         """
         # Try natural-language parser first
         config = parse_schedule_input(interval)
         if config.interval_seconds > 0:
+            config.timezone = resolve_zone(tz).key
             interval_seconds = config.interval_seconds
             schedule_config_json = config.to_json()
         else:
@@ -1108,7 +1178,12 @@ class Scheduler:
         # ── Add run divider + user message ───────────────────────────
         if task.session_id and has_sessions:
             try:
-                ts = now.strftime("%Y-%m-%d %H:%M UTC")
+                zone = resolve_zone(
+                    ScheduleConfig.from_json(task.schedule_config).timezone
+                    if task.schedule_config
+                    else None
+                )
+                ts = now.astimezone(zone).strftime("%Y-%m-%d %H:%M %Z")
                 self._db.add_message(
                     task.session_id,
                     "system",
@@ -1207,7 +1282,9 @@ class Scheduler:
             if task.schedule_config:
                 # Validate eagerly so a corrupt row fails the boot loudly
                 # instead of killing the timer coroutine unobserved later.
-                ScheduleConfig.from_json(task.schedule_config)
+                config = ScheduleConfig.from_json(task.schedule_config)
+                if config.timezone is None and _is_wall_clock(config):
+                    self._adopt_local_zone(task, config)
             self._tasks[task.name] = task
 
             if task.status == "active" and self._running:
@@ -1219,6 +1296,23 @@ class Scheduler:
                     task.name,
                     task.interval_seconds,
                 )
+
+    def _adopt_local_zone(self, task: ScheduledTask, config: ScheduleConfig):
+        """Pin a pre-time-zone schedule to this machine's zone and persist it.
+
+        Older builds computed "daily at 9am" in UTC while showing "9:00 AM",
+        so the local reading is the one the user saw and asked for.
+        """
+        config.timezone = resolve_zone(None).key
+        task.schedule_config = config.to_json()
+        if task.status == "active":
+            task.next_run_at = compute_next_run(config).isoformat()
+        self._db_update_task(task)
+        logger.info(
+            "Schedule '%s' now runs in local time zone %s (was UTC)",
+            task.name,
+            config.timezone,
+        )
 
     def _db_create_task(self, task: ScheduledTask):
         """Insert a new task row via the public ChatDatabase API."""

@@ -12,7 +12,7 @@ from unittest import mock
 
 import pytest
 
-from gaia.daemon.lemonade import EmbeddedLemonadeOwner
+from gaia.daemon.lemonade import EmbeddedLemonadeOwner, LemonadeActivity
 from gaia.daemon.lemonade_clients import ClientRejected, LemonadeClients
 from gaia.llm.lemonade_embedded import EmbeddedLemonadeError, EmbeddedStatus
 
@@ -31,6 +31,8 @@ class _World:
         self.now = 1000.0
         self.busy = False
         self.timeout = 15 * 60.0
+        # GAIA's server is up and serving nothing.
+        self.activity = LemonadeActivity(busy=False, marker=("idle",))
         self.owner = mock.Mock()
         self.owner.unload_models.return_value = True
         self.owner.stop.return_value = True
@@ -49,6 +51,7 @@ class _World:
         return LemonadeClients(
             self.owner,
             busy=lambda: self.busy,
+            activity=lambda: self.activity,
             timeout=lambda: self.timeout,
             identity=self.identity,
             clock=lambda: self.now,
@@ -232,6 +235,7 @@ def _gaia_server():
     )
     embedded.stop.return_value = True
     embedded.unload_models.return_value = True
+    embedded.recorded_health.return_value = (True, {"all_models_loaded": []})
     return embedded
 
 
@@ -343,7 +347,10 @@ class TestRoutes:
 
         owner = owner or world.owner
         clients = LemonadeClients(
-            owner, identity=world.identity, clock=lambda: world.now
+            owner,
+            activity=lambda: world.activity,
+            identity=world.identity,
+            clock=lambda: world.now,
         )
         app = create_app(
             token="tok",
@@ -409,3 +416,319 @@ class TestRoutes:
             "/daemon/v1/lemonade/clients", json={"kind": "app", "pids": [1]}
         )
         assert r.status_code == 401
+
+
+class _BusyLemonade:
+    """GAIA's embedded server as its ``/health`` describes it.
+
+    ``request()`` is one request served start to finish between two looks;
+    ``generating`` is one still streaming.
+    """
+
+    def __init__(self):
+        self.generating = False
+        self.last_use = 1000
+        self.answering = True
+        self.stopped = 0
+        self.unloaded = 0
+        # Runs once the owner holds its lock, just before it would stop.
+        self.on_status = None
+
+    def request(self):
+        self.last_use += 1
+
+    def recorded_health(self):
+        if not self.answering:
+            return True, None
+        return True, {
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
+            "all_models_loaded": [
+                {
+                    "model_name": "Gemma-4-E4B-it-GGUF",
+                    "last_use": self.last_use,
+                    "is_busy": self.generating,
+                    "is_streaming": self.generating,
+                }
+            ],
+        }
+
+    def status(self):
+        if self.on_status:
+            self.on_status()
+        return EmbeddedStatus(installed=True, running=True, version="1", port=1, pid=7)
+
+    def stop(self):
+        self.stopped += 1
+        return True
+
+    def unload_models(self):
+        self.unloaded += 1
+        return True
+
+
+@pytest.fixture
+def lemonade():
+    return _BusyLemonade()
+
+
+def _watching(world, lemonade, timeout=15 * 60.0):
+    owner = EmbeddedLemonadeOwner(factory=lambda: lemonade, owner_pid=1)
+    return LemonadeClients(
+        owner,
+        timeout=lambda: timeout,
+        identity=world.identity,
+        clock=lambda: world.now,
+    )
+
+
+def _sweep_for(world, clients, seconds, each=None, step=5.0):
+    """Sweep every *step* seconds for *seconds*, calling *each* between looks."""
+    end = world.now + seconds
+    while world.now < end:
+        world.now += step
+        if each:
+            each()
+        clients.sweep()
+
+
+class TestNeverStopsAServerInUse:
+    """No GAIA client is registered in any of these: the only evidence of use
+    is the server's own traffic, as for a process under another GAIA_HOME."""
+
+    def test_a_generation_in_progress_is_never_stopped(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        lemonade.generating = True
+        _sweep_for(world, clients, 3 * 15 * 60.0)
+        assert lemonade.stopped == 0
+
+    def test_an_unregistered_process_streaming_turns_keeps_it(self, world, lemonade):
+        """A turn is many short requests; a look rarely lands inside one."""
+        clients = _watching(world, lemonade)
+        _sweep_for(world, clients, 3 * 15 * 60.0, each=lemonade.request)
+        assert lemonade.stopped == 0
+
+    def test_requests_spaced_under_the_timeout_keep_it(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        for _ in range(4):
+            _sweep_for(world, clients, 14 * 60.0)
+            lemonade.request()
+        assert lemonade.stopped == 0
+
+    def test_the_timeout_counts_from_the_last_request(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        _sweep_for(world, clients, 20 * 60.0, each=lemonade.request)
+
+        _sweep_for(world, clients, 14 * 60.0)
+        assert lemonade.stopped == 0
+        _sweep_for(world, clients, 2 * 60.0)
+        assert lemonade.stopped == 1
+
+    def test_a_server_that_does_not_answer_is_left_alone(self, world, lemonade):
+        """It may be loading a large model."""
+        clients = _watching(world, lemonade)
+        lemonade.answering = False
+        _sweep_for(world, clients, 3 * 15 * 60.0)
+        assert lemonade.stopped == 0
+
+
+class TestTrulyIdleStillStops:
+    def test_stopped_once_the_timeout_passes(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        _sweep_for(world, clients, 15 * 60.0 - 5)
+        assert lemonade.stopped == 0
+        _sweep_for(world, clients, 10)
+        assert lemonade.stopped == 1
+
+    def test_a_timeout_of_zero_never_stops(
+        self, world, lemonade, tmp_path, monkeypatch
+    ):
+        from gaia.daemon.lemonade_clients import idle_timeout_seconds
+
+        config = tmp_path / "config.json"
+        config.write_text('{"lemonade_idle_timeout_minutes": 0}')
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", config)
+        assert idle_timeout_seconds() is None
+
+        owner = EmbeddedLemonadeOwner(factory=lambda: lemonade, owner_pid=1)
+        clients = LemonadeClients(
+            owner, identity=world.identity, clock=lambda: world.now
+        )
+        _sweep_for(world, clients, 24 * 60 * 60.0, step=600.0)
+        assert lemonade.stopped == 0
+
+
+class TestARequestMidDecisionWins:
+    def test_a_stream_that_starts_as_the_stop_is_decided(self, world, lemonade):
+        clients = _watching(world, lemonade, timeout=60.0)
+        clients.sweep()
+
+        def _arrives():
+            lemonade.generating = True
+
+        lemonade.on_status = _arrives
+        world.now += 61
+        clients.sweep()
+
+        assert lemonade.stopped == 0
+
+    def test_a_request_served_while_the_stop_is_decided(self, world, lemonade):
+        clients = _watching(world, lemonade, timeout=60.0)
+        clients.sweep()
+        lemonade.on_status = lemonade.request
+        world.now += 61
+        clients.sweep()
+
+        assert lemonade.stopped == 0
+        # The request restarted the clock: no second attempt before it runs out.
+        lemonade.on_status = None
+        world.now += 30
+        clients.sweep()
+        assert lemonade.stopped == 0
+
+    def test_a_request_served_while_the_unload_is_decided(
+        self, world, lemonade, monkeypatch
+    ):
+        clients = _watching(world, lemonade)
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        owner = clients._owner
+        real = owner.configured_url
+
+        def _configured():
+            lemonade.request()  # lands after release decided to unload
+            return real()
+
+        monkeypatch.setattr(owner, "configured_url", _configured)
+        assert clients.release(app)["unloaded"] is False
+        assert lemonade.unloaded == 0
+
+        # Owed, not forgotten: once the server has been quiet, it happens.
+        monkeypatch.setattr(owner, "configured_url", real)
+        _sweep_for(world, clients, 2 * 60.0)
+        assert lemonade.unloaded == 1
+
+
+class TestLastAppClosesUnderAnotherProcess:
+    def test_no_unload_while_another_process_is_mid_turn(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        lemonade.generating = True
+
+        assert clients.release(app)["unloaded"] is False
+        _sweep_for(world, clients, 10 * 60.0)
+        assert lemonade.unloaded == 0
+
+        # That process's turn goes on: more requests, no unload.
+        lemonade.generating = False
+        _sweep_for(world, clients, 10 * 60.0, each=lemonade.request)
+        assert lemonade.unloaded == 0
+
+        # It finishes; after a quiet minute the closed app's unload happens.
+        _sweep_for(world, clients, 2 * 60.0)
+        assert lemonade.unloaded == 1
+        assert lemonade.stopped == 0
+
+    def test_an_idle_server_still_unloads_at_once(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        app = clients.register("app", [world.spawn(10)])["client_id"]
+        assert clients.release(app)["unloaded"] is True
+        assert lemonade.unloaded == 1
+
+
+class TestReadingActivity:
+    def test_busy_and_streaming_both_count(self):
+        from gaia.daemon.lemonade import activity_from_health
+
+        for flag in ("is_busy", "is_streaming"):
+            seen = activity_from_health(
+                {"all_models_loaded": [{"model_name": "m", "last_use": 1, flag: True}]}
+            )
+            assert seen.busy and "m" in seen.detail
+
+    def test_the_marker_moves_with_last_use_and_loads(self):
+        from gaia.daemon.lemonade import activity_from_health
+
+        def marker(models):
+            return activity_from_health({"all_models_loaded": models}).marker
+
+        one = [{"model_name": "m", "last_use": 1}]
+        assert marker(one) == marker([{"model_name": "m", "last_use": 1}])
+        assert marker(one) != marker([{"model_name": "m", "last_use": 2}])
+        assert marker(one) != marker(one + [{"model_name": "e", "last_use": 1}])
+
+    def test_no_running_server_is_none(self):
+        embedded = mock.Mock()
+        embedded.recorded_health.return_value = (False, None)
+        owner = EmbeddedLemonadeOwner(factory=lambda: embedded, owner_pid=1)
+        assert owner.activity() is None
+
+    def test_an_unanswering_server_counts_as_busy(self):
+        embedded = mock.Mock()
+        embedded.recorded_health.return_value = (True, None)
+        owner = EmbeddedLemonadeOwner(factory=lambda: embedded, owner_pid=1)
+        assert owner.activity().busy is True
+
+    def test_a_configured_server_is_never_read(self, monkeypatch):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:13305")
+        factory = mock.Mock()
+        owner = EmbeddedLemonadeOwner(factory=factory, owner_pid=1)
+        assert owner.activity() is None
+        factory.assert_not_called()
+
+
+class TestLeases:
+    """A lease lasts as long as its holder renews it, not as long as it sends
+    requests: a process can sit quiet for an hour and still need its server."""
+
+    def _renewing(self, world, clients, lease, seconds):
+        return _sweep_for(
+            world,
+            clients,
+            seconds,
+            each=lambda: clients.register("cli", [10], client_id=lease),
+            step=30.0,
+        )
+
+    def test_a_quiet_leased_process_is_not_stopped(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        lease = clients.register("cli", [world.spawn(10)], "eval")["client_id"]
+        self._renewing(world, clients, lease, 20 * 60.0)
+        assert lemonade.stopped == 0
+        assert [c["name"] for c in clients.snapshot()["clients"]] == ["eval"]
+
+    def test_a_hung_process_whose_lease_lapses_lets_it_stop(self, world, lemonade):
+        """Its pid lives on, but it stopped renewing."""
+        from gaia.daemon.lemonade_clients import LEASE_TTL
+
+        clients = _watching(world, lemonade)
+        clients.register("cli", [world.spawn(10)], "hung")
+        _sweep_for(world, clients, LEASE_TTL + 5)
+        assert clients.snapshot()["clients"] == []
+
+        _sweep_for(world, clients, 15 * 60.0 - 10)
+        assert lemonade.stopped == 0
+        _sweep_for(world, clients, 10)
+        assert lemonade.stopped == 1
+
+    def test_a_crashed_process_is_dropped_at_once(self, world, lemonade):
+        clients = _watching(world, lemonade)
+        clients.register("cli", [world.spawn(10)], "crashed")
+        world.exit(10)
+        clients.sweep()
+        assert clients.snapshot()["clients"] == []
+
+    def test_a_lapsed_lease_comes_back_on_its_next_renewal(self, world, lemonade):
+        from gaia.daemon.lemonade_clients import LEASE_TTL
+
+        clients = _watching(world, lemonade)
+        lease = clients.register("app", [world.spawn(10)])["client_id"]
+        _sweep_for(world, clients, LEASE_TTL + 5)
+        assert clients.register("app", [10], client_id=lease)["added"] is True
+
+    def test_a_sleeping_machine_lapses_no_lease(self, world, lemonade):
+        """No client could renew while the daemon itself was suspended."""
+        clients = _watching(world, lemonade)
+        clients.register("app", [world.spawn(10)])
+        world.now += 8 * 60 * 60.0
+        clients.sweep()
+        assert len(clients.snapshot()["clients"]) == 1
+        assert lemonade.unloaded == 0

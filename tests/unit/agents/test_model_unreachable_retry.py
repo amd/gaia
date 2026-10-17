@@ -550,3 +550,47 @@ def test_step_retry_settings_reject_invalid_values(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match=name):
         model_step_retries() if "RETRIES" in name else model_retry_cooldown()
+
+
+# ── stalled stream (#5126) as the Agent UI shows it ──────────────────────
+
+
+def _stalled():
+    """What the client raises once a hosted stream stayed silent on every try."""
+    from gaia.llm.retry import StreamStalledError
+
+    stall = StreamStalledError(limit=120, remote=True, before_output=True)
+    try:
+        try:
+            raise stall
+        except StreamStalledError as e:
+            raise attach_retry_state(
+                LemonadeClientError(stall.describe(2)),
+                RetryState(attempts=2, last_reason="stream stalled", exhausted=True),
+            ) from e
+    except LemonadeClientError as error:
+        return error
+
+
+def test_stalled_model_ends_with_the_stall_message_not_a_generic_one(agent):
+    _script(agent, _stalled())
+    result = agent.process_query("Which model are you?", max_steps=5)
+
+    text = strip_verification_scope(result["result"])
+    assert text.startswith("The hosted model accepted the request but sent nothing")
+    assert "pick another model" in text
+    assert "temporary issue" not in text
+    # A stall already spent its retries in the client; no step retry on top.
+    assert agent.sleeps == []
+
+
+def test_retry_notice_also_becomes_the_live_phase(agent):
+    """The Agent UI header shows phases; a retry must replace "Reading your request"."""
+    warnings, phases = [], []
+    agent.console.print_warning = warnings.append
+    agent.console.report_phase = lambda phase, message, **_: phases.append(
+        (phase, message)
+    )
+    agent._announce_model_retry(RetryNotice("stream stalled", 0.2, 1, 1))
+    assert warnings == ["The model stopped sending — retrying now (1/1)"]
+    assert phases == [("model_retry", warnings[0])]

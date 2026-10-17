@@ -142,6 +142,37 @@ describe('SetupScreen', () => {
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
     });
 
+    it("on the user's own Lemonade, connects with no key and says their server is left alone", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({
+            ...TARGET, mode: 'external', saved_mode: 'external', source: 'config',
+            base_url: FOUND.url, saved_base_url: FOUND.url, offer: false,
+        });
+        mockedApi.connectProvider.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProvider>>);
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'amd',
+            models: [{ id: 'amd.m1', context_length: null, downloaded: true, labels: [], rank: 1, note: null, evidence: null }],
+        });
+        mockedApi.selectModel.mockResolvedValue({ provider: 'amd', model: 'amd.m1', label: 'm1', remote: true, is_default: false });
+
+        await start(/AMD LLM Gateway/);
+        expect(await screen.findByText(/doesn.t send your server a key or change its setup/)).toBeInTheDocument();
+        expect(screen.queryByText(/key goes to GAIA/)).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
+        expect(mockedApi.connectProvider).toHaveBeenCalledWith('amd', { api_key: undefined });
+    });
+
+    it('still asks for the key when LEMONADE_BASE_URL picks the server', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({
+            ...TARGET, mode: 'external', source: 'env', base_url: FOUND.url, offer: false,
+        });
+        await start(/AMD LLM Gateway/);
+        expect(await screen.findByLabelText('API key')).toBeInTheDocument();
+        expect(screen.getByText(/key goes to GAIA/)).toBeInTheDocument();
+    });
+
     it('shows the cloud download size and drops the local chat-model reason for a cloud choice', async () => {
         const check: SetupCheck = {
             ...CHECK,

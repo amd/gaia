@@ -249,6 +249,17 @@ async def send_message(
             chat_semaphore.release()
 
 
+# A late answer to a turn that already ended: say so, not "no session".
+_PROMPT_TURN_ENDED = (
+    "That permission prompt is no longer waiting for an answer: the reply it "
+    "belonged to has ended. Send a new message to ask GAIA to try again."
+)
+_QUESTION_TURN_ENDED = (
+    "That question is no longer waiting for an answer: the reply it belonged "
+    "to has ended. Send your answer as a new message instead."
+)
+
+
 class ToolConfirmRequest(BaseModel):
     """Request body for the tool confirmation endpoint.
 
@@ -274,10 +285,7 @@ async def confirm_tool(request: ToolConfirmRequest):
 
     handler = _active_sse_handlers.get(request.session_id)
     if not handler:
-        raise HTTPException(
-            status_code=404,
-            detail="No active chat session found for this session ID",
-        )
+        raise HTTPException(status_code=404, detail=_PROMPT_TURN_ENDED)
     stale = HTTPException(
         status_code=409,
         detail="That permission prompt is no longer waiting for an answer.",
@@ -486,10 +494,7 @@ async def user_input(request: UserInputRequest):
 
     handler = _active_sse_handlers.get(request.session_id)
     if not handler:
-        raise HTTPException(
-            status_code=404,
-            detail="No active chat session found for this session ID",
-        )
+        raise HTTPException(status_code=404, detail=_QUESTION_TURN_ENDED)
     delivered = handler.resolve_user_input(request.request_id, request.value)
     if not delivered:
         try:
@@ -502,8 +507,8 @@ async def user_input(request: UserInputRequest):
     if not delivered:
         raise HTTPException(
             status_code=404,
-            detail="No pending question for this session (it may have already "
-            "timed out or been answered).",
+            detail="That question is no longer waiting for an answer: it was "
+            "already answered or its wait ran out.",
         )
     return {"status": "ok", "request_id": request.request_id}
 

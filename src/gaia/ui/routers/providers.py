@@ -102,9 +102,13 @@ def _require_loopback(base_url: str) -> None:
 def _lemonade(
     method: str, path: str, payload: Optional[Dict[str, Any]] = None
 ) -> Tuple[int, Dict[str, Any]]:
+    from gaia.llm.lemonade_choice import setup_change_refusal
     from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
 
     base = _base_url()
+    refusal = setup_change_refusal(f"{base}/{path}", method, payload)
+    if refusal:
+        raise ProviderError(refusal, status=409)
     try:
         resp = requests.request(
             method,
@@ -528,6 +532,8 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
+    if _uses_users_server():
+        return _connect_on_users_server(provider)
     try:
         _require_loopback(_base_url())
         status, result = _lemonade(
@@ -583,6 +589,39 @@ def connect_provider(
     return {**view, "remembered": remembered, "remember_error": remember_error}
 
 
+def _uses_users_server() -> bool:
+    from gaia.llm.lemonade_choice import is_users_server
+
+    try:
+        return is_users_server(_base_url())
+    except ProviderError as e:
+        _raise(e)
+
+
+def _connect_on_users_server(provider: str) -> Dict[str, Any]:
+    """Use the provider as the user's own server already has it; change nothing.
+
+    A key typed here is not sent anywhere: handing it to the user's server
+    would change that server's setup.
+    """
+    from gaia.llm.cloud_keys import provider_usable, users_server_provider_message
+
+    try:
+        entry = _cloud_entry(provider)
+    except ProviderError as e:
+        _raise(e)
+    if not provider_usable(entry):
+        raise HTTPException(
+            status_code=409,
+            detail=users_server_provider_message(_base_url(), provider),
+        )
+    return {
+        **_provider_view(provider, entry),
+        "remembered": False,
+        "remember_error": None,
+    }
+
+
 @router.delete("/api/providers/{provider}/key")
 def forget_provider_key(provider: str) -> Dict[str, Any]:
     """Clear the key from Lemonade and from the OS credential store."""
@@ -593,9 +632,11 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
     if provider == LOCAL:
         raise HTTPException(status_code=422, detail="Local models have no key.")
     try:
-        status, body = _lemonade("DELETE", f"cloud/auth/{provider}")
-        if status >= 400 and status != 404:
-            raise _cloud_error(provider, status, body)
+        # The user's own server keeps its keys; only GAIA's copy is removed.
+        if not _uses_users_server():
+            status, body = _lemonade("DELETE", f"cloud/auth/{provider}")
+            if status >= 400 and status != 404:
+                raise _cloud_error(provider, status, body)
         removed = forget_key(provider)
     except ProviderError as e:
         _raise(e)

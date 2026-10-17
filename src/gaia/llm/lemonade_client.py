@@ -118,14 +118,24 @@ def _embedded_lemonade_url() -> str:
     return DEFAULT_LEMONADE_URL
 
 
-def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
-    """Read the selected GAIA home's embedded server, without crossing homes."""
+def _read_embedded_lemonade_state(
+    home: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    """Read the selected GAIA home's embedded server, without crossing homes.
+
+    Args:
+        home: Read this GAIA home's server instead -- one a client under another
+            ``GAIA_HOME`` was pointed at (see ``owning_daemon_dir``).
+    """
     gaia_home = os.getenv("GAIA_HOME", "").strip()
-    state_path = (
-        Path(os.path.expandvars(gaia_home)).expanduser() / "lemonade" / "state.json"
-        if gaia_home
-        else EMBEDDED_LEMONADE_STATE
-    )
+    if home is not None:
+        state_path = home / "lemonade" / "state.json"
+    elif gaia_home:
+        state_path = (
+            Path(os.path.expandvars(gaia_home)).expanduser() / "lemonade" / "state.json"
+        )
+    else:
+        state_path = EMBEDDED_LEMONADE_STATE
     if state_path is None:
         return None
     try:
@@ -252,7 +262,9 @@ def _embedded_lemonade_state_path() -> Optional[Path]:
 EMBEDDED_LEMONADE_STATE = _embedded_lemonade_state_path()
 
 
-def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
+def _embedded_lemonade_api_key(
+    base_url: Optional[str] = None, home: Optional[Path] = None
+) -> Optional[str]:
     """The key GAIA's own embedded Lemonade generated for itself, if present.
 
     ``gaia lemonade embedded`` starts a private server that mints an API key
@@ -261,7 +273,9 @@ def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
     and serving — which the readiness screen then reported as "Lemonade not
     running", and offered to install a second one onto the same port.
     """
-    state = _read_embedded_lemonade_state()
+    state = (
+        _read_embedded_lemonade_state(home) if home else _read_embedded_lemonade_state()
+    )
     if state is None:
         return None
     from urllib.parse import urlparse
@@ -1952,9 +1966,15 @@ class CloudModelUnavailableError(LemonadeClientError):
     Distinct from an auth failure (401/403), which says nothing about the model.
     """
 
-    def __init__(self, message: str, model_id: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        model_id: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
         super().__init__(message)
         self.model_id = model_id
+        self.provider = provider
         self.status = 404
 
 
@@ -1981,6 +2001,13 @@ class InsufficientDiskSpaceError(LemonadeClientError):
 
 class InsufficientMemoryError(LemonadeClientError):
     """Raised instead of a load that would run this machine out of memory."""
+
+
+class UsersServerUnchangedError(LemonadeClientError):
+    """A request would change the setup of the user's own Lemonade Server.
+
+    Raised before anything is sent, in saved ``external`` mode only.
+    """
 
 
 def _cloud_error_status(error: openai.APIError) -> Optional[int]:
@@ -2040,6 +2067,7 @@ def _cloud_request_error(
             "deployment or access for your account. Choose a deployed model "
             "or router in the TUI provider settings.",
             model_id=model,
+            provider=provider,
         )
     if status == 429:
         return LemonadeClientError(
@@ -2470,6 +2498,10 @@ class LemonadeClient:
     #: True while this client is aimed at GAIA's own server, so it follows that
     #: server to whatever port and key the daemon last started it with.
     follows_gaia_lemonade: bool = False
+    #: Set when that server belongs to another GAIA home than this process's:
+    #: the home, and the directory of the daemon that owns it.
+    _gaia_lemonade_home: Optional[Path] = None
+    _gaia_daemon_dir: Optional[Path] = None
 
     def __init__(
         self,
@@ -2553,6 +2585,14 @@ class LemonadeClient:
                 and self.base_url == DEFAULT_LEMONADE_URL
                 and gaia_runs_lemonade()
             )
+        if not self.follows_gaia_lemonade and api_key is None:
+            self._adopt_owning_gaia_home()
+        if self.follows_gaia_lemonade:
+            from gaia.llm.lemonade_service import lease_gaia_lemonade
+
+            # Lease it for this process's life, so an idle stop never lands
+            # under a process that is still using it.
+            lease_gaia_lemonade(self._gaia_daemon_dir)
         # Instance-scoped exact-pin ctx override (#1892). Never a class-level
         # default or MODELS mutation — chat/RAG clients sharing this process
         # must keep their own floor semantics.
@@ -2711,6 +2751,105 @@ class LemonadeClient:
             "LEMONADE_BASE_URL to it."
         )
 
+    def _adopt_owning_gaia_home(self) -> None:
+        """Follow another GAIA home's server when ``LEMONADE_BASE_URL`` names it.
+
+        A process under its own ``GAIA_HOME`` pointed at the default home's
+        embedded server otherwise keeps a port and key that a restart retires,
+        and every request after it fails with a refused connection or a 401.
+        """
+        from gaia.llm.lemonade_service import owning_daemon_dir
+
+        owner = owning_daemon_dir(self.base_url)
+        if owner is None:
+            return
+        self._gaia_daemon_dir = owner
+        self._gaia_lemonade_home = owner.parent
+        self.follows_gaia_lemonade = True
+
+    def _gaia_lemonade_state(self) -> Optional[Dict[str, Any]]:
+        """The recorded state of the GAIA server this client follows."""
+        if self._gaia_lemonade_home is None:
+            return _read_embedded_lemonade_state()
+        return _read_embedded_lemonade_state(self._gaia_lemonade_home)
+
+    def _gaia_lemonade_gone(self) -> bool:
+        """Whether the GAIA server this client follows stopped or moved.
+
+        True when no server is recorded, the recorded one is not the port and
+        key this client uses, or nothing accepts a connection on that port.
+        """
+        state = self._gaia_lemonade_state()
+        if state is None:
+            return True
+        key = state.get("api_key")
+        if state["port"] != self.port or (
+            isinstance(key, str) and key.strip() != self.api_key
+        ):
+            return True
+        try:
+            with socket.create_connection((DEFAULT_HOST, state["port"]), timeout=2):
+                return False
+        except OSError:
+            return True
+
+    def _recover_stopped_gaia_lemonade(self, error: Exception, model: str) -> bool:
+        """Bring GAIA's server back after it stopped under a request.
+
+        Returns:
+            True if the server is back (restarted, or followed to where the
+            daemon restarted it) and the request may be sent once more; False
+            when *error* had another cause.
+
+        Raises:
+            LemonadeClientError: It stopped and the daemon could not start it.
+        """
+        if not self.follows_gaia_lemonade or not self._gaia_lemonade_gone():
+            return False
+        self.log.warning(
+            f"GAIA's Lemonade Server stopped during this request "
+            f"({type(error).__name__}); restarting it and retrying once."
+        )
+        self._follow_gaia_lemonade(model)
+        if self._gaia_lemonade_gone():
+            self._start_gaia_lemonade()
+            self._replay_cloud_key(model)
+        self.log.info(f"GAIA's Lemonade Server is back at {self.base_url}")
+        return True
+
+    def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
+        """``call()``, sent once more if GAIA's server stopped under it."""
+        try:
+            return call()
+        except (
+            LemonadeClientError,
+            requests.exceptions.RequestException,
+            openai.APIError,
+        ) as e:
+            if not self._recover_stopped_gaia_lemonade(e, model):
+                raise
+        return call()
+
+    def _stream_surviving_gaia_lemonade_stop(
+        self, first: Iterator[Dict[str, Any]], start: Callable[[], Any], model: str
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream *first*, starting over with ``start()`` once if GAIA's server
+        stopped before its first chunk. A stream under way is never replayed."""
+        yielded = False
+        try:
+            for chunk in first:
+                yielded = True
+                yield chunk
+            return
+        except (
+            LemonadeClientError,
+            requests.exceptions.RequestException,
+            openai.APIError,
+        ) as e:
+            if yielded or not self._recover_stopped_gaia_lemonade(e, model):
+                raise
+        yield from start()
+
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
 
@@ -2723,7 +2862,11 @@ class LemonadeClient:
 
         self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
         try:
-            served = ensure_lemonade()
+            served = (
+                ensure_lemonade(host_dir=self._gaia_daemon_dir)
+                if self._gaia_daemon_dir
+                else ensure_lemonade()
+            )
         except DaemonError as e:
             raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
@@ -2738,7 +2881,11 @@ class LemonadeClient:
         parsed = urlparse(self.base_url)
         self.host = parsed.hostname or DEFAULT_HOST
         self.port = parsed.port or DEFAULT_PORT
-        self.api_key = _embedded_lemonade_api_key(self.base_url)
+        self.api_key = (
+            _embedded_lemonade_api_key(self.base_url, self._gaia_lemonade_home)
+            if self._gaia_lemonade_home
+            else _embedded_lemonade_api_key(self.base_url)
+        )
         self.follows_gaia_lemonade = True
 
     def _follow_gaia_lemonade(self, model: Optional[str] = None) -> None:
@@ -2755,7 +2902,7 @@ class LemonadeClient:
         """
         if not self.follows_gaia_lemonade:
             return
-        state = _read_embedded_lemonade_state()
+        state = self._gaia_lemonade_state()
         if state is None:
             self.log.warning(
                 f"GAIA's Lemonade Server at {self.base_url} has stopped; asking "
@@ -3714,6 +3861,48 @@ class LemonadeClient:
           }]
         }
         """
+
+        # A stop of GAIA's server under this request restarts it and sends the
+        # request once more, so an idle stop never costs the turn.
+        def _call():
+            return self._chat_completions_once(
+                model,
+                messages,
+                temperature=temperature,
+                max_completion_tokens=max_completion_tokens,
+                max_tokens=max_tokens,
+                stop=stop,
+                stream=stream,
+                timeout=timeout,
+                logprobs=logprobs,
+                tools=tools,
+                auto_download=auto_download,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
+
+        first = self._survive_gaia_lemonade_stop(_call, model)
+        if not stream or not self.follows_gaia_lemonade:
+            return first
+        return self._stream_surviving_gaia_lemonade_stop(first, _call, model)
+
+    def _chat_completions_once(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_completion_tokens: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        stream: bool = False,
+        timeout: Optional[int] = None,
+        logprobs: Optional[bool] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        auto_download: bool = True,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Union[Dict[str, Any], Generator[Dict[str, Any], None, None]]:
+        """One :meth:`chat_completions` call, without the restart guard."""
         self._follow_gaia_lemonade(model)
         if timeout is None:
             # Resolved per call, not as a default argument: GAIA_CTX_SIZE and the
@@ -4585,13 +4774,21 @@ class LemonadeClient:
 
         ``/embeddings`` makes Lemonade load the model itself from its saved
         options, so the saved backend must be one that loads on this machine —
-        and a CPU pin saved by an older GAIA is replaced by the GPU here.
+        and a CPU pin saved by an older GAIA is replaced by the GPU here. On
+        the user's own server, where nothing is saved, it is loaded whenever
+        it isn't resident.
         """
         if not manages_embedder_backend(model_name):
             return
-        with _PINNED_BACKENDS_LOCK:
-            if (self.base_url, model_name) in _PINNED_BACKENDS:
+        if self.is_users_server():
+            # Nothing is saved on a server the user runs, so a reload Lemonade
+            # does on its own would drop GAIA's options: load it here instead.
+            if self.check_model_loaded(model_name):
                 return
+        else:
+            with _PINNED_BACKENDS_LOCK:
+                if (self.base_url, model_name) in _PINNED_BACKENDS:
+                    return
         active_model = self.model
         try:
             self.load_model(model_name, prompt=False)
@@ -6228,8 +6425,9 @@ class LemonadeClient:
             backend = "cpu" if fell_back else self._default_llamacpp_backend()
             if backend:
                 request_data["llamacpp_backend"] = backend
-            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too.
-            save_options = True
+            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
+            # never into the config of a server the user runs.
+            save_options = not self.is_users_server()
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:
@@ -6297,6 +6495,15 @@ class LemonadeClient:
                     self.log.warning(
                         f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
                     )
+
+                    if self.is_users_server():
+                        from gaia.llm.lemonade_choice import users_server_repair_message
+
+                        raise UsersServerUnchangedError(
+                            users_server_repair_message(
+                                self.base_url, model_name, resume_error
+                            )
+                        ) from resume_error
 
                     # Honor `prompt` before the destructive delete too.
                     if prompt and not _prompt_user_for_delete(model_name):
@@ -7225,6 +7432,16 @@ class LemonadeClient:
 
         return status
 
+    def is_users_server(self) -> bool:
+        """True when this client talks to the user's own server ("Use mine").
+
+        GAIA uses that server but never changes its setup: see
+        :func:`gaia.llm.lemonade_choice.setup_change_refusal`.
+        """
+        from gaia.llm.lemonade_choice import is_users_server
+
+        return is_users_server(self.base_url)
+
     def _auth_headers(self) -> Dict[str, str]:
         """Authorization headers for this client's configured API key."""
         return lemonade_auth_headers(self.api_key)
@@ -7251,6 +7468,11 @@ class LemonadeClient:
         Raises:
             LemonadeClientError: If the request fails
         """
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        refusal = setup_change_refusal(url, method, data)
+        if refusal:
+            raise UsersServerUnchangedError(refusal)
         try:
             headers = {"Content-Type": "application/json", **self._auth_headers()}
 

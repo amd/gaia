@@ -121,6 +121,32 @@ failures are the part worth reading.
 guides linked at the top of this page cover running it, authoring scenarios, and
 wiring it into CI.
 
+### When CI runs it
+
+The evals on the self-hosted AMD runners (`eval_flagship.yml`, `eval_retrieval.yml`,
+`eval_code_retrieval.yml`) run only on release and release-candidate tags (`v0.24.1`,
+`v0.25.0-rc14`) and on manual dispatch. They never run on pull requests or on a
+schedule. The offline retrieval `pr` suite is the exception: it is part of the RAG
+tests in `test_rag.yml`. None of them blocks publishing. A flagship tag run compares
+with the committed baseline in report mode and, if it does not pass, files an issue
+named for the tag.
+
+To measure a branch before it is tagged:
+
+```bash
+gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch>
+```
+
+A release candidate can skip the evals. Put `[skip eval]` in an annotated tag's message:
+
+```bash
+git tag -a v0.25.0-rc16 -m "rc16 [skip eval]"
+```
+
+The run then skips its lanes and says so in a notice and in the job summary. A
+lightweight tag, or one without the marker, runs the evals. A final release
+(`v0.25.0`) always runs them and ignores the marker.
+
 ### Require a complete comparison
 
 Use `gaia eval agent --compare BASELINE CURRENT --require-complete` for a local
@@ -185,7 +211,7 @@ every image as blank.
 | Suite | Data | Answers | Runs |
 |---|---|---|---|
 | `pr` | Documents committed in this repo (`eval/retrieval/datasets/repo_docs.json`), plus the hard cases that need no LLM | No, so it is deterministic | On RAG pull requests, from `test_rag.yml`, gated against the committed baseline |
-| `full` | Adds the hand-labelled AMD Instinct documents and a two-column arXiv paper (`technical_docs.json`), FinanceBench's 150 questions over 84 SEC filings, and XQuAD in 7 languages; then the scale tiers and every hard case | Yes | Nightly, from `eval_retrieval.yml` |
+| `full` | Adds the hand-labelled AMD Instinct documents and a two-column arXiv paper (`technical_docs.json`), FinanceBench's 150 questions over 84 SEC filings, and XQuAD in 7 languages; then the scale tiers and every hard case | Yes | On release and RC tags, from `eval_retrieval.yml` |
 
 Narrow a run with `--datasets`, `--retrieval-only`, `--no-scale`, `--scale-tiers 10,100,1000,5000`,
 `--no-hard-cases`, `--xquad-languages` or `--financebench-docs N`.
@@ -246,7 +272,7 @@ never by hand.
 
 ## Flagship Agent Tasks
 
-`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `core` on pull requests that touch the agent, and `everyday` plus `therock` every night on `main`, all with the local Qwen3.6 35B A3B (`Qwen3.6-35B-A3B-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a nightly failure files an issue naming the suite.
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `everyday` plus `therock` on every release and RC tag, and the suites a manual dispatch names (`core` by default), all with the local Qwen3.6 35B A3B (`Qwen3.6-35B-A3B-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a failing tag run files an issue naming the suite.
 
 ```bash
 gaia eval tasks run --suite core     # run each task, then judge quality
@@ -270,11 +296,11 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 
 | Suite | Tasks | Where it runs |
 |---|---|---|
-| `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable · fix a bug beside an unrelated failing test, without touching that test · fix a test that fails only from a cold cache, without weakening it · fix a bug without disturbing the user's uncommitted edits | Pull requests that touch the agent |
+| `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable · fix a bug beside an unrelated failing test, without touching that test · fix a test that fails only from a cold cache, without weakening it · fix a bug without disturbing the user's uncommitted edits | Manual dispatch (the default suite) |
 | `adversarial` | The three traps in `core`, plus: answer from the code when the README is wrong · add a test in a project that is not installed · count errors in a log too big to read · report a suite that hangs | `workflow_dispatch` with `task_suite: adversarial` |
 | `full` | `core` and `adversarial`, plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
-| `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | Nightly on `main`; the harness × model comparison |
-| `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | Nightly on `main`; the harness × model comparison |
+| `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | Release and RC tags; the harness × model comparison |
+| `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | Release and RC tags; the harness × model comparison |
 | `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), built from the dataset at run time (`--instances`; default: a five-instance pilot) and graded by the official harness in Docker. Not in `tasks.json`. | The harness × model comparison, against the public yardstick |
 
 The hanging suite stays out of `core`: every test run the agent tries costs a full command timeout.
@@ -544,11 +570,11 @@ Each run writes `results.json` and `report.md` to `--out` (default `eval/results
 
 | Suite | What runs | Gated |
 |---|---|---|
-| `pr` | All 11 Verified instances from the three smallest repos (requests, flask, seaborn). Incremental replay of 10 requests commits. Robustness. | Yes, on PRs that touch the code index |
-| `nightly` | A seeded 20 of Verified plus 6 of SWE-rebench 2026, skipping repos over 20K chunks (named in the report). Incremental replay of 30 flask commits. Robustness. | Yes |
+| `pr` | All 11 Verified instances from the three smallest repos (requests, flask, seaborn). Incremental replay of 10 requests commits. Robustness. | Yes; the dispatch default |
+| `nightly` | A seeded 20 of Verified plus 6 of SWE-rebench 2026, skipping repos over 20K chunks (named in the report). Incremental replay of 30 flask commits. Robustness. | Yes; release and RC tags run it |
 | `scale` | Fresh index of requests, TheRock, llama.cpp, django and GAIA itself, all pinned. | No, reported |
 
-Indexing throughput bounds every suite. That is why the suites are sized by repository, and why `scale` is weekly. Every repository and sample is pinned to a commit and seed, so two runs of a suite score the same queries over the same trees.
+Indexing throughput bounds every suite. That is why the suites are sized by repository, and why `scale` runs only on manual dispatch. Every repository and sample is pinned to a commit and seed, so two runs of a suite score the same queries over the same trees.
 
 ### Incremental re-index and robustness
 

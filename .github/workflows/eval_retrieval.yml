@@ -9,11 +9,15 @@
 # run to the committed full-suite baseline with `--gate`, and replace that
 # baseline only with a results.json artifact from this workflow.
 
-name: Eval — RAG retrieval (nightly)
+name: Eval — RAG retrieval (release)
 
 on:
-  schedule:
-    - cron: '43 6 * * *'
+  # Release and RC tags plus dispatch only: evals do not run per-PR or nightly
+  # (the self-hosted pool is too scarce). `v*.*.*` also matches -rc tags.
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
   workflow_dispatch:
     inputs:
       suite:
@@ -33,8 +37,26 @@ permissions:
   contents: read
 
 jobs:
+  # An RC tag annotated with `[skip eval]` skips the benchmark; a final release,
+  # a lightweight tag and a dispatch always run (util/eval_tag_gate.py).
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+
   retrieval-benchmark:
     name: RAG retrieval benchmark
+    needs: eval-gate
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true'
     runs-on:
       - self-hosted
       - Windows

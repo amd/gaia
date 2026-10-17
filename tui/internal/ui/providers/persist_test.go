@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
@@ -110,6 +111,40 @@ func TestAFailedRestoreIsReported(t *testing.T) {
 		restoreErr: errors.New("daemon-down-sentinel"), started: time.Now()})
 	if view := next.(Model).View(); !strings.Contains(view, "daemon-down-sentinel") {
 		t.Fatalf("the restore failure was not shown:\n%s", view)
+	}
+}
+
+// #5083: an out-of-date background service is one sentence and one next step;
+// the route, the alternative and the log path wait behind `d`.
+func TestAnOutdatedServiceIsOneLineWithDetailsBehindD(t *testing.T) {
+	m := New("", 100, 40)
+	skew := &daemon.RouteMissingError{
+		Op: "restore the fireworks key", Path: "/daemon/v1/providers/fireworks/authenticate",
+		Alternative: keyAlternative,
+	}
+	next, _ := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}},
+		restoreErr: skew, started: time.Now()})
+	m = next.(Model)
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "GAIA's background service is out of date. Run `pip install --upgrade amd-gaia`, then press r.") {
+		t.Fatalf("the status line is not the one-sentence form:\n%s", view)
+	}
+	for _, internal := range []string{"/daemon/v1/", "LEMONADE_<PROVIDER>_API_KEY", "daemon.log"} {
+		if strings.Contains(view, internal) {
+			t.Errorf("%q is on the status line before d was pressed:\n%s", internal, view)
+		}
+	}
+	if !strings.Contains(view, "d details") {
+		t.Errorf("nothing says the detail is behind d:\n%s", view)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	view = ansi.Strip(next.(Model).View())
+	if !strings.Contains(view, "/daemon/v1/providers/fireworks/authenticate") {
+		t.Errorf("d did not show the full account:\n%s", view)
+	}
+	if strings.Contains(strings.ReplaceAll(view, "\n", ""), "..") {
+		t.Errorf("a doubled period survived:\n%s", view)
 	}
 }
 
@@ -381,4 +416,35 @@ func connectFireworks(t *testing.T, base, apiKey string) Model {
 		}
 	}
 	return m
+}
+
+// A provider chosen on the setup screen opens straight on its key form once
+// Lemonade answers; Local, an unknown name, or a failed read stay on the list.
+func TestWithConnectOpensTheKeyFormOnceTheReadLands(t *testing.T) {
+	m := New("http://127.0.0.1:1", 100, 30).WithConnect("fireworks")
+	next, _ := m.Update(loadedMsg{source: m.client, providers: nil, started: time.Now()})
+	got := next.(Model)
+	if got.stage != "setup" || got.chosen() != "fireworks" {
+		t.Errorf("stage %q on %q, want the Fireworks key form", got.stage, got.chosen())
+	}
+	next, _ = got.Update(loadedMsg{source: got.client, providers: nil, started: time.Now()})
+	if again := next.(Model); again.stage != "setup" || again.autoConnect {
+		t.Error("a second read re-opened the form")
+	}
+
+	for name, m := range map[string]Model{
+		"local":   New("http://127.0.0.1:1", 100, 30).WithConnect("local"),
+		"unknown": New("http://127.0.0.1:1", 100, 30).WithConnect("nope"),
+	} {
+		next, _ := m.Update(loadedMsg{source: m.client, providers: nil, started: time.Now()})
+		if got := next.(Model); got.stage != "providers" {
+			t.Errorf("%s: stage %q, want the provider list", name, got.stage)
+		}
+	}
+
+	m = New("http://127.0.0.1:1", 100, 30).WithConnect("amd")
+	next, _ = m.Update(loadedMsg{source: m.client, err: errors.New("HTTP 500"), started: time.Now()})
+	if got := next.(Model); got.stage != "providers" || !got.autoConnect {
+		t.Errorf("a failed read opened the form (stage %q) or forgot the request", got.stage)
+	}
 }

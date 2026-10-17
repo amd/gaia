@@ -794,6 +794,18 @@
         "description": "The prompt to execute on each run",
         "title": "Prompt",
         "type": "string"
+      },
+      "timezone": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "IANA time zone the schedule's times are in, e.g. 'America/Los_Angeles'. Defaults to the server machine's zone.",
+        "title": "Timezone"
       }
     },
     "required": [
@@ -1753,6 +1765,17 @@
         "title": "Output Tokens",
         "type": "integer"
       },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      },
       "time_to_first_token": {
         "default": 0,
         "title": "Time To First Token",
@@ -2382,6 +2405,18 @@
         "description": "Natural language schedule description",
         "title": "Input",
         "type": "string"
+      },
+      "timezone": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "IANA time zone the schedule's times are in, e.g. 'America/Los_Angeles'. Defaults to the server machine's zone.",
+        "title": "Timezone"
       }
     },
     "required": [
@@ -2458,6 +2493,17 @@
           }
         ],
         "title": "Time Of Day"
+      },
+      "timezone": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Timezone"
       },
       "valid": {
         "title": "Valid",

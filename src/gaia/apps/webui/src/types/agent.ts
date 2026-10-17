@@ -34,6 +34,8 @@ export interface GaiaNotification {
   confirmId?: string;
   /** What "always allow" would grant, e.g. `gh issue list`; absent means it is not offered. */
   alwaysScope?: string;
+  /** What the call does (read / write / execute / destructive), from the backend's call_risk. */
+  risk?: string;
   /** The agent's own one-line description of the call, shown when no args came with it. */
   summary?: string;
   /** For policy_alert type. */

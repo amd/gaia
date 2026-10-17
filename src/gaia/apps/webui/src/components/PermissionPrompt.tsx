@@ -7,6 +7,7 @@ import {
     useNotificationStore,
     selectSessionPermissionPrompt,
     requiresFreshConsent,
+    repeatedAllowCount,
     PATH_ACCESS_TOOL,
     type PermissionDecision,
 } from '../stores/notificationStore';
@@ -57,9 +58,15 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
+    const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
+    const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
     const args = notification.toolArgs ?? {};
     const hasArgs = Object.keys(args).length > 0;
+    // A call GAIA's own checks don't cover is approved on its exact text, once:
+    // show that text unwrapped, the folder it runs in, and its risk note.
+    const riskNote = typeof args._risk_note === 'string' ? args._risk_note : '';
+    const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
 
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
@@ -117,7 +124,10 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             ? notification.title
                             : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
                     </h2>
-                    {detail && <p className="perm-card-detail"><code>{detail}</code></p>}
+                    {detail && riskNote && <pre className="perm-card-pre perm-card-exact">{detail}</pre>}
+                    {detail && !riskNote && <p className="perm-card-detail"><code>{detail}</code></p>}
+                    {folder && <p className="perm-card-detail">in <code>{folder}</code></p>}
+                    {riskNote && <p className="perm-card-risk" role="note">{riskNote}</p>}
                     {!detail && notification.summary && <p className="perm-card-detail">{notification.summary}</p>}
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
                 </div>
@@ -139,6 +149,12 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {showArgs && <pre className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
                 </div>
             )}
+            {suggestAlways && !expired && (
+                <p className="perm-card-hint">
+                    You've allowed this {repeats === 1 ? 'once' : `${repeats} times`} already.
+                    {' '}Always allow stops asking about <code>{scope}</code> in this chat.
+                </p>
+            )}
             {expired ? (
                 <p className="perm-card-detail">No answer in time, so GAIA was told no.</p>
             ) : (
@@ -150,7 +166,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {scope && (
                         <button
                             type="button"
-                            className="perm-btn"
+                            className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
                             aria-label={`Always allow ${scope} in this chat`}

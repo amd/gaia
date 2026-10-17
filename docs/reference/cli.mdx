@@ -95,7 +95,7 @@ Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA ag
 
 When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
-The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused still report the failure. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
+The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
@@ -119,7 +119,7 @@ Each tool call is bounded so a hung tool (e.g. a stuck connector or network requ
 export GAIA_AGENT_TOOL_TIMEOUT=300
 ```
 
-Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
+Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. A tool that takes its own `timeout` argument, like `run_python` and `execute_python_file`, is never abandoned before the time that call asked for plus 30 seconds. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
 
 ### Confirming dangerous tools
 
@@ -238,7 +238,7 @@ gaia init [OPTIONS]
 | `--verbose` | flag | false | Enable verbose output |
 | `--remote` | flag | false | Use the Lemonade Server `LEMONADE_BASE_URL` names instead of GAIA's own (checks it, downloads models via its API). Requires `LEMONADE_BASE_URL`; implied when it is a non-localhost URL. |
 | `--lemonade-url` | string | — | Use the Lemonade Server you already run at this address instead of installing GAIA's own, and save that choice. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
-| `--gaia-lemonade` | flag | false | Use GAIA's own Lemonade Server and save that choice, without the offer to use one already running |
+| `--gaia-lemonade` | flag | false | Use GAIA's own Lemonade Server, without the offer to use one already running. The choice is saved once that server is installed and running |
 | `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
 | `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
@@ -1257,7 +1257,7 @@ curl http://localhost:8080/health
   Connect GAIA agents to external MCP servers
 </Card>
 
-Configure MCP servers that your agents can connect to. Servers are saved to `~/.gaia/mcp_servers.json` by default, or to a custom config file using `--config`.
+Configure MCP servers that your agents can connect to. Servers are saved to `~/.gaia/mcp_servers.json` by default (`$GAIA_HOME/mcp_servers.json` when `GAIA_HOME` is set), or to a custom config file using `--config`.
 
 ### Commands
 
@@ -1463,6 +1463,14 @@ backend (`gaia chat --ui`) must already be running.
 | `--port` | `8766` | Port for the MCP server |
 | `--backend` | `http://localhost:4200` | GAIA Agent UI backend URL |
 | `--stdio` | off | Use stdio transport instead of HTTP (Claude Code / eval runner integration) |
+| `--allow-remote` | off | Allow a non-loopback `--host`. Requires a bearer token of 32+ characters in `GAIA_AGENT_UI_MCP_TOKEN` |
+
+Over HTTP, any request carrying a browser `Origin` header is refused with 403,
+so a web page can't drive the server. A non-loopback `--host` is refused unless
+`--allow-remote` is given with a token, sent by clients as
+`Authorization: Bearer <token>`. See
+[Agent UI MCP Server](/guides/mcp/agent-ui#drive-a-turn-without-a-browser) for
+the tools that run a turn unattended.
 
 #### `gaia mcp tui` options
 
@@ -1621,7 +1629,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
-| `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA app or command has used it for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
+| `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA process has held it, and it has served no request, for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
@@ -1855,8 +1863,12 @@ GAIA agents find the embedded instance on their own through its state file. The
 
 Point GAIA at a Lemonade Server you run yourself instead of its own. GAIA then
 installs and starts no Lemonade at all; if yours is down, the error says so and how
-to start it. The [install guide](/guides/install#use-a-lemonade-you-already-run)
-covers what GAIA does on your server.
+to start it. GAIA never changes that server's setup: no cloud providers or keys, no
+backends, no saved load options, and no unloading or deleting your models. The
+[install guide](/guides/install#use-a-lemonade-you-already-run) covers what GAIA
+does on your server. `gaia config set lemonade_mode gaia` is refused, with nothing
+changed, until GAIA's own server is installed; `gaia init --gaia-lemonade` installs
+it and switches.
 
 ```bash
 gaia lemonade detect                           # is one running on this PC's default ports?
@@ -2007,7 +2019,7 @@ gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_basel
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--component` | `rag` | Pass `code` for the code index behind semantic code search; the default, `rag`, is the [document Q&A benchmark](#retrieval-benchmark) |
-| `--suite` | `pr` | `pr` (~40 min, gates PRs), `nightly` (sampled), `scale` (big repos, hours) |
+| `--suite` | `pr` | `pr` (~40 min), `nightly` (sampled; release tags run it), `scale` (big repos, hours) |
 | `--parts` | the suite's | Comma-separated subset of `quality,incremental,robustness,scale` |
 | `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 on a regression |
 | `--tolerance` | `0.05` | Largest drop in a quality metric that is not a regression |
@@ -3201,9 +3213,22 @@ server's memory when GAIA is not in use:
   still using the server, the daemon unloads all of its models. The server
   stays up, so the next launch only reloads the model. An app that is killed
   rather than closed is noticed within about five seconds.
-- **No GAIA client for 15 minutes stops the server.** Change it with
+- **Every GAIA process holds a lease while it uses the server.** Each client
+  of the server registers on its own: apps, `gaia` commands, sidecar agents,
+  and a process under another `GAIA_HOME` whose `LEMONADE_BASE_URL` names this
+  server (it registers with this daemon too). A lease is renewed every 30
+  seconds and dropped when its process exits or stops renewing for two minutes.
+- **No lease and no request for 15 minutes stops the server.** The daemon also
+  reads the server's own activity, so a request from a process it does not
+  know about restarts the clock, and nothing is stopped or unloaded while a
+  request is in flight. Fifteen minutes balances freeing GPU memory for other
+  apps against the 20 to 60 seconds a cold model load costs. Change it with
   `gaia config set lemonade_idle_timeout_minutes <minutes>`, or turn it off
-  with `0`. The next GAIA app or command starts the server again.
+  with `0`.
+- **A stopped server comes back on the next request.** A GAIA process that
+  finds the server gone mid-request has the daemon start it again and sends
+  the request once more, so the turn still answers. A stream already under way
+  is not replayed.
 - **`gaia daemon stop` stops the server, whoever started it,** including the one
   first-time setup starts. If the daemon is not running, it still stops GAIA's
   server.
@@ -3542,7 +3567,7 @@ Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`; empty while the gate starts a stopped daemon or agent itself), and terminal size. |
+| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `choose-chat`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `chat`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`; empty while the gate starts a stopped daemon or agent itself), and terminal size. |
 | `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
 | `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
 | `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |

@@ -47,6 +47,8 @@ _SECRET_NAMES = {
 
 PROVIDERS = tuple(_SECRET_NAMES)
 
+_LABELS = {"fireworks": "Fireworks AI", GATEWAY_PROVIDER: "AMD LLM Gateway"}
+
 _TIMEOUT = 60
 
 
@@ -129,17 +131,25 @@ def ensure_authenticated(
     a key held: Lemonade stores a key without checking it, so a revoked one
     reports authenticated and discovers nothing.
     """
+    from gaia.llm.lemonade_choice import is_users_server
+
     _check(provider)
-    if provider == GATEWAY_PROVIDER:
-        from gaia.llm.gateway import GatewayManager
-
-        return GatewayManager(client).ensure_authenticated()
-
     client = client or LemonadeClient(verbose=False)
     try:
         base_url = client.credential_base_url()
     except LemonadeClientError as e:
         raise CloudKeyError(str(e)) from e
+    if is_users_server(base_url):
+        # Use the provider as the user's server has it; never hand it a key.
+        entry = _provider_entry(base_url, provider)
+        if provider_usable(entry):
+            return True
+        raise CloudKeyError(users_server_provider_message(base_url, provider))
+    if provider == GATEWAY_PROVIDER:
+        from gaia.llm.gateway import GatewayManager
+
+        return GatewayManager(client).ensure_authenticated()
+
     entry = _provider_entry(base_url, provider)
     if entry is None:
         return False
@@ -162,6 +172,31 @@ def ensure_authenticated(
     return True
 
 
+def provider_usable(entry: Optional[Dict[str, Any]]) -> bool:
+    """A ``/system-info`` cloud entry that holds a key and found models."""
+    return bool(
+        entry
+        and (entry.get("env_var_set") or entry.get("runtime_key_set"))
+        and entry.get("models_discovered")
+    )
+
+
+def users_server_provider_message(base_url: str, provider: str) -> str:
+    """Why a provider can't be connected on the user's own server, and what to do."""
+    from gaia.llm.lemonade_choice import SWITCH_BACK_HINT, users_server_route
+
+    match = users_server_route(base_url)
+    server = match[0] if match else base_url
+    return (
+        f"Your Lemonade Server at {server} has no working "
+        f"{_LABELS.get(provider, provider)} provider, "
+        "and GAIA does not change your server's setup: it doesn't register "
+        "providers or hand your server keys. Set the provider up on your server "
+        f"yourself (its key goes in {env_var_for(provider)} where your server "
+        f"runs), or {SWITCH_BACK_HINT}."
+    )
+
+
 def _provider_entry(base_url: str, provider: str) -> Optional[Dict[str, Any]]:
     info = _request(base_url, "GET", "system-info")
     for entry in (info.get("cloud") or {}).get("providers") or []:
@@ -173,7 +208,12 @@ def _provider_entry(base_url: str, provider: str) -> Optional[Dict[str, Any]]:
 def _request(
     base_url: str, method: str, path: str, payload: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    from gaia.llm.lemonade_choice import setup_change_refusal
+
     url = f"{base_url.rstrip('/')}/{path}"
+    refusal = setup_change_refusal(url, method, payload)
+    if refusal:
+        raise CloudKeyError(refusal)
     headers = {
         "Content-Type": "application/json",
         **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url)),

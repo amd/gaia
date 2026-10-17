@@ -586,6 +586,11 @@ class SkillLibraryToolsMixin:
                 skill = agent.load_skill(skill_name)
             except SkillError as exc:
                 return _failure("load_skill", exc)
+            # Tools the framework supplies for this skill register now, so the
+            # unmet-tools warning below describes what the model can really call.
+            activate = getattr(agent, "_activate_extraction_skills", None)
+            if callable(activate):
+                activate(skill_name)
 
             # Captured-but-unpromoted code never registered (gaia.skills.capture)
             # — report that honestly instead of listing tools that do not exist.

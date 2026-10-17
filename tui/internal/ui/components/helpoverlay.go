@@ -303,8 +303,10 @@ const chatHelpText = `  GAIA Chat
   ──────────────────
   Drag to select, then copy with your terminal's
   own Ctrl+Shift+C/Cmd+C (or right-click).
-  Ctrl+T      Mouse to GAIA — links open on
-              click, double-click copies a message
+  Ctrl+T      Mouse to GAIA: drag copies and scrolls
+              past the edge (Shift+click extends),
+              click opens links, double-click copies
+  /copy       Pick a message · /copy all: whole chat
   Ctrl+V      Paste — a clipboard screenshot pastes
               as a file path · Ctrl+Y copy answer ·
               Ctrl+B code

@@ -11,6 +11,7 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
@@ -21,6 +22,8 @@ interface MessageBubbleProps {
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
     agentStepsActive?: boolean;
+    /** The live turn's agent step count; a saved message reads `message.stats.steps`. */
+    agentStepCount?: number;
     /** Live-streaming cards (issue #2108). `message.cards` wins when set —
      *  this prop carries in-flight cards for the synthetic streaming bubble,
      *  mirroring how `agentSteps` reaches it. */
@@ -89,6 +92,8 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
 
     if (phase === 'done') return null;
 
+    const showModelWaitHint = active && !awaitingUser && elapsed >= MODEL_WAIT_HINT_S && isModelWaitLabel(label);
+
     return (
         <span className="thinking-indicator">
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
@@ -96,9 +101,13 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
                 <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
             )}
             {active && <span className="cursor" />}
+            {showModelWaitHint && (
+                <span className="thinking-indicator-hint" role="status">{MODEL_WAIT_HINT}</span>
+            )}
         </span>
     );
 }
+
 
 const WAITING_ON_USER_LABEL = 'Waiting for you';
 
@@ -400,7 +409,7 @@ function formatLatency(ms: number): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -524,6 +533,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             steps={agentSteps}
                             isActive={agentStepsActive ?? false}
                             variant={agentStepsActive ? 'inline' : 'summary'}
+                            agentStepCount={agentStepCount ?? message.stats?.steps ?? undefined}
                         />
                     )}
                     {isError && (
@@ -577,7 +587,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <span title="Time to first token, final model call of this answer">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
                             )}
                             {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
-                                <span title="Input → output tokens, final model call of this answer">
+                                <span title="Input → output tokens, all model calls of this answer">
                                     {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
                                 </span>
                             )}
@@ -650,6 +660,14 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
+/** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
+const WIN_PATH_ONLY_RE = new RegExp(`^(?:${WIN_PATH_RE.source})$`, 'i');
+
+function inlineCodePath(children: React.ReactNode): string | null {
+    if (typeof children !== 'string') return null;
+    const text = children.trim();
+    return WIN_PATH_ONLY_RE.test(text) ? text : null;
+}
 
 function FilePathLink({ path }: { path: string }) {
     const handleClick = (e: React.MouseEvent) => {
@@ -732,6 +750,8 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                     code({ className, children, ...props }) {
                         // If we get here, it's inline code (fenced blocks are
                         // handled by the `pre` override below).
+                        const path = inlineCodePath(children);
+                        if (path) return <FilePathLink path={path} />;
                         return (
                             <code className="inline-code" {...props}>
                                 {children}

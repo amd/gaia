@@ -5,45 +5,57 @@
 # what does indexing cost, and does it fail loudly when its cache is damaged?
 # `gaia eval retrieval --component code`; docs/reference/eval.mdx explains it.
 #
-#   pr      - PRs touching the code index. Real embeddings, no LLM, ~40 min.
+#   pr      - Real embeddings, no LLM, ~40 min. Dispatch default.
 #             Gated against tests/fixtures/eval_baselines/code-retrieval/pr.json.
-#   nightly - sampled SWE-bench Verified + SWE-rebench 2026. Gated against
-#             nightly.json.
-#   scale   - five repos from 1.7K to ~97K chunks; most of a day. Weekly,
-#             reported, not gated.
+#   nightly - sampled SWE-bench Verified + SWE-rebench 2026. Release and RC
+#             tags run this one. Gated against nightly.json.
+#   scale   - five repos from 1.7K to ~97K chunks; most of a day. Dispatch
+#             only, reported, not gated.
 #
 # Throughput and timings depend on the GPU the embedder loads on. The baselines
 # were captured on a Strix Halo, hence the strix-halo label; do not widen it.
 name: Code retrieval benchmark
 
 on:
-  schedule:
-    - cron: '23 6 * * *'   # nightly
-    - cron: '41 7 * * 0'   # scale, Sundays
+  # Release and RC tags plus dispatch only: evals do not run per-PR or nightly
+  # (the self-hosted pool is too scarce). `v*.*.*` also matches -rc tags.
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
   workflow_dispatch:
     inputs:
       suite:
         description: 'Suite (pr | nightly | scale)'
         required: false
         default: 'pr'
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
-    paths:
-      - 'src/gaia/code_index/**'
-      - 'src/gaia/agents/tools/code_index_tools.py'
-      - 'src/gaia/eval/code_retrieval/**'
-      - 'tests/fixtures/eval_baselines/code-retrieval/**'
-      - '.github/workflows/eval_code_retrieval.yml'
 
 permissions:
   contents: read
 
 jobs:
+  # An RC tag annotated with `[skip eval]` skips the benchmark; a final release,
+  # a lightweight tag and a dispatch always run (util/eval_tag_gate.py).
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+
   retrieval:
-    name: Code retrieval (${{ github.event.schedule == '41 7 * * 0' && 'scale' || (github.event_name == 'schedule' && 'nightly' || (github.event.inputs.suite || 'pr')) }})
+    name: Code retrieval (${{ github.event_name == 'push' && 'nightly' || (github.event.inputs.suite || 'pr') }})
     # Fork PRs never reach the self-hosted pool; drafts wait for ready_for_ci.
     # Of all labels, only ready_for_ci starts a run.
+    needs: eval-gate
     if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.action != 'labeled' || github.event.label.name == 'ready_for_ci') &&
@@ -51,16 +63,16 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
     # Job-level, so a skipped run (a label other than ready_for_ci) cancels nothing.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event.inputs.suite || 'pr' }}
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.suite || 'pr' }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         # Windows PowerShell 5.1 reads BOM-less scripts as ANSI: keep run bodies ASCII.
         shell: powershell
-    timeout-minutes: ${{ github.event.schedule == '41 7 * * 0' && 720 || 300 }}
+    timeout-minutes: ${{ github.event.inputs.suite == 'scale' && 720 || 300 }}
     env:
-      SUITE: ${{ github.event.schedule == '41 7 * * 0' && 'scale' || (github.event_name == 'schedule' && 'nightly' || (github.event.inputs.suite || 'pr')) }}
+      SUITE: ${{ github.event_name == 'push' && 'nightly' || (github.event.inputs.suite || 'pr') }}
       OUT: eval-out/code-retrieval
     steps:
       - name: Checkout
@@ -86,7 +98,7 @@ jobs:
 
       - name: Run the benchmark
         # The step owns its timeout so an overrun still reaches the upload below.
-        timeout-minutes: ${{ github.event.schedule == '41 7 * * 0' && 690 || 270 }}
+        timeout-minutes: ${{ github.event.inputs.suite == 'scale' && 690 || 270 }}
         # Step-level: the runner context does not exist in job-level env.
         env:
           GAIA_BENCH_WORK_ROOT: ${{ runner.temp }}/gaia-bench

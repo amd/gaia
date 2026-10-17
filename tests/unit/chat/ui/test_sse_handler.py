@@ -525,6 +525,19 @@ class TestPrettyPrintJsonToolResults:
         assert event["command_output"]["expected_exit"] == reason
         assert event["summary"] == f"{reason} (exit 1)"
 
+    @pytest.mark.parametrize(
+        "data, success",
+        [
+            ('{"ok": false, "error": "Could not archive 3 of 3 messages"}', False),
+            ({"ok": False, "error": "boom"}, False),
+            ('{"ok": true, "data": {"failed_count": 1, "partial": true}}', True),
+            ('{"status": "error", "error": "boom"}', False),
+        ],
+    )
+    def test_an_ok_false_envelope_marks_success_false(self, handler, data, success):
+        handler.pretty_print_json(data, title="Result")
+        assert _drain(handler)[0]["success"] is success
+
     def test_non_dict_data_success_is_true(self, handler):
         handler.pretty_print_json("some string", title="Result")
         events = _drain(handler)
@@ -588,7 +601,7 @@ class TestPrettyPrintJsonToolResults:
         assert "result_data" in event
         rd = event["result_data"]
         assert rd["type"] == "file_list"
-        assert rd["files"] == files
+        assert rd["files"] == [{"name": f} for f in files]
         assert rd["total"] == 3
 
     def test_file_list_limited_to_20(self, handler):
@@ -607,7 +620,7 @@ class TestPrettyPrintJsonToolResults:
         handler.pretty_print_json(data, title="Result")
         events = _drain(handler)
         rd = events[0]["result_data"]
-        assert rd["files"] == files
+        assert rd["files"] == [{"name": f} for f in files]
 
     def test_chunks_result_data(self, handler):
         chunks = ["chunk1 text", "chunk2 text", "chunk3 text"]
@@ -1063,27 +1076,25 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == ""
 
     def test_embedded_text_then_tool_json_split(self, handler):
-        """Pre-tool planning text and tool JSON are both suppressed.
+        """A narration line before a tool call on its own line shows; the call does not.
 
-        When the buffer contains text followed by tool-call JSON, Case 3 of
-        print_streaming_text discards the pre-tool planning text (per system
-        prompt rules: "NEVER output planning text before a tool call") and
-        then filters the tool-call JSON itself.  No chunk event is emitted.
+        The narration usually streams token by token ahead of the call, so
+        dropping only the part that shares a buffer with it would cut a
+        sentence in half.
         """
         mixed = 'I will search now.\n{"tool": "search_file", "tool_args": {"query": "test"}}'
         handler.print_streaming_text(mixed)
         events = _drain(handler)
-        assert len(events) == 0
+        assert events == [{"type": "chunk", "content": "I will search now.\n"}]
         assert handler._stream_buffer == ""
 
-    def test_buffer_overflow_emits_content(self, handler):
-        """Buffer exceeding 2048 bytes should be flushed."""
-        # Build a buffer that starts with { and contains "tool" but is huge
+    def test_oversized_open_envelope_is_held_not_leaked(self, handler):
+        """A long tool call is still a tool call: hold it, never flush it raw."""
         large_text = '{"tool": "x"' + " " * 2100
         handler.print_streaming_text(large_text)
-        events = _drain(handler)
-        assert len(events) == 1
-        assert events[0]["type"] == "chunk"
+        assert _content(_drain(handler)) == []
+        handler.print_streaming_text("", end_of_stream=True)
+        assert _content(_drain(handler)) == []
         assert handler._stream_buffer == ""
 
     def test_json_like_but_not_tool_call_emitted(self, handler):
@@ -1149,13 +1160,12 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == "{"
 
     def test_answer_json_token_by_token_filtered(self, handler):
-        """Token-by-token {"answer": "..."} should extract and emit as answer."""
+        """Token-by-token {"answer": "..."} streams only the decoded value."""
         handler.print_streaming_text("{")
         handler.print_streaming_text('"answer": "Hello world"}')
         events = _drain(handler)
-        # The answer JSON should be parsed and emitted as an "answer" event
         assert len(events) == 1
-        assert events[0]["type"] == "answer"
+        assert events[0]["type"] == "chunk"
         assert events[0]["content"] == "Hello world"
         assert handler._stream_buffer == ""
 
@@ -1171,6 +1181,198 @@ class TestPrintStreamingText:
         # Now it should emit since it's clearly not LLM JSON
         assert len(events2) == 1
         assert "{" in events2[0]["content"]
+
+
+def _stream(handler, chunks, end=True):
+    for chunk in chunks:
+        handler.print_streaming_text(chunk)
+    if end:
+        handler.print_streaming_text("", end_of_stream=True)
+    return _drain(handler)
+
+
+def _shown(events):
+    return "".join(e["content"] for e in events if e and e["type"] == "chunk")
+
+
+def _content(events):
+    """What reaches the transcript; progress status events say only size and kind."""
+    return [e for e in events if e is None or e["type"] != "status"]
+
+
+def _pieces(text, size):
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+# A write_file call whose content is longer than every old hold limit — the
+# shape that reached the transcript as a raw ``{"thought": …}`` line.
+_BIG_CONTENT = "# Answer\\n\\n" + ('Cited fact, see \\"Source\\" {x}.\\n' * 120)
+_WRITE_ENVELOPE = (
+    '{"thought": "The write_file failed because the file already exists and I '
+    "haven't read it this turn. I need to read it first, then write.\", "
+    '"goal": "Read the existing answer.md, then overwrite it", '
+    '"plan": [{"tool": "read_file", "tool_args": {"file_path": "C:\\\\a\\\\answer.md"}}, '
+    '{"tool": "write_file", "tool_args": {"file_path": "C:\\\\a\\\\answer.md", '
+    f'"content": "{_BIG_CONTENT}"}}}}], '
+    '"tool": "read_file", "tool_args": {"file_path": "C:\\\\a\\\\answer.md"}}'
+)
+
+
+class TestResponseEnvelopeNeverStreamsRaw:
+    """The agent's {"thought"/"tool"/"answer"} protocol never reaches chat text."""
+
+    def test_fixture_is_valid_json_longer_than_old_limits(self):
+        import json
+
+        assert json.loads(_WRITE_ENVELOPE)["tool"] == "read_file"
+        assert len(_WRITE_ENVELOPE) > 4096
+
+    @pytest.mark.parametrize("size", [1, 7, 64, 2500, 100_000])
+    def test_long_tool_envelope_split_any_way_is_dropped(self, handler, size):
+        events = _stream(handler, _pieces(_WRITE_ENVELOPE, size))
+        assert _content(events) == []
+        assert handler._stream_buffer == ""
+
+    def test_nothing_leaks_mid_stream_either(self, handler):
+        """Each partial state is checked, not just the end of the stream."""
+        for piece in _pieces(_WRITE_ENVELOPE, 3):
+            handler.print_streaming_text(piece)
+            assert _content(_drain(handler)) == [], handler._stream_buffer[:80]
+
+    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler):
+        """A 400 KB file write streamed 4 chars at a time scans each char once."""
+        content = 'x \\"{y}\\" ' * 40_000
+        envelope = (
+            '{"thought": "t", "tool": "write_file", '
+            f'"tool_args": {{"file_path": "a.md", "content": "{content}"}}}}'
+        )
+        started = time.monotonic()
+        assert _content(_stream(handler, _pieces(envelope, 4))) == []
+        assert time.monotonic() - started < 5
+
+    def test_think_tag_inside_an_envelope_string_is_content(self, handler):
+        envelope = (
+            '{"thought": "t", "tool": "write_file", "tool_args": '
+            '{"content": "models emit <think>x</think> tags"}}'
+        )
+        assert _stream(handler, _pieces(envelope, 5)) == []
+
+    def test_a_stream_cut_mid_envelope_does_not_blind_the_next_one(self, handler):
+        """Stop can end a stream with no end-of-stream call."""
+        handler.print_streaming_text('{"thought": "t", "tool": "x", "tool_args": {')
+        handler._stream_buffer = ""
+        handler.print_streaming_text("<think>pondering</think>Hello.")
+        events = _drain(handler)
+        assert {"type": "thinking", "content": "pondering"} in events
+        assert _shown(events) == "Hello."
+
+    def test_envelope_after_a_rewritten_buffer_is_rescanned(self, handler):
+        handler.print_streaming_text('{"thought": "a {", "tool": "x", "tool_args": {')
+        handler._stream_buffer = '{"thought": "b", "tool": "x", "tool_args": {'
+        handler.print_streaming_text("}}")
+        assert _drain(handler) == []
+        assert handler._stream_buffer == ""
+
+    def test_plan_envelope_does_not_leak_its_tail(self, handler):
+        """The compound regex once ate the head and let ``], "tool"…`` through."""
+        envelope = (
+            '{"thought": "search first", "goal": "find the author", "plan": ['
+            '{"tool": "search_web", "tool_args": {"query": "RFC 2068"}}, '
+            '{"tool": "search_web", "tool_args": {"query": "Fielding PhD"}}'
+            '], "tool": "search_web", "tool_args": {"query": "RFC 2068", '
+            '"num_results": 5}}'
+        )
+        chunks = [envelope[: envelope.index("]")], envelope[envelope.index("]") :]]
+        assert _stream(handler, chunks) == []
+
+    def test_nested_and_escaped_quotes_and_braces(self, handler):
+        envelope = (
+            '{"thought": "she said \\"use {braces}\\" and \\\\\\"more\\\\\\"}", '
+            '"tool": "write_file", "tool_args": {"content": "}}} \\"{\\" {{"}}'
+        )
+        assert _stream(handler, _pieces(envelope, 5)) == []
+
+    def test_thought_split_across_chunks_mid_key(self, handler):
+        chunks = ["{", '"tho', 'ught"', ' : "I should ', 'look", "tool": "x", ']
+        chunks += ['"tool_args": {}}']
+        assert _stream(handler, chunks) == []
+
+    def test_thought_only_envelope_is_dropped(self, handler):
+        """No tool and no answer: nothing to show, and no raw JSON either."""
+        assert _stream(handler, ['{"thought": "hmm", ', '"goal": "think"}']) == []
+
+    def test_thought_plus_answer_streams_only_the_answer(self, handler):
+        envelope = (
+            '{"thought": "done", "goal": "reply", '
+            '"answer": "Roy Fielding, \\"UC Irvine\\", 2000."}'
+        )
+        events = _stream(handler, _pieces(envelope, 4))
+        assert {e["type"] for e in events} == {"chunk"}
+        assert _shown(events) == 'Roy Fielding, "UC Irvine", 2000.'
+
+    @pytest.mark.parametrize("size", [1, 4, 64])
+    def test_answer_after_a_tool_key_is_not_streamed(self, handler, size):
+        envelope = (
+            '{"thought": "t", "tool": "x", "tool_args": {"answer": "no"}, '
+            '"answer": "not yet"}'
+        )
+        assert _shown(_stream(handler, _pieces(envelope, size))) == ""
+
+    @pytest.mark.parametrize("size", [1, 4, 64])
+    def test_nested_answer_key_is_not_the_answer(self, handler, size):
+        envelope = (
+            '{"thought": "t", "goal": {"answer": "inner"}, '
+            '"tool": "x", "tool_args": {}}'
+        )
+        assert _content(_stream(handler, _pieces(envelope, size))) == []
+
+    def test_answer_that_contains_json_still_shows(self, handler):
+        envelope = '{"thought": "t", "answer": "Use {\\"thought\\": \\"x\\"} here."}'
+        events = _stream(handler, [envelope])
+        assert events == [{"type": "answer", "content": 'Use {"thought": "x"} here.'}]
+
+    def test_fenced_envelope_is_dropped_with_its_fence(self, handler):
+        text = '```json\n{"thought": "t", "tool": "x", "tool_args": {}}\n```\n'
+        for size in (1, 3, len(text)):
+            fresh = SSEOutputHandler()
+            assert _stream(fresh, _pieces(text, size)) == [], size
+
+    def test_text_after_an_envelope_still_shows(self, handler):
+        events = _stream(
+            handler, ['{"thought": "t", "tool": "x", "tool_args": {}}', "\nAll done."]
+        )
+        assert _shown(events) == "All done."
+
+    def test_unterminated_envelope_at_end_of_stream_is_dropped(self, handler):
+        assert _stream(handler, ['{"thought": "cut off by max tok']) == []
+
+    def test_signal_done_drops_a_held_envelope(self, handler):
+        handler.print_streaming_text('{"thought": "t", "tool": "x", "tool_args": {')
+        handler.signal_done()
+        assert _drain(handler) == [None]
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "{placeholder} is the template variable you need.",
+            '{"thought" is just a word here, not a key}',
+            "{ not json at all",
+        ],
+    )
+    def test_non_json_line_starting_with_brace_shows(self, handler, text):
+        assert _shown(_stream(handler, _pieces(text, 4))) == text
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '{"name": "gaia", "port": 4200}',
+            '{"goal": "ship v1", "owner": "Ada"}',
+            'The config is:\n```json\n{"name": "gaia", "port": 4200}\n```',
+            '```json\n{"goal": "ship v1", "owner": "Ada"}\n```',
+        ],
+    )
+    def test_real_answer_that_is_json_shows(self, handler, text):
+        assert _shown(_stream(handler, _pieces(text, 6))) == text
 
 
 # ===========================================================================

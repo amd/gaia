@@ -72,6 +72,10 @@ beforeEach(() => {
         compatible: true, blockers: [], warnings: [], ram_gb: 32, gpu_name: null, npu_detected: false, disk_free_gb: 100,
     } as never);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mocked.getLemonadeTarget.mockResolvedValue({
+        mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
+        api_key_stored: false, gaia_installed: false, offer: false, what_gaia_does: '',
+    });
     // ChatView's mount effects chain off these; auto-mocked they return undefined.
     mocked.listDocuments.mockResolvedValue({ documents: [] } as never);
     mocked.getMessageCount.mockResolvedValue({ count: 0 } as never);

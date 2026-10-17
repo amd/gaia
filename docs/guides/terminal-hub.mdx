@@ -179,39 +179,81 @@ message would otherwise have spent.
 #### First run
 
 On a new machine nothing is broken yet — Lemonade and the models just are not
-there. The gate shows that as numbered steps, not failures:
+there. The gate shows that as numbered steps, not failures, and the first step
+is a question: where should chat run? It comes before any download, because the
+answer decides what gets downloaded.
 
 ```
-  Setting up GAIA                                                    step 1 of 2
+  Setting up GAIA                                                    step 1 of 3
+  ──────────────────────────────────────────────────────────────────────────────
+  Step 1 of 3 — where should chat run?
+  Change it any time: p on this screen, /provider in chat.
+
+  > 1. Local
+       Private and free: nothing leaves this PC. Speed depends on this PC.
+       Downloads ~6 GB of models. Setup picks the model that fits this PC's
+       memory.
+
+    2. Fireworks AI
+       Fast on any PC. Conversations are sent to Fireworks AI, and usage is
+       billed to your key.
+       Needs a Fireworks AI API key. Downloads under 1 GB.
+
+    3. AMD LLM Gateway
+       Fast on any PC. Conversations are sent to your organisation's AMD LLM
+       Gateway.
+       Needs your gateway key (and its URL). Downloads under 1 GB.
+
+  ──────────────────────────────────────────────────────────────────────────────
+  ↑/↓ move · p all providers · enter choose · esc back to the steps
+```
+
+Move with `↑`/`↓` (or press `1`–`3`) and press `Enter`. When Lemonade is already
+installed, the Local option names the model setup would download and whether it
+fits this PC's memory, by the same rule the provider panel uses. `esc` goes back
+to the list of steps, where the question is step 1 and `Enter` reopens it. If you
+chose a model on an earlier launch, or started with `--model` or
+`--use-claude`, the question is skipped.
+
+Every choice still installs Lemonade next: it runs local models, and for a cloud
+provider it routes the requests and computes the embeddings that document
+search and memory use.
+
+- **Local** — step 2 installs Lemonade, step 3 downloads the models.
+- **Fireworks AI** or **AMD LLM Gateway** — step 2 installs Lemonade. Step 3
+  opens that provider's key form; paste the key, pick a model, and setup
+  downloads only the embedding model. No local chat model is downloaded.
+
+```
+  Setting up GAIA                                                    step 2 of 3
   ──────────────────────────────────────────────────────────────────────────────
     [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
-  > [ ]   Lemonade            Step 1 of 2 — install the local model server (~1 min)
+  > [ ]   Lemonade            Step 2 of 3 — install the local model server (~1 min)
           Lemonade runs AI models on this machine and routes chat to the
           provider you pick. Setup installs it privately for GAIA — nothing
           system-wide.
-          enter start step 1
-    [ ]   Language model      Step 2 of 2 — download the models (~6 GB)
+          enter start step 2
+    [ ]   Language model      Step 3 of 3 — download the models (~6 GB)
   ──────────────────────────────────────────────────────────────────────────────
-  enter start step 1 · p AI provider · r re-check · d details · esc back
+  enter start step 2 · p AI provider · r re-check · d details · esc back
 ```
 
 Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
-
-Step 1 installs Lemonade and stops, downloading nothing — and so does every
-retry of it, and the key on a Lemonade row that is installed but not running.
-Which models step 2 fetches depends on where chat runs, so this is the moment to press `p` and pick
-Fireworks AI or the AMD LLM Gateway: step 2 then downloads only the embedding
-models, not a local chat model. Press `Enter` again to start step 2:
+The Lemonade step installs Lemonade and stops, downloading nothing — and so does
+every retry of it, and the key on a Lemonade row that is installed but not
+running. `p` still opens the full provider panel at any point, to pick a
+specific model rather than the default. Press `Enter` again to start the last
+step:
 
 ```
-  Setting up GAIA                                                    step 2 of 2
+  Setting up GAIA                                                    step 3 of 3
   ──────────────────────────────────────────────────────────────────────────────
     [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
     [ok]  Lemonade            running at http://localhost:13305/api/v1
     [..]  Language model      ⣟  downloading Gemma-4-E4B-it-GGUF…
 
-  ⣟  Step 2 of 2 — downloading Gemma-4-E4B-it-GGUF · 0:05
+  ⣟  Step 3 of 3 — downloading Gemma-4-E4B-it-GGUF · 0:05
   Leaving this screen stops setup.
   ──────────────────────────────────────────────────────────────────────────────
   r re-check · d details · esc back
@@ -222,10 +264,14 @@ output; `gaia init` does the same work from a terminal.
 
 If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
 port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
-to install GAIA's own. Using yours keeps one server and one copy of each model
+to install GAIA's own (saved once GAIA's server is installed and running). Using yours keeps one server and one copy of each model
 on the PC. A server that needs an API key shows the `gaia lemonade connect`
-command that saves the key. The choice is remembered. To switch back, run
-`gaia config set lemonade_mode gaia`. See
+command that saves the key. The choice is remembered. GAIA never changes your
+server's setup: it doesn't register cloud providers or hand it keys, and the
+`/provider` panel uses a provider only if your server already has it. Setup
+downloads only the models your server lacks. To switch
+back, run `gaia config set lemonade_mode gaia` (it's refused until GAIA's own
+server is installed; `gaia init --gaia-lemonade` does both). See
 [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
 
 When setup finishes, the gate checks the models by **loading** them once — the
@@ -350,7 +396,7 @@ Once the gate clears, GAIA starts the agent and drops you into the conversation:
 GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: agent gaia v0.2.0
+Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
 Type a message and press Enter to start chatting.
 Type /help for available commands.
@@ -361,6 +407,10 @@ Type /help for available commands.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
+The version beside it is the one the running agent reports about itself, and the
+welcome line adds the GAIA core it runs on. An agent too old to report a
+version gets no number at all rather than one read from an install record, which
+can name a different build than the one answering.
 On a narrow terminal this segment is the first thing to give way, never the model
 chip next to it.
 
@@ -382,6 +432,8 @@ names the update command.
 |---|---|
 | `Enter` | Send message. Mid-answer it goes to the turn already running — see below |
 | `Alt+Enter`, `Ctrl+J` | New line in the composer |
+| `Ctrl+Backspace`, `Alt+Backspace`, `Ctrl+W` | Delete the word before the cursor. A terminal that sends `^H` for plain Backspace (PuTTY's "Control-H" setting, `stty erase ^H`) deletes a word with Backspace too; set it to send `DEL` |
+| `Ctrl+Delete`, `Alt+Delete`, `Alt+D` | Delete the word after the cursor |
 | `Esc` | Idle: clear the composer. Streaming: stop the turn; the agent keeps its session. Press again to stop at once — an agent the TUI runs itself is then restarted without its loaded skills or grants |
 | `Ctrl+C` | Quit |
 | `Shift+Tab` | Change the permission mode: ask → accept edits → full access — see [When the agent asks first](#when-the-agent-asks-first) |
@@ -416,7 +468,9 @@ the answer set apart below:
   it gated then records your answer in a word: `approved`, `denied`, or `always
   allowed '<scope>'`.
 - **The agent's narration** ("Let me check the tests first") is folded away.
-  `Ctrl+O` shows it, along with each step's full command and timing.
+  `Ctrl+O` shows it, along with each step's full command and timing. A stage or a
+  narration line the agent repeats word for word — a plan's "Following the plan
+  to …" headline before every step — is shown once, until it changes.
 
 ### Saying something while the agent is still working
 
@@ -446,14 +500,20 @@ By default the mouse belongs to your terminal, so you drag to select text and
 copy and paste with your terminal's own keys (`Ctrl+Shift+C` / `Ctrl+Shift+V`,
 `Cmd+C` / `Cmd+V`, or right-click). The wheel still scrolls the conversation:
 GAIA turns on your terminal's alternate scroll mode, which sends each wheel tick
-as `↑` / `↓`. Press `Ctrl+T` to hand the mouse to GAIA instead, for clickable
-links and double-click copy.
+as `↑` / `↓`. Your terminal's selection only covers what is on screen, though:
+dragging past the top or bottom of the conversation doesn't scroll it. To select
+something longer, press `Ctrl+T` to hand the mouse to GAIA, or copy without the
+mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
+`Ctrl+T` hint either way.
 
 | Mouse | What it does |
 |---|---|
 | Wheel | Scrolls the conversation |
 | Drag | Selects text, for your terminal's own copy |
-| `Ctrl+T` | Hands the mouse to GAIA: a printed `http(s)` link opens in your browser on click, and a double-click copies a whole message. Drag-select then needs `Shift` held (`Option` in iTerm2). `Ctrl+T` again gives the mouse back. Printed links are also real terminal hyperlinks, so terminals that support them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) open them with their own gesture either way |
+| `Ctrl+T` | Hands the mouse to GAIA (the rows below). `Ctrl+T` again gives it back to your terminal |
+| Drag, after `Ctrl+T` | Selects inside GAIA. Drag past the top or bottom edge and the conversation scrolls, extending the selection. Releasing copies it as plain text: no `▶ You:` label, padding, borders or timings, and a message selected end to end is copied as its original markdown, so code blocks come out exactly. `Enter` copies it again, `Esc` clears it |
+| `Shift`+click, after `Ctrl+T` | Extends the selection to the click and copies it, in terminals that pass `Shift`+click to the app. Some, Windows Terminal among them, keep it for their own selection instead |
+| Click / double-click, after `Ctrl+T` | A printed `http(s)` link opens in your browser; a double-click copies the whole message. Printed links are also real terminal hyperlinks, so terminals that support them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) open them with their own gesture either way |
 | Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. The palette takes the mouse only while it is open |
 
 | Command | What it does |
@@ -472,6 +532,8 @@ links and double-click copy.
 | `/full-access never` | Stop it coming back on future launches |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
+| `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
+| `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
@@ -525,6 +587,7 @@ prompt shows the command once, labelled by what it does:
  RUNS CODE  Run this command?
  python -m pytest -q tests/ 2>&1
  in ~/AppData/…/newuser/proj
+ Can run any code, with your permissions.
  mode: ask · shift+tab to change · expires in 10 minutes
  y once · a always: pytest (this session) · n/esc deny
 ```
@@ -538,12 +601,46 @@ prompt shows the command once, labelled by what it does:
 
 Paths are shown relative to the folder you started GAIA in, a leading `cd` moves
 to its own `in …` line, and a long command keeps its start and its end with the
-middle marked as cut.
+middle marked as cut. The `in …` line also appears when an earlier `cd` left the
+session in another folder. A `WRITE` or `RUNS CODE` command gets one plain line
+saying what it can do.
+
+A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
+with no skill loaded for it — gets this prompt rather than an error. `a` covers
+that one command family (`git commit`, `python (any script)`) for the session and
+nothing wider. If you deny it, the agent is told not to get the same result
+another way, and stops to explain.
+
+A command GAIA's own checks don't cover — `git push`, `git fetch`, Python passed
+with `-c`, a PowerShell command it can't read, a line with `$(…)`, a path outside
+the project — is asked about too, with three differences. The prompt shows the
+exact line the shell will run, unshortened, and the full folder it runs in. A
+risk line says what it can do: "Sends your commits to the remote repository.",
+"Reads or changes files outside this project: …", or "Can run any code with your
+permissions — GAIA can't inspect this command." And only `y` and `n` are offered:
+approving runs that exact line once, and the next one asks again.
+
+```
+ WRITE  Run this command?
+ git push
+ in ~/work/proj
+ Sends your commits to the remote repository.
+ y once · n/esc deny
+```
+
+A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
+with invisible or line-break characters (the prompt couldn't show what runs), a
+line whose quoting GAIA can't split the way the shell would, a line its checks
+don't cover that also deletes or discards work (`git push --force`, `git reset
+--hard`, `git clean`, `rm` outside the project), and folders no approval can
+open (credential folders, the system temp folder, a whole drive or your home
+folder). The agent
+says what it would have run, so you can run it yourself.
 
 | Key | What it does |
 |---|---|
 | `y` | Run it this once |
-| `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. `python (any script)` and `Python snippets (run_python)` cover any Python code, and say so. Deletes never offer `a` |
+| `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
 | `n` / `Esc` | Don't run it. The agent is told you said no |
 
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed
@@ -567,10 +664,11 @@ reaches it in a session, GAIA explains what it does and stays in `ask`; type
 straight to it. Turning it off is never gated. While it is on, a banner says so
 on every frame.
 
-Commands GAIA refuses outright — printing a credential (`gh auth token`), an
-encoded PowerShell command, a `git` option that hides a script — stay refused in
-`ask` and `accept edits`, and no `a` answer unlocks them. Only full access lifts
-the shell guardrails; see [Full access](/reference/cli#full-access).
+Commands GAIA's checks don't cover — printing a credential (`gh auth token`), a
+`git` option that hides a script — ask once in `ask` and `accept edits`, showing
+the exact line, and no `a` answer covers them. An encoded PowerShell command, or
+one that deletes or discards work on such a line, stays refused. Only full
+access lifts the shell guardrails; see [Full access](/reference/cli#full-access).
 
 A session launched with `--use-claude` skips first-boot setup entirely and does not
 start the local server — that flag exists to avoid the local backend, so running an
@@ -646,8 +744,8 @@ than reporting "no rate configured" — otherwise you would edit a file that is 
 being ignored.
 
 To run a turn somewhere other than this machine — Fireworks AI or your
-organisation's AMD LLM Gateway — press **p** at the readiness gate or type
-`/provider`. See [AI providers](/guides/ai-providers).
+organisation's AMD LLM Gateway — choose it at the first-run question, press **p**
+at the readiness gate, or type `/provider`. See [AI providers](/guides/ai-providers).
 
 ## When GAIA asks permission
 
@@ -669,7 +767,12 @@ this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
 **y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
-error — the agent is told and carries on.
+error — the agent is told you said no, doesn't try another way to do the same
+thing, and carries on with whatever doesn't need it. When nobody can answer — a
+scheduled or background run, or a prompt that expires — the command doesn't run.
+A command GAIA's own checks don't cover offers no `a`: it shows the exact line
+and a risk line, and runs once if you say yes (see
+[When the agent asks first](#when-the-agent-asks-first)).
 
 The prompt names the tool *and its arguments*, because the argument is usually
 the part that matters. An "always allow" answer, where offered, is scoped to
