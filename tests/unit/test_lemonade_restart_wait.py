@@ -536,3 +536,289 @@ class TestTheEnsureRoute:
         with pytest.raises(DaemonError, match="read lemond.log") as raised:
             daemon_client.ensure_lemonade()
         assert not isinstance(raised.value, LemonadeNotAnsweringError)
+
+
+# -- property-style: randomized timing, overlap, an older daemon ---------------
+
+
+def _virtual_retry_clock(world, monkeypatch):
+    """Let the request's own retry backoff spend the world's time too."""
+    monkeypatch.setattr(lc.LemonadeClient, "_retry_sleep", staticmethod(world.sleep))
+    monkeypatch.setattr(lc.LemonadeClient, "_retry_clock", staticmethod(world.clock))
+
+
+class TestRandomizedRestartTiming:
+    """However long the gap, and however it ends, a turn either answers once on
+    the server that came back, or fails within the bound with the remedy."""
+
+    @pytest.mark.parametrize("seed", range(200))
+    def test_any_gap_answers_or_fails_within_the_bound(self, world, monkeypatch, seed):
+        import random
+
+        _virtual_retry_clock(world, monkeypatch)
+        rng = random.Random(seed)
+        bound = lc.GAIA_LEMONADE_RECONNECT_SECONDS
+        poll = lc.GAIA_LEMONADE_RECONNECT_POLL_SECONDS
+        quiet_polls = rng.randint(0, int(bound / poll) + 10)
+        ending = rng.choice([world.restarted, world.came_back])
+        world.daemon_answers = [world.not_answering] * quiet_polls + [ending]
+        port, key = (
+            (NEW_PORT, NEW_KEY) if ending == world.restarted else (OLD_PORT, OLD_KEY)
+        )
+
+        try:
+            _client().chat_completions(
+                MODEL, [{"role": "user", "content": "hi"}], auto_download=False
+            )
+        except lc.LemonadeClientError as e:
+            assert quiet_polls * poll >= bound - poll, f"gave up early: {e}"
+            assert "gaia daemon status" in str(e)
+            assert world.lemonade_posts == []
+        else:
+            assert world.lemonade_posts == [
+                (f"http://localhost:{port}/api/v1/chat/completions", f"Bearer {key}")
+            ]
+        # The whole turn, the request's own retries included, not just the wait.
+        assert world.now <= bound + poll
+
+    def test_a_gone_server_skips_the_requests_own_backoff(self, world, monkeypatch):
+        """Backing off against a server that is not there only delays the wait
+        that can bring it back; it used to add ~30 s before the 60 s began."""
+        _virtual_retry_clock(world, monkeypatch)
+        world.daemon_answers = [world.not_answering]
+
+        with pytest.raises(lc.LemonadeClientError, match="was not back within"):
+            _client().chat_completions(
+                MODEL, [{"role": "user", "content": "hi"}], auto_download=False
+            )
+
+        assert world.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_SECONDS)
+
+    def test_a_server_that_is_up_but_failing_still_gets_its_retries(
+        self, world, monkeypatch
+    ):
+        """Only a gone server skips them: one that answers 503 is backed off."""
+        _virtual_retry_clock(world, monkeypatch)
+        world.listening = {OLD_PORT}
+        calls = []
+
+        def busy_then_ok(url, json=None, headers=None, timeout=None):
+            calls.append(url)
+            if len(calls) < 3:
+                return _Http(503, {"error": "busy"})
+            return _Http(
+                200,
+                {"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]},
+            )
+
+        monkeypatch.setattr(requests, "post", busy_then_ok)
+
+        result = _client().chat_completions(
+            MODEL, [{"role": "user", "content": "hi"}], auto_download=False
+        )
+
+        assert result["choices"][0]["message"]["content"] == "hi"
+        assert len(calls) == 3
+
+
+class TestOverlappingEnsures:
+    """Many processes asking the daemon at once, at random moments, while the
+    server is quiet and then back: it is never started twice or stopped."""
+
+    @pytest.mark.parametrize("seed", range(20))
+    def test_concurrent_ensures_never_start_twice_or_stop(self, seed):
+        import random
+        import threading
+        import time as _time
+
+        from gaia.daemon.lemonade import EmbeddedLemonadeOwner
+
+        rng = random.Random(seed)
+        quiet_until = _time.monotonic() + rng.uniform(0.0, 0.2)
+
+        class _Server:
+            version = "1"
+            log_path = "lemond.log"
+
+            def __init__(self):
+                self.started, self.stopped = [], []
+
+            def is_installed(self):
+                return True
+
+            def status(self):
+                if _time.monotonic() < quiet_until:
+                    return EmbeddedStatus(
+                        installed=True,
+                        running=False,
+                        version="1",
+                        port=OLD_PORT,
+                        unresponsive_pid=1,
+                        owner_pid=7,
+                    )
+                return EmbeddedStatus(
+                    installed=True,
+                    running=True,
+                    version="1",
+                    port=OLD_PORT,
+                    pid=1,
+                    base_url=f"http://localhost:{OLD_PORT}/api/v1",
+                    owner_pid=7,
+                )
+
+            def start(self, **kwargs):
+                self.started.append(kwargs)
+
+            def stop(self, *a, **k):
+                self.stopped.append(1)
+
+            def claim(self, *a):
+                pass
+
+        server = _Server()
+        owner = EmbeddedLemonadeOwner(
+            factory=lambda: server, owner_pid=7, owner_alive=lambda pid, t: True
+        )
+        owner.configured_url = staticmethod(lambda: None)
+        outcomes = []
+
+        def _ask():
+            _time.sleep(rng.uniform(0.0, 0.3))
+            try:
+                outcomes.append(owner.ensure().port)
+            except EmbeddedLemonadeNotAnswering:
+                outcomes.append("not answering")
+
+        threads = [threading.Thread(target=_ask) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert server.started == [] and server.stopped == []
+        assert set(outcomes) <= {OLD_PORT, "not answering"}
+        assert len(outcomes) == 16
+
+
+class TestAnOlderDaemon:
+    def test_not_answering_without_retry_after_fails_at_once(self, world):
+        """A daemon from before #5264 sends no Retry-After: nothing tells the
+        client the state is transient, so it fails now, as it always did."""
+        world.daemon_answers = [lambda: _Http(503, {"detail": NOT_ANSWERING})]
+
+        with pytest.raises(lc.LemonadeClientError, match="not answering") as raised:
+            _client().wait_for_gaia_lemonade()
+
+        assert not isinstance(raised.value, lc.GaiaLemonadeNotAnsweringError)
+        assert len(world.daemon_posts) == 1
+        assert world.now == 0.0
+
+
+class TestTheHandOff:
+    """Skipping the backoff for a gone server never costs a retry elsewhere."""
+
+    def test_a_stream_cut_after_output_keeps_its_retry_state(self):
+        """The agent retries the step from that state; a hand-off must not
+        take it away once output has been delivered."""
+        from gaia.llm.retry import ModelCallRetrier, RetryPolicy, retry_state_of
+
+        asked = []
+        retrier = ModelCallRetrier(
+            RetryPolicy(max_attempts=3),
+            sleep=lambda s: None,
+            hand_off=lambda error, reason: asked.append(reason) or True,
+        )
+
+        def _cut_mid_reply():
+            yield {"delta": "half an answer"}
+            raise requests.exceptions.ConnectionError("server went away")
+
+        out = []
+        with pytest.raises(requests.exceptions.ConnectionError) as raised:
+            for item in retrier.stream(_cut_mid_reply, is_output=lambda i: True):
+                out.append(item)
+
+        assert out == [{"delta": "half an answer"}]
+        state = retry_state_of(raised.value)
+        assert state is not None and state.output_delivered
+        assert asked == [], "the hand-off was consulted after output"
+
+    def test_before_output_it_gives_up_at_once(self):
+        from gaia.llm.retry import ModelCallRetrier, RetryPolicy
+
+        slept, attempts = [], []
+        retrier = ModelCallRetrier(
+            RetryPolicy(max_attempts=5),
+            sleep=slept.append,
+            hand_off=lambda error, reason: True,
+        )
+
+        def _refused():
+            attempts.append(1)
+            raise requests.exceptions.ConnectionError("refused")
+
+        with pytest.raises(requests.exceptions.ConnectionError):
+            retrier.call(_refused)
+        assert attempts == [1] and slept == []
+
+    def test_a_server_back_by_the_second_look_is_still_resent(self, world, monkeypatch):
+        """Gone when the retrier looked, back when recovery looks: the retries
+        that would have covered that were skipped, so the request is resent."""
+        looks = []
+        real_gone = lc.LemonadeClient._gaia_lemonade_gone
+
+        def gone_then_back(self):
+            looks.append(1)
+            if len(looks) == 1:
+                world.listening = {OLD_PORT}  # restarted right after the look
+                return True
+            return real_gone(self)
+
+        monkeypatch.setattr(lc.LemonadeClient, "_gaia_lemonade_gone", gone_then_back)
+        world.daemon_answers = [world.came_back]
+
+        result = _client().chat_completions(
+            MODEL, [{"role": "user", "content": "hi"}], auto_download=False
+        )
+
+        assert result["choices"][0]["message"]["content"] == "hi"
+        assert world.lemonade_posts == [
+            (
+                f"http://localhost:{OLD_PORT}/api/v1/chat/completions",
+                f"Bearer {OLD_KEY}",
+            )
+        ]
+
+
+class TestEmbeddingsRideARestart:
+    """Memory and RAG embed first in a session; a restart under them is waited
+    out like a chat turn, not failed."""
+
+    def test_an_embedding_during_a_restart_lands_on_the_new_server(
+        self, world, monkeypatch
+    ):
+        monkeypatch.setattr(lc, "manages_embedder_backend", lambda name: False)
+        world.daemon_answers = [world.not_answering, world.restarted]
+        client = _client()
+        phases = []
+        client.model_load_listener = lambda model, state: phases.append(state)
+
+        client.embeddings(["hello"], model="an-embedder")
+
+        assert phases == ["reconnecting"]
+        assert world.lemonade_posts == [
+            (f"http://localhost:{NEW_PORT}/api/v1/embeddings", f"Bearer {NEW_KEY}")
+        ]
+
+    def test_an_embedding_on_the_users_server_is_never_waited_on(
+        self, world, monkeypatch
+    ):
+        monkeypatch.setattr(lc, "manages_embedder_backend", lambda name: False)
+        monkeypatch.setenv("LEMONADE_BASE_URL", f"http://localhost:{OLD_PORT}")
+        world.daemon_answers = [world.restarted]
+
+        with pytest.raises(lc.LemonadeClientError, match="Error generating"):
+            _client().embeddings(["hello"], model="an-embedder")
+
+        assert world.daemon_posts == []
+        assert world.now == 0.0
