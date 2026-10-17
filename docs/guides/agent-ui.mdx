@@ -69,6 +69,35 @@ claim when it can't tell. Hover either for what is sent: the whole conversation,
 including anything read out of files, documents or memory, which themselves stay
 stored on your machine.
 
+### See How Full the Context Is
+
+The meter beside the model chip shows how much of the model's context window the
+next message carries. Click it for the breakdown: system prompt, tools,
+documents, conversation, and the room kept free for the reply. Before older
+turns leave the model's view, a note above the message box names them by their
+question. GAIA never summarises or compacts a chat to make room: older turns stay
+saved, and you can ask GAIA to recall them.
+
+### Type While GAIA Works
+
+You can keep typing while a reply runs. Press Enter and the message waits in a
+queue above the message box, then goes out as its own turn as soon as the reply
+ends, in the order you typed. To add a detail to the work already running, press
+**Add to this reply** on a queued message: GAIA reads it at its next step
+without starting over, though it may not answer it separately. If the reply
+ends before reading it, it goes back in the queue. Press Stop and anything still
+queued goes back into the message box.
+
+### Compare Models on Your Question
+
+To see how another model answers, use **Retry with…** on the latest answer and
+pick a model downloaded on this PC. Both answers appear side by side with the
+time each took and its speed. **Keep this answer** on either one, and the chat
+continues from it. The other model answers from what the first reply already
+gathered and doesn't run tools again. It loads after the first answer, since
+the model server holds one model at a time, so the reported time includes
+loading it. Your next message loads the chat's own model again.
+
 ### Analyze Any Document
 
 Drag files into the chat — or just ask the agent to find them. It indexes the content and lets you ask questions, extract data, compare sections, or get summaries. Works with:

@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
-import { MessageBubble } from './MessageBubble';
+import { MessageBubble, isErrorContent } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -12,13 +12,19 @@ import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
-import type { Message, StreamEvent, AgentStep, RenderCardData } from '../types';
+import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
 
 import './ChatView.css';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
+import { QueuedMessages } from './QueuedMessages';
+import { ContextMeter, ContextWarning } from './ContextMeter';
+import { RetryWithMenu } from './RetryWithMenu';
+import { AnswerComparison, type ComparisonState } from './AnswerComparison';
+import * as messageQueue from '../utils/messageQueue';
+import type { QueuedMessage } from '../utils/messageQueue';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { STARTING_REASON } from '../utils/constants';
@@ -35,6 +41,9 @@ const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
+
+/** How long a queued message waits after finding the chat busy before it is sent again. */
+export const QUEUE_BUSY_WAIT_MS = 3_000;
 
 /**
  * Strip the LLM JSON envelope from streamed/accumulated content.
@@ -186,6 +195,13 @@ interface ChatViewProps {
     sessionId: string;
 }
 
+interface SendOptions {
+    /** Re-subscribe to a run already in flight server-side. */
+    attach?: boolean;
+    /** A message from the queue: already composed, and the composer stays as the user left it. */
+    queued?: boolean;
+}
+
 export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
@@ -267,7 +283,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
     /** The agent's own step number for the live turn, from its `step` events. */
     const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
-    const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean }) => void>(() => {});
+    const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
+    // Messages typed while a reply runs, and whether the user stopped that reply.
+    const [queue, setQueue] = useState<QueuedMessage[]>([]);
+    const userStoppedRef = useRef(false);
+    const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+    const [contextUnavailable, setContextUnavailable] = useState<string | null>(null);
+    const [comparison, setComparison] = useState<{
+        messageId: number;
+        state: ComparisonState;
+        keeping: 'original' | 'retry' | null;
+    } | null>(null);
+    const comparing = comparison?.state.status === 'running';
+    const comparingRef = useRef(false);
+    comparingRef.current = comparing;
+    const comparisonRef = useRef(comparison);
+    comparisonRef.current = comparison;
+    // Set briefly after a queued send found the chat still busy, so it waits before trying again.
+    const [queueHold, setQueueHold] = useState(false);
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -412,6 +445,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
 
+    useEffect(() => {
+        setQueue([]);
+        setComparison(null);
+        setContextUsage(null);
+        setContextUnavailable(null);
+        userStoppedRef.current = false;
+    }, [sessionId]);
+
+    const refreshContext = useCallback(() => {
+        api.getContextUsage(sessionId)
+            .then((r) => {
+                if (isStale()) return;
+                if (r.available) {
+                    setContextUsage(r);
+                    setContextUnavailable(null);
+                } else {
+                    setContextUsage(null);
+                    setContextUnavailable(r.reason);
+                }
+            })
+            .catch((err) => log.chat.error(`Could not measure the context for session=${sessionId}`, err));
+    }, [sessionId, isStale]);
+    useEffect(() => { refreshContext(); }, [refreshContext]);
+
     // Abort active stream and clean up timers when component unmounts / session changes
     useEffect(() => {
         return () => {
@@ -464,6 +521,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const handleStop = useCallback(() => {
         if (stopRequestedRef.current) return;
         stopRequestedRef.current = true;
+        userStoppedRef.current = true;
         setStopping(true);
         useNotificationStore.getState().dismissSessionPrompts(sessionId);
         useChatStore.getState().closeSessionQuestions(sessionId);
@@ -495,15 +553,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [isStreaming, handleStop]);
 
     // Send message
-    const sendMessage = useCallback(async (overrideText?: string, options?: { attach?: boolean }) => {
+    const sendMessage = useCallback(async (overrideText?: string, options?: SendOptions) => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
         // no optimistic user message, no input/attachment handling, and the
         // controller comes from api.attachToRun instead of api.sendMessageStream.
         const reattach = options?.attach === true;
+        const fromQueue = options?.queued === true;
         const text = (overrideText || input).trim();
-        const hasAttachments = attach.hasUploaded;
+        const hasAttachments = !fromQueue && attach.hasUploaded;
 
         // User just sent a message — re-pin scroll to the bottom so the
         // new message and streaming response are visible.
@@ -517,6 +576,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming) return;
+        } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current)) {
+            // Its own turn by default: a model handed a message mid-turn may finish without answering it.
+            setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
+            setInput('');
+            attach.clear();
+            inputRef.current?.focus();
+            return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
@@ -526,15 +592,27 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         // Build message text with attachment references
         let messageText = text;
+        let optimisticUser: Message | null = null;
         if (!reattach) {
-            messageText = attach.compose(text);
+            messageText = fromQueue ? text : attach.compose(text);
 
             log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
 
-            setInput('');
-            inputRef.current?.focus();
+            if (!fromQueue) {
+                setInput('');
+                inputRef.current?.focus();
+                attach.clear();
+            }
 
-            attach.clear();
+            // A new turn moves the chat on, so an open comparison keeps the original answer.
+            const open = comparisonRef.current;
+            if (open) {
+                if (open.state.status === 'ready') {
+                    api.chooseRetry(sessionId, open.messageId, 'original')
+                        .catch((err) => log.chat.error('Could not close the answer comparison', err));
+                }
+                setComparison(null);
+            }
 
             // Optimistic user message
             const userMsg: Message = {
@@ -546,6 +624,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 rag_sources: null,
             };
             addMessage(userMsg);
+            optimisticUser = userMsg;
         } else {
             log.chat.info(`Re-attaching to background run for session=${sessionId}`);
         }
@@ -672,6 +751,29 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Ignore events from a stream the user navigated away from so its
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
+                if (event.type === 'followup_taken' && event.text) {
+                    const takenText = event.text;
+                    setQueue((q) => messageQueue.taken(q, takenText));
+                    addMessage({
+                        id: Date.now(),
+                        session_id: sessionId,
+                        role: 'user',
+                        content: takenText,
+                        created_at: new Date().toISOString(),
+                        rag_sources: null,
+                    });
+                    return;
+                }
+                if (event.type === 'followup_returned') {
+                    const texts = event.texts ?? [];
+                    setQueue((q) => messageQueue.returned(q, texts));
+                    return;
+                }
+                if (event.type === 'context_usage') {
+                    setContextUsage(event as unknown as ContextUsage);
+                    setContextUnavailable(null);
+                    return;
+                }
                 // The agent emits nothing while it blocks on the user, so the next event ends the wait.
                 const waitsOnUser = event.type === 'permission_request' || event.type === 'needs_input';
                 if (useChatStore.getState().awaitingUser !== waitsOnUser) {
@@ -1000,7 +1102,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 setTimeout(() => {
                     api.getMessages(sessionId)
                         .then((data) => {
-                            if (isStale()) return;
+                            // A queued message may already be streaming; its own end refetches.
+                            if (isStale() || useChatStore.getState().isStreaming) return;
                             // The backend doesn't persist cards, so this replace
                             // would drop them — merge from the pre-refetch
                             // in-memory messages by id, else role+content.
@@ -1051,6 +1154,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // A real error event arriving on a backgrounded stream isn't
                 // the active view's concern, so don't surface it (#1580).
                 if (isStale()) return;
+
+                // The chat was still busy (a goal step, say): the queued message waits its turn again.
+                if (fromQueue && err instanceof api.ApiError && err.httpStatus === 409) {
+                    log.chat.info(`Queued message found session=${sessionId} busy; holding it`);
+                    if (optimisticUser) removeMessage(optimisticUser.id);
+                    setQueue((q) => [messageQueue.item(messageText, 'queued'), ...q]);
+                    setQueueHold(true);
+                    setTimeout(() => setQueueHold(false), QUEUE_BUSY_WAIT_MS);
+                    setStreaming(false);
+                    clearStreamContent();
+                    clearAgentSteps();
+                    clearCards();
+                    return;
+                }
 
                 log.chat.error(`Chat error for session=${sessionId}`, err);
 
@@ -1121,7 +1238,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             : api.sendMessageStream(sessionId, messageText, streamCallbacks);
 
         abortRef.current = controller;
-    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
+    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1235,6 +1352,117 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Re-send the same message text
         sendMessage(text);
     }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
+
+    // Between turns: send the next queued message, or after a Stop hand them all back to the composer.
+    const busy = isStreaming || comparing;
+    useEffect(() => {
+        if (busy) return;
+        if (userStoppedRef.current) {
+            userStoppedRef.current = false;
+            const texts = queue.map((m) => m.text);
+            if (texts.length) {
+                setQueue([]);
+                setInput((prev) => [prev.trim(), ...texts].filter(Boolean).join('\n\n'));
+            }
+            return;
+        }
+        const settled = messageQueue.settle(queue);
+        if (settled.some((m, i) => m !== queue[i])) {
+            setQueue(settled);
+            return;
+        }
+        const next = messageQueue.nextToSend(queue);
+        if (!next || queueHold || isLoadingMessages || retiredAgent || systemStatus?.init_state === 'initializing') return;
+        setQueue((q) => messageQueue.remove(q, next.id));
+        sendMessageRef.current(next.text, { queued: true });
+    }, [busy, queue, queueHold, isLoadingMessages, retiredAgent, systemStatus?.init_state]);
+
+    // The meter shows what the next message will carry, so re-measure after each reply.
+    const wasBusyRef = useRef(false);
+    useEffect(() => {
+        if (wasBusyRef.current && !busy) refreshContext();
+        wasBusyRef.current = busy;
+    }, [busy, refreshContext]);
+
+    // The user chose to fold a queued message into the running reply.
+    const handleSteer = useCallback((id: number) => {
+        const item = queue.find((m) => m.id === id && m.state === 'queued');
+        if (!item || !isStreaming) return;
+        setQueue((q) => messageQueue.promote(q, id, 'queued', 'sending'));
+        api.sendFollowUp(sessionId, item.text)
+            .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
+            .catch((err) => {
+                log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
+                setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
+            });
+    }, [queue, isStreaming, sessionId]);
+
+    const handleRetryWith = useCallback((message: Message, model: string) => {
+        if (isStreaming || comparingRef.current) return;
+        log.chat.info(`Retrying message ${message.id} with ${model}`);
+        setComparison({ messageId: message.id, state: { status: 'running', model }, keeping: null });
+        api.retryWith(sessionId, message.id, model)
+            .then((result) => {
+                if (isStale()) return;
+                setComparison((c) => (c && c.messageId === message.id
+                    ? { ...c, state: { status: 'ready', result } }
+                    : c));
+            })
+            .catch((err) => {
+                log.chat.error(`Retry with ${model} failed`, err);
+                if (isStale()) return;
+                setComparison((c) => (c && c.messageId === message.id
+                    ? { ...c, state: { status: 'failed', model, error: err instanceof Error ? err.message : String(err) } }
+                    : c));
+            });
+    }, [sessionId, isStreaming, isStale]);
+
+    const handleKeepAnswer = useCallback(async (which: 'original' | 'retry') => {
+        if (!comparison) return;
+        const { messageId } = comparison;
+        setComparison({ ...comparison, keeping: which });
+        try {
+            const kept = await api.chooseRetry(sessionId, messageId, which);
+            if (isStale()) return;
+            if (kept.kept === 'retry') {
+                const s = kept.stats;
+                setMessages(useChatStore.getState().messages.map((m) => (m.id === messageId
+                    ? {
+                        ...m,
+                        content: kept.content,
+                        stats: {
+                            tokens_per_second: s.tokens_per_second ?? 0,
+                            time_to_first_token: s.time_to_first_token ?? 0,
+                            input_tokens: s.input_tokens ?? 0,
+                            output_tokens: s.output_tokens ?? 0,
+                            model: s.model,
+                            retried: true,
+                            seconds: s.seconds,
+                        },
+                    }
+                    : m)));
+                refreshContext();
+            }
+            setComparison(null);
+        } catch (err) {
+            log.chat.error('Could not keep the chosen answer', err);
+            if (isStale()) return;
+            setComparison((c) => (c ? {
+                ...c,
+                keeping: null,
+                state: { status: 'failed', model: c.state.status === 'ready' ? c.state.result.model : c.state.model, error: err instanceof Error ? err.message : String(err) },
+            } : c));
+        }
+    }, [comparison, sessionId, setMessages, isStale, refreshContext]);
+
+    const handleCloseComparison = useCallback(() => {
+        // Closing a finished comparison keeps the original answer.
+        if (comparison?.state.status === 'ready') {
+            void handleKeepAnswer('original');
+            return;
+        }
+        setComparison(null);
+    }, [comparison, handleKeepAnswer]);
 
     // Retry the last question after a connector was connected (#2119). Resends
     // the last user message, which also drops the stale connector-error reply.
@@ -1509,16 +1737,37 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         const notice = msg.role === 'assistant'
                             ? msg.historyNotice ?? historyNotices.get(msg.id)
                             : undefined;
+                        const canRetry = !busy && !comparison && !retiredAgent && !streamEnding
+                            && msg.role === 'assistant' && idx === messages.length - 1
+                            && !msg.stopState && !isErrorContent(msg.content);
+                        const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
                             <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
                                 {notice && <HistoryNotice text={notice} />}
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                                    onDelete={!isStreaming ? handleDeleteMessage : undefined}
-                                    onResend={!isStreaming && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
-                                    latencyMs={latencyByMsgId.get(msg.id)}
+                                    onDelete={!busy ? handleDeleteMessage : undefined}
+                                    onResend={!busy && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
+                                    extraActions={canRetry ? (
+                                        <RetryWithMenu
+                                            answeredBy={msg.stats?.model ?? session?.effective_model}
+                                            onPick={(model) => handleRetryWith(msg, model)}
+                                        />
+                                    ) : undefined}
+                                    latencyMs={latency}
                                 />
+                                {comparison?.messageId === msg.id && (
+                                    <AnswerComparison
+                                        original={msg}
+                                        originalModel={msg.stats?.model ?? session?.effective_model}
+                                        originalLatencyMs={latency}
+                                        state={comparison.state}
+                                        keeping={comparison.keeping}
+                                        onKeep={(which) => { void handleKeepAnswer(which); }}
+                                        onClose={handleCloseComparison}
+                                    />
+                                )}
                             </div>
                         );
                     })}
@@ -1595,6 +1844,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}
                     <PermissionPrompt sessionId={sessionId} />
+                    <ContextWarning usage={contextUsage} />
+                    <QueuedMessages
+                        items={queue}
+                        onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
+                        onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                    />
                     <Composer
                         value={input}
                         onChange={setInput}
@@ -1602,12 +1857,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         onStop={handleStop}
                         streaming={isStreaming}
                         stopping={stopping}
+                        queueWhileStreaming
                         disabledReason={composerBlocked}
                         attachments={attach}
                         inputRef={inputRef}
-                        placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
+                        placeholder={isStreaming
+                            ? 'Queue your next message'
+                            : messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
-                        rightControls={<ModelChip disabled={isStreaming} />}
+                        rightControls={(
+                            <>
+                                <ContextMeter usage={contextUsage} unavailable={contextUnavailable} />
+                                <ModelChip disabled={busy} />
+                            </>
+                        )}
                     />
                 </div>
             </div>

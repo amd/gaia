@@ -243,6 +243,48 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
+    /** Set when the answer came from Retry with…: the model that wrote it. */
+    model?: string | null;
+    /** Set with `model`: how long that model took, loading included. */
+    seconds?: number | null;
+    /** True only for an answer kept from Retry with…. */
+    retried?: boolean | null;
+}
+
+/** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
+export interface ContextUsage {
+    window: number;
+    reply_reserve: number;
+    system: number;
+    tools: number;
+    documents: number;
+    history: number;
+    query: number;
+    used: number;
+    history_budget: number;
+    history_used: number;
+    turns_in_view: number;
+    turns_hidden: number;
+    /** Oldest turns the next overflow drops, by their question. */
+    at_risk: string[];
+    at_risk_tokens: number;
+}
+
+/** A retried answer from another model, held until one is kept. */
+export interface RetryResult {
+    message_id: number;
+    model: string;
+    content: string;
+    stats: {
+        model: string;
+        retried: true;
+        seconds: number;
+        load_seconds: number;
+        input_tokens: number;
+        output_tokens: number;
+        tokens_per_second: number;
+        time_to_first_token: number;
+    };
 }
 
 export interface Message {
@@ -631,7 +673,10 @@ export type StreamEventType =
     | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
-    | 'agent_created'; // New agent created — triggers agent list refresh
+    | 'agent_created' // New agent created — triggers agent list refresh
+    | 'followup_taken'    // The running turn took a message sent mid-turn
+    | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -639,6 +684,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `followup_taken`: the message the running turn took. */
+    text?: string;
+    /** On `followup_returned`: messages the turn ended without taking. */
+    texts?: string[];
     // Agent-specific fields
     status?: string;
     message?: string;
