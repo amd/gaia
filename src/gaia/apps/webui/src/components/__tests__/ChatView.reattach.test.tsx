@@ -45,6 +45,9 @@ beforeEach(() => {
     });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'a', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+    // ChatView reads context usage once #5241 lands; absent from api.ts before that.
+    (mockedApi as unknown as Record<string, ReturnType<typeof vi.fn> | undefined>).getContextUsage
+        ?.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.attachToRun.mockImplementation((sid, cbs) => {
         (attaches[sid] ??= []).push(cbs as api.StreamCallbacks);
         if (sid === 'a') queueMicrotask(() => (cbs as api.StreamCallbacks).onAgentEvent(PROMPT));
