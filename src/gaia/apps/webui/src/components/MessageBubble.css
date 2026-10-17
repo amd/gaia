@@ -7,7 +7,7 @@
     position: relative;
     width: 100%;
     padding: 10px 0;
-    animation: msgFadeIn 240ms var(--ease) both;
+    animation: msgFadeIn var(--duration) var(--ease) both;
 }
 
 @keyframes msgFadeIn {
@@ -250,7 +250,7 @@
     color: var(--accent);
     text-decoration: none;
     border-bottom: 1px solid transparent;
-    transition: border-color 200ms var(--ease);
+    transition: border-color var(--duration) var(--ease);
 }
 .md-link:hover {
     border-bottom-color: var(--accent);
@@ -523,7 +523,7 @@
     /* Pixelated terminal aesthetic - sharp edges */
     border-radius: 0;
     image-rendering: pixelated;
-    animation: cursorBlink 600ms steps(2, start) infinite;
+    animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */
@@ -576,7 +576,7 @@
     color: var(--text-muted);
     font-family: var(--font-mono);
     opacity: 0;
-    transition: opacity 180ms var(--ease);
+    transition: opacity var(--duration-fast) var(--ease);
     pointer-events: none;
     user-select: none;
 }
