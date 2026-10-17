@@ -11,7 +11,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { displayModelName } from '../stores/modelStore';
+import { displayModelName, useModelNames } from '../stores/modelStore';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
@@ -67,6 +67,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const attachments = useAttachments();
     const warming = useWarmUp();
+    useModelNames();
 
     const live = useRef(true);
     const loadStart = useCallback(() => {

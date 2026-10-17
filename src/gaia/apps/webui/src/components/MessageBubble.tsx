@@ -12,7 +12,7 @@ import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats } from './AnswerStats';
-import { displayModelName, useInferencePlace } from '../stores/modelStore';
+import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
@@ -415,6 +415,7 @@ function formatFullTimestamp(iso: string): string {
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    useModelNames();
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)

@@ -15,7 +15,7 @@ import {
     Globe, Monitor,
 } from 'lucide-react';
 import * as api from '../services/api';
-import { displayModelName } from '../stores/modelStore';
+import { displayModelName, useModelNames } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import { safeUrlTransform } from '../utils/markdown';
 import type { Message, TurnSummary } from '../types';
@@ -275,6 +275,7 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
 }
 
 function ThisTurnSection({ summary }: { summary: TurnSummary }) {
+    useModelNames();
     const { model } = summary;
     const sites = summary.sites ?? [];
     const usedDocs = (summary.documents ?? []).length > 0;

@@ -3,7 +3,7 @@
 
 import { Loader2, X } from 'lucide-react';
 import { RenderedContent } from './MessageBubble';
-import { displayModelName } from '../stores/modelStore';
+import { displayModelName, useModelNames } from '../stores/modelStore';
 import type { Message, RetryResult } from '../types';
 import './AnswerComparison.css';
 
@@ -34,6 +34,7 @@ function Meta({ parts }: { parts: (string | null | undefined)[] }) {
 
 /** The original answer and another model's, side by side; keeping one continues the chat from it. */
 export function AnswerComparison({ original, originalModel, originalLatencyMs, state, keeping, onKeep, onClose }: AnswerComparisonProps) {
+    useModelNames();
     const retryModel = state.status === 'ready' ? state.result.model : state.model;
     const tps = original.stats?.tokens_per_second;
     return (

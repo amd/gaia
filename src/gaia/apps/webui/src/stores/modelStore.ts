@@ -117,6 +117,11 @@ useChatStore.subscribe((state, prev) => {
     }
 });
 
+/** Re-render when friendly names arrive; pair with displayModelName in render. */
+export function useModelNames(): Record<string, string> {
+    return useModelStore((s) => s.names);
+}
+
 /** The friendly name the backend gave a model, else its short id. */
 export function displayModelName(model: string): string {
     const state = useModelStore.getState();
