@@ -176,7 +176,7 @@ function ChatTotals({ totals }: { totals: ChatPerformance['totals'] }) {
     );
 }
 
-/** What is live in the window, and what GAIA put away or summarized to keep going. */
+/** What is live in the window, and what the agent reports it moved out (summaries only once that exists). */
 function BeyondTheWindow({ usage }: { usage: ContextUsage }) {
     const away = usage.context_state?.put_away;
     const folded = usage.context_state?.summarized;
@@ -204,7 +204,9 @@ function BeyondTheWindow({ usage }: { usage: ContextUsage }) {
             )}
             {usage.at_risk.length > 0 && (
                 <p className="cp-warning" role="status">
-                    The window is filling up. GAIA will summarize older messages to keep going.
+                    The window is filling up. Older tool results move out of the prompt and stay
+                    readable, and the oldest turns may drop out of the model's view. They stay saved,
+                    and you can ask GAIA to recall them.
                 </p>
             )}
         </div>

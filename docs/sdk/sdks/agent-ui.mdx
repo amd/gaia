@@ -882,7 +882,8 @@ class AttachDocumentRequest(BaseModel):
     the agent moved out of the window, from its optional `context_state()`
     method: `put_away` (`results`, `tokens`: tool results swapped for a re-read
     handle) and `summarized` (`turns`, `tokens`, `summary_tokens`: older turns
-    folded into a rolling summary). It is `null` when the agent doesn't report
+    folded into a rolling summary). No agent folds turns yet, so `summarized`
+    is `null` today. `context_state` is `null` when the agent doesn't report
     one; a malformed report is a 500, never a guess.
 
     Counts come from the loaded model's own tokenizer (Lemonade's `/tokenize`)

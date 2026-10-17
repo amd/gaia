@@ -94,7 +94,7 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                         {usage.turns_in_view} earlier {usage.turns_in_view === 1 ? 'turn is' : 'turns are'} in view
                         {usage.turns_hidden > 0 && `; ${usage.turns_hidden} older ${usage.turns_hidden === 1 ? 'is' : 'are'} out of view`}.
                         {' '}{usage.tokenizer?.exact ? "Counted with the model's tokenizer." : 'Estimates.'}
-                        {' '}Older turns stay saved and searchable.
+                        {' '}Older turns stay saved and can be recalled.
                     </p>
                     {sessionId && (
                         <button
@@ -120,12 +120,12 @@ export function ContextWarning({ usage }: { usage: ContextUsage | null }) {
         <div className="context-warning" role="status">
             <AlertTriangle size={13} aria-hidden="true" />
             <span>
-                The conversation is filling the model's context. GAIA will summarize older messages
-                to keep going, starting with the oldest {n === 1 ? 'turn' : `${n} turns`}:{' '}
+                The conversation is filling the model's context. The oldest
+                {n === 1 ? ' turn' : ` ${n} turns`} may drop out of the model's view next:{' '}
                 {usage.at_risk.map((q, i) => (
                     <span key={i}>{i > 0 && ', '}<q>{q}</q></span>
                 ))}
-                . The originals stay saved and searchable.
+                . They stay saved, and you can ask GAIA to recall them.
             </span>
         </div>
     );

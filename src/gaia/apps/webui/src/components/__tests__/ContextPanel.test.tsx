@@ -203,16 +203,19 @@ describe('ContextPanel', () => {
         expect(screen.getByText('Put away').nextSibling).toHaveTextContent('3 results · 9.0K');
         expect(screen.getByText('Summarized').nextSibling).toHaveTextContent('4 earlier turns · 12K → 800');
         expect(screen.getByText('Earlier messages summarized — still searchable.')).toBeInTheDocument();
-        expect(screen.getByRole('status')).toHaveTextContent('GAIA will summarize older messages to keep going');
+        expect(screen.getByRole('status')).toHaveTextContent('Older tool results move out of the prompt and stay readable');
+        expect(screen.getByRole('status')).not.toHaveTextContent(/summariz/i);
         expect(screen.queryByText(/new chat/i)).toBeNull();
     });
 
-    it('claims nothing about put-away context when the agent reports none', async () => {
+    it('claims nothing about put-away or summarized context when the agent reports none', async () => {
+        mockedApi.getContextUsage.mockResolvedValue({ available: true, ...usage({ at_risk: ['first question'] }) });
         render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
         expect(await screen.findByText('Live in the window')).toBeInTheDocument();
         expect(screen.queryByText('Put away')).toBeNull();
         expect(screen.queryByText('Summarized')).toBeNull();
         expect(screen.queryByText(/still searchable/)).toBeNull();
+        expect(screen.getByRole('status')).not.toHaveTextContent(/summariz/i);
     });
 
     it('says the last turn is unknown when the newest answer has no record', async () => {
