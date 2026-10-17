@@ -114,13 +114,17 @@ def exhaustive_request(text):
     return False
 
 
-def read_snapshot(path, validator, limit=None):
-    """Read once through the existing file permission boundary, with a hard cap."""
+def read_snapshot(path, validator, limit=None, *, prompt_user=False):
+    """Read once through the existing file permission boundary, with a hard cap.
+
+    ``prompt_user`` asks for an out-of-scope source the way ``read_file`` does;
+    re-reads of an already-approved file leave it off.
+    """
     limit = MAX_CHARS if limit is None else limit
     if validator is None:
         raise ValueError("File permission validator is unavailable")
     real = os.path.realpath(os.path.expanduser(path))
-    allowed, reason = validator.validate_read(real, prompt_user=False)
+    allowed, reason = validator.validate_read(real, prompt_user=prompt_user)
     if not allowed:
         raise ValueError(reason)
     descriptor = os.open(real, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))

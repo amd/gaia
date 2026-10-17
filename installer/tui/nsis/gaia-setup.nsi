@@ -90,6 +90,8 @@ Unicode true
 !define PRODUCT_NAME      "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
+!define DOCS_URL          "https://amd-gaia.ai/docs"
+!define INSTALL_DOCS_URL  "https://amd-gaia.ai/docs/guides/install"
 !define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
@@ -174,12 +176,16 @@ Var Failed
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
-; Launched through a function so the Finish page opens GAIA the way the shortcuts do.
+; One checkbox per installed app; FinishShow hides the ones that weren't installed.
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_FUNCTION LaunchGaia
-!define MUI_FINISHPAGE_RUN_TEXT "Start ${SETUP_NAME}"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchDesktopApp
+!define MUI_FINISHPAGE_RUN_TEXT "Open GAIA Agent UI"
+; MUI2 has one run checkbox; the readme checkbox is the standard second one.
+!define MUI_FINISHPAGE_SHOWREADME ""
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION LaunchTerminal
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open GAIA Terminal UI"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
-!define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_URL}"
+!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"
 
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD_DIR}\LICENSE.md"
 
@@ -193,6 +199,7 @@ Var Failed
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-tui) in the following folder. The desktop app installs to its own folder."
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -407,7 +414,7 @@ Section "-Lemonade" SecLemonade
     DetailPrint "Lemonade Server install FAILED with exit code $0."
     ; /SD IDOK or a silent install blocks here forever on an invisible dialog.
     MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${PRODUCT_URL}" \
+      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${INSTALL_DOCS_URL}" \
       /SD IDOK
   ${EndIf}
   ; Not back to $INSTDIR: SetOutPath creates the folder, and a desktop-app-only
@@ -634,13 +641,28 @@ Function FindWindowsTerminal
   SearchPath $R0 "wt.exe"
 FunctionEnd
 
-; The desktop app when it was installed, otherwise the terminal the way its
-; shortcuts open it.
-Function LaunchGaia
+Function LaunchDesktopApp
   ${If} $UiDir != ""
     Exec '"$UiDir\${UI_EXE}"'
-  ${ElseIf} $LaunchExe != ""
+  ${EndIf}
+FunctionEnd
+
+; The way the terminal's shortcuts open it.
+Function LaunchTerminal
+  ${If} $LaunchExe != ""
     Exec '"$LaunchExe" $LaunchArgs'
+  ${EndIf}
+FunctionEnd
+
+; Unchecked as well as hidden: MUI reads the check state, not the visibility.
+Function FinishShow
+  ${If} $UiDir == ""
+    SendMessage $mui.FinishPage.Run ${BM_SETCHECK} ${BST_UNCHECKED} 0
+    ShowWindow $mui.FinishPage.Run ${SW_HIDE}
+  ${EndIf}
+  ${If} $LaunchExe == ""
+    SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0
+    ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
   ${EndIf}
 FunctionEnd
 
