@@ -13,6 +13,7 @@ import {
 } from '../AgentActivity';
 import type { AgentStep } from '../../types';
 import activityCss from '../AgentActivity.css?raw';
+import tokensCss from '../../styles/index.css?raw';
 
 vi.mock('../../services/api');
 
@@ -242,4 +243,81 @@ it('keeps every font size in the activity view at 12px or more', () => {
 
     expect(sizes.length).toBeGreaterThan(0);
     expect(sizes.filter((px) => px < 12)).toEqual([]);
+});
+
+describe('reasoning', () => {
+    const thought = (active: boolean): AgentStep => ({
+        id: 1, type: 'thinking', label: 'Thinking', active, timestamp: Date.now(),
+        detail: 'Consult the rules, then search the web for the forecast.',
+    });
+
+    it('is folded away once the turn is over', () => {
+        const { container } = render(<AgentActivity steps={[thought(false), call(2, 'Reading file: a.txt')]} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        const toggle = screen.getByRole('button', { name: /Reasoning/ });
+
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(container.querySelector('.flow-thought-hacker')).toBeNull();
+
+        fireEvent.click(toggle);
+        expect(container.querySelector('.flow-thought-hacker')).toHaveTextContent('Consult the rules');
+    });
+
+    it('streams in view while the model is thinking, then folds when the turn ends', () => {
+        const { container, rerender } = render(<AgentActivity steps={[thought(true)]} isActive={true} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        expect(container.querySelector('.flow-thought-hacker')).not.toBeNull();
+
+        rerender(<AgentActivity steps={[thought(false)]} isActive={false} />);
+        expect(container.querySelector('.flow-thought-hacker')).toBeNull();
+    });
+
+    it('meets WCAG AA contrast in the light and dark themes', () => {
+        const [light, dark] = tokensCss.split('[data-theme="dark"] {');
+        const token = (block: string, name: string) => {
+            const m = new RegExp(`${name}:\\s*#([0-9a-fA-F]{6})`).exec(block);
+            if (!m) throw new Error(`${name} not found`);
+            return [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+        };
+        const lum = (rgb: number[]) => {
+            const [r, g, b] = rgb.map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const ratio = (a: number[], b: number[]) => {
+            const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+        };
+        // The reasoning body and toggle are drawn in these tokens (asserted below).
+        expect(activityCss).toMatch(/\.flow-thought-hacker \{[^}]*color: var\(--text-secondary\)[^}]*background: var\(--bg-recessed\)/);
+        for (const block of [light, dark]) {
+            expect(ratio(token(block, '--text-secondary'), token(block, '--bg-recessed'))).toBeGreaterThanOrEqual(4.5);
+            // The toggle's word count sits on the panel background.
+            expect(ratio(token(block, '--text-muted'), token(block, '--bg-secondary'))).toBeGreaterThanOrEqual(4.5);
+        }
+    });
+});
+
+describe('expanded view order', () => {
+    it('drops progress notes from a finished turn', () => {
+        const status: AgentStep = { id: 1, type: 'status', label: 'Sending to model...', active: false, timestamp: 1 };
+        render(<AgentActivity steps={[status, call(2, 'Reading file: a.txt')]} isActive={false} />);
+
+        expect(screen.queryByText('Sending to model...')).toBeNull();
+    });
+
+    it('leads with the steps and puts the filter after them, only for busy turns', () => {
+        const few = [1, 2, 3].map((i) => call(i, `Reading file: ${i}.txt`));
+        const { container, unmount } = render(<AgentActivity steps={few} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        expect(screen.queryByLabelText('Filter by tool name')).toBeNull();
+        unmount();
+
+        const many = [1, 2, 3, 4, 5, 6].map((i) => call(i, `Reading file: ${i}.txt`));
+        const view = render(<AgentActivity steps={many} isActive={false} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+        const wrap = view.container.querySelector('.agent-flow-wrap')!;
+        expect(wrap.firstElementChild).toHaveClass('agent-flow');
+        expect(wrap.lastElementChild).toHaveClass('activity-filter-bar');
+        void container;
+    });
 });

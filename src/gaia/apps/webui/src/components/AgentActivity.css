@@ -149,8 +149,8 @@
     gap: 6px;
     padding: 3px 0;
     font-size: 12px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
     line-height: 1.5;
     animation: thoughtSlideIn 250ms var(--ease);
 }
@@ -171,14 +171,34 @@
 
 /* @keyframes fadeIn defined in global index.css */
 
-/* ── Flow: Hacker-style thinking text ────────────────────────── */
+/* ── Flow: Reasoning, folded behind a one-line toggle ───────────── */
+.flow-reasoning-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 3px 0;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+    text-align: left;
+    cursor: pointer;
+}
+.flow-reasoning-toggle:hover {
+    color: var(--text-primary);
+}
+.flow-reasoning-count {
+    color: var(--text-muted);
+}
+
 .flow-thought-hacker {
     max-height: 200px;
     overflow-y: auto;
+    margin-top: 4px;
     padding: 6px 8px;
-    font-size: 12px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
     line-height: 1.6;
     word-break: break-word;
     white-space: pre-wrap;
@@ -352,8 +372,7 @@
 .activity-filter-bar {
     display: flex;
     gap: 6px;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border-light);
+    padding: 6px 0 0;
 }
 
 .activity-filter-input {

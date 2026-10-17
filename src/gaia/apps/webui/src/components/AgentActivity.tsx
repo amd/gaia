@@ -120,6 +120,9 @@ export function toolRowText(step: AgentStep): string {
 
 const COMPACT_DETAIL_CHARS = 48;
 
+/** Below this many call rows the list is short enough to scan without a filter. */
+const FILTER_MIN_TOOL_ROWS = 6;
+
 /**
  * Shorten the detail of "Reading file: <long path>" to the part that differs
  * between similar rows (a path's tail, a URL's host and page) instead of
@@ -433,36 +436,14 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
             {displaySteps.length > 0 && (
                 // Inert while collapsed: invisible buttons must not be tabbable or announced.
                 <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`} inert={!expanded}>
-                    {/* Filter bar — shown when expanded and 2+ tool steps */}
-                    {expanded && toolSteps.length >= 2 && (
-                        <div className="activity-filter-bar">
-                            <input
-                                type="text"
-                                className="activity-filter-input"
-                                placeholder="Filter by tool name..."
-                                aria-label="Filter by tool name"
-                                value={toolNameFilter}
-                                onChange={(e) => setToolNameFilter(e.target.value)}
-                            />
-                            <select
-                                className="activity-filter-select"
-                                aria-label="Filter by status"
-                                value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
-                            >
-                                <option value="all">All</option>
-                                <option value="success">Success</option>
-                                <option value="error">Error</option>
-                            </select>
-                        </div>
-                    )}
                     <div className="agent-flow">
                         {filteredSteps.map((step) => {
                             if (step.type === 'thinking') {
-                                return <FlowThought key={step.id} step={step} />;
+                                return <FlowThought key={step.id} step={step} live={isActive && !!step.active} />;
                             }
                             if (step.type === 'status') {
-                                return <FlowStatus key={step.id} step={step} />;
+                                // Progress notes ("Sending to model…") mean nothing once the turn is over.
+                                return isActive ? <FlowStatus key={step.id} step={step} /> : null;
                             }
                             if (step.type === 'tool') {
                                 return (
@@ -488,31 +469,75 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                             return null;
                         })}
                     </div>
+                    {/* Filter bar: after the steps, and only once there are enough calls to sift */}
+                    {expanded && toolSteps.length >= FILTER_MIN_TOOL_ROWS && (
+                        <div className="activity-filter-bar">
+                            <input
+                                type="text"
+                                className="activity-filter-input"
+                                placeholder="Filter steps…"
+                                aria-label="Filter by tool name"
+                                value={toolNameFilter}
+                                onChange={(e) => setToolNameFilter(e.target.value)}
+                            />
+                            <select
+                                className="activity-filter-select"
+                                aria-label="Filter by status"
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
+                            >
+                                <option value="all">All</option>
+                                <option value="success">Success</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
     );
 }
 
-// ── Flow: Thinking text (hacker-style with red cursor) ────────────────────
+// ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
 
-function FlowThought({ step }: { step: AgentStep }) {
+function FlowThought({ step, live }: { step: AgentStep; live: boolean }) {
     const text = step.detail || step.label || '';
+    const [open, setOpen] = useState(live);
     const containerRef = useRef<HTMLDivElement>(null);
+
+    // Fold the reasoning away once the agent moves on or the answer arrives.
+    useEffect(() => {
+        if (!live) setOpen(false);
+    }, [live]);
 
     // Auto-scroll to keep cursor visible as text streams in
     useEffect(() => {
-        if (step.active && containerRef.current) {
+        if (live && open && containerRef.current) {
             containerRef.current.scrollTop = containerRef.current.scrollHeight;
         }
-    }, [text, step.active]);
+    }, [text, live, open]);
 
     if (!text) return null;
+    const words = text.trim().split(/\s+/).length;
 
     return (
-        <div ref={containerRef} className="flow-thought-hacker">
-            <span>{text}</span>
-            {step.active && <span className="flow-thought-cursor" />}
+        <div className="flow-reasoning">
+            <button
+                className="flow-reasoning-toggle"
+                onClick={() => setOpen((o) => !o)}
+                aria-expanded={open}
+            >
+                <Brain size={13} className="flow-tool-icon" />
+                <span>{live ? 'Thinking' : 'Reasoning'}</span>
+                <span className="flow-reasoning-count">{words} word{words !== 1 ? 's' : ''}</span>
+                {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+            {open && (
+                <div ref={containerRef} className="flow-thought-hacker">
+                    <span>{text}</span>
+                    {live && <span className="flow-thought-cursor" />}
+                </div>
+            )}
         </div>
     );
 }
