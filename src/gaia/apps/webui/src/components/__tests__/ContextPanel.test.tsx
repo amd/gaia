@@ -335,4 +335,14 @@ describe('ContextMeter entry point', () => {
         expect(await screen.findByRole('dialog', { name: 'Context and performance' })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getChatPerformance).toHaveBeenCalledTimes(1));
     });
+
+    it('hands Details to the session panel when the chat has one, opening no sheet', () => {
+        const onDetails = vi.fn();
+        render(<ContextMeter usage={usage()} sessionId="s1" onDetails={onDetails} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Context \d+% full/ }));
+        fireEvent.click(screen.getByRole('button', { name: /Details: context & performance/ }));
+        expect(onDetails).toHaveBeenCalledTimes(1);
+        expect(screen.queryByRole('dialog', { name: 'Context and performance' })).not.toBeInTheDocument();
+        expect(mockedApi.getChatPerformance).not.toHaveBeenCalled();
+    });
 });

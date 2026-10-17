@@ -80,7 +80,8 @@ before they drop out of the model's view. They stay saved, and you can ask GAIA
 to recall them.
 
 For more, choose **Details: context & performance** in the meter's breakdown.
-The panel shows what fills the window (system prompt, tool definitions,
+It opens the **Context & performance** section of the [session panel](#the-session-panel),
+which shows what fills the window (system prompt, tool definitions,
 skills, memory, documents, messages and free space), counted with the
 model's own tokenizer when it is loaded and marked **approx.** when not. Tools
 that load only when a turn needs them are listed apart. Below that, the panel
@@ -313,30 +314,12 @@ and where that model runs.
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
-- **The side rail** beside the latest answer shows what that turn used and
-  where its data went:
-  - **Sources:** the web pages it read and the document passages it drew on,
-    named by file and page.
-  - **Files:** what it created or changed, with **Open** and **Show in
-    folder**. Scripts, programs and web pages offer only Show in folder,
-    because opening them would run code. A file deleted since the turn shows
-    as no longer on disk, and one changed since then says so.
-  - **This turn:** where the model ran (**This PC**, or the cloud provider
-    such as Fireworks AI or the AMD LLM Gateway), whether your documents
-    stayed here, which websites GAIA's web tools contacted, and the cost (a
-    list-price estimate for Fireworks models).
-
-  While a new turn runs, the rail says the answer is in progress rather than
-  showing the previous one. When every web lookup in a turn failed, the rail
-  says **Couldn't get live data**, so you know the answer isn't based on
-  current information. The rail
-  appears once a turn has a summary; hide it with the button in its corner. On
-  windows narrower than about 1,100 px it folds into a **Sources & details**
-  button that opens it on top of the chat.
 - **A new chat** greets you, shows the folder GAIA works in, and offers up to
   four tasks from the skills you have and what you've set up (indexed
   documents, a connected mail account). A task with a subject to fill in is
   typed into the message box; the others start straight away.
+- **The session panel** on the right keeps the facts about this chat in view;
+  see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
   the model is loading and reading GAIA's instructions ahead of your first
   message, so that message gets a quick answer. You can type and send
@@ -506,6 +489,84 @@ too, from agent contract 2.14. It stops asking, but its shell guardrails stay
 on. If the mode can't be passed on when a turn starts, that turn stops with an
 error, so it never runs with full access you turned off.
 
+## The session panel
+
+Each chat has a panel on the right that keeps the important facts in view:
+what the latest answer used, where the chat runs and what it may touch, what
+fills the context, what the chat produced, and what it changed. Show or hide it
+with the panel button at the right of the chat's title bar. Drag its left edge
+to resize it (or focus the edge and use the arrow keys); the width, whether it
+is open, and which sections are expanded are remembered. On windows narrower
+than about 1,100 px it opens on top of the chat instead, and Escape closes it.
+
+The panel reads when it opens, when you expand a section, and when an answer
+finishes. It never checks on a timer, and a closed panel or a collapsed section
+reads nothing.
+
+- **This answer** shows what the latest turn used and where its data went:
+  - **Sources:** the web pages it read and the document passages it drew on,
+    named by file and page.
+  - **Files:** what it created or changed, with **Open** and **Show in
+    folder**. Scripts, programs and web pages offer only Show in folder,
+    because opening them would run code. A file deleted since the turn shows
+    as no longer on disk, and one changed since then says so.
+  - **This turn:** where the model ran (**This PC**, or the cloud provider
+    such as Fireworks AI or the AMD LLM Gateway), whether your documents
+    stayed here, which websites GAIA's web tools contacted, and the cost (a
+    list-price estimate for Fireworks models).
+
+  While a new turn runs, it says the answer is in progress rather than showing
+  the previous one. When every web lookup in a turn failed, it says **Couldn't
+  get live data**, so you know the answer isn't based on current information;
+  with the panel closed, its button turns amber.
+- **Environment** shows where the chat runs and what it may touch. Each change
+  applies from GAIA's next step, without a restart:
+  - **Runs on:** this PC with its device and backend (for example
+    `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
+  - **Can read and write:** the folders and files GAIA may use in this chat,
+    and where each came from. **Add folder** gives it another folder;
+    **Remove** takes one away. A removed folder is refused by every file and
+    shell tool, even under full access and even inside a wider folder, until
+    you add it back. A document attached to the chat is removed from the
+    document bar instead, which also takes it out of the chat's search.
+  - **Internet:** turn it off and GAIA won't search the web, open pages,
+    use the browser or connectors, or run commands that go online (such as
+    `git push`, `pip install` or `npx`). Pages served from this PC, such as
+    `http://localhost:3000`, stay reachable. The message box says the chat is
+    offline, with a button to turn it back on.
+  - **Phone access:** turns mobile access on or off, shows the QR code, and
+    names the phone that connected.
+  - **Permission mode:** Ask or Full access, the same setting as the shield in
+    the message box.
+
+  An agent that runs as its own process, such as the email agent, isn't held
+  to the folder and internet settings, and the section says so instead of
+  offering them.
+- **Context & performance** is the breakdown described in
+  [See how full the context is](#see-how-full-the-context-is).
+- **Outputs** lists everything the chat produced, newest first: files created
+  or changed, exports (PDF, Word, Excel, CSV and similar), images, documents
+  indexed, scheduled tasks and memories saved. Each shows when it was made and
+  **Go to turn** scrolls to the answer that made it. Files have **Open** and
+  **Show in folder**, with the same rule as above for scripts and web pages.
+  Items an undo removed show as **Undone**.
+- **Changes** appears once the chat has changed files. It totals them, such as
+  "4 files changed, +120 −8", and lists each file with the turns that touched
+  it.
+  - **Review changes** shows each file as one diff, from before the chat's
+    first turn to after its last.
+  - **Undo all** puts every file the chat changed back as it was before the
+    chat, after you confirm. Like undoing one turn, it is all or nothing: if a
+    file changed outside GAIA since, it names the file and changes nothing
+    until you choose to undo anyway.
+  - When the files are in a git repository, **Commit** and **Create PR** open
+    a message drafted from your requests in this chat, which you can edit.
+    Nothing runs until you press the button in that dialog, whatever the
+    permission mode. Commit includes only the files this chat changed.
+    Create PR pushes the current branch (never forced) and opens the pull
+    request with GitHub's `gh` tool; it isn't offered from the default branch
+    or while the chat's internet is off.
+
 ## Undo a turn
 
 Before GAIA changes a file, it saves a copy. When a turn changed files, its
@@ -518,7 +579,8 @@ answer shows **Review changes** and **Undo this turn**:
 
 Undo is all or nothing. If you, or a later turn, changed one of those files
 since, GAIA names it and changes nothing; you can then undo anyway and lose
-that later change. Undo the later turn first to keep it.
+that later change. Undo the later turn first to keep it. To undo every turn at once, use
+**Undo all** in the session panel's Changes section.
 
 GAIA can't copy what a shell command, a Python snippet or a connected (MCP)
 tool is about to change. When a turn ran one that could have changed files,

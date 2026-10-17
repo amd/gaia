@@ -21,6 +21,7 @@ import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
+import { announceMobileAccess, useMobileAccessRequests } from './utils/mobileAccessEvents';
 import { getSessionHash } from './utils/format';
 import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
@@ -442,6 +443,10 @@ function App() {
             setTunnelError(err instanceof Error ? err.message : 'Could not stop mobile access');
         }
     }, []);
+
+    // The session panel's Phone access toggle drives the same flow.
+    useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
+    useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
 
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
 
