@@ -600,6 +600,18 @@ class TurnSummaryFile(BaseModel):
     mtime: Optional[float] = None
 
 
+class TurnSummaryOutput(BaseModel):
+    """Something the turn made besides a file: an image, an indexed document,
+    a memory or a scheduled task."""
+
+    kind: str  # image | document | memory | schedule
+    name: str
+    path: Optional[str] = None
+    detail: Optional[str] = None
+    # The memory's id, so the panel can tell whether it was forgotten since.
+    ref: Optional[str] = None
+
+
 class TurnSummaryModel(BaseModel):
     """Where the turn's model ran."""
 
@@ -630,6 +642,7 @@ class TurnSummaryResponse(BaseModel):
     documents: List[TurnSummaryDocument] = Field(default_factory=list)
     files: List[TurnSummaryFile] = Field(default_factory=list)
     sites: List[str] = Field(default_factory=list)
+    outputs: List[TurnSummaryOutput] = Field(default_factory=list)
     live_data: TurnSummaryLiveData = Field(default_factory=TurnSummaryLiveData)
     cost: TurnSummaryCost
     # Absent when the turn's model location could not be determined.

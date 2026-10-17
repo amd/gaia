@@ -113,6 +113,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     mail_provider TEXT
 );
 
+-- What one chat may reach, set from the session panel (#5276).
+-- folders: added by the user; withheld: removed, refused even under a wider grant.
+CREATE TABLE IF NOT EXISTS session_environment (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    folders TEXT NOT NULL DEFAULT '[]',
+    withheld TEXT NOT NULL DEFAULT '[]',
+    internet_off INTEGER NOT NULL DEFAULT 0
+);
+
 -- Many-to-many: which docs are attached to which session
 CREATE TABLE IF NOT EXISTS session_documents (
     session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
@@ -819,6 +828,38 @@ class ChatDatabase:
 
         return messages
 
+    def get_turn_summaries(self, session_id: str) -> List[Dict[str, Any]]:
+        """Every answer's id, time and turn summary, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, turn_summary FROM messages "
+                "WHERE session_id = ? AND role = 'assistant' "
+                "AND turn_summary IS NOT NULL ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                summary = json.loads(row["turn_summary"])
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Message {row['id']} in chat {session_id} has an unreadable "
+                    f"turn summary ({e})."
+                ) from e
+            out.append(
+                {"id": row["id"], "created_at": row["created_at"], "summary": summary}
+            )
+        return out
+
+    def get_message_times(self, session_id: str) -> Dict[int, str]:
+        """Message id -> when it was written, for every message in the chat."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        return {row["id"]: row["created_at"] for row in rows}
+
     def get_context_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Read model history separately from paginated UI activity metadata."""
         with self._lock:
@@ -1149,6 +1190,55 @@ class ChatDatabase:
             )
             detached = cursor.rowcount > 0
         return detached
+
+    def get_session_environment(self, session_id: str) -> Dict[str, Any]:
+        """The chat's added and removed folders and its internet switch."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT folders, withheld, internet_off FROM session_environment "
+                "WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return {"folders": [], "withheld": [], "internet_off": False}
+        try:
+            folders, withheld = json.loads(row["folders"]), json.loads(row["withheld"])
+        except ValueError as e:
+            raise RuntimeError(
+                f"The saved folders for chat {session_id} are unreadable ({e}). "
+                "Remove and re-add them in the session panel."
+            ) from e
+        return {
+            "folders": folders,
+            "withheld": withheld,
+            "internet_off": bool(row["internet_off"]),
+        }
+
+    def set_session_environment(
+        self,
+        session_id: str,
+        *,
+        folders: List[str],
+        withheld: List[str],
+        internet_off: bool,
+    ) -> None:
+        """Replace the chat's environment settings."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO session_environment
+                       (session_id, folders, withheld, internet_off)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                       folders = excluded.folders,
+                       withheld = excluded.withheld,
+                       internet_off = excluded.internet_off""",
+                (
+                    session_id,
+                    json.dumps(folders),
+                    json.dumps(withheld),
+                    1 if internet_off else 0,
+                ),
+            )
 
     def get_session_documents(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all documents attached to a session."""

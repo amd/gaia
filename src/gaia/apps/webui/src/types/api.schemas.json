@@ -765,6 +765,30 @@
     "title": "CommandOutputResponse",
     "type": "object"
   },
+  "CommitRequest": {
+    "properties": {
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the commit.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "message"
+    ],
+    "title": "CommitRequest",
+    "type": "object"
+  },
   "ConfigureRequest": {
     "properties": {
       "config": {
@@ -1641,6 +1665,21 @@
     "title": "FileUploadResponse",
     "type": "object"
   },
+  "FolderRequest": {
+    "properties": {
+      "path": {
+        "description": "An absolute folder path.",
+        "minLength": 1,
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "FolderRequest",
+    "type": "object"
+  },
   "FollowUpRequest": {
     "properties": {
       "session_id": {
@@ -2046,6 +2085,19 @@
       "id"
     ],
     "title": "InstallRequest",
+    "type": "object"
+  },
+  "InternetRequest": {
+    "properties": {
+      "on": {
+        "title": "On",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "on"
+    ],
+    "title": "InternetRequest",
     "type": "object"
   },
   "KnowledgeCreate": {
@@ -2932,6 +2984,35 @@
       }
     },
     "title": "PreflightReport",
+    "type": "object"
+  },
+  "PullRequestRequest": {
+    "properties": {
+      "body": {
+        "default": "",
+        "title": "Body",
+        "type": "string"
+      },
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the PR.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "title"
+    ],
+    "title": "PullRequestRequest",
     "type": "object"
   },
   "QuickLink": {
@@ -4284,6 +4365,58 @@
     "title": "TurnSummaryModel",
     "type": "object"
   },
+  "TurnSummaryOutput": {
+    "description": "Something the turn made besides a file: an image, an indexed document,\na memory or a scheduled task.",
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Path"
+      },
+      "ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ref"
+      }
+    },
+    "required": [
+      "kind",
+      "name"
+    ],
+    "title": "TurnSummaryOutput",
+    "type": "object"
+  },
   "TurnSummaryPage": {
     "description": "A web page the turn read, or a search hit when it read none.",
     "properties": {
@@ -4357,6 +4490,13 @@
             "type": "null"
           }
         ]
+      },
+      "outputs": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryOutput"
+        },
+        "title": "Outputs",
+        "type": "array"
       },
       "pages": {
         "items": {

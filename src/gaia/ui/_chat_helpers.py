@@ -66,6 +66,7 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
+from .session_environment import apply_environment
 from .sse_handler import (
     _ANSWER_JSON_SUB_RE,
     _RAG_RESULT_JSON_SUB_RE,
@@ -2848,6 +2849,7 @@ async def _get_chat_response(
                 _register_agent_memory_ops(agent)
 
         _apply_memory_state(agent, session, db)
+        apply_environment(agent, session_id, db)
 
         _restore_model_history(agent, db, session_id, request.message)
 
@@ -3459,6 +3461,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 _apply_memory_state(agent, session, db)
+                apply_environment(agent, request.session_id, db)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
