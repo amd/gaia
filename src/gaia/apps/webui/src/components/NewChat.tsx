@@ -23,6 +23,8 @@ interface NewChatProps {
     onSend: (text: string) => Promise<void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
+    /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
+    focusRequest?: number;
 }
 
 export function greeting(now: Date = new Date()): string {
@@ -55,7 +57,7 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
 }
 
 /** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
-export function NewChat({ onSend, initialText = '' }: NewChatProps) {
+export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const [text, setText] = useState(initialText);
     const [error, setError] = useState<string | null>(null);
@@ -103,6 +105,10 @@ export function NewChat({ onSend, initialText = '' }: NewChatProps) {
     }, [attachments, onSend, sending]);
 
     const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
+
+    useEffect(() => {
+        if (focusRequest) inputRef.current?.focus();
+    }, [focusRequest]);
 
     const pick = useCallback((card: StartCard) => {
         if (!card.needs_input) {

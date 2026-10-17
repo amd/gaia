@@ -91,6 +91,7 @@ function App() {
     const [createError, setCreateError] = useState<string | null>(null);
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
+    const [newChatFocus, setNewChatFocus] = useState(0);
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
@@ -343,6 +344,7 @@ function App() {
         store.setShowSchedules(false);
         setCurrentSession(null);
         setMessages([]);
+        setNewChatFocus((n) => n + 1);
     }, [setCurrentSession, setMessages]);
 
     // ── Desktop tray: its icon follows this window; its menu acts here ──
@@ -478,7 +480,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={draftText} onSend={startChat} initialText={draftText} />
+        <NewChat key={draftText} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
     );
 
     return (

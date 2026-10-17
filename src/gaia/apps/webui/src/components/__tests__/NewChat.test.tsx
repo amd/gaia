@@ -99,6 +99,17 @@ describe('NewChat empty state', () => {
         expect(greeting(new Date(2026, 0, 1, 21))).toBe('Good evening. What should we work on?');
     });
 
+    it('takes focus when New chat is chosen while it is already showing', () => {
+        const { rerender } = render(<NewChat onSend={vi.fn()} focusRequest={1} />);
+        const box = screen.getByPlaceholderText('Ask GAIA anything');
+        const other = document.createElement('input');
+        document.body.appendChild(other);
+        other.focus();
+        rerender(<NewChat onSend={vi.fn()} focusRequest={2} />);
+        expect(document.activeElement).toBe(box);
+        other.remove();
+    });
+
     it('offers the task cards the backend picked', async () => {
         render(<NewChat onSend={vi.fn()} />);
         const list = await screen.findByRole('list', { name: 'Things to try' });
