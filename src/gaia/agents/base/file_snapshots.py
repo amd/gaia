@@ -515,6 +515,138 @@ def _restore_file(target: Path, source: Path, mode: Optional[int]) -> None:
         tmp.unlink(missing_ok=True)
 
 
+@dataclass
+class _Step:
+    """Put one file back: copy *source* over it, or remove it when None."""
+
+    path: str
+    source: Optional[Path]
+    sha256: Optional[str]
+    mode: Optional[int]
+    created_dirs: List[str]
+
+    @classmethod
+    def before(cls, turn: _Turn, entry: Dict[str, Any]) -> "_Step":
+        """The state *entry*'s file had before *turn*."""
+        existed = entry["existed"]
+        return cls(
+            path=entry["path"],
+            source=turn.dir / "blobs" / entry["before_blob"] if existed else None,
+            sha256=entry["before_sha256"] if existed else None,
+            mode=entry.get("mode"),
+            created_dirs=list(entry.get("created_dirs") or []),
+        )
+
+
+def _check_copies(steps: List[_Step]) -> None:
+    """Every saved copy must be intact before any file is touched."""
+    for step in steps:
+        if step.source is None:
+            continue
+        try:
+            intact = _sha256_file(step.source) == step.sha256
+        except OSError as e:
+            raise SnapshotError(
+                f"The saved copy of {step.path} is missing ({e}); nothing "
+                "was restored."
+            ) from e
+        if not intact:
+            raise SnapshotError(
+                f"The saved copy of {step.path} is damaged (checksum "
+                "mismatch); nothing was restored."
+            )
+
+
+def _raise_conflicts(checks: List[tuple], since: str) -> None:
+    conflicts = [{"path": path, "reason": why} for path, why in checks if why]
+    if not conflicts:
+        return
+    names = ", ".join(c["path"] for c in conflicts[:5])
+    more = f" and {len(conflicts) - 5} more" if len(conflicts) > 5 else ""
+    raise RestoreConflict(
+        f"{len(conflicts)} file(s) changed after {since}: {names}{more}. "
+        "Undoing it would overwrite those changes. Nothing was restored.",
+        conflicts,
+    )
+
+
+def _apply(steps: List[_Step], rollback_dir: Path) -> List[str]:
+    """Write every step, or none: a failure puts back the files already written.
+
+    Returns the folders a removed file's turn created that could not be
+    removed because something else is in them.
+    """
+    # Copy what is on disk now, so a failure part-way can be rolled back.
+    shutil.rmtree(rollback_dir, ignore_errors=True)
+    rollback_dir.mkdir(parents=True)
+    rollback: List[tuple] = []
+    try:
+        for i, step in enumerate(steps):
+            target = Path(step.path)
+            saved = None
+            if target.is_file():
+                saved = rollback_dir / f"{i:04d}"
+                shutil.copyfile(target, saved)
+            rollback.append((target, saved, step))
+    except OSError as e:
+        shutil.rmtree(rollback_dir, ignore_errors=True)
+        raise SnapshotError(
+            f"Could not keep a safety copy of {target} before undoing ({e}); "
+            "nothing was restored."
+        ) from e
+
+    done: List[tuple] = []
+    failing: Optional[Path] = None
+    try:
+        for target, saved, step in rollback:
+            failing = target
+            # Counted as done before the write, so a failed write is rolled back too.
+            done.append((target, saved, step))
+            if step.source is not None:
+                _restore_file(target, step.source, step.mode)
+                if _sha256_file(target) != step.sha256:
+                    raise SnapshotError(
+                        f"{target} does not match its saved copy after writing it"
+                    )
+            elif target.exists():
+                target.unlink()
+    except (OSError, SnapshotError) as e:
+        failed_back = []
+        for target, saved, step in reversed(done):
+            try:
+                if saved is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    _restore_file(target, saved, step.mode)
+            except OSError as back_err:
+                failed_back.append(f"{target} ({back_err})")
+        if failed_back:
+            raise SnapshotError(
+                f"Undo failed on {failing}: {e}. Putting the files back as they "
+                "were before the undo also failed for: "
+                + "; ".join(failed_back)
+                + f". Copies of them are in {rollback_dir}."
+            ) from e
+        shutil.rmtree(rollback_dir, ignore_errors=True)
+        raise SnapshotError(
+            f"Undo failed on {failing}: {e}. Every file was put back as it was, "
+            "so nothing changed."
+        ) from e
+    shutil.rmtree(rollback_dir, ignore_errors=True)
+
+    kept_dirs = []
+    for step in steps:
+        for folder in reversed(step.created_dirs):
+            path = Path(folder)
+            if not path.is_dir():
+                continue
+            try:
+                path.rmdir()
+            except OSError:
+                kept_dirs.append(folder)
+    return kept_dirs
+
+
 def restore_turn(
     session_id: str,
     turn_id: str,
@@ -540,111 +672,13 @@ def restore_turn(
         )
 
     entries = [e for e in m["files"] if _change_kind(e) != "unchanged"]
-
-    # Every copy must be intact before any file is touched.
-    for entry in entries:
-        if not entry["existed"]:
-            continue
-        blob = turn.dir / "blobs" / entry["before_blob"]
-        try:
-            intact = _sha256_file(blob) == entry["before_sha256"]
-        except OSError as e:
-            raise SnapshotError(
-                f"The saved copy of {entry['path']} is missing ({e}); nothing "
-                "was restored."
-            ) from e
-        if not intact:
-            raise SnapshotError(
-                f"The saved copy of {entry['path']} is damaged (checksum "
-                "mismatch); nothing was restored."
-            )
-
+    steps = [_Step.before(turn, e) for e in entries]
+    _check_copies(steps)
     if not force:
-        conflicts = []
-        for entry in entries:
-            reason = _current_matches_after(entry)
-            if reason:
-                conflicts.append({"path": entry["path"], "reason": reason})
-        if conflicts:
-            names = ", ".join(c["path"] for c in conflicts[:5])
-            more = f" and {len(conflicts) - 5} more" if len(conflicts) > 5 else ""
-            raise RestoreConflict(
-                f"{len(conflicts)} file(s) changed after this turn: {names}{more}. "
-                "Undoing it would overwrite those changes. Nothing was restored.",
-                conflicts,
-            )
-
-    # Copy what is on disk now, so a failure part-way can be rolled back.
-    rollback_dir = turn.dir / "rollback"
-    shutil.rmtree(rollback_dir, ignore_errors=True)
-    rollback_dir.mkdir(parents=True)
-    rollback: List[tuple] = []
-    try:
-        for i, entry in enumerate(entries):
-            target = Path(entry["path"])
-            saved = None
-            if target.is_file():
-                saved = rollback_dir / f"{i:04d}"
-                shutil.copyfile(target, saved)
-            rollback.append((target, saved, entry))
-    except OSError as e:
-        shutil.rmtree(rollback_dir, ignore_errors=True)
-        raise SnapshotError(
-            f"Could not keep a safety copy of {target} before undoing ({e}); "
-            "nothing was restored."
-        ) from e
-
-    done: List[tuple] = []
-    failing: Optional[Path] = None
-    try:
-        for target, saved, entry in rollback:
-            failing = target
-            # Counted as done before the write, so a failed write is rolled back too.
-            done.append((target, saved, entry))
-            if entry["existed"]:
-                _restore_file(
-                    target, turn.dir / "blobs" / entry["before_blob"], entry.get("mode")
-                )
-                if _sha256_file(target) != entry["before_sha256"]:
-                    raise SnapshotError(
-                        f"{target} does not match its saved copy after writing it"
-                    )
-            elif target.exists():
-                target.unlink()
-    except (OSError, SnapshotError) as e:
-        failed_back = []
-        for target, saved, entry in reversed(done):
-            try:
-                if saved is None:
-                    target.unlink(missing_ok=True)
-                else:
-                    _restore_file(target, saved, entry.get("mode"))
-            except OSError as back_err:
-                failed_back.append(f"{target} ({back_err})")
-        if failed_back:
-            raise SnapshotError(
-                f"Undo failed on {failing}: {e}. Putting the files back as they "
-                "were before the undo also failed for: "
-                + "; ".join(failed_back)
-                + f". Copies of them are in {rollback_dir}."
-            ) from e
-        shutil.rmtree(rollback_dir, ignore_errors=True)
-        raise SnapshotError(
-            f"Undo failed on {failing}: {e}. Every file was put back as it was, "
-            "so nothing changed."
-        ) from e
-    shutil.rmtree(rollback_dir, ignore_errors=True)
-
-    kept_dirs = []
-    for entry in entries:
-        for folder in reversed(entry.get("created_dirs") or []):
-            path = Path(folder)
-            if not path.is_dir():
-                continue
-            try:
-                path.rmdir()
-            except OSError:
-                kept_dirs.append(folder)
+        _raise_conflicts(
+            [(e["path"], _current_matches_after(e)) for e in entries], "this turn"
+        )
+    kept_dirs = _apply(steps, turn.dir / "rollback")
 
     m["restored_at"] = _now_iso()
     _write_json_atomic(turn.dir / MANIFEST, m)
@@ -655,6 +689,190 @@ def restore_turn(
         "kept_folders": sorted(set(kept_dirs)),
         "untracked": m.get("untracked", []),
         "incomplete": bool(m.get("untracked")),
+    }
+
+
+# ---------------------------------------------------------------------------
+# The whole chat
+# ---------------------------------------------------------------------------
+
+
+def _live_turns(session_id: str, root: Optional[Path]) -> List[_Turn]:
+    """The session's turns that were not undone, oldest first."""
+    session_dir = (root or snapshots_root()) / _check_id("session id", session_id)
+    if not session_dir.is_dir():
+        return []
+    turns = []
+    for turn_dir in sorted(session_dir.iterdir()):
+        if not (turn_dir / MANIFEST).is_file():
+            continue
+        turn = _load(session_id, turn_dir.name, root)
+        if not turn.manifest.get("restored_at"):
+            turns.append(turn)
+    return turns
+
+
+@dataclass
+class _Span:
+    """One file across the chat: its state before the first turn that touched
+    it, and after the last."""
+
+    first_turn: _Turn
+    first: Dict[str, Any]
+    last_turn: _Turn
+    last: Dict[str, Any]
+    message_ids: List[int]
+
+    @property
+    def change(self) -> str:
+        existed, after = self.first["existed"], self.last.get("after_exists")
+        if existed and after:
+            same = self.first["before_sha256"] == self.last["after_sha256"]
+            return "unchanged" if same else "edited"
+        if existed:
+            return "deleted"
+        return "created" if after else "unchanged"
+
+
+def _spans(turns: List[_Turn]) -> List[_Span]:
+    spans: Dict[str, _Span] = {}
+    for turn in turns:
+        message_id = turn.manifest.get("message_id")
+        for entry in turn.manifest["files"]:
+            key = os.path.normcase(entry["path"])
+            span = spans.get(key)
+            if span is None:
+                span = spans[key] = _Span(turn, entry, turn, entry, [])
+            span.last_turn, span.last = turn, entry
+            if message_id is not None and message_id not in span.message_ids:
+                span.message_ids.append(message_id)
+    return [s for s in spans.values() if s.change != "unchanged"]
+
+
+def _count_lines(unified: str) -> tuple:
+    added = removed = 0
+    for line in unified.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return added, removed
+
+
+def _span_diff(span: _Span) -> Dict[str, Any]:
+    first, last = span.first, span.last
+    item: Dict[str, Any] = {
+        "path": first["path"],
+        "change": span.change,
+        "binary": False,
+        "too_large": False,
+        "truncated": False,
+        "unified": "",
+        "additions": None,
+        "deletions": None,
+        "before_size": first.get("before_size") or 0,
+        "after_size": last.get("after_size") or 0,
+        "message_ids": span.message_ids,
+        "changed_since": _current_matches_after(last),
+    }
+    uncopied = last.get("after_exists") and not last.get("after_blob")
+    if uncopied or max(item["before_size"], item["after_size"]) > MAX_DIFF_BYTES:
+        item["too_large"] = True
+        return item
+    before = _read_blob(span.first_turn, first.get("before_blob"))
+    after = _read_blob(span.last_turn, last.get("after_blob"))
+    before_text, after_text = _as_text(before), _as_text(after)
+    if before_text is None or after_text is None:
+        item["binary"] = True
+        return item
+    name = Path(first["path"]).name
+    unified = "".join(
+        difflib.unified_diff(
+            before_text.splitlines(keepends=True),
+            after_text.splitlines(keepends=True),
+            fromfile=f"a/{name}" if first["existed"] else "/dev/null",
+            tofile=f"b/{name}" if last.get("after_exists") else "/dev/null",
+        )
+    )
+    item["additions"], item["deletions"] = _count_lines(unified)
+    if len(unified) > MAX_DIFF_CHARS:
+        unified = unified[:MAX_DIFF_CHARS]
+        item["truncated"] = True
+    item["unified"] = unified
+    return item
+
+
+def session_changes(session_id: str, root: Optional[Path] = None) -> Dict[str, Any]:
+    """Every file the chat changed, from before its first turn to after its last.
+
+    Undone turns are left out. A turn still running is not counted yet and
+    sets ``pending``.
+    """
+    turns = _live_turns(session_id, root)
+    finished = [t for t in turns if t.manifest.get("finished_at")]
+    files = [_span_diff(span) for span in _spans(finished)]
+    untracked = [u for t in finished for u in t.manifest.get("untracked", [])]
+    counted = [f for f in files if f["additions"] is not None]
+    return {
+        "files": files,
+        "totals": {
+            "files": len(files),
+            "additions": sum(f["additions"] for f in counted),
+            "deletions": sum(f["deletions"] for f in counted),
+            "uncounted": len(files) - len(counted),
+        },
+        "turns": len(finished),
+        "pending": len(finished) < len(turns),
+        "untracked": untracked,
+        "incomplete": bool(untracked),
+    }
+
+
+def restore_session(
+    session_id: str, force: bool = False, root: Optional[Path] = None
+) -> Dict[str, Any]:
+    """Put every file the chat changed back as it was before its first turn.
+
+    All or nothing, like :func:`restore_turn`: copies are checked, then a file
+    changed outside GAIA since the chat last touched it is a conflict unless
+    *force*, and a failure part-way puts every file back.
+    """
+    turns = _live_turns(session_id, root)
+    if not turns:
+        raise SnapshotError("This chat has no file changes left to undo.")
+    unfinished = [t for t in turns if not t.manifest.get("finished_at")]
+    if unfinished:
+        raise SnapshotError(
+            f"{len(unfinished)} turn(s) in this chat did not finish (GAIA "
+            "stopped while they were running), so GAIA cannot tell which file "
+            "states are the chat's own. Undo the finished turns one at a time, "
+            "or restore the files by hand from "
+            + str(unfinished[0].dir / "blobs")
+            + "."
+        )
+    spans = _spans(turns)
+    steps = [_Step.before(span.first_turn, span.first) for span in spans]
+    _check_copies(steps)
+    if not force:
+        _raise_conflicts(
+            [(s.first["path"], _current_matches_after(s.last)) for s in spans],
+            "this chat last changed them",
+        )
+    session_dir = turns[0].dir.parent
+    kept_dirs = _apply(steps, session_dir / "rollback")
+
+    restored_at = _now_iso()
+    for turn in turns:
+        turn.manifest["restored_at"] = restored_at
+        _write_json_atomic(turn.dir / MANIFEST, turn.manifest)
+    untracked = [u for t in turns for u in t.manifest.get("untracked", [])]
+    return {
+        "turn_ids": [t.manifest["turn_id"] for t in turns],
+        "restored": [s.first["path"] for s in spans if s.first["existed"]],
+        "removed": [s.first["path"] for s in spans if not s.first["existed"]],
+        "kept_folders": sorted(set(kept_dirs)),
+        "untracked": untracked,
+        "incomplete": bool(untracked),
     }
 
 
