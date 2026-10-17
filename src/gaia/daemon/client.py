@@ -42,7 +42,7 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
-from gaia.utils.terminal import background_popen_kwargs
+from gaia.utils.terminal import background_popen_kwargs, popen_outliving_job
 
 logger = get_logger(__name__)
 
@@ -251,7 +251,7 @@ def _spawn_and_wait(
     # the console programs the daemon starts don't each open a blank window.
     spawn_kwargs = background_popen_kwargs()
     try:
-        proc = subprocess.Popen(
+        proc = popen_outliving_job(
             [sys.executable, "-m", "gaia.daemon"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
