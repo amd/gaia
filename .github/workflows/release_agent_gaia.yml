@@ -120,6 +120,19 @@
 #   file name: release_agent_gaia.yml (repo amd/gaia). The OIDC subject is tied
 #   to the exact filename — RENAMING THIS FILE BREAKS THE npm PUBLISH.
 #
+# Release candidates: a pre-release version (tag agent-pkg-gaia-vX.Y.Z-rc.N,
+# package version X.Y.Z-rc.N) runs the same pipeline behind the same approval,
+# with these differences (a final is untouched by them):
+#   * npm publishes under the `next` dist-tag, so `latest` does not move.
+#   * the sidecar is PUT straight to R2 (publish_to_r2.py --storage-only) and
+#     NOT POSTed to /publish. The hub's latest_version is the highest SemVer it
+#     knows and X.Y.Z-rc.N outranks the current final, so cataloguing an RC would
+#     make it every hub user's default. The Worker still serves the stored
+#     objects, so the RC's binaries.lock.json resolves and is fetch-verified.
+#   * no website redeploy (the catalog did not change).
+#   * an ANNOTATED tag whose message contains `[skip eval]` skips the
+#     self-hosted gaia-eval (util/eval_tag_gate.py); a final always runs it.
+#
 # Not carried over from release_agent_email.yml (deliberate):
 #   * the `verify-darwin-x64-compat` leg. darwin-x64 is built on macos-26-intel,
 #     the newest Intel image, which can raise the frozen binary's minimum macOS.
@@ -144,7 +157,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (must match package.json + gaia-agent.yaml), e.g. 0.1.0'
+        description: 'Version to release (must match package.json + gaia-agent.yaml), e.g. 0.1.0 or 0.3.0-rc.1'
         required: true
 
 concurrency:
@@ -183,6 +196,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       base_url: ${{ steps.ver.outputs.base_url }}
+      prerelease: ${{ steps.ver.outputs.prerelease }}
       tui_version: ${{ steps.tui.outputs.tui_version }}
       tui_base_url: ${{ steps.tui.outputs.tui_base_url }}
     steps:
@@ -240,6 +254,18 @@ jobs:
           if [ "$VERSION" != "$PKG_VER" ] || [ "$VERSION" != "$MAN_VER" ]; then
             echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
             exit 1
+          fi
+          # A pre-release is X.Y.Z-rc.N only: anything else after the dash would
+          # still sort above the current final on the hub and on npm.
+          if [[ "$VERSION" == *-* ]]; then
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$ ]]; then
+              echo "::error::pre-release version '${VERSION}' is not X.Y.Z-rc.N (e.g. 0.3.0-rc.1). Release candidates must use that form."
+              exit 1
+            fi
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Release candidate: npm dist-tag 'next', sidecar stored outside the hub catalog."
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
@@ -395,6 +421,19 @@ jobs:
               --scorecard hub/agents/gaia/npm/SCORECARD.md ${BARS}
           fi
 
+  # An RC tag annotated with `[skip eval]` skips gaia-eval; a final, a
+  # lightweight tag and a dispatch always run it (util/eval_tag_gate.py).
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+
   # ── Stage 1c: judged gaia eval (release gate, self-hosted) ─────────
   # A bounded subset of the judged suite (the cheap categories — the full
   # 13-category run is the nightly/dispatch profile; a release must not hold
@@ -408,6 +447,10 @@ jobs:
   # does not ship on nightly-only coverage.
   gaia-eval:
     name: Gaia eval subset (release gate)
+    needs: [eval-gate]
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true'
     uses: ./.github/workflows/test_gaia_agent_eval.yml
     with:
       categories: 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_skills_capture'
@@ -630,7 +673,16 @@ jobs:
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [version, freeze, tui, tests, scorecard-gate, gaia-eval]
+    needs: [version, freeze, tui, tests, scorecard-gate, eval-gate, gaia-eval]
+    # Every gate must pass. gaia-eval may be skipped only when eval-gate said so,
+    # which it does only for an RC tag annotated with [skip eval].
+    if: >-
+      !cancelled() &&
+      needs.version.result == 'success' && needs.freeze.result == 'success' &&
+      needs.tui.result == 'success' && needs.tests.result == 'success' &&
+      needs.scorecard-gate.result == 'success' && needs.eval-gate.result == 'success' &&
+      (needs.gaia-eval.result == 'success' ||
+      (needs.gaia-eval.result == 'skipped' && needs.eval-gate.outputs.run == 'false'))
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until
     # a maintainer approves — the human backstop for an accidental/tampered
@@ -867,8 +919,29 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
+          # Release candidate: store the sidecar in R2 without cataloguing it, so
+          # the RC never becomes the hub's latest (see the header). The lock and
+          # fetch-verify steps below work the same, against the stored objects.
+          if [ "${PRERELEASE}" = "true" ]; then
+            args=()
+            for f in bins/*; do
+              [ -f "$f" ] || continue
+              args+=(--artifact "$f")
+            done
+            if [ "${#args[@]}" -eq 0 ]; then
+              echo "::error::no binaries staged in bins/ — nothing to store."
+              exit 1
+            fi
+            python "${PACKAGING}/publish_to_r2.py" \
+              --base-url "${GAIA_HUB_PUBLISH_URL}" \
+              --manifest "${MANIFEST}" \
+              --storage-only \
+              "${args[@]}"
+            exit 0
+          fi
           for required in "${README}" "${CHANGELOG}"; do
             if [ ! -f "${required}" ]; then
               echo "::error::missing required hub doc '${required}' — the hub page renders it and it ships in the npm tarball. Add it before releasing."
@@ -1105,19 +1178,25 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
           if npm view "${NPM_PKG}@${VERSION}" version >/dev/null 2>&1; then
             echo "${NPM_PKG}@${VERSION} already on npm — skipping (idempotent)."
             exit 0
           fi
+          # An RC goes to `next`, so a plain install keeps resolving the last final.
+          DIST_TAG=latest
+          if [ "${PRERELEASE}" = "true" ]; then DIST_TAG=next; fi
           # --ignore-scripts: dist/ was already built by the "Build npm package"
           # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs
           # to run here — and we don't want any package/dependency script
           # executing in this OIDC-privileged job. Matches publish.yml.
-          npm publish --access public --provenance --ignore-scripts
+          npm publish --access public --provenance --ignore-scripts --tag "${DIST_TAG}"
+          echo "Published ${NPM_PKG}@${VERSION} under the '${DIST_TAG}' dist-tag"
 
       - name: Redeploy the website to publish the new catalog entry
+        if: needs.version.outputs.prerelease != 'true'
         shell: bash
         # The website builds its Agent Hub pages at deploy time from the live hub
         # index.json (website/src/data/catalog.ts, HUB_CATALOG_URL), so a freshly
@@ -1138,11 +1217,15 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           BASE_URL: ${{ steps.ver.outputs.base_url }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
           {
             echo "### GAIA agent ${VERSION}"
             echo ""
+            if [ "${PRERELEASE}" = "true" ]; then
+              echo "- Release candidate: npm dist-tag \`next\`; sidecar stored outside the hub catalog"
+            fi
             echo "- Hub: \`${BASE_URL}\`"
             echo "- npm: \`${NPM_PKG}@${VERSION}\`"
             echo "- Intel sidecar published: \`${DARWIN_X64_SIDECAR:-unknown}\`"

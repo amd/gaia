@@ -54,7 +54,8 @@ describe("shipped binaries.lock.json", () => {
   // and the version being a real semver rather than a leftover placeholder.
   it("agrees with package.json on the version", () => {
     expect(lock.agentVersion).toBe(pkg.version);
-    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
+    // A release candidate is X.Y.Z-rc.N, the only pre-release form the release accepts.
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(-rc\.[1-9]\d*)?$/);
   });
 
   it("publishes the sidecar from the gaia lane at the agent's own version", () => {

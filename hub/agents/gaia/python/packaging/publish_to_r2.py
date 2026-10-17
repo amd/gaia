@@ -39,6 +39,15 @@ Idempotency (re-running a published release is a no-op):
   * Any other 409 (``artifact_mismatch`` / ``artifact_unverifiable`` /
     ``id_conflict`` / ``manifest_mismatch``) means the catalog was NOT modified, and stays a failure.
 
+Storage only (``--storage-only``, release candidates): every artifact is PUT
+straight to R2 at ``agents/<id>/<version>/`` and NOTHING is POSTed, so the
+catalog (``index.json``, ``agents/<id>/manifest.json``) never lists the version.
+The Worker still serves the stored objects, which is all the npm package's
+``binaries.lock.json`` needs. This exists because the catalog's
+``latest_version`` is the highest SemVer it knows, and ``0.3.0-rc.1`` outranks
+``0.2.0`` -- publishing an RC would make it every hub user's default. Only a
+pre-release version is accepted; an already-stored object is never replaced.
+
 NO silent fallback: any other non-2xx, a SHA mismatch, or a missing token raises
 with an actionable message.
 
@@ -67,6 +76,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 import requests
@@ -107,6 +117,9 @@ DOC_PARTS = {
 # by reference. Deliberately below the real cap so an artifact that grows into
 # the limit switches lanes before it starts 413ing mid-release.
 DIRECT_UPLOAD_THRESHOLD = 90 * 1024 * 1024
+
+# SemVer with a pre-release part: the only versions --storage-only accepts.
+PRERELEASE_RE = re.compile(r"^\d+\.\d+\.\d+-[0-9A-Za-z][0-9A-Za-z.-]*$")
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -441,6 +454,64 @@ def publish_one(
     }
 
 
+def store_one(
+    base_url: str,
+    manifest: dict,
+    artifact_path: Path,
+    component: str,
+    platform_key: str,
+) -> dict:
+    """PUT one artifact into R2 without recording it in the hub catalog."""
+    filename = artifact_path.name
+    local_sha, size = _sha256_file(artifact_path)
+    agent_id = str(manifest["id"])
+    version = str(manifest["version"])
+    url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
+    print(
+        f"[store] {component}/{platform_key} {filename} ({size} bytes, "
+        f"sha256={local_sha[:12]}…) -> {agent_id}/{version} (not catalogued)",
+        flush=True,
+    )
+
+    head = requests.head(url, timeout=60, allow_redirects=True)
+    if head.status_code == 200:
+        remote_sha, remote_size = _download_published(
+            base_url, agent_id, version, filename
+        )
+        if remote_sha != local_sha:
+            raise SystemExit(
+                f"error: {filename} is already stored at {agent_id}/{version} with "
+                f"a DIFFERENT sha256 (remote={remote_sha}, local={local_sha}). A "
+                "stored object is never replaced -- cut the next release candidate "
+                "(e.g. -rc.2) instead."
+            )
+        print("[store] already stored with identical bytes (no-op).", flush=True)
+        stored_now, size = False, remote_size
+    elif head.status_code == 404:
+        _upload_to_r2(
+            artifact_path, f"agents/{agent_id}/{version}/{filename}", local_sha
+        )
+        stored_now = True
+    else:
+        raise SystemExit(
+            f"error: HEAD {url} returned HTTP {head.status_code}, so it is unknown "
+            f"whether {filename} is already stored. Refusing to upload over it; "
+            "check the hub Worker and re-run."
+        )
+
+    stem = EXECUTABLE_STEMS[component]
+    executable = f"{stem}.exe" if filename.endswith(".exe") else stem
+    return {
+        "component": component,
+        "platform": platform_key,
+        "filename": filename,
+        "executable": executable,
+        "sha256": local_sha,
+        "size": size,
+        "_published": stored_now,
+    }
+
+
 def _read_docs(args: argparse.Namespace) -> dict[str, bytes]:
     docs: dict[str, bytes] = {}
     for dest in DOC_PARTS:
@@ -459,7 +530,7 @@ def _read_docs(args: argparse.Namespace) -> dict[str, bytes]:
     return docs
 
 
-def _preflight_oversized(artifact_args: list[str]) -> None:
+def _preflight_oversized(artifact_args: list[str], all_direct: bool = False) -> None:
     """Refuse to start when the oversized lane is needed but unavailable.
 
     Each artifact is published in turn, so discovering halfway through that
@@ -480,7 +551,10 @@ def _preflight_oversized(artifact_args: list[str]) -> None:
             "is the usual cause).\n"
             "  Nothing has been published."
         )
-    oversized = [p for p in paths if p.stat().st_size >= DIRECT_UPLOAD_THRESHOLD]
+    # --storage-only sends every artifact over the S3 API, whatever its size.
+    oversized = [
+        p for p in paths if all_direct or p.stat().st_size >= DIRECT_UPLOAD_THRESHOLD
+    ]
     if not oversized:
         return
     # boto3 is only imported by the upload itself, so a missing dependency would
@@ -501,10 +575,15 @@ def _preflight_oversized(artifact_args: list[str]) -> None:
         listing = "\n".join(
             f"    {p.name}  ({p.stat().st_size / 1e6:.1f} MB)" for p in oversized
         )
+        why = (
+            "are stored with --storage-only, which uploads everything"
+            if all_direct
+            else "exceed the Worker request-body cap "
+            f"({DIRECT_UPLOAD_THRESHOLD / 1e6:.1f} MB) and must upload"
+        )
         raise SystemExit(
-            "error: these artifacts exceed the Worker request-body cap "
-            f"({DIRECT_UPLOAD_THRESHOLD / 1e6:.1f} MB) and must upload straight to "
-            f"R2 over the S3 API:\n{listing}\n"
+            f"error: these artifacts {why} straight to R2 over the S3 API:\n"
+            f"{listing}\n"
             "  but R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and CLOUDFLARE_ACCOUNT_ID "
             "are not all set.\n"
             "  Fix: pass all three to this step (see release_agent_gaia.yml), from "
@@ -563,15 +642,45 @@ def main(argv=None) -> int:
         "so re-running a published version always differs and is a no-op to skip, "
         "not a failure. Turn it on to police 'changed the code, forgot to bump'.",
     )
+    parser.add_argument(
+        "--storage-only",
+        action="store_true",
+        help="Release candidates: PUT every artifact straight to R2 and do not "
+        "POST /publish, so the version never enters the hub catalog and cannot "
+        "become its latest. Requires a pre-release version (X.Y.Z-<pre>) and the "
+        "R2 credentials; takes no doc flags, since nothing renders them.",
+    )
     args = parser.parse_args(argv)
 
-    token = _read_token()
     manifest = _load_manifest(args.manifest)
-    docs = _read_docs(args)
+    if args.storage_only:
+        version = str(manifest["version"])
+        if not PRERELEASE_RE.match(version):
+            raise SystemExit(
+                f"error: --storage-only stores {manifest['id']}@{version} outside the "
+                "catalog, which is only for a pre-release (X.Y.Z-<pre>, e.g. "
+                "0.3.0-rc.1). A final release must go through POST /publish so the "
+                "hub lists it -- drop --storage-only."
+            )
+        given = [
+            "--" + dest.replace("_", "-")
+            for dest in DOC_PARTS
+            if getattr(args, dest, None) is not None
+        ]
+        if given:
+            raise SystemExit(
+                f"error: {', '.join(given)} cannot be used with --storage-only: the "
+                "docs only reach the hub through POST /publish, which this mode "
+                "skips. Drop them."
+            )
+        token, docs = "", {}
+    else:
+        token = _read_token()
+        docs = _read_docs(args)
 
     # Before publishing ANYTHING: every artifact must exist, and one that needs
     # the direct-to-R2 lane must be able to use it.
-    _preflight_oversized(args.artifact)
+    _preflight_oversized(args.artifact, all_direct=args.storage_only)
 
     # Oversized first. The pre-flight proves the R2 credentials are PRESENT, not
     # that R2 accepts them — an expired or read-only token still fails at the
@@ -588,6 +697,11 @@ def main(argv=None) -> int:
     results = []
     for raw in ordered:
         path, component, platform_key = _parse_artifact_arg(raw)
+        if args.storage_only:
+            results.append(
+                store_one(args.base_url, manifest, path, component, platform_key)
+            )
+            continue
         results.append(
             publish_one(
                 args.base_url,
