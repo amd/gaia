@@ -176,7 +176,7 @@ export function ModelSettings() {
         const progress = isDownloading(m) ? m.download_progress : null;
         const meta = [
             placementText(m.placement),
-            m.size_gb ? `${m.size_gb} GB download` : null,
+            m.size_gb ? `${m.size_gb} GB ${m.downloaded ? 'on disk' : 'download'}` : null,
             m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s measured here` : null,
             !m.placement && m.context_length ? `Context ${m.context_length.toLocaleString()} tokens` : null,
         ].filter(Boolean).join(' · ');

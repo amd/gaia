@@ -299,8 +299,8 @@ export async function getLocalModelStatus(): Promise<LocalModelStatus> {
 }
 
 /** Start the model server if stopped, then reload the chat model. */
-export async function restartLocalModel(): Promise<{ status: string; model: string; starting_server: boolean }> {
-    return apiFetch('POST', '/providers/local/restart');
+export async function restartLocalModel(confirm = false): Promise<{ status: string; model: string; starting_server: boolean }> {
+    return apiFetch('POST', '/providers/local/restart', { confirm });
 }
 
 export async function selectModel(model: string): Promise<ActiveModel> {

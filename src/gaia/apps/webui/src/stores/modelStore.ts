@@ -161,6 +161,10 @@ export function inferencePlace(
     if (location?.inference_remote === false) {
         return { remote: false, label: 'Local', description: location.inference_description ?? null };
     }
+    // No chat yet: the backend's answer for where a new chat would run.
+    if (location === undefined && active?.inference_remote === false) {
+        return { remote: false, label: 'Local', description: active.inference_description ?? null };
+    }
     return null;
 }
 

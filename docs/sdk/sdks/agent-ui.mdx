@@ -1879,8 +1879,10 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="GET /api/providers/active">
     The model new turns run — the one a new chat starts on: the picked model,
     else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
-    `display_name`, and `downloaded` for a local model (`null` for a cloud
-    model or while the server starts). With an unreadable config, `model` is
+    `display_name`, `downloaded` for a local model (`null` for a cloud
+    model or while the server starts), and `inference_remote` /
+    `inference_description`: where a new chat would be answered, by the rule
+    session locations use (`null` when it can't tell). With an unreadable config, `model` is
     `null` and `config_error` says why. On the first call of a backend run it also
     restores `last_model` from `~/.gaia/config.json`; `restore.status` is
     `restored`, `failed` (with the reason — another model is never switched in
@@ -1941,7 +1943,8 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `{"model", "ctx_size"}`, with `ctx_size: null` for Automatic. If the model
     is loaded, GAIA reloads it in the background through its normal load path
     (free-memory check included); `reload` says `{"started": true}`, or
-    `started: false` with `reason` `busy` (a reply is running) or `restarting`,
+    `started: false` with `reason` `busy` (a reply is running), `restarting`, or
+    `not_gaias_server` (GAIA never reloads a model on a server it doesn't run),
     in which case the size applies on the next load. **422** for a size not
     offered on this PC. A saved size that stops fitting is refused at load with
     how to fix it; `GAIA_CTX_SIZE` still overrides it.
@@ -1949,18 +1952,21 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
 
   <Accordion title="GET /api/providers/local/status">
     The sidebar's live status: `state` (`loaded`, `warming`, `idle` or
-    `stopped`), `busy` while the model answers, the loaded `model` with its
+    `stopped`), `owner` (`gaia`, `user` or `remote`, as in the Model server
+    panel), `busy` while the model answers, the loaded `model` with its
     `placement` and `ctx_size`, `memory` (`free_gb`, `total_gb`, and
-    `model_gb`, its estimated share; no `free_gb` for a Lemonade on another
-    machine), `error` with the raw cause in `error_detail`, and `restarting` /
+    `model_gb`, its estimated share; `free_gb` never exceeds `total_gb`, and
+    is absent for a Lemonade on another machine), `error` with the raw cause in `error_detail`, and `restarting` /
     `restart_error`. Requires `X-Gaia-UI: 1`.
   </Accordion>
 
   <Accordion title="POST /api/providers/local/restart">
     Start the model server if it is stopped, else reload the loaded chat model
     (or the active one) at its context size. Returns **202**; progress shows in
-    `/local/status`. **409** while a restart runs or while the model is
-    answering; **422** for a cloud model.
+    `/local/status`. On a server GAIA doesn't run, it never starts the server and
+    reloads only with `{"confirm": true}`; without it the **409** explains what
+    the reload would interrupt. Also **409** while a restart runs or while the
+    model is answering; **422** for a cloud model.
   </Accordion>
 
   <Accordion title="POST /api/providers/select">

@@ -70,6 +70,7 @@ export interface ApiSchemas {
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
+  RestartRequest: RestartRequest;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -734,6 +735,12 @@ export interface PreflightReport {
   required_memory_gb?: number;
   tier?: string;
   warnings?: string[];
+}
+/**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
 }
 /**
  * List of scheduled tasks.

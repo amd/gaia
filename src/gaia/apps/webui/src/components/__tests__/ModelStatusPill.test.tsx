@@ -25,7 +25,7 @@ const LOADED: LocalModelStatus = {
     model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B',
     placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
     ctx_size: 65536, memory: { source: 'AMD iGPU', total_gb: 112, free_gb: 80.5, model_gb: 8.2 },
-    memory_error: null, error: null, base_url: 'http://localhost:13305/api/v1', busy: false, restarting: false, restart_error: null,
+    memory_error: null, error: null, base_url: 'http://localhost:13305/api/v1', owner: 'gaia', busy: false, restarting: false, restart_error: null,
 };
 
 const STOPPED: LocalModelStatus = {
@@ -37,7 +37,10 @@ const STOPPED: LocalModelStatus = {
 beforeEach(() => {
     vi.clearAllMocks();
     useModelStore.setState({
-        active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', label: 'Gemma', remote: false, is_default: true },
+        active: {
+            provider: 'local', model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', label: 'Gemma', remote: false,
+            is_default: true, inference_remote: false,
+        },
         names: {},
     });
     useChatStore.setState({
@@ -89,6 +92,41 @@ describe('ModelStatusPill', () => {
         const dialog = await open();
         expect(await within(dialog).findByText('Loaded · answering')).toBeInTheDocument();
         expect(within(dialog).getByRole('button', { name: /Restart/ })).toBeDisabled();
+    });
+
+    it('asks before reloading a model on the user\'s own Lemonade', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, owner: 'user' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /Restart/ }));
+        expect(mockedApi.restartLocalModel).not.toHaveBeenCalled();
+        expect(within(dialog).getByRole('alert')).toHaveTextContent(
+            'This reloads Gemma 4 E4B on your Lemonade at http://localhost:13305/api/v1. Other apps using it are interrupted',
+        );
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reload it' }));
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalledWith(true));
+    });
+
+    it('never offers to start the user\'s own Lemonade', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...STOPPED, owner: 'user' });
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        await within(dialog).findByText('Model server stopped');
+        expect(within(dialog).queryByRole('button', { name: /Restart/ })).not.toBeInTheDocument();
+    });
+
+    it('restarts GAIA\'s own server without asking', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue(LOADED);
+        render(<ModelStatusPill />);
+        const dialog = await open();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /Restart/ }));
+        await waitFor(() => expect(mockedApi.restartLocalModel).toHaveBeenCalledWith(false));
+    });
+
+    it('says Local before the first chat, once setup is done', () => {
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+        render(<ModelStatusPill />);
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model loaded' })).toBeInTheDocument();
     });
 
     it('shows why a restart failed', async () => {

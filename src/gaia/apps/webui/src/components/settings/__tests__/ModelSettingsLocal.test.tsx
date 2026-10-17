@@ -83,7 +83,7 @@ describe('ModelSettings local models', () => {
     it('shows each model\'s device, size, speed and fit', async () => {
         await renderLocal();
         const qwen = screen.getByText('Qwen3.6 35B A3B', { selector: '.model-row-name' }).closest('li') as HTMLElement;
-        expect(within(qwen).getByText('GPU · Vulkan · 21.7 GB download · 52 tok/s measured here')).toBeInTheDocument();
+        expect(within(qwen).getByText('GPU · Vulkan · 21.7 GB on disk · 52 tok/s measured here')).toBeInTheDocument();
         expect(within(qwen).getByText('Fits this PC')).toBeInTheDocument();
         expect(within(qwen).getByText('Loaded')).toBeInTheDocument();
         const gemma = screen.getByText('Gemma 4 E4B').closest('li') as HTMLElement;

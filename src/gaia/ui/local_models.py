@@ -39,9 +39,24 @@ def friendly_name(model_id: str) -> str:
         # MODELS names carry a capability note, "(Multimodal)"; the list shows that elsewhere.
         return re.sub(r"\s*\([^)]*\)\s*$", "", req.display_name)
     name = model_id[5:] if model_id.startswith("user.") else model_id
-    name = re.sub(r"-(GGUF|FLM|ONNX|OGA)$", "", name, flags=re.IGNORECASE)
-    name = re.sub(r"-(it|instruct)(?=-|$)", "", name, flags=re.IGNORECASE)
-    return name.replace("-", " ").replace("_", " ").strip() or model_id
+    words = []
+    for word in re.split(r"[-_\s]+", name):
+        low = word.lower()
+        # Format and tuning tags, and the date stamp a user-registered build carries.
+        if low in _NAME_NOISE or re.fullmatch(r"\d{8}", word):
+            continue
+        # Sizes read as sizes: 27b -> 27B, e2b -> E2B, a3b -> A3B.
+        words.append(
+            word.upper() if re.fullmatch(r"[a-z]?\d+(\.\d+)?[bkm]", low) else word
+        )
+    if not words:
+        return model_id
+    words[0] = words[0][:1].upper() + words[0][1:]
+    return " ".join(words)
+
+
+#: Words in a model id that say how it is packaged or tuned, not what it is.
+_NAME_NOISE = {"gguf", "flm", "onnx", "oga", "it", "instruct"}
 
 
 def measured_speeds(stats: Iterable[Dict[str, Any]]) -> Dict[str, float]:

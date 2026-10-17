@@ -59,6 +59,7 @@ class Lemonade:
 
     def __init__(self):
         self.down = False
+        self.owner = "gaia"
         self.loaded = []
         self.models = [
             {
@@ -103,6 +104,7 @@ def lemonade(monkeypatch):
     fake = Lemonade()
     monkeypatch.setattr(providers, "_lemonade", fake)
     monkeypatch.setattr(providers, "_base_url", lambda: BASE)
+    monkeypatch.setattr(providers, "_server_owner", lambda base: fake.owner)
     return fake
 
 
@@ -446,3 +448,69 @@ def test_active_survives_a_lemonade_error(client, lemonade, monkeypatch):
     resp = client.get("/api/providers/active")
     assert resp.status_code == 200
     assert resp.json()["downloaded"] is None
+
+
+# ── #5253: the user's own Lemonade, and figures that add up ───────────────
+
+
+def test_restart_on_the_users_server_asks_first(client, lemonade, jobs):
+    lemonade.owner = "user"
+    lemonade.loaded = [_entry(DEFAULT_MODEL_NAME)]
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 409
+    assert "on your Lemonade" in resp.json()["detail"]
+    assert "Other apps using it are interrupted" in resp.json()["detail"]
+    assert jobs == []
+    resp = client.post("/api/providers/local/restart", json={"confirm": True})
+    assert resp.status_code == 202
+    _join_restart()
+    assert jobs == [(DEFAULT_MODEL_NAME, True)]
+
+
+@pytest.mark.parametrize("owner", ["user", "remote"])
+def test_gaia_never_starts_a_server_it_does_not_run(client, lemonade, jobs, owner):
+    lemonade.owner = owner
+    lemonade.down = True
+    resp = client.post("/api/providers/local/restart", json={"confirm": True})
+    assert resp.status_code == 409
+    assert "doesn't start" in resp.json()["detail"]
+    assert jobs == []
+    status = client.get("/api/providers/local/status").json()
+    assert status["owner"] == owner
+    assert "start it yourself" in status["error"]
+
+
+def test_a_size_change_never_reloads_the_users_server(client, lemonade, jobs):
+    lemonade.owner = "user"
+    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME)]
+    body = client.put(
+        "/api/providers/local/context",
+        json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072},
+    ).json()
+    assert body["reload"] == {"started": False, "reason": "not_gaias_server"}
+    assert body["chosen"] == 131072
+    assert jobs == []
+
+
+def test_free_memory_never_exceeds_the_total(client, lemonade, monkeypatch):
+    from gaia.llm import model_fit
+
+    lemonade.loaded = [_entry(DEFAULT_MODEL_NAME, ctx=65536)]
+    # Windows iGPU: the carve-out plus all free RAM, more than the GPU pool.
+    monkeypatch.setattr(
+        model_fit,
+        "free_memory",
+        lambda info, os_mem: model_fit.FreeMemory(197.5, 210.0),
+    )
+    memory = client.get("/api/providers/local/status").json()["memory"]
+    assert memory["total_gb"] == 112.0
+    assert memory["free_gb"] <= memory["total_gb"]
+    # Used plus free adds up to the pool, as setup describes it.
+    assert memory["free_gb"] == pytest.approx(
+        memory["total_gb"] - memory["model_gb"], abs=0.11
+    )
+
+
+def test_active_says_where_a_new_chat_runs_before_any_chat(client, lemonade):
+    body = client.get("/api/providers/active").json()
+    assert body["inference_remote"] is False

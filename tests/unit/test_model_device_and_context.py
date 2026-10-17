@@ -284,6 +284,8 @@ def test_a_running_model_is_never_hidden_by_the_estimate():
         ("gemma4-it-e2b-FLM", "Gemma 4 E2B"),
         ("Qwen3-30B-A3B-Instruct-2507-GGUF", "Qwen3 30B A3B 2507"),
         ("user.Phi-4-mini-instruct-GGUF", "Phi 4 mini"),
+        # A user-registered build: date stamp and format tag dropped, sizes upper-case.
+        ("user.qwen38-27b-gguf-20260826", "Qwen38 27B"),
     ],
 )
 def test_friendly_name(model_id, name):

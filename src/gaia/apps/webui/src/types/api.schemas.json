@@ -2725,6 +2725,18 @@
     "title": "QuickLink",
     "type": "object"
   },
+  "RestartRequest": {
+    "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "RestartRequest",
+    "type": "object"
+  },
   "ScheduleListResponse": {
     "description": "List of scheduled tasks.",
     "properties": {

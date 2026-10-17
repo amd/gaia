@@ -42,6 +42,7 @@ export function ModelStatusPill() {
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [restarting, setRestarting] = useState(false);
+    const [confirming, setConfirming] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -59,11 +60,12 @@ export function ModelStatusPill() {
         return () => clearInterval(t);
     }, [open, load]);
 
-    const restart = useCallback(async () => {
+    const restart = useCallback(async (confirm: boolean) => {
+        setConfirming(false);
         setRestarting(true);
         setError(null);
         try {
-            await api.restartLocalModel();
+            await api.restartLocalModel(confirm);
             await load();
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
@@ -85,6 +87,9 @@ export function ModelStatusPill() {
 
     const s = status;
     const busy = restarting || !!s?.restarting;
+    const notOurs = !!s && s.owner !== 'gaia';
+    // GAIA never starts a server it doesn't run, so there is nothing to offer then.
+    const canRestart = !!s && !(notOurs && s.state === 'stopped');
     return (
         <div className="sb-location-wrap">
             <button
@@ -136,6 +141,18 @@ export function ModelStatusPill() {
                         </>
                     )}
                     {error && <span className="settings-error" role="alert">{error}</span>}
+                    {confirming && s && (
+                        <div className="model-status-confirm" role="alert">
+                            <span>
+                                This reloads {s.display_name ?? 'the model'} on your Lemonade at {s.base_url}. Other apps
+                                using it are interrupted while it reloads.
+                            </span>
+                            <div className="model-status-actions">
+                                <button type="button" className="btn-secondary" onClick={() => setConfirming(false)}>Cancel</button>
+                                <button type="button" className="btn-primary" onClick={() => void restart(true)}>Reload it</button>
+                            </div>
+                        </div>
+                    )}
                     <div className="model-status-actions">
                         <button
                             type="button"
@@ -144,10 +161,10 @@ export function ModelStatusPill() {
                         >
                             <Settings size={13} aria-hidden="true" /> Model settings
                         </button>
-                        <button
+                        {canRestart && <button
                             type="button"
                             className="btn-secondary"
-                            onClick={() => void restart()}
+                            onClick={() => (notOurs ? setConfirming(true) : void restart(false))}
                             disabled={busy || !s || s.busy || (s.active_remote && s.state !== 'loaded')}
                             title={s?.busy
                                 ? 'GAIA is answering with this model. Restart it once the reply finishes.'
@@ -157,7 +174,7 @@ export function ModelStatusPill() {
                         >
                             {busy ? <Loader2 size={13} className="spin" /> : <RotateCw size={13} aria-hidden="true" />}
                             {busy ? 'Restarting…' : 'Restart'}
-                        </button>
+                        </button>}
                     </div>
                 </div>
             </Popover>

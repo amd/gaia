@@ -178,3 +178,10 @@
     width: 100%;
 }
 .sb-location-dot.is-idle { border: 1px solid var(--text-secondary); }
+
+.model-status-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--accent-yellow);
+}

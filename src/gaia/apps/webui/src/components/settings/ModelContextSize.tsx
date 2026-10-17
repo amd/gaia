@@ -37,6 +37,8 @@ export function ModelContextSize({ model }: { model: string }) {
                 setNotice(`Reloading ${next.display_name} at ${size}. Chat pauses until it's back.`);
             } else if (next.reload?.reason === 'busy') {
                 setNotice(`Saved. GAIA is answering right now, so ${next.display_name} switches to ${size} the next time it loads.`);
+            } else if (next.reload?.reason === 'not_gaias_server') {
+                setNotice(`Saved. GAIA doesn't reload models on your own server; ${next.display_name} uses ${size} the next time it loads.`);
             } else if (next.reload?.reason === 'restarting') {
                 setNotice('Saved. A reload is already running; this size applies the next time the model loads.');
             } else {
@@ -72,7 +74,7 @@ export function ModelContextSize({ model }: { model: string }) {
             <span className="settings-hint">
                 {view.note ?? (
                     view.max_fit
-                        ? `Up to ${ctxLabel(view.max_fit)}, the most ${view.display_name} can hold on this PC (${view.memory_source}). A larger window uses more memory. Changing it reloads the model if it's loaded.`
+                        ? `Up to ${ctxLabel(view.max_fit)}, the most ${view.display_name} can hold on this PC (${view.memory_source}). A larger window uses more memory. GAIA reloads the model to apply it, except on a Lemonade you run yourself.`
                         : null
                 )}
                 {loadedDiffers && ` Loaded now at ${ctxLabel(view.loaded_ctx)}.`}

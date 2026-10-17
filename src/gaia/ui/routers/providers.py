@@ -93,6 +93,15 @@ def _is_local_url(base_url: str) -> bool:
     return host in ("localhost", "127.0.0.1", "::1")
 
 
+def _server_owner(base_url: str) -> str:
+    """``gaia`` for GAIA's own Lemonade, ``user`` for another local one, ``remote``."""
+    from gaia.llm.lemonade_client import _read_embedded_lemonade_state
+    from gaia.llm.model_server_info import server_owner
+
+    state = _read_embedded_lemonade_state()
+    return server_owner(base_url, state.get("port") if state else None)
+
+
 def _require_loopback(base_url: str) -> None:
     if not _is_local_url(base_url):
         raise ProviderError(
@@ -366,6 +375,26 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
         "remote": provider != LOCAL,
         "is_default": not chosen,
         "config_error": None,
+        **_new_chat_location(model, chosen or None),
+    }
+
+
+def _new_chat_location(model: str, custom_model: Optional[str]) -> Dict[str, Any]:
+    """Where a new chat would be answered, by the rule session locations use.
+
+    Lets the chip say "Local" before the first chat exists, from the backend.
+    """
+    from .._chat_helpers import session_inference_location
+    from ..warmup import NEW_CHAT_AGENT
+
+    loc = session_inference_location(
+        {"agent_type": NEW_CHAT_AGENT, "model": model}, custom_model
+    )
+    if loc is None:
+        return {"inference_remote": None, "inference_description": None}
+    return {
+        "inference_remote": loc.remote,
+        "inference_description": loc.notice() if loc.model else None,
     }
 
 
@@ -909,7 +938,9 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
             entry = _chat_entry(_read_health())
         except ProviderError as e:
             _raise(e)
-        if entry is not None and entry.get("is_busy"):
+        if _server_owner(_base_url()) != "gaia":
+            reload = {"started": False, "reason": "not_gaias_server"}
+        elif entry is not None and entry.get("is_busy"):
             reload = {"started": False, "reason": "busy"}
         elif _start_reload(model_id, server_up=True):
             reload = {"started": True, "reason": None}
@@ -973,7 +1004,15 @@ def _memory_view(
     return {
         "source": capacity.memory_source,
         "total_gb": round(capacity.memory_gb, 1),
-        "free_gb": round(free.free_gb, 1) if free else None,
+        # The OS also counts RAM outside the GPU pool, so free is bounded by what
+        # the pool has left once this model is in it.
+        "free_gb": (
+            round(
+                min(free.free_gb, max(0.0, capacity.memory_gb - (model_gb or 0.0))), 1
+            )
+            if free
+            else None
+        ),
         "model_gb": round(model_gb, 1) if model_gb else None,
     }
 
@@ -1005,19 +1044,25 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         "error": None,
         "error_detail": None,
         "base_url": None,
+        "owner": None,
         "busy": False,
         "restarting": _restart_lock.locked(),
         "restart_error": _restart_error,
     }
     try:
         view["base_url"] = _base_url()
+        view["owner"] = _server_owner(view["base_url"])
         health = _read_health()
         system_info = _read_system_info()
     except ProviderError as e:
         down = e.status == 503 and view["base_url"]
         view["error"] = (
             f"The model server isn't answering at {view['base_url']}. "
-            "Restart starts it if GAIA runs it."
+            + (
+                "Restart starts it."
+                if view["owner"] == "gaia"
+                else "GAIA doesn't start a server it doesn't run; start it yourself."
+            )
             if down
             else str(e)
         )
@@ -1090,8 +1135,16 @@ def _start_reload(model_id: str, server_up: bool) -> bool:
     return True
 
 
+class RestartRequest(BaseModel):
+    """``confirm`` is required to reload a model on a server GAIA does not run."""
+
+    confirm: bool = False
+
+
 @router.post("/api/providers/local/restart", status_code=202)
-def restart_local(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
+def restart_local(
+    body: Optional[RestartRequest] = None, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
     """Start the model server if it is stopped, then reload the chat model.
 
     Reloads the model already loaded (or the active one), so nothing another
@@ -1114,6 +1167,28 @@ def restart_local(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         model_id, server_up = active["model"], False
     if not model_id:
         raise HTTPException(status_code=409, detail=active["config_error"])
+    try:
+        base = _base_url()
+    except ProviderError as e:
+        _raise(e)
+    owner = _server_owner(base)
+    if owner != "gaia" and not server_up:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The model server at {base} isn't GAIA's, so GAIA doesn't start "
+                "it. Start it the way you usually do."
+            ),
+        )
+    if owner != "gaia" and not (body and body.confirm):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This reloads {display_name(model_id)} on your Lemonade at {base}. "
+                "Other apps using it are interrupted while it reloads. Confirm to "
+                "go ahead."
+            ),
+        )
     if provider_of(model_id) != LOCAL:
         raise HTTPException(
             status_code=422,

@@ -836,6 +836,9 @@ export interface ActiveModel {
     /** Local model on disk; null for a cloud model or while the server starts. */
     downloaded?: boolean | null;
     config_error?: string | null;
+    /** Where a new chat would be answered, as the backend resolves it; null when it can't tell. */
+    inference_remote?: boolean | null;
+    inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
     restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
 }
@@ -904,7 +907,7 @@ export interface ContextChoice {
     memory_source: string;
     note: string | null;
     /** On PUT for a loaded model: whether GAIA started reloading it at the new size. */
-    reload?: { started: boolean; reason: 'busy' | 'restarting' | null } | null;
+    reload?: { started: boolean; reason: 'busy' | 'restarting' | 'not_gaias_server' | null } | null;
 }
 
 /** GET /api/providers/local/status — the sidebar pill's popover. */
@@ -923,6 +926,8 @@ export interface LocalModelStatus {
     error: string | null;
     error_detail?: string | null;
     base_url: string | null;
+    /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
+    owner: 'gaia' | 'user' | 'remote' | null;
     /** The loaded model is answering a request right now. */
     busy: boolean;
     restarting: boolean;
