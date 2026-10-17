@@ -253,3 +253,106 @@ export const selectSessionPermissionPrompt = (sessionId: string) =>
     state.notifications.find(
       (n) => n.type === 'permission_request' && n.sessionId === sessionId && !n.response && !n.dismissed
     ) ?? null;
+
+/** Chats with an unanswered permission prompt, sorted; feeds the chat list's Needs you group. */
+export const selectPromptingSessionIds = (state: NotificationState): string[] =>
+  [...new Set(
+    state.notifications
+      .filter((n) => n.type === 'permission_request' && n.sessionId && !n.response && !n.dismissed)
+      .map((n) => n.sessionId as string)
+  )].sort();
+
+// ── Chat alert settings (#5226) ──────────────────────────────────────────
+
+/** The chat events that can alert the user. */
+export type AlertEvent = 'needs_approval' | 'question' | 'finished';
+/** banner: OS notification plus badge; badge: counted on the tray/dock badge only. */
+export type AlertMode = 'banner' | 'badge' | 'off';
+
+export interface AlertSettings {
+  modes: Record<AlertEvent, AlertMode>;
+  /** A short chime with each alert. */
+  sound: boolean;
+  /** Flash the taskbar button when an alert fires and GAIA isn't focused. */
+  flash: boolean;
+  /** Hold off idle sleep while a chat turn runs (desktop app). */
+  keepAwake: boolean;
+  /** On battery, stop holding off sleep below this percent; 0 never stops. */
+  batteryFloor: number;
+}
+
+export const ALERT_SETTINGS_KEY = 'gaia_alert_settings';
+
+export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
+  modes: { needs_approval: 'banner', question: 'banner', finished: 'banner' },
+  sound: false,
+  flash: true,
+  keepAwake: true,
+  batteryFloor: 20,
+};
+
+const ALERT_MODES: readonly AlertMode[] = ['banner', 'badge', 'off'];
+
+/** Saved settings over the defaults; an unreadable or invalid value is reported and replaced. */
+export function loadAlertSettings(): AlertSettings {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(ALERT_SETTINGS_KEY);
+  } catch (err) {
+    console.warn('[alerts] Notification settings unreadable (site data blocked); using defaults.', err);
+    return DEFAULT_ALERT_SETTINGS;
+  }
+  if (!raw) return DEFAULT_ALERT_SETTINGS;
+  let saved: Partial<AlertSettings>;
+  try {
+    saved = JSON.parse(raw);
+  } catch (err) {
+    console.warn('[alerts] Saved notification settings are corrupt; using defaults.', err);
+    return DEFAULT_ALERT_SETTINGS;
+  }
+  const modes = { ...DEFAULT_ALERT_SETTINGS.modes };
+  for (const event of Object.keys(modes) as AlertEvent[]) {
+    const m = saved.modes?.[event];
+    if (m !== undefined && ALERT_MODES.includes(m)) modes[event] = m;
+    else if (m !== undefined) console.warn(`[alerts] Ignored unknown mode ${String(m)} for ${event}.`);
+  }
+  const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
+  const floor = saved.batteryFloor;
+  return {
+    modes,
+    sound: bool(saved.sound, DEFAULT_ALERT_SETTINGS.sound),
+    flash: bool(saved.flash, DEFAULT_ALERT_SETTINGS.flash),
+    keepAwake: bool(saved.keepAwake, DEFAULT_ALERT_SETTINGS.keepAwake),
+    batteryFloor: typeof floor === 'number' && floor >= 0 && floor <= 100
+      ? floor : DEFAULT_ALERT_SETTINGS.batteryFloor,
+  };
+}
+
+interface AlertSettingsState extends AlertSettings {
+  setMode: (event: AlertEvent, mode: AlertMode) => void;
+  update: (patch: Partial<Omit<AlertSettings, 'modes'>>) => void;
+}
+
+function saveAlertSettings(s: AlertSettings): void {
+  try {
+    localStorage.setItem(ALERT_SETTINGS_KEY, JSON.stringify(s));
+  } catch (err) {
+    console.warn('[alerts] Notification settings not saved; they will reset on reload.', err);
+  }
+}
+
+const pickSettings = (s: AlertSettings): AlertSettings => ({
+  modes: s.modes, sound: s.sound, flash: s.flash, keepAwake: s.keepAwake, batteryFloor: s.batteryFloor,
+});
+
+export const useAlertSettings = create<AlertSettingsState>((set, get) => ({
+  ...loadAlertSettings(),
+  setMode: (event, mode) => {
+    set({ modes: { ...get().modes, [event]: mode } });
+    saveAlertSettings(pickSettings(get()));
+  },
+  update: (patch) => {
+    set(patch);
+    saveAlertSettings(pickSettings(get()));
+  },
+}));

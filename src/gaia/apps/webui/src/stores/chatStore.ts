@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { log } from '../utils/logger';
 
@@ -17,6 +17,7 @@ export type SettingsSection =
     | 'connectors'
     | 'memory'
     | 'privacy'
+    | 'notifications'
     | 'advanced';
 
 /**
@@ -26,6 +27,10 @@ export type SettingsSection =
  * preference is cosmetic, so the default stands in rather than failing the
  * whole store's construction -- but never without a trace.
  */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+    return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function readPref(key: string, fallback: string): string {
     if (typeof window === 'undefined') return fallback;
     try {
@@ -94,6 +99,12 @@ interface ChatState {
      *  "still running" spinner on backgrounded sessions. */
     runningSessionIds: string[];
     setRunningSessions: (ids: string[]) => void;
+    /** Chats waiting in line for the model, first to run next first (#5226). */
+    queuedSessionIds: string[];
+    /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
+    awaitingBySession: Record<string, AwaitingUser>;
+    /** Apply one GET /api/chat/active poll. */
+    setActiveRuns: (runs: ActiveRuns) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -219,11 +230,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             // Reference-stable update: skip the set() when the running set is
             // unchanged so the polled refresh doesn't re-render the sidebar.
-            const prev = state.runningSessionIds;
-            if (prev.length === ids.length && prev.every((id) => ids.includes(id))) {
-                return state;
-            }
+            if (sameIds(state.runningSessionIds, ids)) return state;
             return { runningSessionIds: ids };
+        }),
+    queuedSessionIds: [],
+    awaitingBySession: {},
+    setActiveRuns: (runs) =>
+        set((state) => {
+            const next: Partial<ChatState> = {};
+            if (!sameIds(state.runningSessionIds, runs.session_ids)) next.runningSessionIds = runs.session_ids;
+            if (state.queuedSessionIds.join() !== runs.queued.join()) next.queuedSessionIds = runs.queued;
+            if (JSON.stringify(state.awaitingBySession) !== JSON.stringify(runs.awaiting_user)) {
+                next.awaitingBySession = runs.awaiting_user;
+            }
+            // Reference-stable: an unchanged poll doesn't re-render the sidebar.
+            return Object.keys(next).length ? next : state;
         }),
     setSessions: (sessions) =>
         set((state) => ({

@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re as _re
+import sqlite3
 import threading
 import time as _time
 from pathlib import Path
@@ -223,8 +224,8 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
 # even when nothing has changed.  Caching the agent per session_id lets us skip
 # all of that on follow-up turns.
 #
-# Thread-safety: the global chat_semaphore(1) in server.py serialises all chat
-# requests, and the per-session session_lock prevents concurrent turns within
+# Thread-safety: the global turn queue (turn_queue.py) serialises all chat
+# turns, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
 _agent_cache: dict[str, dict] = (
@@ -3539,6 +3540,67 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         await _cleanup_stream()
 
 
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def _queued_status_event(position: int, ordinal) -> dict:
+    """The status a turn shows while another chat has the model (#5226)."""
+    return {
+        "type": "status",
+        "status": "working",
+        "phase": "queued",
+        "queue_position": position,
+        "message": f"Waiting for the GPU — {ordinal(position)} in line",
+    }
+
+
+class _RunOutcome:
+    """How a turn ended, read off the SSE events it emitted (#5221)."""
+
+    def __init__(self) -> None:
+        self._error = False
+        self._done = False
+        self._cancelled = False
+
+    def observe(self, data: str) -> None:
+        # A frame may carry ": padding" lines after its data line.
+        line = data.split("\n", 1)[0]
+        if not line.startswith("data: "):
+            return
+        try:
+            event = json.loads(line[len("data: ") :])
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Chat run emitted a malformed SSE frame: {line[:200]!r}"
+            ) from exc
+        kind = event.get("type") if isinstance(event, dict) else None
+        if kind == "error":
+            self._error = True
+        elif kind == "done":
+            self._done = True
+            self._cancelled = bool(event.get("cancelled"))
+
+    def status(self) -> str:
+        if self._error or not self._done:
+            return "failed"
+        return "stopped" if self._cancelled else "done"
+
+
+def _record_run_outcome(db: ChatDatabase, session_id: str, status: str) -> None:
+    """Persist the turn's outcome and mark the chat unread for the list."""
+    try:
+        db.finish_session_run(session_id, status)
+    except sqlite3.Error as exc:
+        # The turn already ended and was persisted; only the list status is lost.
+        logger.error(
+            "Could not record the %s outcome of session %s: %s",
+            status,
+            session_id[:8],
+            exc,
+        )
+
+
 async def _run_chat_lifecycle(
     run, db: ChatDatabase, session: dict, request: ChatRequest
 ):
@@ -3550,8 +3612,32 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
-    async for data in _stream_chat_impl(run, db, session, request):
+    from gaia.ui.turn_queue import TurnCancelled, ordinal, turn_queue
+
+    session_id = request.session_id
+    outcome = _RunOutcome()
+
+    def _emit(data: str) -> None:
+        outcome.observe(data)
         run.emit(data)
+
+    def _announce_place(position: int) -> None:
+        _emit(_sse(_queued_status_event(position, ordinal)))
+
+    try:
+        try:
+            await turn_queue.acquire(session_id, on_position=_announce_place)
+        except TurnCancelled:
+            msg_id = db.add_message(session_id, "assistant", "Cancelled.")
+            _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
+            return
+        try:
+            async for data in _stream_chat_impl(run, db, session, request):
+                _emit(data)
+        finally:
+            turn_queue.release()
+    finally:
+        _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
     # than on subscriber detach.

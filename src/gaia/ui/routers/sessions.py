@@ -38,6 +38,7 @@ from ..models import (
     CreateSessionRequest,
     MessageListResponse,
     SessionListResponse,
+    SessionPinRequest,
     SessionResponse,
     UpdateSessionRequest,
 )
@@ -407,6 +408,26 @@ async def toggle_session_privacy(
     current = bool(session.get("private", 0))
     updated = db.update_session(session_id, private=not current)
     return await _session_response(db, updated)
+
+
+@router.put("/api/sessions/{session_id}/pin", response_model=SessionResponse)
+async def pin_session(
+    session_id: str,
+    request: SessionPinRequest,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Pin a chat to the top of the list, or unpin it (#5221)."""
+    if not db.set_session_pinned(session_id, request.pinned):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_response(db, db.get_session(session_id))
+
+
+@router.post("/api/sessions/{session_id}/read", response_model=SessionResponse)
+async def mark_session_read(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Clear a chat's unread mark; the UI calls this when the chat is opened (#5221)."""
+    if not db.mark_session_read(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_response(db, db.get_session(session_id))
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────

@@ -31,6 +31,27 @@ export interface Session {
     inference_provider_name?: string | null;
     /** One sentence on where chat runs and what is sent there. */
     inference_description?: string | null;
+    /** Pinned to the top of the chat list. */
+    pinned?: boolean;
+    /** A turn finished since the chat was last opened. */
+    unread?: boolean;
+    /** How the last turn ended; null before the first. */
+    last_run_status?: 'done' | 'failed' | 'stopped' | null;
+    /** Who started the chat: a person, the eval runner, or a schedule. */
+    kind?: SessionKind;
+}
+
+export type SessionKind = 'chat' | 'eval' | 'scheduled';
+
+/** What a chat's running turn is paused on. */
+export type AwaitingUser = 'permission' | 'question';
+
+/** GET /api/chat/active: chats with a turn in flight. */
+export interface ActiveRuns {
+    session_ids: string[];
+    /** Chats waiting for the model, first to run next first. */
+    queued: string[];
+    awaiting_user: Record<string, AwaitingUser>;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */

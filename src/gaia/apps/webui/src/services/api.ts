@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { ActiveRuns, Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -511,6 +511,19 @@ export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
 }
 
+export async function getSession(id: string): Promise<Session> {
+    return apiFetch('GET', `/sessions/${id}`);
+}
+
+export async function pinSession(id: string, pinned: boolean): Promise<Session> {
+    return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/** Clear the chat's unread mark. */
+export async function markSessionRead(id: string): Promise<Session> {
+    return apiFetch('POST', `/sessions/${id}/read`);
+}
+
 export async function toggleSessionPrivacy(id: string): Promise<Session> {
     return apiFetch('PATCH', `/sessions/${id}/private`);
 }
@@ -779,7 +792,7 @@ export function attachToRun(
 }
 
 /** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
+export async function getActiveRuns(): Promise<ActiveRuns> {
     return apiFetch('GET', '/chat/active');
 }
 

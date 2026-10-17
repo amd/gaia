@@ -94,6 +94,8 @@ class TrayManager {
 
     /** @type {number} Unread notifications reflected in the tooltip/badge. */
     this._notificationCount = 0;
+    /** Chats waiting on the user or finished unread, per the renderer's alert settings. */
+    this._attentionCount = 0;
 
     /** @type {object} */
     this.config = this._loadConfig();
@@ -153,23 +155,46 @@ class TrayManager {
       console.log(`[tray] Unread notifications: ${unread}`);
     }
     this._notificationCount = unread;
+    this._renderBadge();
+  }
 
+  /**
+   * Reflect how many chats need the user (#5226): waiting on a permission or
+   * a question, or finished and unread. Shares the badge with notifications.
+   *
+   * @param {number} count Chats needing attention; must be a non-negative integer.
+   */
+  setAttentionCount(count) {
+    if (!Number.isInteger(count) || count < 0) {
+      throw new TypeError(`setAttentionCount expects a non-negative integer, got ${count}`);
+    }
+    this._attentionCount = count;
+    this._renderBadge();
+  }
+
+  _renderBadge() {
+    const unread = this._notificationCount;
+    const chats = this._attentionCount;
     const trayAlive =
       this.tray &&
       !(typeof this.tray.isDestroyed === "function" && this.tray.isDestroyed());
     if (trayAlive) {
-      this.tray.setToolTip(
-        unread > 0
-          ? `GAIA — ${unread} unread notification${unread === 1 ? "" : "s"}`
-          : "GAIA"
-      );
+      const parts = [];
+      if (chats > 0) parts.push(`${chats} chat${chats === 1 ? "" : "s"} need${chats === 1 ? "s" : ""} you`);
+      if (unread > 0) parts.push(`${unread} unread notification${unread === 1 ? "" : "s"}`);
+      this.tray.setToolTip(parts.length ? `GAIA — ${parts.join(", ")}` : "GAIA");
     }
 
     // Dock (macOS) / Unity launcher (Linux) badge. Windows has no
     // app.setBadgeCount equivalent — the tooltip above is the badge there.
     if (process.platform !== "win32" && typeof app.setBadgeCount === "function") {
-      app.setBadgeCount(unread);
+      app.setBadgeCount(unread + chats);
     }
+  }
+
+  /** @returns {number} The chat count last passed to setAttentionCount. */
+  get attentionCount() {
+    return this._attentionCount;
   }
 
   /** @returns {number} The unread count last passed to setNotificationCount. */

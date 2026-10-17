@@ -14,6 +14,7 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useChatAlerts } from './hooks/useChatAlerts';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
@@ -60,7 +61,7 @@ function App() {
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
     const setAgents = useChatStore((s) => s.setAgents);
-    const setRunningSessions = useChatStore((s) => s.setRunningSessions);
+    const setActiveRuns = useChatStore((s) => s.setActiveRuns);
     const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
     const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
     const openSettings = useChatStore((s) => s.openSettings);
@@ -152,7 +153,7 @@ function App() {
                     if (!initial && list.length === 0 && useChatStore.getState().sessions.length > 0) return;
                     // Includes the model and inference location, so a model change reaches the indicators.
                     const fp = list
-                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}`)
+                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}|${s.unread}|${s.pinned}|${s.last_run_status}|${s.kind}`)
                         .join('\n');
                     if (fp === sessionFingerprint.current) return;
                     sessionFingerprint.current = fp;
@@ -165,16 +166,19 @@ function App() {
         return () => clearInterval(t);
     }, [setSessions]);
 
+    // Every second: a chat paused on a prompt must reach Needs you within one (#5221).
     useEffect(() => {
         const poll = () => {
             api.getActiveRuns()
-                .then((d) => setRunningSessions(d.session_ids || []))
+                .then(setActiveRuns)
                 .catch((err) => log.api.debug('Active-run poll failed', err));
         };
         poll();
-        const t = setInterval(poll, 2_600);
+        const t = setInterval(poll, 1_000);
         return () => clearInterval(t);
-    }, [setRunningSessions]);
+    }, [setActiveRuns]);
+
+    useChatAlerts();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);

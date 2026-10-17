@@ -56,6 +56,7 @@ try {
 const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
+const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { buildIndexQuery } = require("./services/index-query.cjs");
@@ -224,6 +225,9 @@ let agentProcessManager = null;
 
 /** @type {NotificationService | null} */
 let notificationService = null;
+
+/** @type {KeepAwake | null} */
+let keepAwake = null;
 
 /** @type {PortManager} */
 const portManager = new PortManager({
@@ -685,6 +689,9 @@ function initializeServices() {
     agentProcessManager,
     trayManager
   );
+
+  // #5226: hold off idle sleep while a chat turn runs
+  keepAwake = new KeepAwake();
 
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
@@ -1256,6 +1263,11 @@ async function cleanup() {
   if (notificationService) {
     notificationService.destroy();
     notificationService = null;
+  }
+
+  if (keepAwake) {
+    keepAwake.destroy();
+    keepAwake = null;
   }
 
   // Stop all managed OS agents gracefully
