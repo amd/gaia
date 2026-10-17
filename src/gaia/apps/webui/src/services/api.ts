@@ -495,8 +495,23 @@ export async function deactivateConnectorAgent(
 
 // -- Sessions ------------------------------------------------------------------
 
+/** The backend's largest page of chats. */
+export const SESSION_PAGE_SIZE = 200;
+
+/** Every chat, newest first, fetched page by page so none past the first page go missing. */
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-    return apiFetch('GET', '/sessions');
+    const byId = new Map<string, Session>();
+    let total = 0;
+    for (let offset = 0; ; offset += SESSION_PAGE_SIZE) {
+        const page: { sessions: Session[]; total: number } = await apiFetch(
+            'GET', `/sessions?limit=${SESSION_PAGE_SIZE}&offset=${offset}`,
+        );
+        total = page.total;
+        // A chat updated between two page reads can shift into both; keep one.
+        for (const s of page.sessions) if (!byId.has(s.id)) byId.set(s.id, s);
+        if (page.sessions.length < SESSION_PAGE_SIZE || offset + SESSION_PAGE_SIZE >= total) break;
+    }
+    return { sessions: [...byId.values()], total };
 }
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
@@ -778,7 +793,16 @@ export function attachToRun(
         method: 'GET',
         signal: controller.signal,
     })
-        .then((res) => consumeSSEResponse(res, callbacks, t))
+        .then((res) => {
+            // The run ended between the active-runs poll and this attach: its
+            // answer is already saved, so close the view like any finished turn.
+            if (res.status === 404) {
+                log.stream.info(`Run for session=${sessionId} finished before the attach`);
+                callbacks.onDone({ type: 'done', content: '' } as StreamEvent);
+                return;
+            }
+            return consumeSSEResponse(res, callbacks, t);
+        })
         .catch((err) => {
             if (err.name === 'AbortError') {
                 log.stream.warn('Run attach detached by client');

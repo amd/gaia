@@ -67,3 +67,22 @@ describe('alert settings', () => {
         warn.mockRestore();
     });
 });
+
+describe('addNotification', () => {
+    it('keeps one entry when a re-attached run replays the same prompt', () => {
+        useNotificationStore.setState({ notifications: [] });
+        const add = useNotificationStore.getState().addNotification;
+        add(prompt('c1', 'a'));
+        useNotificationStore.getState().dismissSessionPrompts('a');
+        add(prompt('c1', 'a'));
+        const list = useNotificationStore.getState().notifications;
+        expect(list).toHaveLength(1);
+        expect(list[0].dismissed).toBe(false);
+    });
+
+    it('never reopens a prompt that was already answered', () => {
+        useNotificationStore.setState({ notifications: [prompt('c1', 'a', { response: 'allow' })] });
+        useNotificationStore.getState().addNotification(prompt('c1', 'a'));
+        expect(useNotificationStore.getState().notifications[0].response).toBe('allow');
+    });
+});

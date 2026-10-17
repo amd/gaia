@@ -103,8 +103,10 @@ interface ChatState {
     queuedSessionIds: string[];
     /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
     awaitingBySession: Record<string, AwaitingUser>;
-    /** Apply one GET /api/chat/active poll. */
-    setActiveRuns: (runs: ActiveRuns) => void;
+    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
+    activeRunsAt: number;
+    /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
+    setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -235,16 +237,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }),
     queuedSessionIds: [],
     awaitingBySession: {},
-    setActiveRuns: (runs) =>
+    activeRunsAt: 0,
+    setActiveRuns: (runs, requestedAt) =>
         set((state) => {
-            const next: Partial<ChatState> = {};
+            const next: Partial<ChatState> = { activeRunsAt: requestedAt };
             if (!sameIds(state.runningSessionIds, runs.session_ids)) next.runningSessionIds = runs.session_ids;
             if (state.queuedSessionIds.join() !== runs.queued.join()) next.queuedSessionIds = runs.queued;
             if (JSON.stringify(state.awaitingBySession) !== JSON.stringify(runs.awaiting_user)) {
                 next.awaitingBySession = runs.awaiting_user;
             }
-            // Reference-stable: an unchanged poll doesn't re-render the sidebar.
-            return Object.keys(next).length ? next : state;
+            return next;
         }),
     setSessions: (sessions) =>
         set((state) => ({

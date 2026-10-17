@@ -15,6 +15,7 @@ import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { startActiveRunsPoll } from './services/activeRuns';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
@@ -61,7 +62,6 @@ function App() {
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
     const setAgents = useChatStore((s) => s.setAgents);
-    const setActiveRuns = useChatStore((s) => s.setActiveRuns);
     const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
     const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
     const openSettings = useChatStore((s) => s.openSettings);
@@ -166,17 +166,7 @@ function App() {
         return () => clearInterval(t);
     }, [setSessions]);
 
-    // Every second: a chat paused on a prompt must reach Needs you within one (#5221).
-    useEffect(() => {
-        const poll = () => {
-            api.getActiveRuns()
-                .then(setActiveRuns)
-                .catch((err) => log.api.debug('Active-run poll failed', err));
-        };
-        poll();
-        const t = setInterval(poll, 1_000);
-        return () => clearInterval(t);
-    }, [setActiveRuns]);
+    useEffect(() => startActiveRunsPoll(), []);
 
     useChatAlerts();
 

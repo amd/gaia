@@ -171,9 +171,19 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   typeFilter: null,
 
   addNotification: (notification) =>
-    set((state) => ({
-      notifications: [notification, ...state.notifications].slice(0, MAX_NOTIFICATIONS),
-    })),
+    set((state) => {
+      const existing = state.notifications.find((n) => n.id === notification.id);
+      if (!existing) {
+        return { notifications: [notification, ...state.notifications].slice(0, MAX_NOTIFICATIONS) };
+      }
+      // A re-attached run replays its prompt with the same id: keep one entry, and any answer.
+      if (existing.response) return state;
+      return {
+        notifications: state.notifications.map((n) =>
+          n.id === notification.id ? { ...notification, read: existing.read } : n
+        ),
+      };
+    }),
 
   dismiss: (id) =>
     set((state) => ({
