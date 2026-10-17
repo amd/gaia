@@ -158,6 +158,11 @@ class EmbeddedLemonadeError(RuntimeError):
     """An embedded Lemonade operation failed. Message names the remedy."""
 
 
+class EmbeddedLemonadeNotAnswering(EmbeddedLemonadeError):
+    """The recorded server process is up but not answering. Nothing was started
+    or stopped, so asking again later may find it back."""
+
+
 class UnsupportedPlatformError(EmbeddedLemonadeError):
     """No embeddable artifact is published for this OS/architecture."""
 

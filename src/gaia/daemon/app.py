@@ -200,8 +200,14 @@ def create_app(
         app.include_router(build_lemonade_router(token, lemonade))
 
     if lemonade_owner is not None:
-        from gaia.daemon.lemonade import LemonadeNotManaged
-        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+        from gaia.daemon.lemonade import (
+            LEMONADE_RETRY_AFTER_SECONDS,
+            LemonadeNotManaged,
+        )
+        from gaia.llm.lemonade_embedded import (
+            EmbeddedLemonadeError,
+            EmbeddedLemonadeNotAnswering,
+        )
 
         @app.post(f"{API_PREFIX}/lemonade/ensure")
         def ensure_lemonade(_: None = Depends(require_token)) -> dict:
@@ -212,6 +218,13 @@ def create_app(
                 return lemonade_owner.ensure().to_dict()
             except (LemonadeNotManaged, LemonadeChoiceError, GaiaConfigError) as e:
                 raise HTTPException(status_code=409, detail=str(e)) from e
+            except EmbeddedLemonadeNotAnswering as e:
+                # Retry-After marks it transient: the caller may wait and ask again.
+                raise HTTPException(
+                    status_code=503,
+                    detail=str(e),
+                    headers={"Retry-After": str(LEMONADE_RETRY_AFTER_SECONDS)},
+                ) from e
             except EmbeddedLemonadeError as e:
                 raise HTTPException(status_code=503, detail=str(e)) from e
 
