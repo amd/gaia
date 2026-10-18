@@ -143,7 +143,10 @@ class LemonadeError(ValueError):
 
 class LemonadeModelNotLoadedError(LemonadeError):
     retryable = True
-    user_message = "Reloading the model — give it a few seconds and try again."
+    user_message = (
+        "The model was unloaded before it could answer. Send your message again: "
+        "GAIA loads it first."
+    )
 
 
 class LemonadeContextOverflowError(LemonadeError):
