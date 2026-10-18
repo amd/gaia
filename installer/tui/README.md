@@ -1,10 +1,10 @@
 # GAIA Terminal UI installers
 
-Native double-click installers for the GAIA Terminal UI (`gaia-tui`). Each one puts two
-executables on disk and on `PATH`:
+Native double-click installers for the GAIA Terminal UI (`gaia-tui`). Each one
+puts two executables on disk and on `PATH`:
 
-- **`gaia-tui`** — the hub itself (built from [`tui/`](../../tui))
-- **`gaia-agent`** — the flagship agent the hub spawns as a child process
+- **`gaia-tui`** — the Terminal UI itself (built from [`tui/`](../../tui))
+- **`gaia-agent`** — the flagship agent the Terminal UI spawns as a child process
   (`TransportSubprocess` in `tui/internal/catalog/catalog.go`)
 
 Shipping only the first installs a front end with nothing behind it, which is
