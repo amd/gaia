@@ -277,7 +277,7 @@ jobs:
           # branch's code) or session creation dies with ModuleNotFoundError.
           # Core gaia stays editable (-e .) so eval fixtures + thresholds
           # resolve in-repo.
-          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
 
       - name: Check the venv interpreter
         env:
