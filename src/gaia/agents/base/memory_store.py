@@ -196,12 +196,18 @@ _STEM_STOPWORDS = frozenset(
 
 
 def content_stems(text: str) -> set:
-    """Content words of *text*, cut to a 4-letter stem so "works" meets "working"."""
-    return {
-        w[:4]
-        for w in re.findall(r"[a-z0-9']+", text.lower())
-        if len(w) >= 3 and w not in _STEM_STOPWORDS
-    }
+    """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
+
+    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
+    7" are different memories.
+    """
+    stems = set()
+    for w in re.findall(r"[a-z0-9']+", text.lower()):
+        if any(ch.isdigit() for ch in w):
+            stems.add(w)
+        elif len(w) >= 3 and w not in _STEM_STOPWORDS:
+            stems.add(w[:4])
+    return stems
 
 
 def _as_datetime(iso: str) -> datetime:
@@ -1393,10 +1399,14 @@ class MemoryStore:
         top_k: int = 5,
         time_from: str | None = None,
         time_to: str | None = None,
+        count_as_use: bool = True,
     ) -> List[Dict]:
         """FTS5 search. AND semantics, OR fallback. BM25 ranking.
 
-        Bumps confidence +0.02 and increments use_count on each recalled item.
+        Bumps confidence +0.02 and increments use_count on each recalled item,
+        unless *count_as_use* is False: a lookup nobody asked for (extraction
+        checking what is already known) must not make an old memory look
+        more trusted every turn.
         Filters by context/entity if provided. Excludes sensitive by default.
         Only returns active items (superseded_by IS NULL).
 
@@ -1443,29 +1453,41 @@ class MemoryStore:
             # Wrap in try/except so that a failure on any UPDATE rolls back
             # the whole batch — partial confidence bumps committed by a later
             # unrelated commit() would produce inconsistent use_count/confidence.
-            if results:
-                now = _now_iso()
-                try:
-                    for r in results:
-                        self._conn.execute(
-                            "UPDATE knowledge SET "
-                            "confidence = MIN(confidence + ?, 1.0), "
-                            "last_used = ?, "
-                            "use_count = use_count + 1 "
-                            "WHERE id = ?",
-                            (CONFIDENCE_BUMP_PER_RECALL, now, r["id"]),
-                        )
-                        r["confidence"] = min(
-                            r["confidence"] + CONFIDENCE_BUMP_PER_RECALL, 1.0
-                        )
-                        r["use_count"] = r["use_count"] + 1
-                        r["last_used"] = now
-                    self._conn.commit()
-                except Exception:
-                    self._conn.rollback()
-                    raise
+            if results and count_as_use:
+                self._count_use_locked(results)
 
         return results
+
+    def count_use(self, items: List[Dict]) -> None:
+        """Record that *items* were recalled: confidence, use count, last used.
+
+        ``updated_at`` is left alone: being looked up is not being confirmed.
+        """
+        if items:
+            with self._locked():
+                self._count_use_locked(items)
+
+    def _count_use_locked(self, items: List[Dict]) -> None:
+        # SQL-side arithmetic keeps each bump atomic across processes; one
+        # transaction, so a failure leaves no partial use counts.
+        now = _now_iso()
+        try:
+            for r in items:
+                self._conn.execute(
+                    "UPDATE knowledge SET "
+                    "confidence = MIN(confidence + ?, 1.0), "
+                    "last_used = ?, "
+                    "use_count = use_count + 1 "
+                    "WHERE id = ?",
+                    (CONFIDENCE_BUMP_PER_RECALL, now, r["id"]),
+                )
+                r["confidence"] = min(r["confidence"] + CONFIDENCE_BUMP_PER_RECALL, 1.0)
+                r["use_count"] = r.get("use_count", 0) + 1
+                r["last_used"] = now
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def _fts5_search_knowledge_locked(
         self,
@@ -1977,6 +1999,45 @@ class MemoryStore:
         return bool(stems) and any(
             _mentions(stems, content_stems(c))
             for c, _ in self._forgotten_rows(said_before)
+        )
+
+    def is_current(self, content: str, category: str) -> bool:
+        """Whether a current memory in *category* already says *content*.
+
+        Unlike ``store()``'s dedup, this ignores entity and context, so a copy
+        without an entity tag is recognised as the same memory. It matches on
+        content words against the larger of the two, so "User's sister lives
+        in Calgary" is not "User lives in Calgary".
+        """
+        stems = content_stems(content)
+        if not stems:
+            return False
+        with self._locked():
+            rows = self._conn.execute(
+                "SELECT content FROM knowledge WHERE category = ? "
+                "AND superseded_by IS NULL",
+                (category,),
+            ).fetchall()
+        return any(_same_memory(stems, content_stems(r[0])) for r in rows)
+
+    def changed_since(self, content: str, since: str) -> bool:
+        """Whether *content* is a memory replaced by a newer one after *since*.
+
+        Supersession stamps the old row's ``updated_at``, so this finds a value
+        the user changed after an old conversation stated it.
+        """
+        stems = content_stems(content)
+        if not stems:
+            return False
+        moment = _as_datetime(since)
+        with self._locked():
+            rows = self._conn.execute(
+                "SELECT content, updated_at FROM knowledge "
+                "WHERE superseded_by IS NOT NULL"
+            ).fetchall()
+        return any(
+            _as_datetime(updated) >= moment and _same_memory(stems, content_stems(old))
+            for old, updated in rows
         )
 
     def _unforget_locked(self, content: str) -> None:

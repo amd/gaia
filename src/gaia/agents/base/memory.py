@@ -352,9 +352,9 @@ projects, plans and commitments in their life. Return a JSON array only.
 
 Each item must have an "op" field:
 - "add": New knowledge not already in memory
-  Required: {{op, category, content, grounded, entity?, domain?, confidence: 0.4}}
+  Required: {{op, category, content, grounded, entity?, domain?, due_at?, confidence: 0.4}}
 - "update": Modify an existing memory item (correction, enrichment, or supersession)
-  Required: {{op, knowledge_id, content, grounded, entity?, domain?}}
+  Required: {{op, knowledge_id, content, grounded, entity?, domain?, due_at?}}
 - "delete": Remove a memory item contradicted or invalidated by new information
   Required: {{op, knowledge_id, reason, grounded}}
 - "noop": Information already captured accurately. Do not include in output.
@@ -367,6 +367,9 @@ of the conversation, not about the user. Do not store it.
 Categories: fact, preference, error, skill, note, reminder
 Entity format: type:name (person:sarah_chen, app:vscode, project:gaia)
 Domain examples: journal, meeting, meeting:standup, research, deployment
+due_at: for a dated plan, appointment or deadline the user mentions, the
+category is "reminder" and due_at is its ISO date (YYYY-MM-DD or
+YYYY-MM-DDTHH:MM). The current time is {now}.
 
 Rules:
 - Only extract information about the user that is useful in FUTURE conversations
@@ -1650,6 +1653,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         top_k: int = 5,
         time_from: Optional[str] = None,
         time_to: Optional[str] = None,
+        count_as_use: bool = True,
     ) -> List[Dict]:
         """Full hybrid search: vector + BM25 fused by RRF.
 
@@ -1658,7 +1662,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         3. FTS5 BM25 via self._memory_store.search(): top_k × 4 candidates
         4. Deduplicate by ID, apply RRF fusion
         5. Return final top_k
-        6. Bump confidence + use_count
+        6. Bump confidence + use_count on those, unless *count_as_use* is False
 
         Args:
             query: Search query text.
@@ -1669,6 +1673,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             top_k: Final number of results.
             time_from: ISO 8601 lower bound on created_at.
             time_to: ISO 8601 upper bound on created_at.
+            count_as_use: False for a lookup the user didn't ask for, such as
+                extraction checking what is already known.
 
         Returns:
             List of knowledge dicts, ranked by relevance.
@@ -1705,6 +1711,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     vector_results.append(item)
 
         # Step 3: FTS5 BM25 search
+        # Candidates are not results: only what is returned counts as a use.
         bm25_results = store.search(
             query=query,
             category=category,
@@ -1712,6 +1719,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             entity=entity,
             include_sensitive=include_sensitive,
             top_k=oversample,
+            count_as_use=False,
         )
         # Apply time filters on BM25 results
         if time_from or time_to:
@@ -1766,22 +1774,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         results = [all_items[kid] for kid in final_ids]
 
         # Step 6: Bump confidence + use_count on recalled items.
-        # Only bump items that were NOT already bumped by store.search()
-        # (BM25 path).  store.search() internally bumps confidence for its
-        # results, so we only bump vector-only items to avoid double-counting.
-        if results:
-            bm25_ids = set(bm25_rank.keys())
-            for item in results:
-                if item["id"] not in bm25_ids:
-                    try:
-                        store.update_confidence(item["id"], 0.02)
-                        item["confidence"] = min(item["confidence"] + 0.02, 1.0)
-                    except Exception as e:  # a missed +0.02 bump loses no data
-                        logger.debug(
-                            "[MemoryMixin] recall confidence bump failed for %s: %s",
-                            item["id"],
-                            e,
-                        )
+        if count_as_use:
+            store.count_use(results)
 
         return results
 
@@ -1838,6 +1832,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             existing_items_json=existing_json,
             user_input=user_input[:2000],
             assistant_response=assistant_response[:2000],
+            now=datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M (%A)"),
         )
         material = "\n".join(
             [assistant_response] + [entry["text"] for entry in tool_record or []]
@@ -1971,6 +1966,18 @@ class MemoryMixin(ProceduralMemoryMixin):
                     op
                 ):
                     continue
+                if op_type in ("add", "update") and op.get("due_at"):
+                    try:
+                        datetime.fromisoformat(str(op["due_at"]))
+                    except ValueError:
+                        logger.warning(
+                            "[MemoryMixin] extracted %s op had a due_at that is not "
+                            "an ISO date (%r); stored without a date: %s",
+                            op_type,
+                            op["due_at"],
+                            str(op.get("content", ""))[:80],
+                        )
+                        op.pop("due_at")
                 if op_type == "add" and "content" in op and "category" in op:
                     if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
@@ -2164,6 +2171,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         confidence=op.get("confidence", 0.4),
                         entity=op.get("entity"),
                         domain=op.get("domain"),
+                        due_at=op.get("due_at") or None,
                         source="llm_extract",
                         context=target_context,
                     )
@@ -2180,15 +2188,26 @@ class MemoryMixin(ProceduralMemoryMixin):
                         raise ValueError(
                             "Extraction cannot update privileged memory rows"
                         )
-                    # Store new version
-                    new_id = store.store(
-                        category=op.get(
+                    # Store new version; a reworded reminder keeps its date
+                    # unless the op moves it, and anything else drops it.
+                    new_category = op.get(
+                        "category",
+                        (target or {}).get(
                             "category", existing_item.get("category", "fact")
                         ),
+                    )
+                    inherited_due = (
+                        (target or {}).get("due_at")
+                        if new_category == "reminder"
+                        else None
+                    )
+                    new_id = store.store(
+                        category=new_category,
                         content=op["content"],
                         confidence=max(existing_item.get("confidence", 0.4), 0.4),
                         entity=op.get("entity"),
                         domain=op.get("domain"),
+                        due_at=op.get("due_at") or inherited_due,
                         source="llm_extract",
                         context=target_context,
                     )
@@ -2428,6 +2447,18 @@ class MemoryMixin(ProceduralMemoryMixin):
                         # EXTRACTABLE_CATEGORIES, not VALID_CATEGORIES: a session
                         # summary must not mint a system/profile/permission row.
                         if ki["category"] not in EXTRACTABLE_CATEGORIES:
+                            continue
+                        if store.is_current(str(ki["content"]), ki["category"]):
+                            # Already known; storing it again would refresh its
+                            # date from an old chat, or file an untagged copy
+                            # that a later correction would miss.
+                            continue
+                        if store.changed_since(str(ki["content"]), window_start):
+                            logger.info(
+                                "[MemoryMixin] consolidation: not stored, the user "
+                                "changed it after this chat: %s",
+                                str(ki["content"])[:80],
+                            )
                             continue
                         if store.is_forgotten(
                             str(ki["content"]), said_before=window_start
@@ -4049,7 +4080,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             existing = [
                 item
                 for item in self._hybrid_search(
-                    job.user_input, context=job.read_scope, top_k=10
+                    job.user_input,
+                    context=job.read_scope,
+                    top_k=10,
+                    count_as_use=False,
                 )
                 if not _is_lesson(item)
             ]
