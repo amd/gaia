@@ -10,12 +10,19 @@ asks the server to shut down through its normal, graceful path.
 ``GAIA_DAEMON_EXIT_WITH_PID`` additionally ties the daemon to one process. It is
 opt-in, set by the test suite so a daemon a test started cannot outlive a test
 run that was killed before its teardown ran. Production never sets it.
+
+A daemon for any home but ``~/.gaia`` (a scratch ``GAIA_HOME``, an eval or demo
+home) also exits after :data:`DEFAULT_IDLE_EXIT_MINUTES` with no client, no busy
+sidecar and no pending scheduled job; the next client starts a fresh one. The
+default home's daemon is the machine's always-on one and never idles out.
+``GAIA_DAEMON_IDLE_EXIT_MINUTES`` changes the limit; ``0`` turns it off.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 from typing import Callable, Optional
 
 from gaia.daemon import paths
@@ -26,6 +33,8 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
+IDLE_EXIT_ENV = "GAIA_DAEMON_IDLE_EXIT_MINUTES"
+DEFAULT_IDLE_EXIT_MINUTES = 120
 
 #: Seconds between checks. Each one is two stats (and a pid check when tied).
 CHECK_SECONDS = 5.0
@@ -53,8 +62,46 @@ def exit_with_pid_from_env() -> Optional[int]:
     return pid
 
 
-def exit_reason(exit_with_pid: Optional[int] = None) -> Optional[str]:
-    """Why this daemon should exit now, or None while it should keep running."""
+def idle_exit_seconds_from_env() -> Optional[float]:
+    """The idle limit for a non-default home, or None when it is turned off.
+
+    Raises:
+        DaemonStartError: ``GAIA_DAEMON_IDLE_EXIT_MINUTES`` is not a whole number
+            of minutes, or is negative.
+    """
+    raw = os.environ.get(IDLE_EXIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_IDLE_EXIT_MINUTES * 60.0
+    try:
+        minutes = int(raw)
+    except ValueError as e:
+        raise DaemonStartError(
+            f"{IDLE_EXIT_ENV}={raw!r} is not a whole number of minutes. Unset it "
+            f"for the default ({DEFAULT_IDLE_EXIT_MINUTES}), or set 0 to never idle out."
+        ) from e
+    if minutes < 0:
+        raise DaemonStartError(
+            f"{IDLE_EXIT_ENV}={raw!r} is negative. Use 0 to never idle out."
+        )
+    return minutes * 60.0 if minutes else None
+
+
+def is_default_home() -> bool:
+    """True for the machine's own daemon home, ``~/.gaia/host``."""
+    return paths.host_dir().resolve() == (Path.home() / ".gaia" / "host").resolve()
+
+
+def exit_reason(
+    exit_with_pid: Optional[int] = None,
+    idle_seconds: Optional[float] = None,
+    idle_limit: Optional[float] = None,
+) -> Optional[str]:
+    """Why this daemon should exit now, or None while it should keep running.
+
+    *idle_seconds* is how long nothing has used the daemon (None while
+    something does); it counts against *idle_limit* only outside the default
+    home.
+    """
     home = paths.host_dir()
     if not home.is_dir():
         return f"its home {home} no longer exists"
@@ -64,6 +111,16 @@ def exit_reason(exit_with_pid: Optional[int] = None) -> Optional[str]:
         return f"its state file {state} no longer exists"
     if exit_with_pid is not None and not pid_alive(exit_with_pid):
         return f"process {exit_with_pid} ({EXIT_WITH_PID_ENV}) has exited"
+    if (
+        idle_limit is not None
+        and idle_seconds is not None
+        and idle_seconds >= idle_limit
+        and not is_default_home()
+    ):
+        return (
+            f"nothing has used it for {idle_seconds / 60:.0f} minutes "
+            f"({IDLE_EXIT_ENV}={idle_limit / 60:g})"
+        )
     return None
 
 
@@ -74,6 +131,9 @@ class LifetimeWatch:
     Args:
         on_exit: Starts the daemon's graceful shutdown. Receives the reason.
         exit_with_pid: Also exit once this process is gone.
+        idle: Seconds since anything last used the daemon, or None while
+            something does.
+        idle_limit: Exit once *idle* reaches this, outside the default home.
         interval: Seconds between checks.
     """
 
@@ -82,12 +142,16 @@ class LifetimeWatch:
         on_exit: Callable[[str], None],
         *,
         exit_with_pid: Optional[int] = None,
+        idle: Optional[Callable[[], Optional[float]]] = None,
+        idle_limit: Optional[float] = None,
         interval: float = CHECK_SECONDS,
     ) -> None:
         if interval <= 0:
             raise ValueError(f"interval must be > 0, got {interval}")
         self._on_exit = on_exit
         self._exit_with_pid = exit_with_pid
+        self._idle = idle
+        self._idle_limit = idle_limit
         self._interval = interval
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -111,7 +175,8 @@ class LifetimeWatch:
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
-            reason = exit_reason(self._exit_with_pid)
+            idle = self._idle() if self._idle is not None else None
+            reason = exit_reason(self._exit_with_pid, idle, self._idle_limit)
             if reason is None:
                 continue
             logger.warning(
@@ -125,8 +190,12 @@ class LifetimeWatch:
 
 __all__ = [
     "CHECK_SECONDS",
+    "DEFAULT_IDLE_EXIT_MINUTES",
     "EXIT_WITH_PID_ENV",
+    "IDLE_EXIT_ENV",
     "LifetimeWatch",
     "exit_reason",
     "exit_with_pid_from_env",
+    "idle_exit_seconds_from_env",
+    "is_default_home",
 ]

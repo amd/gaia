@@ -261,12 +261,17 @@ def run(host: str = HOST) -> None:
 
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
-    from gaia.daemon.lifetime import LifetimeWatch, exit_with_pid_from_env
+    from gaia.daemon.lifetime import (
+        LifetimeWatch,
+        exit_with_pid_from_env,
+        idle_exit_seconds_from_env,
+    )
     from gaia.daemon.migrate import run_migrations
     from gaia.daemon.paths import custody_db_path, scheduler_db_path
     from gaia.daemon.sidecars.spec import builtin_specs
 
     exit_with_pid = exit_with_pid_from_env()
+    idle_limit = idle_exit_seconds_from_env()
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
     # bound so a corrupt/unknown-newer custody schema refuses loudly (MigrationError
@@ -350,9 +355,23 @@ def run(host: str = HOST) -> None:
     def _exit_on_own(_reason: str) -> None:
         server.should_exit = True
 
+    def _idle_seconds() -> Optional[float]:
+        # No client and no busy sidecar (the clients' own idle clock), and no
+        # scheduled job waiting to fire.
+        idle = lemonade_clients.snapshot()["idle_seconds"]
+        if idle is None or idle_limit is None or idle < idle_limit:
+            return idle
+        return None if clock.job_counts()["pending"] else idle
+
     # Exit once nothing can find this daemon (its home or instance.json is
-    # gone) or the GAIA_DAEMON_EXIT_WITH_PID process has exited.
-    lifetime = LifetimeWatch(_exit_on_own, exit_with_pid=exit_with_pid)
+    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, or, outside the
+    # default home, nothing has used it for the idle limit.
+    lifetime = LifetimeWatch(
+        _exit_on_own,
+        exit_with_pid=exit_with_pid,
+        idle=_idle_seconds,
+        idle_limit=idle_limit,
+    )
 
     _register = _build_register(
         specs=specs,
