@@ -1503,6 +1503,19 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
+def _pull_registration(model_name: str) -> Tuple[str, Dict[str, Any]]:
+    """The name and registration a pull of *model_name* must send.
+
+    A custom (``user.``) model in ``MODELS`` registers on its first pull, under
+    its ``user.`` name; everything else is pulled by name alone (#1655).
+    """
+    mr = find_model_requirement(model_name)
+    registration = (
+        {k: v for k, v in mr.pull_kwargs().items() if v is not None} if mr else {}
+    )
+    return (mr.model_id if registration else model_name), registration
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -3466,6 +3479,17 @@ class LemonadeClient:
         # Handle string errors
         if isinstance(error, str):
             result["message"] = error
+            # "Request failed with status 404: {...}" carries Lemonade's own body.
+            brace = error.find("{")
+            if brace >= 0:
+                try:
+                    body = json.loads(error[brace:])
+                except ValueError:
+                    return result
+                if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                    result["type"] = body["error"].get("type")
+                    result["code"] = body["error"].get("code")
+                    result["is_structured"] = True
             return result
 
         # Handle dict responses
@@ -3520,6 +3544,8 @@ class LemonadeClient:
             error_type_lower = error_type.lower()
             if error_type_lower in ["not_found", "model_not_found", "model_not_loaded"]:
                 return True
+        if str(error_info.get("code") or "").lower() == "model_not_found":
+            return True
 
         # Fallback to string matching for unstructured errors
         error_message = error_info.get("message") or ""
@@ -6211,7 +6237,8 @@ class LemonadeClient:
         """
         download_complete = False
         last_logged_percent = -10  # Log at 0%, 10%, 20%, ...
-        for event in self.pull_model_stream(model_name=model_name):
+        pull_name, registration = _pull_registration(model_name)
+        for event in self.pull_model_stream(model_name=pull_name, **registration):
             event_type = event.get("event")
             if event_type == "progress":
                 percent = event.get("percent", 0)
@@ -6649,7 +6676,10 @@ class LemonadeClient:
                 download_complete = False
                 last_logged_percent = -10  # Log at 0%, 10%, 20%, etc.
 
-                for event in self.pull_model_stream(model_name=model_name):
+                pull_name, registration = _pull_registration(model_name)
+                for event in self.pull_model_stream(
+                    model_name=pull_name, **registration
+                ):
                     # Check for cancellation
                     if download_task and download_task.is_cancelled():
                         raise ModelDownloadCancelledError(
