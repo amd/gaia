@@ -23,6 +23,7 @@ function openStream() {
         response: new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
         send: (event: Record<string, unknown>) => ctrl.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
         keepalive: () => ctrl.enqueue(encoder.encode(': keepalive\n\n')),
+        cut: () => ctrl.error(new TypeError('network error')),
     };
 }
 
@@ -31,7 +32,8 @@ function callbacks() {
         onChunk: vi.fn<StreamCallbacks['onChunk']>(),
         onAgentEvent: vi.fn<StreamCallbacks['onAgentEvent']>(),
         onDone: vi.fn<StreamCallbacks['onDone']>(),
-        onError: vi.fn<(err: Error & { httpStatus?: number }) => void>(),
+        onError: vi.fn<(err: Error & { httpStatus?: number; endpoint?: string }) => void>(),
+        onConnected: vi.fn<() => void>(),
     };
 }
 
@@ -120,6 +122,48 @@ describe('chat stream idle watchdog (E4)', () => {
         expect(cb.onError).not.toHaveBeenCalled();
     });
 
+    it('ends the turn on an agent error that is not recoverable', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'agent_error', content: 'The model stopped answering.' });
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(cb.onError).not.toHaveBeenCalled();
+    });
+
+    it('keeps watching after a recoverable agent error', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'agent_error', content: 'A tool failed; trying another way.', recoverable: true });
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(cb.onError.mock.calls[0][0].name).toBe('StreamStalledError');
+    });
+
+    it('reports a connection cut mid-answer as dropped, so the run can be re-attached', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'chunk', content: 'Partial' });
+        s.cut();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cb.onError.mock.calls[0][0].name).toBe('StreamDroppedError');
+    });
+
+    it('reports an attach that cannot connect as dropped', async () => {
+        fetchMock().mockRejectedValue(new TypeError('Failed to fetch'));
+        const cb = callbacks();
+        attachToRun('s1', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cb.onError.mock.calls[0][0].name).toBe('StreamDroppedError');
+    });
+
     it('applies to a re-attached run too', async () => {
         const s = openStream();
         fetchMock().mockResolvedValue(s.response);
@@ -169,7 +213,36 @@ describe('bounded send (E1)', () => {
         expect(cb.onError.mock.calls[0][0].name).toBe('StreamTimeoutError');
     });
 
-    it('does not report a user Stop as an error', async () => {
+    it('says when the backend finally answers, so the waiting notice can go', async () => {
+        let answer!: (r: Response) => void;
+        fetchMock().mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(cb.onConnected).not.toHaveBeenCalled();
+        answer(openStream().response);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cb.onConnected).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a send that never starts apart from a send to a busy server', async () => {
+        fetchMock().mockImplementation(hangingFetch());
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(91_000);
+        expect(cb.onError.mock.calls[0][0].endpoint).toBe('send');
+    });
+
+    it('names the attach when an attach never starts', async () => {
+        fetchMock().mockImplementation(hangingFetch());
+        const cb = callbacks();
+        attachToRun('s1', cb);
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(cb.onError.mock.calls[0][0].name).toBe('StreamTimeoutError');
+        expect(cb.onError.mock.calls[0][0].endpoint).toBe('attach');
+    });
+
+    it('does not report detaching from the stream as an error', async () => {
         fetchMock().mockImplementation(hangingFetch());
         const cb = callbacks();
         const controller = sendMessageStream('s1', 'hi', cb);
@@ -177,6 +250,14 @@ describe('bounded send (E1)', () => {
         controller.abort();
         await vi.advanceTimersByTimeAsync(120_000);
         expect(cb.onError).not.toHaveBeenCalled();
+    });
+
+    it('leaves a send that could not connect as a connection error, since nothing may be running', async () => {
+        fetchMock().mockRejectedValue(new TypeError('Failed to fetch'));
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cb.onError.mock.calls[0][0]).toBeInstanceOf(TypeError);
     });
 
     it('reports a busy server as an ApiError carrying the status, not a raw JSON string', async () => {

@@ -576,6 +576,8 @@ export interface StreamCallbacks {
     onError: (error: Error) => void;
     /** A new agent was created and registered — refresh the agent list. */
     onAgentCreated?: (event: StreamEvent) => void;
+    /** The backend answered the request; a wait shown before this is over. */
+    onConnected?: () => void;
 }
 
 /** Agent event types that represent activity rather than content. */
@@ -627,13 +629,14 @@ export function sendMessageStream(
     })
         .then((res) => {
             headers.received();
+            headers.connected();
             return consumeSSEResponse(res, callbacks, t);
         })
         .catch((err) => {
             headers.received();
             if (headers.timedOut()) {
                 log.stream.error(`No answer to /chat/send within ${SEND_HEADER_TIMEOUT_MS / 1000}s`);
-                callbacks.onError(new StreamTimeoutError(SEND_HEADER_TIMEOUT_MS));
+                callbacks.onError(new StreamTimeoutError('send', SEND_HEADER_TIMEOUT_MS));
             } else if (err.name === 'AbortError') {
                 log.stream.warn('Stream aborted by user');
             } else {
@@ -653,6 +656,7 @@ export const QUEUED_IDLE_MS = 10 * 60_000;
 export const SEND_HEADER_TIMEOUT_MS = 90_000;
 /** When a send not yet started by the backend begins showing as waiting. */
 export const SEND_WAITING_NOTICE_MS = 3_000;
+export const SEND_WAITING_NOTICE_TEXT = 'Waiting for GAIA to start this answer…';
 /** An attach replays at once; a slower answer means the backend is stuck or unreachable. */
 export const ATTACH_HEADER_TIMEOUT_MS = 30_000;
 
@@ -664,9 +668,17 @@ export class StreamStalledError extends Error {
     }
 }
 
+/** The connection broke after the run started (network switch, proxy reset, restart). */
+export class StreamDroppedError extends Error {
+    constructor(readonly cause: unknown) {
+        super(`The connection to GAIA was cut: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'StreamDroppedError';
+    }
+}
+
 /** The backend never started answering the request. */
 export class StreamTimeoutError extends Error {
-    constructor(readonly timeoutMs: number) {
+    constructor(readonly endpoint: 'send' | 'attach', readonly timeoutMs: number) {
         super(`GAIA did not start answering within ${Math.round(timeoutMs / 1000)} s.`);
         this.name = 'StreamTimeoutError';
     }
@@ -678,24 +690,30 @@ function watchHeaders(
     callbacks: StreamCallbacks,
     timeoutMs: number,
     noticeMs?: number,
-): { received: () => void; timedOut: () => boolean } {
+): { received: () => void; connected: () => void; timedOut: () => boolean } {
     let timedOut = false;
     const notice = noticeMs === undefined ? undefined : setTimeout(() => {
         callbacks.onAgentEvent({
             type: 'status',
             status: 'working',
             phase: 'waiting',
-            message: 'Waiting for GAIA to start this answer…',
+            message: SEND_WAITING_NOTICE_TEXT,
         } as StreamEvent);
     }, noticeMs);
     const limit = setTimeout(() => {
         timedOut = true;
         controller.abort();
     }, timeoutMs);
+    let settled = false;
     return {
         received: () => {
             clearTimeout(notice);
             clearTimeout(limit);
+        },
+        connected: () => {
+            if (settled) return;
+            settled = true;
+            callbacks.onConnected?.();
         },
         timedOut: () => timedOut,
     };
@@ -758,7 +776,12 @@ async function consumeSSEResponse(
             try {
                 next = await readWithin(reader, queued ? QUEUED_IDLE_MS : STREAM_IDLE_MS);
             } catch (err) {
-                if (!(err instanceof StreamStalledError)) throw err;
+                if ((err as Error)?.name === 'AbortError') throw err;
+                if (!(err instanceof StreamStalledError)) {
+                    log.stream.error('SSE connection cut mid-stream', err);
+                    if (doneReceived || errorReceived) return;
+                    throw new StreamDroppedError(err);
+                }
                 log.stream.error(`SSE stream silent for ${err.idleMs / 1000}s; dropping the connection`);
                 await reader.cancel().catch((cancelErr) => log.stream.warn('Could not cancel the stalled stream', cancelErr));
                 // The turn already ended for the caller; a dead connection after that changes nothing.
@@ -815,6 +838,9 @@ async function consumeSSEResponse(
                             }
                         } else if (AGENT_EVENT_TYPES.has(event.type)) {
                             agentEventCount++;
+                            if (event.type === 'agent_error' && !(event as { recoverable?: boolean }).recoverable) {
+                                errorReceived = true;
+                            }
                             log.stream.debug(`Agent event: ${event.type}`, event);
                             callbacks.onAgentEvent(event);
                         } else {
@@ -863,6 +889,7 @@ export function attachToRun(
     })
         .then((res) => {
             headers.received();
+            headers.connected();
             // The run ended between the active-runs poll and this attach: its
             // answer is already saved, so close the view like any finished turn.
             if (res.status === 404) {
@@ -876,9 +903,13 @@ export function attachToRun(
             headers.received();
             if (headers.timedOut()) {
                 log.stream.error(`No answer to /chat/attach within ${ATTACH_HEADER_TIMEOUT_MS / 1000}s`);
-                callbacks.onError(new StreamTimeoutError(ATTACH_HEADER_TIMEOUT_MS));
+                callbacks.onError(new StreamTimeoutError('attach', ATTACH_HEADER_TIMEOUT_MS));
             } else if (err.name === 'AbortError') {
                 log.stream.warn('Run attach detached by client');
+            } else if (err instanceof TypeError) {
+                // The run lives server-side; a failed attach is a connection problem, not a lost run.
+                log.stream.error('Run attach could not connect', err);
+                callbacks.onError(new StreamDroppedError(err));
             } else {
                 log.stream.error('Run attach fetch error', err);
                 callbacks.onError(err);

@@ -10,7 +10,7 @@ import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import { describeStreamError, MAX_STREAM_RECONNECTS, RUN_LOST_TEXT } from '../utils/streamErrors';
+import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData } from '../types';
@@ -33,6 +33,9 @@ import { STARTING_REASON } from '../utils/constants';
  * keep this in sync if the server-side pattern changes.
  */
 const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
+
+/** Events that only come after the agent got past a permission prompt. */
+const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
@@ -633,10 +636,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
         };
 
         const streamCallbacks: api.StreamCallbacks = {
+            onConnected: () => {
+                if (isStale()) return;
+                const store = useChatStore.getState();
+                if (store.liveStatus === api.SEND_WAITING_NOTICE_TEXT) store.setLiveStatus(null);
+            },
             onChunk: (event) => {
                 if (isStale()) return; // stop writing after a session switch (#1580)
                 if (useChatStore.getState().awaitingUser) useChatStore.getState().setAwaitingUser(false);
                 const content = event.content || '';
+                if (content) useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 if (content) {
                     // 'answer' events carry the full final text (not a delta),
                     // so replace rather than append to avoid doubling content.
@@ -688,9 +697,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 // Permission request — shown inline above the composer. Calls the
                 // user already allowed "always" never get here: the backend skips them.
+                // The run moved past any prompt still open, so a replayed one is already resolved.
+                if (RESOLVES_PROMPTS.has(event.type)) {
+                    useNotificationStore.getState().dismissSessionPrompts(sessionId);
+                }
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
                     const { addNotification: addNotif, notifications } = useNotificationStore.getState();
+                    // A re-attach replays the run; keep the prompt as the user left it.
+                    if (event.confirm_id && notifications.some((n) => n.id === event.confirm_id)) return;
                     const isPathAccess = toolName === PATH_ACCESS_TOOL;
                     const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
                     addNotif({
@@ -1058,12 +1073,25 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onError: (err) => {
-                // A silent stream is a dead connection, not a failed turn: re-attach, which replays the run so far.
-                if (err.name === 'StreamStalledError' && !doneHandled && !stopRequestedRef.current && !isStale()
-                    && reconnectsRef.current < MAX_STREAM_RECONNECTS) {
-                    reconnectsRef.current += 1;
-                    log.chat.warn(`Stream for session=${sessionId} went silent; reconnecting (${reconnectsRef.current}/${MAX_STREAM_RECONNECTS})`);
-                    sendMessageRef.current(undefined, { attach: true, reconnect: reconnectsRef.current });
+                const interrupted = isStreamInterrupted(err);
+                // Stop already asked the server to end the turn; don't reopen it.
+                if (interrupted && stopRequestedRef.current && !doneHandled) {
+                    log.chat.warn(`Stream for session=${sessionId} was lost while stopping; closing the turn locally`);
+                    closeStoppedTurnLocallyRef.current?.();
+                    return;
+                }
+                // A dead connection is not a failed turn: re-attach, which replays the run so far.
+                if (interrupted && !doneHandled && !isStale() && reconnectsRef.current < MAX_STREAM_RECONNECTS) {
+                    const attempt = ++reconnectsRef.current;
+                    const delay = RECONNECT_DELAYS_MS[attempt - 1] ?? 0;
+                    log.chat.warn(`Stream for session=${sessionId} lost (${err.name}); reconnecting in ${delay}ms (${attempt}/${MAX_STREAM_RECONNECTS})`);
+                    useChatStore.getState().setLiveStatus(`Connection lost. Reconnecting (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
+                    const reattach = () => {
+                        if (isStale() || stopRequestedRef.current) return;
+                        sendMessageRef.current(undefined, { attach: true, reconnect: attempt });
+                    };
+                    if (delay > 0) setTimeout(reattach, delay);
+                    else reattach();
                     return;
                 }
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);

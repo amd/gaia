@@ -154,6 +154,7 @@ describe('ChatView stream reliability', () => {
         await driveSend();
         act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
         for (let i = 0; i < 3; i++) {
+            await waitFor(() => expect(attachCallbacks.length).toBe(i + 1), { timeout: 5_000 });
             act(() => attachCallbacks[i].onError(new api.StreamStalledError(30_000)));
         }
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(3);
@@ -172,7 +173,7 @@ describe('ChatView stream reliability', () => {
 
     it('explains a send the backend never started', async () => {
         await driveSend();
-        act(() => capturedCallbacks!.onError(new api.StreamTimeoutError(api.SEND_HEADER_TIMEOUT_MS)));
+        act(() => capturedCallbacks!.onError(new api.StreamTimeoutError('send', api.SEND_HEADER_TIMEOUT_MS)));
         await waitFor(() => expect(document.body.textContent).toContain('did not start this answer within 90 seconds'));
         expect(document.body.textContent).not.toContain('Try a shorter question');
     });
@@ -205,5 +206,97 @@ describe('ChatView stream reliability', () => {
         await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent)
             .toBe('Waiting for GAIA to start this answer…'));
         expect(useChatStore.getState().agentSteps).toEqual([]);
+    });
+
+    it('reconnects after the connection is cut mid-answer', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onChunk({ type: 'chunk', content: 'Partial answer' }));
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(document.body.textContent).toContain('Reconnecting (attempt 1 of 3)'));
+        expect(document.body.textContent).not.toContain('send your message again');
+    });
+
+    it('waits before a later reconnect, so a restarting backend has time to come back', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(document.body.textContent).toContain('Reconnecting (attempt 2 of 3)'));
+        await waitFor(() => expect(mockedApi.attachToRun).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+    });
+
+    it('does not bring back a prompt the user already answered when a reconnect replays it', async () => {
+        await driveSend();
+        const prompt = { type: 'permission_request', tool: 'write_file', confirm_id: 'c1', args: {} } as never;
+        act(() => capturedCallbacks!.onAgentEvent(prompt));
+        useNotificationStore.setState((st) => ({
+            notifications: st.notifications.map((n) => (n.id === 'c1' ? { ...n, response: 'allow', read: true } : n)),
+        }));
+        act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
+        act(() => attachCallbacks[0].onAgentEvent(prompt));
+        const copies = useNotificationStore.getState().notifications.filter((n) => n.id === 'c1');
+        expect(copies).toHaveLength(1);
+        expect(copies[0].response).toBe('allow');
+    });
+
+    it('clears a replayed prompt that the run already moved past', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
+        act(() => attachCallbacks[0].onAgentEvent({ type: 'permission_request', tool: 'write_file', confirm_id: 'c2', args: {} } as never));
+        act(() => attachCallbacks[0].onAgentEvent({ type: 'tool_start', tool: 'write_file' } as never));
+        const prompt = useNotificationStore.getState().notifications.find((n) => n.id === 'c2');
+        expect(prompt?.dismissed).toBe(true);
+    });
+
+    it('clears the waiting notice as soon as the backend answers', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onAgentEvent({
+            type: 'status', status: 'working', phase: 'waiting', message: 'Waiting for GAIA to start this answer…',
+        }));
+        await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent)
+            .toBe('Waiting for GAIA to start this answer…'));
+        act(() => capturedCallbacks!.onConnected?.());
+        await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent)
+            .not.toBe('Waiting for GAIA to start this answer…'));
+    });
+
+    it('closes a stopped turn whose stream dies instead of reconnecting it', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onChunk({ type: 'chunk', content: 'Partial answer' }));
+        await act(async () => { fireEvent.click(screen.getByLabelText('Stop')); });
+        act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
+        expect(mockedApi.attachToRun).not.toHaveBeenCalled();
+        await waitFor(() => expect(useChatStore.getState().isStreaming).toBe(false));
+        const msgs = useChatStore.getState().messages;
+        const last = msgs[msgs.length - 1];
+        expect(last?.stopState).toBe('unconfirmed');
+        expect(last?.stopError).toBeUndefined();
+    });
+
+    it('loads the saved answer when the run finished just before the chat reopened', async () => {
+        useChatStore.setState({ runningSessionIds: [SESSION.id] } as never);
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                { id: 1, session_id: SESSION.id, role: 'user', content: 'send the drafted email', created_at: '', rag_sources: null },
+                { id: 2, session_id: SESSION.id, role: 'assistant', content: 'Sent it.', created_at: '', rag_sources: null },
+            ],
+            total: 2,
+        } as never);
+        render(<ChatView sessionId={SESSION.id} />);
+        await waitFor(() => expect(attachCallbacks).toHaveLength(1));
+        act(() => attachCallbacks[0].onDone({ type: 'done', content: '' }));
+        await waitFor(() => expect(document.body.textContent).toContain('Sent it.'));
+        expect(document.body.textContent).not.toContain('was lost');
+        expect(document.body.textContent).not.toContain('HTTP 404');
+    });
+
+    it('drops a pending reconnect when the user presses Stop during the wait', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        await act(async () => { fireEvent.click(screen.getByLabelText('Stop')); });
+        await new Promise((r) => setTimeout(r, 1_500));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
     });
 });
