@@ -73,6 +73,25 @@ def _parse(frame: str) -> Optional[dict]:
     return event if isinstance(event, dict) else None
 
 
+def _plain_chunk(event: Optional[dict]) -> bool:
+    return (
+        event is not None
+        and event.get("type") == "chunk"
+        and set(event) == {"type", "content"}
+    )
+
+
+def _progress_tick(event: Optional[dict]) -> bool:
+    """The stream loop's periodic "Model is processing... (Ns)" status."""
+    return (
+        event is not None
+        and event.get("type") == "status"
+        and event.get("status") == "working"
+        and "phase" not in event
+        and str(event.get("message", "")).startswith("Model is processing")
+    )
+
+
 class Run:
     """A single in-flight (or just-finished) chat turn for one session."""
 
@@ -82,9 +101,12 @@ class Run:
         # Held so an external cancel can signal the producer to bail.
         self.handler = None
         # What a re-attaching subscriber replays: every ``data:`` frame so
-        # far, unpadded, with consecutive chunks merged (see ``_record``).
+        # far, unpadded (see ``_record``). The chunk text still streaming is
+        # kept as parts and joined only when replayed or closed.
         self.buffer: List[str] = []
         self._buffer_bytes = 0
+        self._open_chunk: List[str] = []
+        self._open_chunk_bytes = 0
         self._last_event: Optional[dict] = None
         self._trimmed = False
         # Live subscriber queues. emit() fans out to each; finish() closes them.
@@ -103,45 +125,52 @@ class Run:
         """Keep what a re-attaching client needs to rebuild the reply, and no more.
 
         Keepalives and padding are dropped, consecutive plain chunks become
-        one chunk, and a ``working`` status replaces the one just before it,
-        as the client shows them. Past ``MAX_REPLAY_BYTES`` the oldest frames
-        go, behind a note that says so.
+        one chunk, and the periodic "Model is processing" tick replaces the
+        one just before it, as the client shows them. Past
+        ``MAX_REPLAY_BYTES`` the oldest frames go, behind a note that says so.
         """
         line = data.split("\n", 1)[0]
         if not line.startswith("data: "):
             return
         event = _parse(line)
-        prev = self._last_event
-        merged = None
-        if event is not None and prev is not None and self.buffer:
+        if _plain_chunk(event):
+            text = event.get("content") or ""
+            self._open_chunk.append(text)
+            self._open_chunk_bytes += len(text)
+        else:
+            self._close_chunk()
             if (
-                event.get("type") == "chunk"
-                and set(event) == {"type", "content"}
-                and prev.get("type") == "chunk"
-                and set(prev) == {"type", "content"}
+                self.buffer
+                and _progress_tick(event)
+                and _progress_tick(self._last_event)
             ):
-                merged = {
-                    "type": "chunk",
-                    "content": (prev.get("content") or "")
-                    + (event.get("content") or ""),
-                }
-            elif (
-                event.get("type") == "status"
-                and event.get("status") == "working"
-                and prev.get("type") == "status"
-                and prev.get("status") == "working"
-            ):
-                merged = event
-        if merged is not None:
-            self._buffer_bytes -= len(self.buffer.pop())
-            event = merged
-            line = f"data: {json.dumps(merged)}"
-        frame = line + "\n\n"
+                self._buffer_bytes -= len(self.buffer.pop())
+            self._append(line + "\n\n")
+            self._last_event = event
+        if self._buffer_bytes + self._open_chunk_bytes > MAX_REPLAY_BYTES:
+            self._trim()
+
+    def _append(self, frame: str) -> None:
         self.buffer.append(frame)
         self._buffer_bytes += len(frame)
-        self._last_event = event
-        if self._buffer_bytes > MAX_REPLAY_BYTES:
-            self._trim()
+
+    def _chunk_frame(self) -> str:
+        content = "".join(self._open_chunk)
+        return f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+
+    def _close_chunk(self) -> None:
+        if not self._open_chunk:
+            return
+        self._append(self._chunk_frame())
+        self._open_chunk = []
+        self._open_chunk_bytes = 0
+        self._last_event = {"type": "chunk"}
+
+    def _replay_frames(self) -> List[str]:
+        frames = list(self.buffer)
+        if self._open_chunk:
+            frames.append(self._chunk_frame())
+        return frames
 
     def _trim(self) -> None:
         if not self._trimmed:
@@ -152,11 +181,20 @@ class Run:
                 MAX_REPLAY_BYTES,
             )
             self._trimmed = True
-            self.buffer.insert(1, _TRIMMED_NOTE)
+            self.buffer.insert(min(1, len(self.buffer)), _TRIMMED_NOTE)
             self._buffer_bytes += len(_TRIMMED_NOTE)
         # Keep the first frame and the note; drop from just after them.
-        while self._buffer_bytes > MAX_REPLAY_BYTES and len(self.buffer) > 3:
+        while (
+            self._buffer_bytes + self._open_chunk_bytes > MAX_REPLAY_BYTES
+            and len(self.buffer) > 2
+        ):
             self._buffer_bytes -= len(self.buffer.pop(2))
+        # One reply text bigger than the cap: keep its end.
+        while (
+            self._buffer_bytes + self._open_chunk_bytes > MAX_REPLAY_BYTES
+            and len(self._open_chunk) > 1
+        ):
+            self._open_chunk_bytes -= len(self._open_chunk.pop(0))
 
     def finish(self) -> None:
         """Mark the run complete and close out every live subscriber."""
@@ -175,7 +213,7 @@ class Run:
         to receive live events.
         """
         q: asyncio.Queue = asyncio.Queue()
-        for item in self.buffer:
+        for item in self._replay_frames():
             q.put_nowait(_padded(item))
         if self.done.is_set():
             q.put_nowait(DONE)

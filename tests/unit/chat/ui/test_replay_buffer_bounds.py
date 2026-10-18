@@ -63,7 +63,13 @@ async def test_a_long_reply_replays_whole_from_a_small_buffer():
         if i % 10 == 0:
             run.emit(_KEEPALIVE)
             run.emit(
-                _frame({"type": "status", "status": "working", "message": f"{i}s"})
+                _frame(
+                    {
+                        "type": "status",
+                        "status": "working",
+                        "message": f"Model is processing... ({i}s)",
+                    }
+                )
             )
     while not q.empty():
         live.append(q.get_nowait())
@@ -93,3 +99,33 @@ async def test_the_buffer_is_capped_and_says_what_it_dropped(monkeypatch):
         e["type"] == "status" and "earlier progress" in e["message"].lower()
         for e in events
     )
+
+
+async def test_status_rows_the_client_shows_are_kept():
+    run = Run("s3")
+    shown = {"type": "status", "status": "working", "message": "Reading report.pdf"}
+    run.emit(_frame(shown))
+    run.emit(_frame({"type": "status", "status": "working", "message": "Executing x"}))
+    run.emit(
+        _frame({"type": "status", "status": "working", "phase": "p", "message": "m"})
+    )
+
+    events = _events(await _replay(run))
+
+    assert [e["message"] for e in events] == ["Reading report.pdf", "Executing x", "m"]
+
+
+async def test_a_long_reply_is_recorded_quickly_and_stays_capped(monkeypatch):
+    import time
+
+    monkeypatch.setattr(rm, "MAX_REPLAY_BYTES", 100_000)
+    run = Run("s4")
+    started = time.perf_counter()
+    for i in range(20_000):
+        run.emit(_frame({"type": "chunk", "content": f"{i:09d} "}))
+    assert time.perf_counter() - started < 2.0
+
+    events = _events(await _replay(run))
+    text = _answer(events)
+    assert len(text) <= 100_000
+    assert text.endswith("000019999 ")
