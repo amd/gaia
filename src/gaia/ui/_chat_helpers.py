@@ -2323,7 +2323,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         if not (_loaded_here(m["model_name"]) or nobody_chose):
                             raise ModelInUseError(
                                 f"{model_id} is loaded by another app with a "
-                                f"{window or 'smaller'}-token window, smaller "
+                                f"{window}-token window, smaller "
                                 f"than the {required_ctx} tokens this chat "
                                 "needs; reloading it would cut that app off. "
                                 "Let it finish (or close it), then send the "
