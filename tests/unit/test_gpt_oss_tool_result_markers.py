@@ -63,6 +63,28 @@ class TestChannelMarkersInText:
             "reasoning_content": DEFANGED,
         }
 
+    def test_arguments_of_an_earlier_call_are_covered(self):
+        """A file the model wrote returns to it in its own call's arguments."""
+        args = json.dumps({"path": "tok.json", "content": INJECTED})
+        msgs = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "write_file", "arguments": args},
+                    }
+                ],
+            }
+        ]
+        out = lc.defang_harmony_tokens(msgs)
+        sent = out[0]["tool_calls"][0]["function"]["arguments"]
+        assert "<|" not in sent and json.loads(sent)["content"] == DEFANGED
+        assert msgs[0]["tool_calls"][0]["function"]["arguments"] == args
+        assert out[0]["tool_calls"][0]["function"]["name"] == "write_file"
+
     def test_nothing_is_added_and_the_input_is_not_mutated(self):
         msgs = [{"role": "tool", "content": INJECTED, "tool_call_id": "c1"}]
         out = lc.defang_harmony_tokens(msgs)

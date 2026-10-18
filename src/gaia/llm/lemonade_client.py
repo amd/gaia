@@ -1545,6 +1545,22 @@ def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
                 ]
             else:
                 fixed[key] = defang(content)
+        # A file the model wrote comes back in its own call's arguments.
+        if isinstance(fixed.get("tool_calls"), list):
+            fixed["tool_calls"] = [
+                (
+                    {
+                        **call,
+                        "function": {
+                            **call["function"],
+                            "arguments": defang(call["function"].get("arguments")),
+                        },
+                    }
+                    if isinstance(call, dict) and isinstance(call.get("function"), dict)
+                    else call
+                )
+                for call in fixed["tool_calls"]
+            ]
         out.append(fixed)
     return out
 
