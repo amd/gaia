@@ -243,7 +243,7 @@ def answers_liveness(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def _busy_limit() -> int:
+def busy_limit() -> int:
     """How long a server may stay busy before it counts as stalled.
 
     lemond ends any request after ``global_timeout``, which GAIA sets to this
@@ -1152,7 +1152,8 @@ class EmbeddedLemonade:
         A daemon whose health endpoint is slow but that still answers
         liveness -- one evicting a model, say -- is running and ``busy``. One
         that answers neither is reported through ``unresponsive_pid`` and keeps
-        its state, so ``stop`` can still reach it.
+        its state, so ``stop`` can still reach it. The first busy sighting is
+        recorded in :attr:`busy_since_path`, so this is not read-only.
 
         Returns:
             The current :class:`EmbeddedStatus`.
@@ -1201,7 +1202,7 @@ class EmbeddedLemonade:
         else:
             identity = self._identify(int(pid), int(port), api_key)
         if identity == OWN and answers_liveness("127.0.0.1", int(port)):
-            busy_for, limit = self._busy_for(int(pid)), _busy_limit()
+            busy_for, limit = self._busy_for(int(pid)), busy_limit()
         else:
             busy_for = limit = None
         if busy_for is not None and busy_for > limit:

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import socket
+import socketserver
 import subprocess
 import sys
 import threading
@@ -32,12 +33,19 @@ from gaia.llm.lemonade_supervisor import LemonadeSupervisor
 pytestmark = pytest.mark.allow_network
 
 KEY = "test-key"
+# Loopback only: never route the probe through a system proxy (macOS reads one).
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class _FakeLemond(ThreadingHTTPServer):
     """lemond's two probe routes: ``/health`` behind a lock, ``/live`` not."""
 
     daemon_threads = True
+
+    def server_bind(self):
+        # HTTPServer's own bind does a reverse DNS lookup that stalls on macOS.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 
     def __init__(self, health_delay: float, lemonade: bool = True):
         self.health_delay = health_delay
@@ -152,7 +160,7 @@ class TestSlowButAliveEmbeddedServer:
     ):
         """A router lock held past lemond's request budget is wedged, not working."""
         _record_own_server(manager, slow_health.port, monkeypatch)
-        monkeypatch.setattr(emb, "_busy_limit", lambda: 30)
+        monkeypatch.setattr(emb, "busy_limit", lambda: 30)
         assert manager.status().busy  # first seen busy: the clock starts
         manager.busy_since_path.write_text(
             json.dumps({"pid": os.getpid(), "since": time.time() - 31}),
@@ -221,6 +229,18 @@ class TestSlowButAliveSupervisedServer:
         assert state.started is False
         assert state.owned is False
 
+    def test_busy_longer_than_any_request_is_an_error(
+        self, supervisor, slow_health, monkeypatch
+    ):
+        """A wedged system Lemonade still answers /live; past the request budget
+        GAIA says so rather than attaching to it forever."""
+        s = supervisor(slow_health.port)
+        assert s.ensure_running(ctx_size=65536).started is False
+        monkeypatch.setattr(emb, "busy_limit", lambda: 0)
+        with pytest.raises(sup.LemonadeStartError) as exc:
+            s.ensure_running(ctx_size=65536)
+        assert "stuck" in str(exc.value)
+
     def test_another_app_answering_live_is_not_taken_for_lemonade(self, supervisor):
         stranger = _FakeLemond(health_delay=4.0, lemonade=False)
         try:
@@ -238,11 +258,14 @@ class TestSlowButAliveSupervisedServer:
 
 # lemond's own bind rule: it exits 1 when either loopback address is taken.
 _FAKE_LEMOND = r"""
-import json, socket, sys, threading
+import json, socket, socketserver, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 port = int(sys.argv[sys.argv.index("--port") + 1])
 class Server(HTTPServer):
     allow_reuse_address = False
+    def server_bind(self):  # skip HTTPServer's reverse DNS lookup
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
@@ -283,7 +306,7 @@ class TestPortTakenBeforeLemondBinds:
             # An HTTP answer, as the real probe needs: a thief's bare socket
             # accepts the connection but never replies.
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1):
+                with _DIRECT.open(f"http://127.0.0.1:{port}/", timeout=1):
                     return {"ok": True}
             except OSError:
                 return None

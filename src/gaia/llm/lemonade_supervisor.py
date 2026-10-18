@@ -143,6 +143,8 @@ class LemonadeSupervisor:
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen] = None
         self._log_handle = None
+        # When each busy (host, port) was first seen busy, to bound the wait.
+        self._busy_since: dict = {}
 
     # -- introspection -----------------------------------------------------
 
@@ -304,7 +306,7 @@ class LemonadeSupervisor:
         # give it a grace window — but if it never answers it is a stranger, and
         # evicting it is not ours to do.
         if _port_is_open(host, port):
-            if _busy_lemonade(client):
+            if self._attach_if_busy(client):
                 return False
             log.info(
                 "lemonade: %s:%s accepts connections but does not answer health yet; "
@@ -315,7 +317,7 @@ class LemonadeSupervisor:
             )
             if _wait_for_health(client, _OCCUPIED_PORT_GRACE_S):
                 return False
-            if _busy_lemonade(client):
+            if self._attach_if_busy(client):
                 return False
             raise self._occupied_port_error(host, port)
 
@@ -404,6 +406,31 @@ class LemonadeSupervisor:
             "could not find one to start.\n"
             f"To fix: {describe_start_hint().instruction}\n"
             "See https://amd-gaia.ai/docs/guides/install"
+        )
+
+    def _attach_if_busy(self, client) -> bool:
+        """Whether to use a busy Lemonade on *client*'s port.
+
+        Raises:
+            LemonadeStartError: It has been busy longer than any request may
+                run, so its router is wedged rather than working.
+        """
+        from gaia.llm.lemonade_embedded import busy_limit
+
+        key = (client.host, client.port)
+        if not _busy_lemonade(client):
+            self._busy_since.pop(key, None)
+            return False
+        busy_for = time.monotonic() - self._busy_since.setdefault(key, time.monotonic())
+        limit = busy_limit()
+        if busy_for <= limit:
+            return True
+        raise LemonadeStartError(
+            f"The Lemonade Server on port {client.port} has answered liveness "
+            f"but not health for {busy_for:.0f}s, longer than any request may "
+            f"run ({limit}s), so it is stuck rather than loading a model.\n"
+            f"To fix: restart it ({describe_start_hint().instruction}).\n"
+            "See https://amd-gaia.ai/docs/reference/troubleshooting"
         )
 
     def _occupied_port_error(self, host: str, port: int) -> LemonadeStartError:
