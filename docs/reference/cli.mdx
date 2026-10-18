@@ -3265,12 +3265,15 @@ than doing a direct load that would evict another process's model — check
 reported as a warning and loads proceed unbrokered; `gaia daemon restart`
 restores serialization.
 
-A daemon that is running but slow to answer is **never killed** for it. GAIA
+A daemon that is running but slow to answer is **not killed** for it. GAIA
 gives it 10 more seconds, then reports it busy: commands fail with an error
 naming its pid, and `gaia daemon status` shows `running, but not answering`.
-If it stays that way, `gaia daemon restart` restarts it and its sidecars. Only
-a daemon whose port refuses connections, or answers as something else, is
-replaced automatically.
+Its status check waits on nothing else, so a daemon that has not answered it
+for two minutes is hung: the next `gaia daemon start` (or any command that
+starts the daemon) replaces it, and `gaia daemon restart` does so at once. A
+daemon whose port refuses connections, answers as something else, or whose pid
+now belongs to another program is replaced right away. An exiting app does not
+wait on a busy daemon.
 
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running

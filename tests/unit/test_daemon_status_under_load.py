@@ -96,13 +96,19 @@ def test_status_answers_while_lease_waiters_fill_the_thread_pool(live_daemon):
             "status did not answer within the 1.5 s probe while leases queued; "
             "start_or_attach would read this live daemon as hung and kill it"
         )
-    finally:
-        requests.post(
+        # The holder must be able to give the slot back while waiters fill
+        # the pool; a starved release keeps every waiter behind it.
+        started = time.monotonic()
+        released = requests.post(
             f"{live_daemon.base_url}/host/v1/models/lease/"
             f"{first.json()['lease_id']}/release",
             headers={"Authorization": f"Bearer {live_daemon.token}"},
-            timeout=10,
+            timeout=30,
         )
+        took = time.monotonic() - started
+        assert released.status_code == 200, released.text
+        assert took < 1.5, f"releasing the held lease took {took:.1f}s"
+    finally:
         for w in waiters:
             w.join(timeout=30)
 
@@ -142,6 +148,7 @@ def _stale_registry(monkeypatch, outcomes):
 
     monkeypatch.setattr(daemon_client, "StartLock", _NoLock)
     monkeypatch.setattr(daemon_client, "missing_daemon_deps", lambda: [])
+    monkeypatch.setattr(daemon_client, "_is_gaia_daemon", lambda pid: True)
     return inst, calls, killed, spawned
 
 
@@ -247,3 +254,68 @@ def test_a_busy_daemon_fails_a_lemonade_start_with_the_start_error(monkeypatch):
         lemonade_service._post_start({}, 1.0)
     assert "pid 4242" in str(err.value)
     assert isinstance(err.value.__cause__, DaemonBusyError)
+
+
+def _busy_for(seconds: float, pid: int = 4242) -> None:
+    """Record that the registered daemon has been busy for *seconds*."""
+    import json
+
+    from gaia.daemon import paths
+
+    paths.ensure_host_dir()
+    (paths.host_dir() / daemon_client.BUSY_MARKER_NAME).write_text(
+        json.dumps({"pid": pid, "since": time.time() - seconds}), encoding="utf-8"
+    )
+
+
+def test_a_daemon_busy_past_the_hung_limit_is_restarted(monkeypatch):
+    """Busy is bounded: status never waits on other work, so a daemon that has
+    not answered it for minutes is hung, and the next start replaces it."""
+    inst, _calls, killed, spawned = _stale_registry(monkeypatch, [("busy", None)])
+    _busy_for(daemon_client.HUNG_AFTER_S + 1)
+
+    daemon_client.start_or_attach()
+
+    assert killed == [inst] and len(spawned) == 1
+
+
+def test_a_hung_daemon_is_named_as_hung_to_callers_that_only_attach(monkeypatch):
+    _stale_registry(monkeypatch, [("busy", None)])
+    _busy_for(daemon_client.HUNG_AFTER_S + 1)
+
+    with pytest.raises(DaemonBusyError) as err:
+        daemon_client.attach()
+
+    assert "hung" in str(err.value) and "gaia daemon restart" in str(err.value)
+
+
+def test_a_busy_spell_is_forgotten_once_the_daemon_answers(monkeypatch):
+    _stale_registry(monkeypatch, [("live", _BODY)])
+    _busy_for(daemon_client.HUNG_AFTER_S + 1)
+
+    daemon_client.attach()
+
+    from gaia.daemon import paths
+
+    assert not (paths.host_dir() / daemon_client.BUSY_MARKER_NAME).exists()
+
+
+def test_a_reused_pid_that_is_not_a_daemon_is_gone_not_busy(monkeypatch):
+    """A foreign process holding the recorded pid and port never answers
+    status; it must not read as a busy daemon forever."""
+    inst, calls, _killed, spawned = _stale_registry(monkeypatch, [("busy", None)])
+    monkeypatch.setattr(daemon_client, "_is_gaia_daemon", lambda pid: False)
+
+    daemon_client.start_or_attach()
+
+    assert len(spawned) == 1
+    assert max(calls) <= 1.5, "waited out a foreign process as if it were busy"
+
+
+def test_releasing_on_exit_does_not_wait_out_a_busy_daemon(monkeypatch):
+    _inst, calls, _killed, _spawned = _stale_registry(monkeypatch, [("busy", None)])
+
+    with pytest.raises(DaemonBusyError):
+        daemon_client.release_lemonade_client("client-1")
+
+    assert calls == [1.5], "an exiting process waited 10 more seconds"

@@ -32,6 +32,14 @@ class DaemonBusyError(DaemonError):
     """
 
 
+class DaemonHungError(DaemonBusyError):
+    """A daemon has not answered its status check for :data:`HUNG_AFTER_S`.
+
+    Status waits on nothing else, so this long a silence is not load: the next
+    ``start_or_attach`` replaces the daemon, and other callers are told to.
+    """
+
+
 class DaemonVersionError(DaemonError):
     """The running daemon speaks a different MAJOR host-API version than this client.
 

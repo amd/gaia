@@ -29,6 +29,7 @@ from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
 from gaia.daemon.errors import (
     DaemonBusyError,
     DaemonError,
+    DaemonHungError,
     DaemonStartError,
     DaemonVersionError,
 )
@@ -60,6 +61,13 @@ _LOG_TAIL_LINES = 5
 #: out. Status never waits on other work, so a daemon still silent after this is
 #: overloaded or stuck, and is reported busy rather than killed.
 BUSY_PROBE_TIMEOUT_S = 10.0
+
+#: A daemon whose status has gone unanswered this long, across probes, is hung,
+#: not busy: the next start replaces it.
+HUNG_AFTER_S = 120.0
+
+#: Where the start of a daemon's current unanswered spell is recorded.
+BUSY_MARKER_NAME = "busy_since.json"
 
 #: Called with the seconds waited so far while a daemon start is in progress.
 ProgressCallback = Callable[[float], None]
@@ -145,43 +153,113 @@ def _patient_probe(
     return state, body
 
 
-def _answers(inst: DaemonInstance, timeout: float) -> bool:
+def _is_gaia_daemon(pid: int) -> bool:
+    """True unless *pid* is visibly some other program (a reused pid)."""
+    import psutil
+
+    try:
+        return "gaia.daemon" in " ".join(psutil.Process(pid).cmdline())
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        return True  # cannot tell; the hung limit still bounds it
+
+
+def _busy_marker(host_dir: Optional[Path]) -> Path:
+    return (host_dir or paths.host_dir()) / BUSY_MARKER_NAME
+
+
+def _busy_since(inst: DaemonInstance, host_dir: Optional[Path]) -> float:
+    """When this daemon's current unanswered spell began; starts one if new."""
+    import json
+
+    marker = _busy_marker(host_dir)
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        if int(data["pid"]) == inst.pid:
+            return float(data["since"])
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warning("daemon: ignoring unreadable %s (%s); starting over", marker, e)
+    now = time.time()
+    paths.atomic_write_json(marker, {"pid": inst.pid, "since": now})
+    return now
+
+
+def _clear_busy(host_dir: Optional[Path]) -> None:
+    try:
+        _busy_marker(host_dir).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("daemon: could not remove %s: %s", _busy_marker(host_dir), e)
+
+
+def _answers(
+    inst: DaemonInstance,
+    timeout: float,
+    *,
+    patient: bool = True,
+    host_dir: Optional[Path] = None,
+) -> bool:
     """True if *inst* is live, False if it is gone.
 
+    A daemon that accepts the probe but does not answer gets a longer second
+    probe when *patient* (an exiting process skips it). A pid that is visibly
+    not a GAIA daemon is gone, whatever its port does.
+
     Raises:
-        DaemonBusyError: its process is alive and accepted the probe, but did
-            not answer even after a longer second wait.
+        DaemonHungError: it has not answered for :data:`HUNG_AFTER_S`.
+        DaemonBusyError: it accepted the probe but has not answered, for less
+            than that.
     """
     if not pid_alive(inst.pid):
         return False
-    state, _ = _patient_probe(inst, timeout)
+    state, _ = probe_state(inst, timeout=timeout)
+    if state == "busy" and not _is_gaia_daemon(inst.pid):
+        state = "gone"
     if state == "busy":
-        raise DaemonBusyError(
-            f"the GAIA daemon (pid {inst.pid}, port {inst.port}) is running but "
-            f"did not answer its status check within {BUSY_PROBE_TIMEOUT_S:.0f}s, "
-            "so it is overloaded or stuck. It was left running. Retry in a "
-            "moment; if it stays like this, `gaia daemon restart` restarts it "
-            "and its sidecar agents. Where to look: `gaia daemon logs` "
-            f"({paths.log_path()})."
+        since = _busy_since(inst, host_dir)
+        if time.time() - since < HUNG_AFTER_S and patient:
+            state, _ = probe_state(inst, timeout=max(timeout, BUSY_PROBE_TIMEOUT_S))
+    if state != "busy":
+        _clear_busy(host_dir)
+        return state == "live"
+    silent_for = time.time() - since
+    where = f"Where to look: `gaia daemon logs` ({paths.log_path()})."
+    if silent_for >= HUNG_AFTER_S:
+        raise DaemonHungError(
+            f"the GAIA daemon (pid {inst.pid}, port {inst.port}) has not answered "
+            f"its status check for {silent_for:.0f}s, so it is hung. Run `gaia "
+            f"daemon restart`; the next `gaia daemon start` also replaces it. " + where
         )
-    return state == "live"
+    raise DaemonBusyError(
+        f"the GAIA daemon (pid {inst.pid}, port {inst.port}) is running but has "
+        f"not answered its status check for {silent_for:.0f}s, so it is "
+        f"overloaded or stuck. It was left running; after {HUNG_AFTER_S:.0f}s "
+        "it is treated as hung and replaced. Retry in a moment, or run `gaia "
+        "daemon restart` to restart it and its sidecar agents now. " + where
+    )
 
 
 def attach(
-    timeout: float = 1.5, host_dir: Optional[Path] = None
+    timeout: float = 1.5, host_dir: Optional[Path] = None, *, patient: bool = True
 ) -> Optional[DaemonInstance]:
     """Return the running daemon if one is live and version-compatible, else None.
 
     Args:
         host_dir: Attach to the daemon of another GAIA home, whose
             ``instance.json`` is in this directory, instead of this process's.
+        patient: give a slow daemon a longer second probe. Exit paths pass
+            False rather than hold up the process.
 
     Raises:
         DaemonBusyError: a daemon is running but not answering. ``None`` would
             tell the caller there is no daemon, and it would act as if alone.
     """
     inst = read_instance(host_dir / "instance.json") if host_dir else read_instance()
-    if inst is None or not _answers(inst, timeout):
+    if inst is None or not _answers(inst, timeout, patient=patient, host_dir=host_dir):
         return None
     _check_version(inst)
     return inst
@@ -198,26 +276,34 @@ def start_or_attach(
     so a front-end can show that something is happening. *drop_env* names
     variables of this process a newly started daemon must not inherit.
     """
-    inst = attach()
+    try:
+        inst = attach()
+    except DaemonHungError:
+        inst = None  # replaced below, under the lock
     if inst is not None:
         return inst
 
     with StartLock(timeout=timeout):
         # Re-check under the lock: a concurrent caller may have just started it.
         inst = read_instance()
-        if inst is not None and _answers(inst, 1.5):
-            _check_version(inst)
-            return inst
-        # Stale registry. A live pid whose port refuses us or answers as
-        # something else is our own daemon gone bad — terminate it before
-        # reclaiming (§0.25). A busy one raised above and is never killed.
+        try:
+            if inst is not None and _answers(inst, 1.5):
+                _check_version(inst)
+                return inst
+        except DaemonHungError as e:
+            logger.warning("daemon: %s Replacing it.", e)
+        # Stale registry. A live pid whose port refuses us, answers as
+        # something else, or stayed silent past HUNG_AFTER_S is our own daemon
+        # gone bad — terminate it before reclaiming (§0.25). A merely busy one
+        # raised above and is never killed.
         if inst is not None and pid_alive(inst.pid):
             logger.warning(
-                "daemon: instance pid=%s is alive but its port does not answer "
-                "as this daemon; reclaiming",
+                "daemon: instance pid=%s is alive but not answering as this "
+                "daemon; reclaiming",
                 inst.pid,
             )
             terminate_instance(inst)
+            _clear_busy(None)
         missing = missing_daemon_deps()
         if missing:
             raise DaemonStartError(
@@ -609,7 +695,7 @@ def register_lemonade_client(
     """
     import requests
 
-    inst = attach(host_dir=host_dir) if host_dir else attach()
+    inst = attach(host_dir=host_dir, patient=False)
     if inst is None:
         raise DaemonError(
             "the GAIA daemon is not running, so there is nothing to register "
@@ -662,7 +748,7 @@ def release_lemonade_client(
     """
     import requests
 
-    inst = attach(host_dir=host_dir) if host_dir else attach()
+    inst = attach(host_dir=host_dir, patient=False)
     if inst is None:
         return None
     url = f"{inst.base_url}{API_PREFIX}/lemonade/clients/{client_id}"
