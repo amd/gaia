@@ -3,8 +3,9 @@
 """Starting a session or switching its model must not stall other runs.
 
 ``/query`` set up its turn on the event loop: building a session's agent, or a
-``/model`` switch that waits for a model to load, froze every other run's SSE
-stream, heartbeats included, and the TUI and relay idle timers kept counting.
+``/model`` switch building its new client, froze every other run's SSE stream
+for as long as it took, heartbeats included, and the TUI and relay idle timers
+kept counting.
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ def app(monkeypatch):
         return agent
 
     def slow_switch(self, target):
-        time.sleep(_SLOW_SETUP_S)  # a model load behind someone else's lease
+        time.sleep(_SLOW_SETUP_S)  # a slow client build or server check
         self.model_id = target
         return target
 
