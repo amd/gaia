@@ -16,7 +16,7 @@
     --sp-space-2: 8px;
     --sp-space-3: 12px;
     --sp-space-4: 16px;
-    --sp-handle: 6px;
+    --sp-handle: 8px;
     --sp-overlay-w: min(360px, calc(100% - 32px));
     --sp-dialog-w: min(520px, calc(100vw - 32px));
     --sp-picker-h: 260px;
@@ -74,13 +74,22 @@
     touch-action: none;
 }
 
-.sp-resize:hover,
-.sp-resize:focus-visible,
-.sp-resize.is-dragging {
+/* A line on hover says the edge can be dragged; the grab area is wider than it. */
+.sp-resize::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--sp-handle) / 2 - 1px);
+    width: 2px;
     background: var(--accent);
-    opacity: 0.4;
-    outline: none;
+    opacity: 0;
+    transition: opacity var(--duration) var(--ease);
 }
+
+.sp-resize:hover::after,
+.sp-resize:focus-visible::after,
+.sp-resize.is-dragging::after { opacity: 0.6; }
 
 .sp-header {
     display: flex;
