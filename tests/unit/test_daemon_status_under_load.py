@@ -21,7 +21,7 @@ import requests
 from gaia.daemon import client as daemon_client
 from gaia.daemon.app import create_app
 from gaia.daemon.broker import ModelSlotBroker
-from gaia.daemon.errors import DaemonBusyError
+from gaia.daemon.errors import DaemonBusyError, DaemonHungError
 from gaia.daemon.instance import DaemonInstance, probe_state
 
 _TOKEN = "status-under-load-token"
@@ -283,10 +283,11 @@ def test_a_hung_daemon_is_named_as_hung_to_callers_that_only_attach(monkeypatch)
     _stale_registry(monkeypatch, [("busy", None)])
     _busy_for(daemon_client.HUNG_AFTER_S + 1)
 
-    with pytest.raises(DaemonBusyError) as err:
+    with pytest.raises(DaemonHungError) as err:
         daemon_client.attach()
 
-    assert "hung" in str(err.value) and "gaia daemon restart" in str(err.value)
+    assert "so it is hung" in str(err.value)
+    assert "gaia daemon restart" in str(err.value)
 
 
 def test_a_busy_spell_is_forgotten_once_the_daemon_answers(monkeypatch):
