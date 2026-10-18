@@ -158,11 +158,53 @@ MAX_CONTENT_LENGTH: int = 2000
 # Harmony/ChatML ``<|channel|>``/``<|im_end|>``, DeepSeek ``<｜…｜>``. No one
 # types these; in memory text they mean raw model output leaked into a write.
 _MODEL_SENTINEL = re.compile(
-    r"<\|[^\s<>]{1,40}>|<[A-Za-z_][\w-]{0,39}\|>|<\s*｜[^\s<>]{0,40}>?"
+    r"<\|[^\s<>]{1,40}>|<[A-Za-z_][\w-]{0,39}\|>|<｜[^\s<>]{0,40}>?"
 )
-_MODEL_TOOL_CALL_OPENER = re.compile(r"<\|tool_call>|<\s*｜\s*tool[▁_]call[▁_]begin")
-# Closed code spans only — an unclosed fence must not hide what follows it.
-_CLOSED_CODE_SPAN = re.compile(r"(```|~~~)[\s\S]*?\1|`[^`\n]+`")
+_MODEL_TOOL_CALL_OPENER = re.compile(r"<\|tool_call>|<｜tool[▁_]call[▁_]begin")
+
+
+def _without_code_spans(text: str) -> str:
+    """*text* with closed fenced and inline code blanked, in linear time.
+
+    An unclosed fence or backtick is ordinary text, so it cannot hide markup.
+    """
+    parts: List[str] = []
+    unclosed: set = set()
+    i = start = 0
+    n = len(text)
+    next_newline = -1
+    while i < n:
+        ch = text[i]
+        if ch not in "`~":
+            i += 1
+            continue
+        fence = ch * 3
+        if text.startswith(fence, i):
+            end = -1 if fence in unclosed else text.find(fence, i + 3)
+            if end == -1:
+                # No later closer, so no later opener of this kind can close.
+                unclosed.add(fence)
+                i += 3
+                continue
+            parts.append(text[start:i] + " ")
+            i = start = end + 3
+            continue
+        if ch == "~":
+            i += 1
+            continue
+        if next_newline < i:
+            next_newline = text.find("\n", i)
+            if next_newline == -1:
+                next_newline = n
+        # Each search stops at the next backtick or newline, so scans are disjoint.
+        end = text.find("`", i + 1, next_newline)
+        if end > i + 1:
+            parts.append(text[start:i] + " ")
+            i = start = end + 1
+        else:
+            i += 1
+    parts.append(text[start:])
+    return "".join(parts)
 
 
 class MemoryContentError(ValueError):
@@ -194,7 +236,7 @@ def check_memory_content(content: str) -> None:
     Raises:
         MemoryContentError: A chat-template special token is outside code.
     """
-    prose = _CLOSED_CODE_SPAN.sub(" ", content)
+    prose = _without_code_spans(content)
     found = _MODEL_SENTINEL.findall(prose)
     if not found:
         return
