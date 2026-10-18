@@ -273,12 +273,22 @@ def ui(monkeypatch):
 
     def load(name, **kwargs):
         held.append(helpers.model_load_lock.locked())
+        if helpers.model_load_lock.locked():
+            order.append("lock")
         loads.append((name, kwargs.get("ctx_size")))
 
     client.load_model.side_effect = load
     monkeypatch.setattr(lemonade_client, "LemonadeClient", lambda **_kw: client)
+    order = []
+
+    @contextmanager
+    def lease(_model, **_kwargs):
+        order.append("lock" if helpers.model_load_lock.locked() else "lease")
+        yield None
+
+    monkeypatch.setattr(broker_client, "model_lease", lease)
     app = create_app(db_path=":memory:")
-    return TestClient(app), loads, held
+    return TestClient(app), loads, held, order
 
 
 def _wait_for(predicate):
@@ -291,7 +301,7 @@ def _wait_for(predicate):
 
 @pytest.mark.allow_network
 def test_settings_load_goes_through_the_model_client_and_load_lock(ui):
-    client, loads, held = ui
+    client, loads, held, order = ui
 
     resp = client.post(
         "/api/system/load-model", json={"model_name": "Mine-GGUF", "ctx_size": 65536}
@@ -301,13 +311,15 @@ def test_settings_load_goes_through_the_model_client_and_load_lock(ui):
     _wait_for(lambda: loads)
     assert loads == [("Mine-GGUF", 65536)]
     assert held == [True]
+    # Lease first, then the lock: the order every load in this process uses.
+    assert order == ["lease", "lock"]
 
 
 @pytest.mark.allow_network
 def test_settings_load_asks_first_while_a_chat_is_answering(ui, monkeypatch):
     from gaia.ui.run_manager import run_manager
 
-    client, loads, _held = ui
+    client, loads, _held, _order = ui
     monkeypatch.setitem(run_manager._runs, "busy-session", object())
 
     resp = client.post("/api/system/load-model", json={"model_name": "Mine-GGUF"})
@@ -320,3 +332,21 @@ def test_settings_load_asks_first_while_a_chat_is_answering(ui, monkeypatch):
     )
     assert resp.status_code == 202
     _wait_for(lambda: loads)
+
+
+def test_names_are_matched_the_way_lemonade_reports_them(lemonade):
+    helpers.note_model_loaded("user.Mine-Old-GGUF")
+    lemonade["resident"] = [_model("mine-old-gguf"), _model("Other-App-GGUF")]
+    loads = []
+
+    def load(name, **_kwargs):
+        loads.append(name)
+        if len(loads) == 1:
+            raise InsufficientMemoryError("Not enough free memory to load it")
+
+    lemonade["client"].load_model.side_effect = load
+
+    helpers._maybe_load_expected_model("Mine-New-GGUF")
+
+    unloaded = [c.args[0] for c in lemonade["client"].unload_model.call_args_list]
+    assert unloaded == ["mine-old-gguf"]

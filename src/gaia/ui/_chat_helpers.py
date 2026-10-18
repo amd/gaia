@@ -294,6 +294,23 @@ model_load_lock = threading.Lock()
 _models_loaded_here: set[str] = set()
 
 
+def _model_key(model_id: str) -> str:
+    return (
+        model_id[len("user.") :].lower()
+        if model_id.startswith("user.")
+        else model_id.lower()
+    )
+
+
+def note_model_loaded(model_id: str) -> None:
+    """Record a chat model this process loaded (pre-flight, preload, Settings)."""
+    _models_loaded_here.add(_model_key(model_id))
+
+
+def _loaded_here(model_id: str) -> bool:
+    return _model_key(model_id) in _models_loaded_here
+
+
 def _take_model_load_lock(sse_handler=None) -> bool:
     """Take ``model_load_lock``; False when the turn is stopped while waiting."""
     shown = False
@@ -325,12 +342,13 @@ def _load_making_room(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
     except InsufficientMemoryError:
-        wanted = model_id.lower()
+        wanted = _model_key(model_id)
         ours = [
             m["model_name"]
             for m in resident
-            if m.get("model_name") in _models_loaded_here
-            and m["model_name"].lower() != wanted
+            if m.get("model_name")
+            and _loaded_here(m["model_name"])
+            and _model_key(m["model_name"]) != wanted
         ]
         if not may_unload or not ours:
             raise
@@ -345,11 +363,11 @@ def _load_making_room(
                     }
                 )
             client.unload_model(name, ignore_if_not_loaded=True)
-            _models_loaded_here.discard(name)
+            _models_loaded_here.discard(_model_key(name))
         client.load_model(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
-    _models_loaded_here.add(model_id)
+    note_model_loaded(model_id)
 
 
 # ── Lemonade error classification ──────────────────────────────────────────
@@ -464,9 +482,13 @@ async def _generate_session_title(
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
     punctuation), the first question for an empty reply or a classifier
-    verdict ("safe", "unsafe S1"), or None when the request fails. Times out
-    at 30 s so a hung model doesn't keep the background task alive.
+    verdict ("safe", "unsafe S1"), or None when the request fails. The
+    request itself times out at 30 s; the wait for the model slot before it
+    is the broker's.
     """
+    from contextlib import nullcontext
+
+    from gaia.daemon.broker_client import model_lease
     from gaia.llm.lemonade_client import (
         SIDE_SLOT,
         LemonadeClient,
@@ -491,23 +513,30 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
-        if not cloud_model_provider(model_id):
-            loaded = client.health_check().get("all_models_loaded", [])
-            if not any(_model_ids_match(m.get("model_name"), model_id) for m in loaded):
-                return None
-            if client.slot_count(model_id) > SIDE_SLOT:
-                kwargs["id_slot"] = SIDE_SLOT
-        return client.chat_completions(
-            model_id,
-            [{"role": "user", "content": prompt}],
-            max_tokens=24,
-            # Low temperature: titles should be deterministic-ish
-            # for the same conversation.
-            temperature=0.3,
-            timeout=30,
-            auto_download=False,
-            **kwargs,
-        )
+        local = not cloud_model_provider(model_id)
+        # One lease over the residency check and the call, so the model can't
+        # be swapped out between them; the call's own lease folds into it.
+        lease = model_lease(model_id, priority="background") if local else nullcontext()
+        with lease:
+            if local:
+                loaded = client.health_check().get("all_models_loaded", [])
+                if not any(
+                    _model_ids_match(m.get("model_name"), model_id) for m in loaded
+                ):
+                    return None
+                if client.slot_count(model_id) > SIDE_SLOT:
+                    kwargs["id_slot"] = SIDE_SLOT
+            return client.chat_completions(
+                model_id,
+                [{"role": "user", "content": prompt}],
+                max_tokens=24,
+                # Low temperature: titles should be deterministic-ish
+                # for the same conversation.
+                temperature=0.3,
+                timeout=30,
+                auto_download=False,
+                **kwargs,
+            )
 
     try:
         data = await asyncio.to_thread(_ask)
@@ -2084,7 +2113,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
-            return
+            raise RuntimeError(f"its /health check returned HTTP {resp.status_code}")
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
@@ -2565,10 +2594,8 @@ async def _get_chat_response(
         classified = _classify_chat_exception(e)
         if classified is not None:
             return _agent_ui_wording(classified.user_message)
-        return (
-            "I'm having trouble connecting to the language model right now. "
-            "Please make sure Lemonade Server is running and try again."
-        )
+        # Same as the streamed path: the real reason, not a guess at one.
+        return _agent_ui_wording(f"Agent error: {e}")
 
 
 # ── Streaming Chat ───────────────────────────────────────────────────────────

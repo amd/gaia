@@ -193,12 +193,12 @@ def test_vlm_active_skips_load():
 
 
 # ---------------------------------------------------------------------------
-# 5. Lemonade returns non-200 → load_model NOT called, no crash
+# 5. Lemonade returns non-200 → load_model NOT called; the turn says why
 # ---------------------------------------------------------------------------
 
 
-def test_non_200_health_skips_load():
-    """Non-200 /health → skip silently; LemonadeClient must NOT be instantiated."""
+def test_non_200_health_ends_the_turn():
+    """Non-200 /health → the turn fails saying so; nothing is loaded."""
     bad = MagicMock(spec=httpx.Response)
     bad.status_code = 503
 
@@ -209,7 +209,8 @@ def test_non_200_health_skips_load():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")  # must not raise
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
 
         mock_cls.assert_not_called()
 

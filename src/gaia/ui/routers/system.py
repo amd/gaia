@@ -1225,18 +1225,20 @@ def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> 
     the chosen llama.cpp backend; ``model_load_lock`` keeps it from racing a
     chat's own pre-flight load in this process.
     """
-    from gaia.daemon.broker_client import BrokerUnavailableError
+    from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
     from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
-    from gaia.ui._chat_helpers import model_load_lock
+    from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
 
     try:
-        with model_load_lock:
+        # The order every load in this process uses: lease, then the lock.
+        with model_lease(model_name, priority="interactive"), model_load_lock:
             LemonadeClient(verbose=False).load_model(
                 model_name, ctx_size=ctx_size, prompt=False, timeout=600
             )
     except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
         logger.error("%s failed: %s", log_context, exc)
         return
+    note_model_loaded(model_name)
     logger.info("%s succeeded", log_context)
 
 
@@ -1265,9 +1267,9 @@ async def load_model_endpoint(body: LoadModelRequest):
             status_code=409,
             detail=(
                 f"{len(answering)} chat(s) are answering right now. Loading "
-                f"{model_name} may unload the model they are using and cut "
-                "their answers off. Wait for them to finish, or load anyway "
-                "(force=true)."
+                f"{model_name} now competes with them for memory and the "
+                "model, and can slow or stop their answers. Wait for them to "
+                "finish, or load anyway (force=true)."
             ),
         )
     task = asyncio.create_task(

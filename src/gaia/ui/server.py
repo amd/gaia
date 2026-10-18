@@ -398,7 +398,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
-            from gaia.ui._chat_helpers import model_load_lock
+            from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
             from gaia.ui.warmup import preload_skip_reason
 
             low_memory = preload_skip_reason()
@@ -466,6 +466,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 client.load_model(
                     model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
+                note_model_loaded(model_id)
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
