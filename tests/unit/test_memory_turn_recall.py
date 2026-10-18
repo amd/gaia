@@ -26,6 +26,7 @@ from gaia.agents.base.memory import (
     LESSON_SOURCE,
     MemoryMixin,
     _embedding_to_blob,
+    _names_in,
 )
 from gaia.agents.base.memory_store import MemoryStore
 
@@ -62,6 +63,7 @@ def store(tmp_path):
 
 def _remember(store, vectors, content, vec, **kwargs):
     kwargs.setdefault("context", "work")
+    kwargs.setdefault("category", "fact")
     kid = store.store(content=content, **kwargs)
     store.store_embedding(kid, _embedding_to_blob(vec))
     vectors[content] = vec
@@ -305,15 +307,19 @@ class TestWhatIsNeverSurfaced:
 
 
 class TestTruncatedItemsStayRecallable:
-    """A memory the 4000-char cap cut is missing from the stable prompt.
+    """A memory the 4000-char cap left out is missing from the stable prompt.
 
     It must not also be suppressed from per-turn recall, or it becomes
     invisible on both paths -- worse than before the ages were added.
     """
 
-    @staticmethod
-    def _saturate(host, store):
-        """Fill the stable prompt past its cap; return the cut error memory.
+    TARGET = "toybox CI fails without TOYBOX_CLOCK=frozen " + " ".join(
+        f"tail{n}" for n in range(60)
+    )
+
+    @classmethod
+    def _saturate(cls, host, store):
+        """Fill the stable prompt past its cap; return the left-out error memory.
 
         Every line needs its own vocabulary -- ``MemoryStore.store`` dedupes on
         >80% word overlap, so repeated filler would collapse into one row.
@@ -323,19 +329,26 @@ class TestTruncatedItemsStayRecallable:
             _remember(
                 store,
                 host.vectors,
-                f"Preference {i}: {words}",
+                f"Error {i}: {words}",
                 _axis(4 + (i % 3)),
-                category="preference",
+                category="error",
+                confidence=0.9,
             )
-        return _remember(
+        target = _remember(
             store,
             host.vectors,
-            "toybox CI fails without TOYBOX_CLOCK=frozen",
+            cls.TARGET,
             _axis(0, lean=0.3),
             category="error",
+            confidence=0.1,
         )
+        # The oldest, so the newer rows fill the budget first.
+        _backdate(
+            store, target, "2026-01-01T10:00:00+00:00", "2026-01-01T10:00:00+00:00"
+        )
+        return target
 
-    def test_a_cut_memory_is_still_offered_to_the_turn(self, host, store):
+    def test_a_left_out_memory_is_still_offered_to_the_turn(self, host, store):
         self._saturate(host, store)
         host._rebuild_faiss_index()
         host._memory_turn_query = QUERY
@@ -343,9 +356,9 @@ class TestTruncatedItemsStayRecallable:
         stable = host.get_memory_system_prompt()
         ctx = host.get_memory_dynamic_context()
 
-        assert "... (memory truncated)" in stable
-        assert "toybox CI fails without TOYBOX_CLOCK=frozen" not in stable
-        assert "toybox CI fails without TOYBOX_CLOCK=frozen" in ctx
+        assert "more stored memories are not listed here" in stable
+        assert "TOYBOX_CLOCK=frozen" not in stable
+        assert self.TARGET in ctx
 
     def test_only_surviving_lines_are_suppressed(self, host, store):
         cut = self._saturate(host, store)
@@ -368,10 +381,10 @@ class TestStablePromptAges:
         prompt = host.get_memory_system_prompt()
 
         assert (
-            "  - Team ships on Fridays (confidence: 0.80, learned 2026-06-03, "
-            "last confirmed 2026-09-20)"
+            "  - Team ships on Fridays (learned 2026-06-03, last confirmed 2026-09-20)"
         ) in prompt
         assert "  - Prefers short answers (learned 2026-07-01)" in prompt
+        assert "confidence" not in prompt
 
 
 class _AgentBase:
@@ -387,11 +400,12 @@ class _TurnHost(_Host, _AgentBase):
 def test_the_memory_rides_on_the_user_message_not_the_system_prompt(store):
     vectors: Dict[str, np.ndarray] = {QUERY: _axis(0)}
     host = _TurnHost(store, vectors)
+    system_before = host.get_memory_system_prompt()
+    # Learned mid-session, after the stable prompt froze.
     _remember(
         store, vectors, "toybox CI needs a frozen clock", _axis(0), category="note"
     )
     host._rebuild_faiss_index()
-    system_before = host.get_memory_system_prompt()
 
     host.process_query(QUERY)
 
@@ -400,3 +414,208 @@ def test_the_memory_rides_on_the_user_message_not_the_system_prompt(store):
     assert after == ""
     assert host.get_memory_system_prompt() == system_before
     assert "frozen clock" not in system_before
+
+
+# ---------------------------------------------------------------------------
+# Calibration for a small real embedder. With embeddinggemma-300m a natural
+# question scores the memory it is about at 0.35-0.55 and unrelated memories at
+# 0.25-0.40 ("What should I get my sister for her birthday?" vs "My sister
+# Priya lives in Vancouver": 0.47). A fixed 0.5 floor surfaced nothing.
+# ---------------------------------------------------------------------------
+
+
+def _at(cos: float, axis: int = 1) -> np.ndarray:
+    """Unit vector whose cosine with the query (axis 0) is exactly *cos*."""
+    vec = np.zeros(DIM, dtype=np.float32)
+    vec[0] = cos
+    vec[axis] = np.sqrt(1.0 - cos * cos)
+    return vec
+
+
+_NOISE = [
+    "The team standup is at half past nine",
+    "Laptop is a ThinkPad with thirty two gigabytes",
+    "Uses an editor with modal keybindings",
+    "Office moved up to the fifth floor",
+    "Runs five kilometres on weekday evenings",
+    "Favourite band plays alternative rock",
+    "Practises guitar scales before breakfast",
+    "Production database runs version sixteen",
+    "Takes the bus into work most days",
+    "Prefers dark mode in every application",
+]
+
+
+def _seed_field(store, vectors, cos: float, count: int = 8) -> None:
+    for i, content in enumerate(_NOISE[:count]):
+        _remember(store, vectors, content, _at(cos, 1 + i % 7), category="fact")
+
+
+def _surfaced(host) -> str:
+    host._rebuild_faiss_index()
+    host._memory_turn_query = QUERY
+    return host.get_memory_dynamic_context()
+
+
+class TestRecallForNaturalQuestions:
+    def test_a_match_that_stands_out_from_the_field_is_surfaced(self, host, store):
+        _seed_field(store, host.vectors, 0.30)
+        _remember(
+            store,
+            host.vectors,
+            "My sister Priya lives in Vancouver",
+            _at(0.46),
+            category="fact",
+        )
+
+        assert "Priya lives in Vancouver" in _surfaced(host)
+
+    def test_a_best_match_at_noise_level_is_not(self, host, store):
+        _seed_field(store, host.vectors, 0.30)
+        _remember(store, host.vectors, "My sister Priya lives in Vancouver", _at(0.36))
+
+        assert "Stored memories" not in _surfaced(host)
+
+    def test_a_match_that_does_not_clear_a_high_field_is_not(self, host, store):
+        _seed_field(store, host.vectors, 0.42)
+        _remember(store, host.vectors, "My sister Priya lives in Vancouver", _at(0.46))
+
+        assert "Stored memories" not in _surfaced(host)
+
+    def test_a_match_far_behind_the_best_is_not(self, host, store):
+        _seed_field(store, host.vectors, 0.30)
+        _remember(store, host.vectors, "I drive a 2019 Subaru Outback", _at(0.48))
+        _remember(store, host.vectors, "I prefer metric units", _at(0.40, 2))
+
+        ctx = _surfaced(host)
+
+        assert "Subaru Outback" in ctx
+        assert "metric units" not in ctx
+
+    def test_a_small_store_keeps_the_sure_floor(self, host, store):
+        """Too few memories for a field; they all fit in the stable prompt."""
+        _seed_field(store, host.vectors, 0.30, count=3)
+        _remember(store, host.vectors, "My sister Priya lives in Vancouver", _at(0.46))
+
+        assert "Stored memories" not in _surfaced(host)
+
+
+class TestNamedPeopleComeAlong:
+    def test_a_memory_naming_someone_a_match_names_comes_along(self, host, store):
+        _seed_field(store, host.vectors, 0.25)
+        _remember(
+            store, host.vectors, "I have two children named Ada and Leo", _at(0.44)
+        )
+        _remember(store, host.vectors, "Leo is allergic to peanuts", _at(0.36, 2))
+        _remember(store, host.vectors, "Snow fell early this year", _at(0.36, 3))
+
+        ctx = _surfaced(host)
+
+        assert "children named Ada and Leo" in ctx
+        assert "Leo is allergic to peanuts" in ctx
+        assert "Snow fell" not in ctx
+
+    def test_it_may_go_past_the_top_few(self, host, store):
+        _seed_field(store, host.vectors, 0.25)
+        _remember(
+            store, host.vectors, "I have two children named Ada and Leo", _at(0.52)
+        )
+        _remember(store, host.vectors, "Packs lunches the night before", _at(0.51, 2))
+        _remember(store, host.vectors, "Shops for groceries on Sundays", _at(0.50, 3))
+        _remember(store, host.vectors, "Kids lunchbox must be nut free", _at(0.49, 4))
+        _remember(store, host.vectors, "Leo's school has a nut ban", _at(0.36, 5))
+
+        ctx = _surfaced(host)
+
+        assert "Leo's school has a nut ban" in ctx
+        assert "Kids lunchbox must be nut free" not in ctx
+
+    def test_names_are_capitalised_words_that_do_not_open_a_sentence(self):
+        assert _names_in("I have two children named Ada and Leo.") == {"Ada", "Leo"}
+        assert _names_in("My partner's name is Sam. Sam's car is red") == {"Sam"}
+        assert _names_in("Leo is allergic to peanuts") == set()
+
+
+class TestStablePromptFillsItsBudget:
+    def test_more_than_the_old_per_category_cap_is_shown(self, host, store):
+        facts = [f"Fact number {word} about the user" for word in _NOISE]
+        for content in facts:
+            store.store(category="fact", content=content, context="work")
+
+        prompt = host.get_memory_system_prompt()
+
+        assert all(content in prompt for content in facts)
+        assert "not listed here" not in prompt
+
+    def test_one_long_category_does_not_crowd_out_the_others(self, host, store):
+        for i in range(30):
+            words = " ".join(f"w{i}x{n}" for n in range(30))
+            store.store(
+                category="preference",
+                content=f"Preference {i}: {words}",
+                context="work",
+                confidence=0.9,
+            )
+        fact = store.store(
+            category="fact", content="Lives in Calgary", context="work", confidence=0.4
+        )
+
+        prompt = host.get_memory_system_prompt()
+
+        assert "  - Lives in Calgary (" in prompt
+        assert fact in host._stable_memory_ids
+        assert "more stored memories are not listed here" in prompt
+        assert len(prompt) <= 4000
+
+    def test_notes_and_upcoming_reminders_are_shown_lessons_are_not(self, host, store):
+        store.store(
+            category="note", content="Book club meets Thursdays", context="work"
+        )
+        store.store(
+            category="note",
+            content="toybox build needs --no-sandbox",
+            domain=LESSON_DOMAIN,
+            source=LESSON_SOURCE,
+            context="work",
+        )
+        store.store(
+            category="reminder",
+            content="Renew the passport",
+            due_at="2030-01-01T00:00:00+00:00",
+            context="work",
+        )
+        store.store(
+            category="reminder",
+            content="Dentist cleaning appointment",
+            due_at="2020-01-01T00:00:00+00:00",
+            context="work",
+        )
+
+        prompt = host.get_memory_system_prompt()
+
+        assert "Notes:\n  - Book club meets Thursdays (" in prompt
+        assert "--no-sandbox" not in prompt.split("Notes:")[1]
+        assert "  - Renew the passport (due 2030-01-01, learned " in prompt
+        assert "Dentist" not in prompt, "a reminder whose day has passed stays out"
+
+    def test_the_most_recently_confirmed_fact_comes_first(self, host, store):
+        """An old high-confidence fact must not outrank the one that replaced it."""
+        old = store.store(
+            category="fact", content="Lives in Calgary", context="work", confidence=0.9
+        )
+        new = store.store(
+            category="fact", content="Moved to Toronto", context="work", confidence=0.4
+        )
+        _backdate(store, old, "2026-01-01T10:00:00+00:00", "2026-01-01T10:00:00+00:00")
+        _backdate(store, new, "2026-09-01T10:00:00+00:00", "2026-09-01T10:00:00+00:00")
+
+        prompt = host.get_memory_system_prompt()
+
+        assert prompt.index("Moved to Toronto") < prompt.index("Lives in Calgary")
+
+
+def test_saving_stays_silent(host):
+    """Memory works in the background: the model doesn't announce saves."""
+    prompt = host.get_memory_system_prompt()
+
+    assert "call the tool silently and respond naturally" in prompt

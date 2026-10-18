@@ -137,13 +137,13 @@ Preferences:
   - code_style: black formatter, 88 char lines (learned 2026-01-20, last confirmed 2026-03-02)
 
 Known facts:
-  - Project uses React 19 with app router (confidence: 0.82, learned 2026-03-01)
-  - User's name is Alex, role is tech lead (confidence: 0.95, learned 2026-01-20)
+  - Project uses React 19 with app router (learned 2026-03-01)
+  - User's name is Alex, role is tech lead (learned 2026-01-20)
 
 Skills:
-  - Deploy workflow: test → build → push → verify (confidence: 0.88, learned 2026-02-02)
-  - Docker compose: always use --build flag on first run (confidence: 0.72, learned 2026-02-15)
-  - Git bisect: use binary search for regression hunting (confidence: 0.65, learned 2026-03-10)
+  - Deploy workflow: test → build → push → verify (learned 2026-02-02)
+  - Docker compose: always use --build flag on first run (learned 2026-02-15)
+  - Git bisect: use binary search for regression hunting (learned 2026-03-10)
 
 Known errors to avoid:
   - execute_code: "import torch" fails -- torch not installed on this machine (learned 2026-03-12)
@@ -166,9 +166,10 @@ No memories stored yet. Start building your knowledge base by remembering what t
 - Includes items from every context when the active context is `global` (the default), otherwise `global` + the active context
 - Excludes items where `sensitive=1`
 - Excludes items where `superseded_by IS NOT NULL` (only current/active items)
-- Sorted by confidence descending
-- Hard limits: max 10 preferences, 5 facts, 3 skills, 5 errors
-- Hard cap on total output: 4000 chars (truncated with `... (memory truncated)` if exceeded)
+- Covers preferences, facts, skills, errors, reminders and notes; lessons have their own section. A reminder whose due day has passed is left to the upcoming/overdue path, and a reminder shows its due date
+- Most recently confirmed first, so a fact that changed outranks the one it replaced
+- No per-category limit: the categories take turns, one item each, until the 4000-char cap (`STABLE_MEMORY_PROMPT_CHARS`, instructions included) is full. An item too long for what is left is skipped whole, and a closing line says how many were left out so the model knows to `recall` them
+- Confidence scores are not shown, so the model doesn't discount a true fact that was extracted rather than stated
 
 ### get_memory_dynamic_context()
 
@@ -197,13 +198,13 @@ Always returns at least the current time.
 
 **Recalled procedures** (procedural memory) ride here too, under a `=== RECALLED PROCEDURES (learned from past successful runs) ===` heading, whenever a stored procedure matches the goal. The matched set changes from turn to turn, so it never goes in the system prompt.
 
-**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error, each with cosine similarity of at least `TURN_RECALL_MIN_SIMILARITY` (0.5). Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
+**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they name someone a match names, so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
 
 The upcoming/overdue section is **rate-limited, not per-turn**. It rides the first turn of a session and the first turn after `REMINDER_PAUSE_SECONDS` (30 min) of silence — a natural pause — so an `[OVERDUE ...]` block never lands on an unrelated turn.
 
 Anything included is marked as raised immediately, by the agent loop:
 
-- `reminded_at` is written to the store, so `get_upcoming()` skips it in later sessions. **An overdue item is therefore volunteered once.** It stays fully recallable — it still appears in the stable system prompt, and `recall(category='reminder')` still returns it. An item due in the *future* gets one nudge per session, since `reminded_at` is still earlier than `due_at`.
+- `reminded_at` is written to the store, so `get_upcoming()` skips it in later sessions. **An overdue item is therefore volunteered once.** It stays fully recallable — `recall(category='reminder')` still returns it. An item due in the *future* gets one nudge per session, since `reminded_at` is still earlier than `due_at`.
 - The id is also held in memory for the session, so a store that cannot be written (incognito) still gets no repeats.
 
 The model is not asked to maintain `reminded_at` and should not — prompt-based enforcement of this was unreliable, which is why it moved into code.

@@ -89,6 +89,9 @@ const TOOL_META: Record<string, ToolMeta> = {
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };
 
+// Memory works in the background: its steps show only when they fail.
+const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+
 const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
@@ -143,6 +146,9 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     const displaySteps = useMemo(() => {
         const result: AgentStep[] = [];
         for (const step of steps) {
+            if (step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '')) {
+                continue;
+            }
             const prev = result[result.length - 1];
             // Merge consecutive thinking steps — concatenate details
             if (step.type === 'thinking' && prev && prev.type === 'thinking') {
