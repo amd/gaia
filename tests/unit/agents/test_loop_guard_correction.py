@@ -12,6 +12,8 @@ service.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -206,23 +208,33 @@ def test_rate_limited_calls_do_not_count_toward_the_limit(agent):
     wait.assert_called_with(_throttled(2.0))
 
 
-def test_rate_limit_wait_is_capped(agent):
-    with patch("gaia.agents.base.agent.time.sleep") as sleep:
-        agent._wait_out_rate_limit(_throttled(60.0))
-    sleep.assert_called_once_with(Agent._RATE_LIMIT_WAIT_CAP_S)
+@pytest.fixture
+def own_sleeps():
+    """Record, without sleeping, the ``time.sleep`` calls on this test's thread."""
+    # Patching time.sleep reaches every thread, and an earlier test's thread may poll.
+    real_sleep, test_thread, calls = time.sleep, threading.get_ident(), []
+
+    def _sleep(seconds):
+        if threading.get_ident() == test_thread:
+            calls.append(seconds)
+        else:
+            real_sleep(seconds)
+
+    with patch("gaia.agents.base.agent.time.sleep", _sleep):
+        yield calls
 
 
-def test_rate_limit_wait_honours_the_cancel_event(agent):
-    import threading
+def test_rate_limit_wait_is_capped(agent, own_sleeps):
+    agent._wait_out_rate_limit(_throttled(60.0))
+    assert own_sleeps == [Agent._RATE_LIMIT_WAIT_CAP_S]
 
+
+def test_rate_limit_wait_honours_the_cancel_event(agent, own_sleeps):
     agent._cancel_event = threading.Event()
-    with (
-        patch("gaia.agents.base.agent.time.sleep") as sleep,
-        patch.object(agent._cancel_event, "wait") as wait,
-    ):
+    with patch.object(agent._cancel_event, "wait") as wait:
         agent._wait_out_rate_limit(_throttled(3.0))
     wait.assert_called_once_with(3.0)
-    sleep.assert_not_called()
+    assert own_sleeps == []
 
 
 # ---------------------------------------------------------------------------

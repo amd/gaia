@@ -549,7 +549,7 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="Embedding model downloaded but won't load (memory and document search off)" icon="triangle-exclamation">
     You see `Memory is unavailable this session: the embedding model ... is downloaded but would not load`, or indexing fails with `model_load_error` / `llama-server failed to start`.
 
-    GAIA loads its embedding model on the GPU, using the llama.cpp backend Lemonade picks for your machine (Vulkan on most Windows and Linux PCs, Metal on a Mac). If that load fails to start, GAIA loads the embedding model on the CPU backend instead and logs a warning naming the model, the backend that failed, and the error:
+    GAIA loads its embedding model on the GPU, using the llama.cpp backend Lemonade picks for your machine (Vulkan on most Windows and Linux PCs, Metal on a Mac). With ROCm it uses the CPU instead (see the next entry). If the GPU load fails to start, GAIA loads the embedding model on the CPU backend instead and logs a warning naming the model, the backend that failed, and the error:
 
     ```
     Embedding model 'user.embeddinggemma-300m-GGUF' failed to load on llama.cpp's vulkan backend (...). Loading it on the CPU backend instead
@@ -568,6 +568,20 @@ error. To run the chat model in the cloud instead, see
     The first GPU failure seen was llama.cpp's Vulkan cooperative-matrix path crashing on AMD Radeon GPUs ([#1831](https://github.com/amd/gaia/issues/1831)). Starting Lemonade with `GGML_VK_DISABLE_COOPMAT=1` also avoids that crash, but it slows prompt processing for every model: Qwen3 30B A3B on a Radeon 8060S drops from about 1,290 to 680 tokens/s. Generation speed is unchanged.
 
     If the CPU load fails too, the cause is something else: out of memory, or a context size the model can't take. Lemonade's server log has llama-server's own error.
+  </Accordion>
+
+  <Accordion title="GPU stuck at 100% on ROCm with two models loaded" icon="microchip">
+    With llama.cpp's ROCm backend, the chat model and the embedding model both resident on the GPU can hold it at 100% even while idle. It is an amdgpu kernel driver issue, reported fixed in Linux kernel 7.4.
+
+    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as the backend you chose for chat models in **Settings → Advanced → Model server**. That panel then reads:
+
+    ```
+    Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue.
+    ```
+
+    and GAIA's log has the same line at INFO. The chat model stays on the GPU. Memory and document search keep working; indexing a large folder is slower and uses more CPU cores. Vulkan and Metal are unchanged: the embedding model stays on the GPU there.
+
+    If you still see the GPU pinned on ROCm, use the Vulkan backend or update to kernel 7.4 or later.
   </Accordion>
 </AccordionGroup>
 

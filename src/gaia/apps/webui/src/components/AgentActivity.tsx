@@ -373,7 +373,8 @@ export function linkifyPaths(text: string): React.ReactNode {
     // A quoted path ('C:\My Docs\a.txt') runs to its closing quote, spaces
     // included, and the quotes stay outside the link. An unquoted one
     // (C:\...\file.ext, (C:\Users\...)) stops at whitespace or punctuation.
-    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
+    // The lookbehind keeps the "s:/" in "https://" from reading as a drive.
+    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|(?<![\w/\\])[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
