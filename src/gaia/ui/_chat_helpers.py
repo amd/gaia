@@ -3665,6 +3665,10 @@ def _queued_status_event(position: int, ordinal) -> dict:
     }
 
 
+# A turn waiting in line sends the stream loop's keepalive this often.
+_QUEUED_KEEPALIVE_SECONDS = 5.0
+_KEEPALIVE_FRAME = ": keepalive " + "x" * 490 + "\n\n"
+
 # Ends the "in line" status once a turn that stepped away for the user is back.
 _RESUMED_STATUS_EVENT = {
     "type": "status",
@@ -3754,13 +3758,24 @@ async def _run_chat_lifecycle(
         on_position=_announce_place,
         on_resume=_announce_resume,
     )
+
+    async def _keep_alive_while_queued() -> None:
+        # The same comment frame the stream loop sends, so clients can tell
+        # a turn waiting in line from a dead connection.
+        while True:
+            await asyncio.sleep(_QUEUED_KEEPALIVE_SECONDS)
+            run.emit(_KEEPALIVE_FRAME)
+
     try:
+        keep_alive = asyncio.create_task(_keep_alive_while_queued())
         try:
             await run.slot.acquire()
         except TurnCancelled:
             msg_id = db.add_message(session_id, "assistant", "Cancelled.")
             _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
             return
+        finally:
+            keep_alive.cancel()
         try:
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)

@@ -413,3 +413,23 @@ async def test_turn_waiting_on_the_warm_up_shows_it_and_stop_ends_the_wait(runti
     finally:
         warm.set()
         await _cleanup(rt, sid)
+
+
+async def test_a_turn_waiting_in_line_keeps_its_stream_alive(runtime):
+    rt = runtime
+    sid = rt.db.create_session()["id"]
+    await rt.queue.acquire("another-chat")
+    try:
+        with patch.object(helpers, "_QUEUED_KEEPALIVE_SECONDS", 0.05):
+            await _start_detached(await _send(rt, sid, "queued"))
+            run = rt.manager.get(sid)
+            q = run.subscribe()
+            await asyncio.sleep(0.3)
+            frames = []
+            while not q.empty():
+                frames.append(q.get_nowait())
+            run.unsubscribe(q)
+        assert any(f.startswith(": keepalive") for f in frames)
+    finally:
+        rt.queue.release()
+        await _cleanup(rt, sid)
