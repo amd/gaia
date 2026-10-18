@@ -17,7 +17,7 @@ beforeEach(() => {
 describe('ScheduleManager', () => {
     it('closes on Escape, like every other dialog', () => {
         render(<ScheduleManager />);
-        expect(screen.getByRole('dialog', { name: 'Scheduled tasks' })).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: /Schedule/ })).toBeInTheDocument();
         fireEvent.keyDown(document, { key: 'Escape' });
         expect(useChatStore.getState().showSchedules).toBe(false);
     });
