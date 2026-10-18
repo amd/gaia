@@ -548,8 +548,11 @@ class AttachDocumentRequest(BaseModel):
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
     | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
+
+    The load takes the same model-slot lease and load lock a chat turn does, so it waits for another app's load instead of racing it. While a chat is answering, the request returns `409` (loading another model could cut that answer off); send it again with `"force": true` to load anyway.
 
     **Response (202):**
     ```json

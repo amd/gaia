@@ -289,6 +289,68 @@ _mcp_status_lock = threading.Lock()
 # Public (no underscore) because it is intentionally accessed cross-module.
 model_load_lock = threading.Lock()
 
+# Chat models this process loaded. Only these may be unloaded to make room: a
+# model another app loaded is never taken from under it.
+_models_loaded_here: set[str] = set()
+
+
+def _take_model_load_lock(sse_handler=None) -> bool:
+    """Take ``model_load_lock``; False when the turn is stopped while waiting."""
+    shown = False
+    while not model_load_lock.acquire(timeout=0.2):
+        if sse_handler is None:
+            continue
+        if sse_handler.cancelled.is_set():
+            return False
+        if not shown:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "working",
+                    "message": "Waiting for another chat to finish loading its model",
+                }
+            )
+            shown = True
+    return True
+
+
+def _load_making_room(
+    client, model_id: str, ctx: int, resident: list, may_unload: bool, sse_handler
+) -> None:
+    """Load *model_id*, unloading only this process's other models if it won't fit."""
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
+    try:
+        client.load_model(
+            model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
+        )
+    except InsufficientMemoryError:
+        wanted = model_id.lower()
+        ours = [
+            m["model_name"]
+            for m in resident
+            if m.get("model_name") in _models_loaded_here
+            and m["model_name"].lower() != wanted
+        ]
+        if not may_unload or not ours:
+            raise
+        for name in ours:
+            logger.info("Pre-flight: unloading %s to make room for %s", name, model_id)
+            if sse_handler is not None:
+                sse_handler._emit(
+                    {
+                        "type": "status",
+                        "status": "info",
+                        "message": f"Unloading {name} to make room for {model_id}",
+                    }
+                )
+            client.unload_model(name, ignore_if_not_loaded=True)
+            _models_loaded_here.discard(name)
+        client.load_model(
+            model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
+        )
+    _models_loaded_here.add(model_id)
+
 
 # ── Lemonade error classification ──────────────────────────────────────────
 #
@@ -392,20 +454,26 @@ async def _generate_session_title(
     user_msg: str,
     assistant_msg: str,
 ) -> Optional[str]:
-    """Call Lemonade chat completions to produce a short tab-style title.
+    """Ask the chat's model for a short tab-style title.
+
+    Runs like any other model request in this process: through the model
+    client, so it takes the broker lease (at background priority, behind any
+    turn) and the per-model request lock, and on the model's side slot when it
+    has one, so the conversation's cache stays put. A title never loads a
+    model: when *model_id* is not loaded, the first question is the title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on an HTTP or parse failure.  An empty reply or a
-    classifier verdict ("safe", "unsafe S1") yields the first question instead,
-    with a warning.  Times out at 30 s so a hung
-    LLM doesn't keep the background task alive forever.
+    punctuation), the first question for an empty reply or a classifier
+    verdict ("safe", "unsafe S1"), or None when the request fails. Times out
+    at 30 s so a hung model doesn't keep the background task alive.
     """
-    import httpx  # pylint: disable=import-outside-toplevel
-
     from gaia.llm.lemonade_client import (
-        find_model_requirement,
-        lemonade_auth_headers,
-        resolve_lemonade_api_key,
+        SIDE_SLOT,
+        LemonadeClient,
+        LemonadeClientError,
+        _model_ids_match,
+        cloud_model_provider,
+        no_thinking_kwargs,
     )
 
     prompt = (
@@ -416,56 +484,63 @@ async def _generate_session_title(
         f"Assistant: {(assistant_msg or '')[:200]}\n"
         "Title:"
     )
-    body = {
-        "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 24,
-        # Low temperature: titles should be deterministic-ish
-        # for the same conversation.
-        "temperature": 0.3,
-    }
-    mr = find_model_requirement(model_id)
-    if mr is not None and mr.thinking is not None:
+
+    def _ask() -> Optional[dict]:
+        client = LemonadeClient(
+            base_url=base_url, verbose=False, model_lease_priority="background"
+        )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
-        body["chat_template_kwargs"] = {"enable_thinking": False}
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                json=body,
-                headers=lemonade_auth_headers(
-                    resolve_lemonade_api_key(base_url=base_url)
-                ),
-            )
-            if resp.status_code != 200:
-                logger.debug(
-                    "Auto-title HTTP %d: %s", resp.status_code, resp.text[:200]
-                )
+        kwargs = dict(no_thinking_kwargs(model_id))
+        if not cloud_model_provider(model_id):
+            loaded = client.health_check().get("all_models_loaded", [])
+            if not any(_model_ids_match(m.get("model_name"), model_id) for m in loaded):
                 return None
-            data = resp.json()
-            content = (
-                data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-            )
-            title = content.strip().split("\n")[0].strip()
-            # Strip wrapping quotes and trailing punctuation that some
-            # models always add despite the instruction.
-            title = title.strip("\"'`").rstrip(".!?;:,").strip()
-            # Strip stock prefixes models sometimes emit anyway.
-            for prefix in ("title:", "tab:", "summary:"):
-                if title.lower().startswith(prefix):
-                    title = title[len(prefix) :].strip()
-            if not title or _CLASSIFIER_VERDICT_RE.match(title):
-                logger.warning(
-                    "Auto-title: %s replied %r, not a title; "
-                    "titling from the first question instead",
-                    model_id,
-                    content[:80],
-                )
-                return _title_from_question(user_msg)
-            return title[:64]
-    except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
-        logger.debug("Auto-title LLM call failed: %s", exc)
+            if client.slot_count(model_id) > SIDE_SLOT:
+                kwargs["id_slot"] = SIDE_SLOT
+        return client.chat_completions(
+            model_id,
+            [{"role": "user", "content": prompt}],
+            max_tokens=24,
+            # Low temperature: titles should be deterministic-ish
+            # for the same conversation.
+            temperature=0.3,
+            timeout=30,
+            auto_download=False,
+            **kwargs,
+        )
+
+    try:
+        data = await asyncio.to_thread(_ask)
+    except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
+        logger.warning("Auto-title request to %s failed: %s", model_id, exc)
         return None
+    if data is None:
+        logger.info(
+            "Auto-title: %s is not loaded; titling from the first question", model_id
+        )
+        return _title_from_question(user_msg)
+    try:
+        content = data["choices"][0]["message"].get("content") or ""
+    except (LookupError, TypeError, AttributeError) as exc:
+        logger.warning("Auto-title: unreadable reply from %s: %s", model_id, exc)
+        return None
+    title = content.strip().split("\n")[0].strip()
+    # Strip wrapping quotes and trailing punctuation that some
+    # models always add despite the instruction.
+    title = title.strip("\"'`").rstrip(".!?;:,").strip()
+    # Strip stock prefixes models sometimes emit anyway.
+    for prefix in ("title:", "tab:", "summary:"):
+        if title.lower().startswith(prefix):
+            title = title[len(prefix) :].strip()
+    if not title or _CLASSIFIER_VERDICT_RE.match(title):
+        logger.warning(
+            "Auto-title: %s replied %r, not a title; "
+            "titling from the first question instead",
+            model_id,
+            content[:80],
+        )
+        return _title_from_question(user_msg)
+    return title[:64]
 
 
 def _first_exchange(
@@ -1967,9 +2042,17 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     VLMs (``type="vlm"``) count as valid chat models for the model-name
     check, since the multimodal backbone serves text completions.
 
-    Note: there is a small TOCTOU window between this check and the
-    actual chat request.  An eviction in that window is handled by
-    the one-shot retry in the streaming worker (see ``_run_agent``).
+    The model server is shared: a model another process loaded is never
+    unloaded. When the model won't fit, only models this process loaded are
+    unloaded to make room; otherwise the load fails loudly. A Stop
+    (``sse_handler.cancelled``) seen after a wait means nothing is loaded.
+
+    Raises:
+        InsufficientMemoryError: the model does not fit, even after unloading
+            this process's other models.
+        BrokerUnavailableError: the daemon's broker did not grant the model
+            slot (a lease timeout included).
+        RuntimeError: any other failure to check or load the model.
     """
     if not model_id:
         return
@@ -2058,6 +2141,20 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         from gaia.daemon.broker_client import model_lease
         from gaia.llm.lemonade_client import LemonadeClient
 
+        def _slot_busy(reason: str) -> None:
+            logger.info("Pre-flight for %s: %s", model_id, reason)
+            if sse_handler is not None:
+                sse_handler._emit(
+                    {
+                        "type": "status",
+                        "status": "working",
+                        "message": "Waiting for the model: another app is using it",
+                    }
+                )
+
+        def _stopped() -> bool:
+            return sse_handler is not None and sse_handler.cancelled.is_set()
+
         # Interactive priority: this pre-flight is on the user's turn, so it
         # must jump ahead of queued background loads (embedder warm-ups,
         # autonomous briefs). The lease spans the re-check and the unload→load
@@ -2069,76 +2166,78 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         # and this interactive request would then queue behind it on the lock —
         # where the broker's priority ordering has no say, silently defeating
         # the priority it just asked for.
-        with model_lease(model_id, priority="interactive"), model_load_lock:
-            # Re-check after acquiring the lock: another thread may have
-            # already loaded the expected model with sufficient context.
-            resident_chat_models = []
-            resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
-            if resp2.status_code == 200:
-                resident_chat_models = [
-                    m
-                    for m in resp2.json().get("all_models_loaded", [])
-                    if m.get("type") in ("llm", "vlm") and m.get("recipe") != "cloud"
-                ]
-                if any(
-                    (m.get("model_name") or "").lower() == expected_lower
-                    and (m.get("recipe_options", {}).get("ctx_size") or 0)
-                    >= required_ctx
-                    for m in resident_chat_models
-                ):
-                    logger.debug(
-                        "Expected model loaded with sufficient ctx by concurrent "
-                        "thread; skipping load"
-                    )
+        with model_lease(model_id, priority="interactive", on_wait=_slot_busy):
+            if _stopped() or not _take_model_load_lock(sse_handler):
+                return
+            try:
+                if _stopped():
                     return
+                # Re-check after acquiring the lock: another thread may have
+                # already loaded the expected model with sufficient context.
+                resident_chat_models = []
+                resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
+                if resp2.status_code == 200:
+                    resident_chat_models = [
+                        m
+                        for m in resp2.json().get("all_models_loaded", [])
+                        if m.get("type") in ("llm", "vlm")
+                        and m.get("recipe") != "cloud"
+                    ]
+                    if any(
+                        (m.get("model_name") or "").lower() == expected_lower
+                        and (m.get("recipe_options", {}).get("ctx_size") or 0)
+                        >= required_ctx
+                        for m in resident_chat_models
+                    ):
+                        logger.debug(
+                            "Expected model loaded with sufficient ctx by "
+                            "concurrent thread; skipping load"
+                        )
+                        return
 
-            client = LemonadeClient(verbose=False)
-            # Lemonade does not evict the resident model on a new /load, so
-            # unload the stale local chat models first — by name, so the
-            # embedder that memory and RAG need stays resident. A server the
-            # user runs keeps its models: GAIA only loads there.
-            if not is_users_server(base_url):
-                for stale in resident_chat_models:
-                    client.unload_model(stale["model_name"], ignore_if_not_loaded=True)
-            client.load_model(
-                model_id,
-                ctx_size=required_ctx,
-                prompt=False,
-                timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
-            )
+                client = LemonadeClient(verbose=False)
+                # A server the user runs keeps its models: GAIA only loads there.
+                may_unload = not is_users_server(base_url)
+                if may_unload:
+                    # The same model at too small a window is reloaded, not
+                    # loaded twice. Other resident models stay.
+                    for m in resident_chat_models:
+                        if (m.get("model_name") or "").lower() == expected_lower:
+                            client.unload_model(
+                                m["model_name"], ignore_if_not_loaded=True
+                            )
+                _load_making_room(
+                    client,
+                    model_id,
+                    required_ctx,
+                    resident_chat_models,
+                    may_unload,
+                    sse_handler,
+                )
+            finally:
+                model_load_lock.release()
     except InsufficientMemoryError as exc:
         # The fix is closing apps, not checking Lemonade: pass the reason on.
         logger.error("Pre-flight model load refused: %s", exc)
-        if sse_handler is not None:
-            sse_handler._emit(
-                {"type": "status", "status": "warning", "message": str(exc)}
-            )
+        raise
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
         # the user at the wrong subsystem costs them the debugging session.
         logger.error("Pre-flight model load could not lease the model slot: %s", exc)
-        if sse_handler is not None:
-            sse_handler._emit(
-                {
-                    "type": "status",
-                    "status": "warning",
-                    "message": (
-                        "Could not reserve the model slot from the GAIA daemon. "
-                        "Check `gaia daemon status`."
-                    ),
-                }
-            )
+        raise BrokerUnavailableError(
+            f"Could not reserve the model slot for {model_id} from the GAIA "
+            f"daemon, so this turn did not start: {exc} Check `gaia daemon "
+            "status`; send the message again once the other app's turn is done.",
+            status_code=exc.status_code,
+        ) from exc
     except Exception as exc:
-        logger.warning("Pre-flight model check failed: %s", exc)
-        if sse_handler is not None:
-            sse_handler._emit(
-                {
-                    "type": "status",
-                    "status": "warning",
-                    "message": "Could not auto-load LLM. Check that Lemonade is running.",
-                }
-            )
+        logger.error("Pre-flight model load failed for %s: %s", model_id, exc)
+        raise RuntimeError(
+            f"Could not load {model_id} before answering: {exc}. Check that "
+            "Lemonade is running (`gaia init --check`), then send the message "
+            "again."
+        ) from exc
 
 
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
