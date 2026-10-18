@@ -92,9 +92,10 @@ def _api(url: str, token: str, body: dict | None = None):
             raw = resp.read()
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as e:
+        hint = " The job needs `actions: write` permission." if e.code == 403 else ""
         raise RuntimeError(
-            f"{req.get_method()} {url} returned HTTP {e.code}: {e.read()[:300]!r}. "
-            "The job needs `actions: write` permission."
+            f"{req.get_method()} {url} returned HTTP {e.code}: "
+            f"{e.read()[:300]!r}.{hint}"
         ) from e
 
 
@@ -148,6 +149,7 @@ def check(
                     )
                     continue
             v = judge(w, runs, repo, tag)
+            # A red run on main is dispatched once too: a flake gets one re-check.
             if v.state in ("failed", "missing") and w not in dispatched:
                 print(f"{w}: {v.detail}; dispatching it on {tag}", flush=True)
                 start_run(w)

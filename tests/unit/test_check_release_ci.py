@@ -196,3 +196,18 @@ def test_main_requires_a_token(monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     assert crc.main(["--repo", "amd/gaia", "--sha", "abc", "--tag", "v1.0.0"]) == 1
     assert "GITHUB_TOKEN" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("code, hinted", [(403, True), (404, False), (502, False)])
+def test_only_a_403_blames_permissions(monkeypatch, code, hinted):
+    import io
+    import urllib.error
+
+    def boom(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, code, "x", {}, io.BytesIO(b"body"))
+
+    monkeypatch.setattr(crc.urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError) as exc:
+        crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok")
+    assert f"HTTP {code}" in str(exc.value)
+    assert ("actions: write" in str(exc.value)) is hinted
