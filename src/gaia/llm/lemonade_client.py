@@ -1014,9 +1014,8 @@ SYSTEM_INFO_TIMEOUT = (3.05, 15.0)
 CATALOG_TIMEOUT = (3.05, 30.0)
 #: Seconds between status probes while a busy server is waited for.
 _BUSY_POLL_SECONDS = 5.0
-#: ``(connect, read)`` for a probe made while waiting. Short, so Stop is seen
-#: within about 1.5 s even when the probe itself goes unanswered.
-_WAIT_PROBE_TIMEOUT = (1.0, 1.0)
+#: Longest Stop goes unseen while a status probe made during a wait runs.
+_STOP_CHECK_SECONDS = 0.5
 #: ``/health`` per-model ``status`` of a model taking or leaving the LLM slot.
 #: A download holds no slot (and can take hours), so it is not one of them.
 _LOADING_STATES = frozenset({"loading", "evicting", "pending", "queued"})
@@ -3731,7 +3730,7 @@ class LemonadeClient:
         does not answer it counts as busy loading.
         """
         try:
-            health = self.health_check(timeout=_WAIT_PROBE_TIMEOUT)
+            health = self._unless_stopped(self.health_check)
         except LemonadeUnresponsiveError:
             return "Lemonade is busy and not answering status checks"
         except LemonadeClientError as e:
@@ -3754,8 +3753,9 @@ class LemonadeClient:
 
         Bounded by ``GAIA_LLM_LOAD_WAIT`` (see :class:`RetryPolicy`), said
         through the retry notice (so a front-end shows it as waiting, not
-        hung), and ended by Stop within about 1.5 s: half a second of sleep
-        plus one short, possibly unanswered, probe.
+        hung), and ended by Stop within half a second, even while a probe is
+        blocked on the server. A probe gets the full ``PROBE_TIMEOUT``, so a
+        server that is slow to answer, not silent, ends the wait.
 
         Raises:
             LemonadeUnresponsiveError: It did not answer within that limit.
@@ -3784,20 +3784,52 @@ class LemonadeClient:
                     "stuck: check the Lemonade server log, or set "
                     f"{LOAD_WAIT_ENV} (seconds) to wait longer for a slow load."
                 )
-            stopped = StreamCancelledError(
-                f"Stopped while waiting for a busy Lemonade to load '{model}'."
-            )
             if not sleep_unless_cancelled(
                 sleep, min(_BUSY_POLL_SECONDS, limit - waited), is_cancelled
             ):
-                raise stopped
+                raise StreamCancelledError(
+                    f"Stopped while waiting for a busy Lemonade to load '{model}'."
+                )
+            status = self._unless_stopped(
+                lambda: self.get_status(include_catalog=False)
+            )
+            if not status.busy:
+                return status
+
+    def _unless_stopped(self, probe: Callable[[], Any]) -> Any:
+        """``probe()``, but Stop ends the wait for it within half a second.
+
+        A status probe can block for its whole read timeout on a server that
+        accepted and went quiet; it runs on a worker thread so Stop (see
+        :func:`gaia.llm.retry.model_retry_notices`) is not held up by it. The
+        abandoned probe finishes on its own and is discarded.
+
+        Raises:
+            StreamCancelledError: Stop was pressed while it ran.
+        """
+        is_cancelled = current_cancel_check()
+        if is_cancelled is None:
+            return probe()
+        outcome: Dict[str, Any] = {}
+        done = threading.Event()
+
+        def run() -> None:
             try:
-                self.health_check(timeout=_WAIT_PROBE_TIMEOUT)
-            except LemonadeUnresponsiveError:
-                if is_cancelled is not None and is_cancelled():
-                    raise stopped from None
-                continue
-            return self.get_status(include_catalog=False)
+                outcome["value"] = probe()
+            except BaseException as e:  # pylint: disable=broad-except
+                outcome["error"] = e  # re-raised on the caller's thread below
+            finally:
+                done.set()
+
+        threading.Thread(target=run, name="gaia-lemonade-probe", daemon=True).start()
+        while not done.wait(_STOP_CHECK_SECONDS):
+            if is_cancelled():
+                raise StreamCancelledError(
+                    "Stopped while waiting for Lemonade to answer a status check."
+                )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
 
     def _record_retries(self, state: RetryState) -> None:
         self.last_request_retries = state.retries

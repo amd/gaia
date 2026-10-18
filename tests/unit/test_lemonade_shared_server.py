@@ -349,17 +349,23 @@ def _stop_after(seconds):
     return lambda: time.monotonic() >= deadline
 
 
-def test_stop_reaches_the_busy_wait_within_about_two_seconds(isolated_home, stalled):
-    """The probes themselves stall here, so the bound includes one probe."""
+@pytest.fixture
+def quick_polls(monkeypatch):
+    monkeypatch.setattr(lc, "_BUSY_POLL_SECONDS", 0.5)
+
+
+def test_stop_lands_while_a_probe_is_stalled(isolated_home, stalled, quick_polls):
+    """Stop is pressed after the first sleep, while a probe is blocked on a
+    server that never answers: it is seen within about half a second."""
     client = lc.LemonadeClient(base_url=stalled.base_url, verbose=False)
     started = time.monotonic()
-    with model_retry_notices(lambda _n: None, is_cancelled=_stop_after(0.3)):
+    with model_retry_notices(lambda _n: None, is_cancelled=_stop_after(1.5)):
         with pytest.raises(StreamCancelledError):
             client._wait_while_busy(MODEL)
     assert time.monotonic() - started < 2.5
 
 
-def test_stop_reaches_the_load_wait_within_about_two_seconds(isolated_home, stalled):
+def test_stop_lands_while_the_load_probe_is_stalled(isolated_home, stalled):
     client = lc.LemonadeClient(base_url=stalled.base_url, verbose=False)
     retrier = client._model_retrier(MODEL)
 
@@ -367,7 +373,22 @@ def test_stop_reaches_the_load_wait_within_about_two_seconds(isolated_home, stal
         raise lc.requests.exceptions.ConnectionError("reset")
 
     started = time.monotonic()
-    with model_retry_notices(lambda _n: None, is_cancelled=_stop_after(0.3)):
-        with pytest.raises(lc.requests.exceptions.ConnectionError):
+    with model_retry_notices(lambda _n: None, is_cancelled=_stop_after(1.5)):
+        with pytest.raises(
+            (StreamCancelledError, lc.requests.exceptions.ConnectionError)
+        ):
             retrier.call(call)
     assert time.monotonic() - started < 2.5
+
+
+def test_a_slow_but_alive_server_ends_the_busy_wait(
+    isolated_home, fake, quick_polls, monkeypatch
+):
+    """/health answering in 2 s is slow, not silent: the wait ends as soon as
+    it answers instead of running to GAIA_LLM_LOAD_WAIT."""
+    monkeypatch.setenv("GAIA_LLM_LOAD_WAIT", "20")
+    fake.health_delay = 2
+    client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
+    started = time.monotonic()
+    assert client._wait_while_busy(MODEL).running
+    assert time.monotonic() - started < 10
