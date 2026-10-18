@@ -22,6 +22,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
 )
 from gaia.llm.model_server_info import (
+    EMBEDDER_ON_CPU_WITH_ROCM,
     available_llamacpp_backends,
     describe_loaded_model,
     describe_model_server,
@@ -115,6 +116,43 @@ def test_health_with_no_models_and_no_version():
     assert info["version"] is None
     assert info["port"] == 13305
     assert info["preferred_backend"] == "rocm"
+
+
+@pytest.mark.parametrize(
+    "default_backend,preferred,note",
+    [
+        ("rocm", None, EMBEDDER_ON_CPU_WITH_ROCM),
+        ("vulkan", "rocm", EMBEDDER_ON_CPU_WITH_ROCM),
+        ("vulkan", None, None),
+        ("vulkan", "cpu", None),
+        (None, None, None),
+    ],
+)
+def test_the_panel_says_when_the_embedder_runs_on_the_cpu_for_rocm(
+    monkeypatch, default_backend, preferred, note
+):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Linux")
+    sysinfo = {"recipes": {"llamacpp": {"default_backend": default_backend}}}
+    info = describe_model_server(
+        base_url="http://localhost:13305/api/v1",
+        owner="gaia",
+        health={},
+        system_info=sysinfo,
+        preferred_backend=preferred,
+    )
+    assert info["embedding_note"] == note
+
+
+def test_the_panel_has_no_rocm_note_on_macos(monkeypatch):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Darwin")
+    info = describe_model_server(
+        base_url="http://remote:13305/api/v1",
+        owner="remote",
+        health={},
+        system_info={"recipes": {"llamacpp": {"default_backend": "rocm"}}},
+        preferred_backend=None,
+    )
+    assert info["embedding_note"] is None
 
 
 def test_backend_named_by_the_load_wins():
@@ -304,6 +342,14 @@ def test_the_embedder_keeps_its_own_backend(config_file, monkeypatch):
     assert _loads(calls)[0]["llamacpp_backend"] == "vulkan"
 
 
+def test_a_saved_rocm_choice_puts_the_embedder_on_the_cpu(config_file, monkeypatch):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Linux")
+    config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
+    calls = []
+    _recording_client(calls).load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+    assert _loads(calls)[0]["llamacpp_backend"] == "cpu"
+
+
 def test_a_failed_load_on_the_chosen_backend_says_how_to_undo_it(config_file):
     config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
     client = _recording_client([], fail_load="backend rocm is not installed")
@@ -361,6 +407,16 @@ def test_unreachable_lemonade_is_one_plain_line(ui):
         body["error"] == "Lemonade is not answering at http://localhost:13305/api/v1."
     )
     assert "\n" not in body["error"]
+
+
+@pytest.mark.allow_network
+def test_the_panel_payload_carries_the_rocm_embedder_note(ui, monkeypatch):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Windows")
+    sysinfo = {"recipes": {"llamacpp": {"default_backend": "rocm"}}}
+    body = ui(sysinfo=sysinfo).get("/api/system/model-server").json()
+    assert body["embedding_note"] == EMBEDDER_ON_CPU_WITH_ROCM
+    body = ui(sysinfo=SYSINFO).get("/api/system/model-server").json()
+    assert body["embedding_note"] is None
 
 
 @pytest.mark.allow_network

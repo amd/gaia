@@ -276,7 +276,9 @@ class TrayManager {
       img.setTemplateImage(true);
       return img;
     }
-    return this._loadIcon("tray-icon.png"); // Linux: full-colour PNG
+    // Linux: full-colour 32px PNG (+@2x); StatusNotifier hosts scale it
+    // down to their 16-24px slot, which stays sharp where upscaling blurs.
+    return this._loadIcon("tray-icon.png");
   }
 
   _loadIcon(filename) {
@@ -285,7 +287,13 @@ class TrayManager {
     if (!fs.existsSync(iconPath)) {
       throw new Error(`[tray] icon asset missing: ${iconPath}`);
     }
-    return nativeImage.createFromPath(iconPath);
+    const img = nativeImage.createFromPath(iconPath);
+    // An undecodable file yields an empty image, which trays draw as a blank
+    // or placeholder square instead of erroring.
+    if (img.isEmpty()) {
+      throw new Error(`[tray] icon asset could not be decoded: ${iconPath}`);
+    }
+    return img;
   }
 
   // ── Private: Config persistence ──────────────────────────────────────

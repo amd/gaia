@@ -12,6 +12,7 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 The mixin is tested in isolation via a minimal host class (no real Agent).
 """
 
+import copy
 import inspect
 import json
 import logging
@@ -26,6 +27,9 @@ import pytest
 
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
+from gaia.agents.base.system_context import (
+    collect_system_info as _real_collect_system_info,
+)
 from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
@@ -113,6 +117,21 @@ def memory_store(tmp_db_path):
     store = MemoryStore(db_path=tmp_db_path)
     yield store
     store.close()
+
+
+_SYSTEM_FACTS_CACHE: dict = {}
+
+
+def _system_facts_once():
+    """The real ``collect_system_info()`` result, collected once per process.
+
+    Host fixtures call it on every test; it spawns PowerShell (about 1 s on a
+    Windows runner) and the machine cannot change mid-run. The collector's own
+    tests below still call it directly.
+    """
+    if "facts" not in _SYSTEM_FACTS_CACHE:
+        _SYSTEM_FACTS_CACHE["facts"] = _real_collect_system_info()
+    return copy.deepcopy(_SYSTEM_FACTS_CACHE["facts"])
 
 
 def _make_mock_embedder():
@@ -233,6 +252,10 @@ def mixin_host(tmp_db_path):
         patch(
             "gaia.agents.base.memory._system_context_is_enabled",
             return_value=True,
+        ),
+        patch(
+            "gaia.agents.base.system_context.collect_system_info",
+            side_effect=_system_facts_once,
         ),
     ):
         host.init_memory(db_path=tmp_db_path, context="global")
@@ -4770,6 +4793,10 @@ def composing_host(tmp_db_path):
         patch(
             "gaia.agents.base.memory._system_context_is_enabled",
             return_value=True,
+        ),
+        patch(
+            "gaia.agents.base.system_context.collect_system_info",
+            side_effect=_system_facts_once,
         ),
     ):
         host.init_memory(db_path=tmp_db_path, context="global")
