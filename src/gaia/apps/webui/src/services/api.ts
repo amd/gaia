@@ -624,7 +624,7 @@ export function sendMessageStream(
         }),
         signal: controller.signal,
     })
-        .then((res) => consumeSSEResponse(res, callbacks, t))
+        .then((res) => consumeSSEResponse(res, callbacks, t, { silentCloseIsError: true }))
         .catch((err) => {
             if (err.name === 'AbortError') {
                 log.stream.warn('Stream aborted by user');
@@ -646,13 +646,17 @@ async function consumeSSEResponse(
     res: Response,
     callbacks: StreamCallbacks,
     t: ReturnType<typeof log.stream.time>,
+    { silentCloseIsError = false }: { silentCloseIsError?: boolean } = {},
 ): Promise<void> {
     log.stream.info(`SSE connection opened -> HTTP ${res.status}`);
 
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
-        callbacks.onError(new Error(`HTTP ${res.status}: ${errText}`));
+        // The server's own words when it gave any, never a raw JSON body.
+        const detail = parseErrorDetail(errText);
+        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }
 
@@ -669,6 +673,7 @@ async function consumeSSEResponse(
     let chunkCount = 0;
     let totalChars = 0;
     let agentEventCount = 0;
+    let errorReceived = false;
 
     try {
         while (true) {
@@ -705,6 +710,7 @@ async function consumeSSEResponse(
                             callbacks.onDone(event);
                         } else if (event.type === 'error') {
                             log.stream.error(`Stream error event:`, event.content);
+                            errorReceived = true;
                             callbacks.onError(new Error(event.content || 'Unknown error'));
                         } else if (event.type === 'agent_created') {
                             log.stream.info(`Agent created: ${event.agent_id}`);
@@ -739,6 +745,15 @@ async function consumeSSEResponse(
     // Only signal completion if no explicit done event was received during the stream
     if (!doneReceived) {
         log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
+        // A send that closes having said nothing would otherwise leave the
+        // message sitting there with no answer and no error.
+        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0 && !errorReceived) {
+            callbacks.onError(new Error(
+                'GAIA closed the connection before any answer arrived. Send the message again; ' +
+                'if it keeps happening, check the GAIA server log.',
+            ));
+            return;
+        }
         callbacks.onDone({ type: 'done' });
     }
 }
