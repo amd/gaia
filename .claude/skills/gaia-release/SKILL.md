@@ -409,7 +409,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 
 ## Phase 3.5 — Release candidate (default for minor/major; ask for a patch)
 
-**Goal:** put the exact build users will get in front of a tester before it becomes the default. An RC tag runs the same `publish.yml`, behind the same approval gate, but stays off every stable channel:
+**Goal:** put the exact build users will get in front of a tester before it becomes the default. An RC tag runs the same `publish.yml` with **no approval** (its `approve-publish` runs in the reviewer-less `publish-rc` environment), and stays off every stable channel:
 
 | | Final `v<version>` | RC `v<version>-rcN` |
 |---|---|---|
@@ -440,7 +440,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git push origin v<version>-rc1
    ```
 
-3. **Monitor and approve exactly as in Phase 5.** The approval gate is the same `publish` environment. There is no `refresh-context7` job to wait for; `redeploy-website-rc` asks the website to rebuild so the RC entry appears.
+3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. There is no `refresh-context7` job to wait for; `redeploy-website-rc` asks the website to rebuild so the RC entry appears.
 
 4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
    ```bash
@@ -489,7 +489,9 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    gh run list --repo amd/gaia --workflow publish.yml --limit 3
    ```
 
-   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers) → approve-publish (manual gate) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release → refresh-context7`. Surface the run URL.
+   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release`. Surface the run URL.
+
+   `ci-green` requires a passing run of `lint.yml`, `test_unit.yml` and `test_gaia_cli_linux.yml` on the tagged commit (`util/check_release_ci.py`). Most main commits have none (the next merge cancels their runs), so it dispatches the missing ones against the tag and waits up to ~80 min alongside the builds. A red one stops the release before anything publishes.
 
 ---
 
@@ -508,7 +510,7 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
 3. **On real failure** (logic error, missing artifact, validator failure that wasn't there before): **stop**. Do not push past a red build. Do not delete and re-tag — that path is messy. Surface the failing step + log to the user.
 
-4. **Manual approval gate** — when the run reaches the `approve-publish` job (gated on the `publish` GitHub environment), surface the URL to the user. Tell them: **"Manual approval required at <url>. Claude cannot click this — please approve in browser when ready."** Then wait.
+4. **Manual approval gate (finals only)** — when the run reaches the `approve-publish` job (gated on the `publish` GitHub environment), surface the URL to the user. Tell them: **"Manual approval required at <url>. Claude cannot click this — please approve in browser when ready."** Then wait.
 
 5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel. Watch to completion.
 
