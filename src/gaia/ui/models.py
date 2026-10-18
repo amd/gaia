@@ -56,7 +56,7 @@ class SystemStatus(BaseModel):
     lemonade_error: Optional[str] = None
     # How the Lemonade probe ended: "ok", "down" (nothing answered the
     # connection), "timed_out" (connected, no answer in time) or "error".
-    lemonade_probe: Optional[str] = None
+    lemonade_probe: Optional[Literal["ok", "down", "timed_out", "error"]] = None
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0

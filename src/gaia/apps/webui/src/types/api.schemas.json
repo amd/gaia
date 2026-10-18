@@ -3371,6 +3371,12 @@
       "lemonade_probe": {
         "anyOf": [
           {
+            "enum": [
+              "ok",
+              "down",
+              "timed_out",
+              "error"
+            ],
             "type": "string"
           },
           {

@@ -43,16 +43,35 @@ def status_with(monkeypatch):
     return _status
 
 
-@pytest.mark.allow_network
-def test_a_connect_timeout_reads_as_not_running(status_with):
-    async def get(url):
-        raise httpx.ConnectTimeout("timed out connecting", request=None)
+async def _connect_timeout(url):
+    raise httpx.ConnectTimeout("timed out connecting", request=None)
 
-    body = status_with(get).json()
+
+@pytest.mark.allow_network
+def test_a_connect_timeout_to_a_remote_server_reads_as_not_running(
+    status_with, monkeypatch
+):
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://10.0.0.5:8000/api/v1")
+
+    body = status_with(_connect_timeout).json()
 
     assert body["lemonade_running"] is False
     assert body["lemonade_error"] is None
     assert body["lemonade_probe"] == "down"
+
+
+@pytest.mark.allow_network
+def test_a_connect_timeout_to_a_local_server_reads_as_busy_not_stopped(
+    status_with, monkeypatch
+):
+    # A wedged local Lemonade with a full accept queue: up, not answering.
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:13305/api/v1")
+
+    body = status_with(_connect_timeout).json()
+
+    assert body["lemonade_running"] is False
+    assert body["lemonade_probe"] == "timed_out"
+    assert "not accepting" in body["lemonade_error"]
 
 
 @pytest.mark.allow_network

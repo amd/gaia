@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    _is_local_url,
     cloud_model_provider,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
@@ -796,6 +797,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     try:
         await asyncio.wait_for(_probe_lemonade(), _STATUS_PROBE_BUDGET_S)
         status.lemonade_probe = "ok" if status.lemonade_running else "error"
+        if status.lemonade_running:
+            _probe_ok("lemonade")
     except asyncio.TimeoutError:
         if status.lemonade_running:
             # Health answered; only the extra probes ran out of time.
@@ -816,12 +819,23 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 f"Lemonade did not answer within {_STATUS_PROBE_BUDGET_S:g} s; "
                 "it may be busy loading a model."
             )
-    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-        # Nothing answered the connection: a confirmed outage, so keep the
+    except httpx.ConnectError as exc:
+        # Refused: nothing is listening, a confirmed outage, so keep the
         # actionable "not responding" banner rather than an ambiguous probe.
         logger.debug("system status: Lemonade is not running: %s", exc)
         status.lemonade_running = False
         status.lemonade_probe = "down"
+    except httpx.ConnectTimeout as exc:
+        status.lemonade_running = False
+        if _is_local_url(resolve_lemonade_base_url()):
+            # A local server that is up but not accepting (full backlog,
+            # wedged) times out the same way; say busy, never "start it".
+            logger.warning("system status: local Lemonade is not accepting: %s", exc)
+            status.lemonade_probe = "timed_out"
+            status.lemonade_error = "Lemonade is not accepting connections right now"
+        else:
+            logger.debug("system status: remote Lemonade is not reachable: %s", exc)
+            status.lemonade_probe = "down"
     except httpx.TimeoutException as exc:
         # Connected, then no answer in time: busy, not down.
         logger.warning("system status: Lemonade did not answer in time: %s", exc)
