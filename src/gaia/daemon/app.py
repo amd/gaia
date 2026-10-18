@@ -33,7 +33,10 @@ def build_require_token(token: str):
     router so the 401 contract never forks."""
     from fastapi import Header, HTTPException
 
-    def require_token(authorization: Optional[str] = Header(default=None)) -> None:
+    # Async: a sync dependency would take a worker-pool thread on every call.
+    async def require_token(
+        authorization: Optional[str] = Header(default=None),
+    ) -> None:
         where = f"the client token in {instance_path()}"
         if not authorization:
             raise HTTPException(
@@ -129,6 +132,7 @@ def create_app(
     given with *lemonade_owner*) mounts ``/daemon/v1/lemonade/clients``, where
     front ends register while they use GAIA's Lemonade and release on exit.
     """
+    import anyio
     from fastapi import Depends, FastAPI, HTTPException
 
     @asynccontextmanager
@@ -152,8 +156,12 @@ def create_app(
 
     require_token = build_require_token(token)
 
+    # Clients read a status that misses their probe as a hung daemon, so it
+    # never queues for the worker pool that sync routes and lease waits share.
+    status_limiters = []
+
     @app.get(f"{API_PREFIX}/status")
-    def status(_: None = Depends(require_token)) -> dict:
+    async def status(_: None = Depends(require_token)) -> dict:
         now = time.time()
         payload = {
             "service": SERVICE_ID,
@@ -165,7 +173,11 @@ def create_app(
             "uptime_seconds": max(0.0, now - started_at),
         }
         if clock is not None:
-            counts = clock.job_counts()
+            if not status_limiters:  # created on the event loop, lazily
+                status_limiters.append(anyio.CapacityLimiter(4))
+            counts = await anyio.to_thread.run_sync(
+                clock.job_counts, limiter=status_limiters[0]
+            )
             payload["clock"] = {
                 "running": clock.running,
                 "last_poll_at": clock.last_poll_at,

@@ -3265,6 +3265,13 @@ than doing a direct load that would evict another process's model — check
 reported as a warning and loads proceed unbrokered; `gaia daemon restart`
 restores serialization.
 
+A daemon that is running but slow to answer is **never killed** for it. GAIA
+gives it 10 more seconds, then reports it busy: commands fail with an error
+naming its pid, and `gaia daemon status` shows `running, but not answering`.
+If it stays that way, `gaia daemon restart` restarts it and its sidecars. Only
+a daemon whose port refuses connections, or answers as something else, is
+replaced automatically.
+
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running
 gaia daemon status     # pid, port, uptime + the supervised sidecar list

@@ -9,7 +9,9 @@ exactly ONE daemon (the second attaches to the first's instance.json).
 
 Recovery follows §0.25: a recorded instance is trusted only when its pid is alive
 AND a token-authed probe succeeds. A dead pid → reclaim by spawning fresh; a
-live-but-unresponsive pid → terminate it, then spawn fresh.
+live pid with nothing answering on its port → terminate it, then spawn fresh. A
+live pid that accepts the probe but answers slowly is busy, not dead: it is
+re-probed with a longer wait and never killed (:class:`DaemonBusyError`).
 """
 
 from __future__ import annotations
@@ -19,17 +21,22 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
 from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
-from gaia.daemon.errors import DaemonError, DaemonStartError, DaemonVersionError
+from gaia.daemon.errors import (
+    DaemonBusyError,
+    DaemonError,
+    DaemonStartError,
+    DaemonVersionError,
+)
 from gaia.daemon.instance import (
     DaemonInstance,
     is_live,
     pid_alive,
-    probe,
+    probe_state,
     read_instance,
     terminate_instance,
 )
@@ -48,6 +55,11 @@ _START_TIMEOUT = 60.0
 _PROGRESS_AFTER = 5.0
 _PROGRESS_EVERY = 10.0
 _LOG_TAIL_LINES = 5
+
+#: The second, longer probe a daemon gets after one that connected but timed
+#: out. Status never waits on other work, so a daemon still silent after this is
+#: overloaded or stuck, and is reported busy rather than killed.
+_BUSY_PROBE_TIMEOUT = 10.0
 
 #: Called with the seconds waited so far while a daemon start is in progress.
 ProgressCallback = Callable[[float], None]
@@ -116,6 +128,36 @@ def _check_version(inst: DaemonInstance) -> None:
         )
 
 
+def _patient_probe(inst: DaemonInstance, timeout: float) -> Tuple[str, Optional[dict]]:
+    """:func:`probe_state`, giving a busy daemon one longer second chance."""
+    state, body = probe_state(inst, timeout=timeout)
+    if state == "busy":
+        state, body = probe_state(inst, timeout=max(timeout, _BUSY_PROBE_TIMEOUT))
+    return state, body
+
+
+def _answers(inst: DaemonInstance, timeout: float) -> bool:
+    """True if *inst* is live, False if it is gone.
+
+    Raises:
+        DaemonBusyError: its process is alive and accepted the probe, but did
+            not answer even after a longer second wait.
+    """
+    if not pid_alive(inst.pid):
+        return False
+    state, _ = _patient_probe(inst, timeout)
+    if state == "busy":
+        raise DaemonBusyError(
+            f"the GAIA daemon (pid {inst.pid}, port {inst.port}) is running but "
+            f"did not answer its status check within {_BUSY_PROBE_TIMEOUT:.0f}s, "
+            "so it is overloaded or stuck. It was left running. Retry in a "
+            "moment; if it stays like this, `gaia daemon restart` restarts it "
+            "and its sidecar agents. Where to look: `gaia daemon logs` "
+            f"({paths.log_path()})."
+        )
+    return state == "live"
+
+
 def attach(
     timeout: float = 1.5, host_dir: Optional[Path] = None
 ) -> Optional[DaemonInstance]:
@@ -124,9 +166,13 @@ def attach(
     Args:
         host_dir: Attach to the daemon of another GAIA home, whose
             ``instance.json`` is in this directory, instead of this process's.
+
+    Raises:
+        DaemonBusyError: a daemon is running but not answering. ``None`` would
+            tell the caller there is no daemon, and it would act as if alone.
     """
     inst = read_instance(host_dir / "instance.json") if host_dir else read_instance()
-    if inst is None or not is_live(inst, timeout=timeout):
+    if inst is None or not _answers(inst, timeout):
         return None
     _check_version(inst)
     return inst
@@ -150,14 +196,16 @@ def start_or_attach(
     with StartLock(timeout=timeout):
         # Re-check under the lock: a concurrent caller may have just started it.
         inst = read_instance()
-        if inst is not None and is_live(inst):
+        if inst is not None and _answers(inst, 1.5):
             _check_version(inst)
             return inst
-        # Stale registry. If the pid is alive but unresponsive, it is our own
-        # daemon gone bad — terminate it before reclaiming (§0.25).
+        # Stale registry. A live pid whose port refuses us or answers as
+        # something else is our own daemon gone bad — terminate it before
+        # reclaiming (§0.25). A busy one raised above and is never killed.
         if inst is not None and pid_alive(inst.pid):
             logger.warning(
-                "daemon: instance pid=%s is alive but unresponsive; reclaiming",
+                "daemon: instance pid=%s is alive but its port does not answer "
+                "as this daemon; reclaiming",
                 inst.pid,
             )
             terminate_instance(inst)
@@ -668,7 +716,9 @@ def status_report() -> dict:
         return {"state": "not_running"}
     if not pid_alive(inst.pid):
         return {"state": "stale", "reason": "pid_dead", "instance": inst}
-    body = probe(inst)
+    state, body = _patient_probe(inst, 1.5)
+    if state == "busy":
+        return {"state": "busy", "instance": inst}
     if body is None:
         return {"state": "stale", "reason": "unresponsive", "instance": inst}
     return {"state": "running", "instance": inst, "status": body}

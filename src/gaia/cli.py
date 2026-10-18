@@ -8584,6 +8584,13 @@ def _handle_daemon_status():
         print("  Start it with `gaia daemon start`.")
         return
     inst = report["instance"]
+    if state == "busy":
+        print("GAIA daemon: running, but not answering (busy or stuck)")
+        print(f"  Registry: {paths.instance_path()} (pid {inst.pid}, port {inst.port})")
+        print("  It was left running. Retry in a moment; if it stays like this,")
+        print("  `gaia daemon restart` restarts it and its sidecar agents.")
+        print("  Where to look: `gaia daemon logs`.")
+        return
     if state == "stale":
         reason = {
             "pid_dead": "recorded pid is not alive",

@@ -54,7 +54,7 @@ class TestRegisterCall:
         (tmp_path / "instance.json").write_text(
             json.dumps({"pid": 1, "port": 4321, "token": "OTHER", "api_version": "1.4"})
         )
-        monkeypatch.setattr(client, "is_live", lambda inst, timeout=1.5: True)
+        monkeypatch.setattr(client, "_answers", lambda inst, timeout=1.5: True)
         response = mock.Mock(status_code=200)
         response.json.return_value = {"client_id": "abc"}
         with mock.patch("requests.post", return_value=response) as post:
