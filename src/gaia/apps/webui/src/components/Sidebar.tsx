@@ -14,6 +14,7 @@ import { log } from '../utils/logger';
 import { groupSessionsByRecency } from '../utils/sessionGrouping';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import gaiaRobot from '../assets/gaia-robot.png';
+import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
 import './Sidebar.css';
 
@@ -141,6 +142,10 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const LocationIcon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
     const isCollapsed = collapsed && !isMobile;
+    const setSidebarCollapsed = useChatStore((s) => s.setSidebarCollapsed);
+    const collapse = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
+    const pane = useSidebarWidth(collapse);
+    const resizable = !isMobile && !isCollapsed;
 
     const nav = [
         { key: 'memory', label: 'Memory', icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
@@ -150,16 +155,17 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
 
     return (
         <aside
-            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}`}
+            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}${pane.resizing ? ' is-resizing' : ''}`}
+            style={resizable ? { width: pane.width, minWidth: pane.width } : undefined}
             aria-label="Chats"
         >
+            {resizable && pane.handle}
             <div className="sb-top">
-                {!isCollapsed && (
-                    <div className="sb-brand">
-                        <img src={gaiaRobot} alt="" width={22} height={22} />
-                        <span>GAIA</span>
-                    </div>
-                )}
+                {/* The icon stays when collapsed: with no title bar it is the app's mark. */}
+                <div className="sb-brand">
+                    <img src={gaiaRobot} alt="" width={22} height={22} />
+                    {!isCollapsed && <span>GAIA</span>}
+                </div>
                 <button
                     type="button"
                     className="sb-icon-btn"

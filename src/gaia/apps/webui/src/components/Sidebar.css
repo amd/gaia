@@ -14,9 +14,47 @@
     z-index: 30;
 }
 
+.sb { position: relative; }
+
+/* Dragging follows the pointer directly, without the width transition. */
+.sb.is-resizing { transition: none; }
+
 .sb.is-collapsed {
     width: 56px;
     min-width: 56px;
+}
+
+/* Resize handle on the right edge: an 8px grab area with a line on hover. */
+.sb-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -4px;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 2;
+}
+
+.sb-resize::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: var(--accent-solid);
+    opacity: 0;
+    transition: opacity var(--duration) var(--ease);
+}
+
+.sb-resize:hover::after,
+.sb-resize:focus-visible::after,
+.sb-resize.is-dragging::after { opacity: 0.6; }
+
+.sb.is-collapsed .sb-top {
+    flex-direction: column;
+    gap: 10px;
 }
 
 .sb-top {
