@@ -1314,6 +1314,8 @@ class RAGSDK:
                         f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
                     )
                     return pdf_text, pdf_pages, metadata
+                except IndexingStopped:
+                    raise
                 except Exception as pdf_err:
                     self.log.warning(
                         "PDF extraction from converted PPTX failed, falling back: %s",
@@ -1380,6 +1382,7 @@ class RAGSDK:
             total_images_processed = 0
 
             for i, slide in enumerate(prs.slides, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract native text from shapes / tables
@@ -1514,7 +1517,7 @@ class RAGSDK:
             }
 
             return full_text, total_slides, metadata
-        except ValueError:
+        except (ValueError, IndexingStopped):
             raise
         except Exception as e:
             self.log.error(f"Error reading PPTX {pptx_path}: {e}")
