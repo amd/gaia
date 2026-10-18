@@ -256,7 +256,8 @@ class TestLemonadeClientMock(unittest.TestCase):
         mock_load.assert_called_once()
         args, kwargs = mock_load.call_args
         self.assertEqual(args[0], TEST_MODEL)  # First arg should be model
-        self.assertEqual(kwargs.get("timeout", None), 60)  # Should have timeout=60
+        # The default load timeout: a load can queue behind another app's.
+        self.assertNotIn("timeout", kwargs)
         # list_models should also be called when auto_pull=True (default)
         mock_list_models.assert_called_once()
 

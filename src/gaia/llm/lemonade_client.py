@@ -7675,52 +7675,24 @@ def create_lemonade_client(
                     )
 
                     try:
-                        # Try to pull the model first
-                        pull_result = client.pull_model(
-                            model_name, timeout=300
-                        )  # 5 min timeout for download
-                        client.log.info(f"Successfully pulled model: {pull_result}")
-                    except Exception as pull_error:
-                        client.log.warning(
-                            f"Failed to pull model '{model_name}': {pull_error}"
-                        )
-                        client.log.info(
-                            "Proceeding with load anyway - server may auto-install"
-                        )
+                        pull_result = client.pull_model(model_name)
+                    except LemonadeClientError as pull_error:
+                        raise LemonadeClientError(
+                            f"could not download it from {client.base_url} "
+                            f"({pull_error}). Check the model name and your "
+                            "connection, or run `gaia init` to install it."
+                        ) from pull_error
+                    client.log.info(f"Successfully pulled model: {pull_result}")
                 else:
                     client.log.info(
                         f"Model '{model_name}' found in registry, proceeding with load"
                     )
 
-            # Now attempt to load the model
-            client.load_model(model_name, timeout=60)
-        except Exception as e:
-            # Extract detailed error information
-            error_details = str(e)
-            client.log.error(f"Failed to load {model_name}: {error_details}")
-
-            # Try to get more details about available models for debugging
-            try:
-                models_response = client.list_models()
-                available_models = [
-                    model.get("id", "unknown")
-                    for model in models_response.get("data", [])
-                ]
-                client.log.error(f"Available models: {available_models}")
-                client.log.error(f"Attempted to load: {model_name}")
-                if available_models:
-                    client.log.error(
-                        "Consider using one of the available models instead"
-                    )
-            except Exception as list_error:
-                client.log.error(f"Could not list available models: {list_error}")
-
-            # Include both original error and context in the raised exception
-            enhanced_message = f"Failed to load {model_name}: {error_details}"
-            if "available_models" in locals() and available_models:
-                enhanced_message += f" (Available models: {available_models})"
-
-            raise LemonadeClientError(enhanced_message)
+            # The default load timeout: a load can queue behind another app's.
+            client.load_model(model_name)
+        except LemonadeClientError as e:
+            client.log.error(f"Failed to load {model_name}: {e}")
+            raise LemonadeClientError(f"Failed to load {model_name}: {e}") from e
 
     return client
 
