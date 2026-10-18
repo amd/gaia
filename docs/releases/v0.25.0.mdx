@@ -105,7 +105,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Memory stops false apologies and reusing deleted values**, saves "remember this" requests, and skips loading the embedder when memory is off. (PRs [#4708](https://github.com/amd/gaia/pull/4708), [#4756](https://github.com/amd/gaia/pull/4756))
 - **A reply cut off by the token limit is continued** instead of ending mid-sentence, and a tool call cut off at the output cap is retried shorter. (PRs [#4054](https://github.com/amd/gaia/pull/4054), [#4556](https://github.com/amd/gaia/pull/4556))
 - **The GPU no longer sits at 100% on ROCm** — with llama.cpp on ROCm, the embedding model runs on the CPU, and Settings → Model server says so. (PR [#5274](https://github.com/amd/gaia/pull/5274))
-- **GAIA never saves its output over your source file.** (PR [#5167](https://github.com/amd/gaia/pull/5167))
+- **GAIA no longer saves over the file you asked it to read from** — "save the items in X as Y" writes Y, not X. (PR [#5167](https://github.com/amd/gaia/pull/5167))
 - **Pulling every item out of a document outside your folders asks first** instead of refusing. (PR [#5218](https://github.com/amd/gaia/pull/5218))
 - **Fetch errors name the page you asked for**, and web addresses in answers no longer turn into broken folder links. (PR [#5238](https://github.com/amd/gaia/pull/5238))
 - **The Agent UI fits better** — wide tables scroll, composer menus stay inside the window, the model-wait hint stays quiet while a tool runs, and the Memory page shows chat titles. (PRs [#5193](https://github.com/amd/gaia/pull/5193), [#5196](https://github.com/amd/gaia/pull/5196), [#5192](https://github.com/amd/gaia/pull/5192), [#5194](https://github.com/amd/gaia/pull/5194))
