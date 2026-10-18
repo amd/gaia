@@ -15,8 +15,8 @@ export const STATUS_POLL_MS = 5_000;
 /** While a model downloads, its progress bar wants a faster refresh. */
 export const STATUS_POLL_DOWNLOAD_MS = 2_000;
 export const STATUS_POLL_MAX_MS = 30_000;
-/** The backend's own model-server probe waits 10 s, and its device probes a few more. */
-export const STATUS_REQUEST_TIMEOUT_MS = 30_000;
+/** Above the status handler's own sequential probes (health, models, catalog, stats, devices: 31 s+). */
+export const STATUS_REQUEST_TIMEOUT_MS = 60_000;
 
 export type StatusOutcome =
     | { kind: 'ok'; status: SystemStatus }
@@ -60,16 +60,23 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
     let timer: ReturnType<typeof setTimeout> | null = null;
     // A stopped poll's probe still in flight must not reschedule.
     let generation = 0;
+    let current: AbortController | null = null;
+    let cancelled = false;
 
-    const probe = async (): Promise<StatusOutcome> => {
+    /** The outcome, or null when stop() cancelled the request. */
+    const probe = async (): Promise<StatusOutcome | null> => {
         const controller = new AbortController();
+        current = controller;
+        cancelled = false;
         const limit = setTimeout(() => controller.abort(), STATUS_REQUEST_TIMEOUT_MS);
         try {
             return { kind: 'ok', status: await api.getSystemStatus(controller.signal) };
         } catch (error) {
+            if (cancelled) return null;
             return controller.signal.aborted ? { kind: 'slow' } : { kind: 'unreachable', error };
         } finally {
             clearTimeout(limit);
+            if (current === controller) current = null;
         }
     };
 
@@ -77,6 +84,7 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
         if (inFlight) return inFlight;
         inFlight = probe()
             .then((outcome) => {
+                if (outcome === null) return;
                 slowStreak = isSlow(outcome) ? slowStreak + 1 : 0;
                 downloading = isDownloading(outcome);
                 onOutcome(outcome);
@@ -102,9 +110,14 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
             const gen = ++generation;
             tick(gen);
             return () => {
-                if (gen === generation) generation++;
+                if (gen !== generation) return;
+                generation++;
                 if (timer) clearTimeout(timer);
                 timer = null;
+                if (current) {
+                    cancelled = true;
+                    current.abort();
+                }
             };
         },
     };

@@ -116,25 +116,26 @@ function App() {
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
     const slowCount = useRef(0);
+    // A backend that answers late is busy, not gone; only a refused request means it is unreachable.
+    const [backendSlow, setBackendSlow] = useState(false);
     const applyStatus = useCallback((outcome: StatusOutcome) => {
         if (outcome.kind === 'unreachable') {
             log.system.warn('System status check failed', outcome.error);
+            slowCount.current = 0;
+            setBackendSlow(false);
             setBackendConnected(false);
             setSystemStatus(null);
             return;
         }
         if (outcome.kind === 'slow') {
-            // A backend busy behind a slow model server is not gone; three missed answers in a row are.
             slowCount.current += 1;
             log.system.warn(`System status did not answer in time (${slowCount.current} in a row)`);
-            if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) {
-                setBackendConnected(false);
-                setSystemStatus(null);
-            }
+            if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) setBackendSlow(true);
             return;
         }
         const { status } = outcome;
         slowCount.current = 0;
+        setBackendSlow(false);
         setBackendConnected(true);
         if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
         // One slow health probe under load is not an outage.
@@ -420,7 +421,7 @@ function App() {
             />
 
             <div className="main-content">
-                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} />}
+                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} />}
                 {setup.state === 'unknown' && (
                     <div className="app-notice is-warning" role="status">
                         <span>Could not check whether GAIA is set up: {setup.error}</span>

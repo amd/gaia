@@ -140,20 +140,34 @@ describe('system status poll', () => {
         expect(document.body.textContent).not.toMatch(/stopped responding/i);
     });
 
-    it('reports the backend lost only after three status requests in a row get no answer', async () => {
+    it('calls a backend that keeps missing answers slow, never lost', async () => {
         fakeTimers();
         mocked.getSystemStatus.mockImplementation((signal?: AbortSignal) => new Promise((_resolve, reject) => {
             signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
         }));
         useChatStore.setState({ backendConnected: true });
         render(<App />);
-        // Two timeouts (30 s each, plus backoff between them): still connected.
-        await advance(75_000);
-        expect(useChatStore.getState().backendConnected).toBe(true);
-        expect(mocked.getSystemStatus.mock.calls.length).toBe(2);
-        await advance(60_000);
+        // Each request gets 60 s, with 10 s then 20 s of backoff between them: the third ends at 210 s.
+        await advance(205_000);
         expect(mocked.getSystemStatus.mock.calls.length).toBe(3);
-        expect(useChatStore.getState().backendConnected).toBe(false);
+        expect(document.body.textContent).not.toMatch(/slow to answer/i);
+        await advance(10_000);
+        expect(useChatStore.getState().backendConnected).toBe(true);
+        expect(document.body.textContent).toMatch(/GAIA is slow to answer/i);
+        expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+    });
+
+    it('waits long enough for the status handler to finish its own probes', async () => {
+        fakeTimers();
+        const signals: AbortSignal[] = [];
+        mocked.getSystemStatus.mockImplementation((signal?: AbortSignal) => {
+            if (signal) signals.push(signal);
+            return new Promise((resolve) => setTimeout(
+                () => resolve({ lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF' } as never), 45_000));
+        });
+        render(<App />);
+        await advance(46_000);
+        expect(signals[0]?.aborted).toBe(false);
     });
 
     it('still tells the user how to start a model server that is down', async () => {

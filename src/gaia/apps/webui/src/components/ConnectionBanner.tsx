@@ -14,7 +14,25 @@ import './ConnectionBanner.css';
  * the required model is not downloaded, the wrong model is loaded, or the
  * context window is too small. Provides clear messaging and actionable hints.
  */
-export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
+/** A retry that says it is checking until the check answers. */
+function RetryButton({ onRetry, label }: { onRetry: () => void | Promise<void>; label: string }) {
+    const [checking, setChecking] = useState(false);
+    const run = () => {
+        setChecking(true);
+        Promise.resolve(onRetry()).finally(() => setChecking(false));
+    };
+    return (
+        <button className="connection-banner__retry" onClick={run} disabled={checking}>
+            {checking ? 'Checking…' : label}
+        </button>
+    );
+}
+
+export function ConnectionBanner({ onRetry, backendSlow = false }: {
+    onRetry?: () => void | Promise<void>;
+    /** Status requests keep timing out: the backend is busy, not gone. */
+    backendSlow?: boolean;
+}) {
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
 
@@ -207,11 +225,25 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         Check that GAIA is still running, then retry.
                     </span>
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Retry
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Retry" />}
+            </div>
+        );
+    }
+
+    // Case 1a: the backend answers, but too slowly to read its status.
+    if (backendSlow) {
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <AlertTriangle size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    GAIA is slow to answer.{' '}
+                    <span className="connection-banner__hint">
+                        It may be busy with another chat or app. GAIA keeps checking.
+                    </span>
+                </div>
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
             </div>
         );
     }
@@ -228,11 +260,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     GAIA settings could not be loaded.{' '}
                     <span className="connection-banner__hint">{systemStatus.config_error}</span>
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
             </div>
         );
     }
@@ -259,11 +287,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         <span className="connection-banner__hint">{systemStatus.start_instruction}</span>
                     )}
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
@@ -295,11 +319,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         Reload it with a larger context in Settings → Advanced.
                     </span>
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
