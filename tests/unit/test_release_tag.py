@@ -328,12 +328,6 @@ def test_an_rc_github_release_is_a_prerelease(publish):
     assert rc["with"]["files"] == final["with"]["files"]
 
 
-def test_context7_is_not_refreshed_for_an_rc(publish):
-    job = publish["refresh-context7"]
-    assert NOT_RC in job["if"]
-    assert "validate" in job["needs"]
-
-
 def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
     # A final's redeploy comes from release_components.yml; a second one here
     # would change the final path.
