@@ -4,36 +4,102 @@
     {
       "name": "Agent UI (backend + frontend, combined)",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "gaia", "chat", "--ui"],
+      "runtimeArgs": [
+        "run",
+        "gaia",
+        "chat",
+        "--ui"
+      ],
       "port": 4200,
       "autoPort": false
     },
     {
       "name": "Agent UI backend only (FastAPI, no frontend)",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "python", "-m", "gaia.ui.server", "--port", "4200", "--host", "127.0.0.1"],
+      "runtimeArgs": [
+        "run",
+        "python",
+        "-m",
+        "gaia.ui.server",
+        "--port",
+        "4200",
+        "--host",
+        "127.0.0.1"
+      ],
       "port": 4200,
       "autoPort": false
     },
     {
       "name": "Agent UI frontend hot-reload (Vite dev)",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "--prefix", "src/gaia/apps/webui", "dev"],
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "src/gaia/apps/webui",
+        "dev"
+      ],
       "port": 5174,
       "autoPort": true
     },
     {
       "name": "GAIA API server (OpenAI-compatible)",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "gaia", "api", "start", "--port", "8080"],
+      "runtimeArgs": [
+        "run",
+        "gaia",
+        "api",
+        "start",
+        "--port",
+        "8080"
+      ],
       "port": 8080,
       "autoPort": false
     },
     {
       "name": "Agent UI MCP server",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "gaia", "mcp", "serve", "--port", "8766"],
+      "runtimeArgs": [
+        "run",
+        "gaia",
+        "mcp",
+        "serve",
+        "--port",
+        "8766"
+      ],
       "port": 8766,
+      "autoPort": false
+    },
+    {
+      "name": "fake daemon fixed A",
+      "runtimeExecutable": "C:/Users/Kalin/AppData/Local/Programs/Python/Python312/python.exe",
+      "runtimeArgs": [
+        "-u",
+        "C:/Users/Kalin/AppData/Local/Temp/claude/C--Users-Kalin-Work-gaia--claude-worktrees-reliability-clients-3fa149/118b6aca-11a2-4aff-b397-b3bdceaaa096/scratchpad/live/fake_daemon.py",
+        "--port",
+        "4341",
+        "--token",
+        "token-A",
+        "--home",
+        "C:/Users/Kalin/AppData/Local/Temp/claude/C--Users-Kalin-Work-gaia--claude-worktrees-reliability-clients-3fa149/118b6aca-11a2-4aff-b397-b3bdceaaa096/scratchpad/live/home-fixed/daemon"
+      ],
+      "port": 4341,
+      "autoPort": false
+    },
+    {
+      "name": "fake daemon fixed B",
+      "runtimeExecutable": "C:/Users/Kalin/AppData/Local/Programs/Python/Python312/python.exe",
+      "runtimeArgs": [
+        "-u",
+        "C:/Users/Kalin/AppData/Local/Temp/claude/C--Users-Kalin-Work-gaia--claude-worktrees-reliability-clients-3fa149/118b6aca-11a2-4aff-b397-b3bdceaaa096/scratchpad/live/fake_daemon.py",
+        "--port",
+        "4342",
+        "--token",
+        "token-B",
+        "--home",
+        "C:/Users/Kalin/AppData/Local/Temp/claude/C--Users-Kalin-Work-gaia--claude-worktrees-reliability-clients-3fa149/118b6aca-11a2-4aff-b397-b3bdceaaa096/scratchpad/live/home-fixed/daemon",
+        "--fresh"
+      ],
+      "port": 4342,
       "autoPort": false
     }
   ]

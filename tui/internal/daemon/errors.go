@@ -218,5 +218,5 @@ type DaemonRestartedError struct {
 func (e *DaemonRestartedError) Error() string {
 	return fmt.Sprintf(
 		"could not %s: GAIA's daemon restarted, which ended the agent session this belonged to. "+
-			"Nothing was sent. Send your message again", e.Op)
+			"Nothing was sent; your next message starts a fresh session", e.Op)
 }
