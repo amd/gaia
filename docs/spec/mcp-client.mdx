@@ -977,7 +977,7 @@ def __init__(
             ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
         env (dict[str, str] | None): Extra environment variables, merged
             over the current process environment
-        timeout (int): Request timeout in seconds (default: 30)
+        timeout (int): Seconds to wait for each reply (default: 30)
         debug (bool): Enable debug logging (default: False)
     """
 ```
@@ -1034,23 +1034,37 @@ def disconnect(self) -> None:
 
 ```python
 def send_request(
-    self, method: str, params: Dict[str, Any] = None
+    self,
+    method: str,
+    params: Dict[str, Any] = None,
+    timeout: float | None = None,
 ) -> Dict[str, Any]:
-    """Send a JSON-RPC request via stdin and read response from stdout.
+    """Send a JSON-RPC request via stdin and wait for its reply.
 
     Request format (JSON-RPC 2.0):
         {"jsonrpc": "2.0", "id": <int>, "method": <str>, "params": <dict>}
 
+    Background threads drain the server's stdout and stderr, so the wait is
+    bounded and a chatty stderr can't block the server. Only the reply whose
+    id matches is returned: notifications and late replies to timed-out
+    requests are skipped, and a request from the server gets a JSON-RPC
+    "method not found" (-32601) error back. The wait also ends once the agent
+    abandons the tool call (`tool_cancelled()`).
+
     Args:
         method (str): JSON-RPC method name
         params (Dict[str, Any], optional): Parameters dictionary
+        timeout (float, optional): Seconds to wait for the reply; defaults
+            to the transport's `timeout`
 
     Returns:
         Dict[str, Any]: JSON-RPC response
 
     Raises:
         RuntimeError: If not connected or process died
-        ValueError: If response is invalid JSON
+        TimeoutError: If the server doesn't reply in time; names the server
+        ToolCancelled: If the agent stopped waiting for this tool call
+        ValueError: If the server writes non-JSON to stdout
     """
 ```
 

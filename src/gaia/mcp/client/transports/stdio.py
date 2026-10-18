@@ -2,17 +2,21 @@
 # SPDX-License-Identifier: MIT
 """Stdio transport for MCP protocol communication via subprocess."""
 
+import collections
 import json
 import os
+import queue
 import shlex
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 from .base import MCPTransport
@@ -23,6 +27,17 @@ logger = get_logger(__name__)
 # token made only of these was shell syntax; quoted uses stay inside a larger
 # token and are inert under shell=False, so they are left alone.
 _SHELL_OPERATOR_CHARS = frozenset(";|&<>()")
+
+# How often a blocked read wakes to check for cancellation.
+_POLL_INTERVAL_S = 0.25
+
+# Lines of server stderr kept for crash diagnostics.
+_STDERR_TAIL_LINES = 200
+
+# JSON-RPC "method not found": the reply to a request this client can't serve.
+_METHOD_NOT_FOUND = -32601
+
+_EOF = object()
 
 _FIX_HINT = (
     'Split the program from its arguments instead: {"command": "npx", '
@@ -97,7 +112,8 @@ class StdioTransport(MCPTransport):
         command: Base command to start the MCP server (e.g., "npx" or "python")
         args: Optional list of arguments (e.g., ["-y", "@modelcontextprotocol/server-github"])
         env: Extra variables for the server, overlaid on the child environment
-        timeout: Request timeout in seconds (default: 30)
+        timeout: Seconds to wait for each reply (default: 30). A server that
+            stays silent that long raises ``TimeoutError``.
         debug: Enable debug logging (default: False)
     """
 
@@ -116,6 +132,66 @@ class StdioTransport(MCPTransport):
         self.debug = debug
         self._process: Optional[subprocess.Popen] = None
         self._request_id = 0
+        # One request in flight at a time: replies are read off a shared pipe.
+        self._request_lock = threading.Lock()
+        self._stdout_lines: Optional[queue.Queue] = None
+        self._stderr_tail: Optional[collections.deque] = None
+        self._stderr_reader: Optional[threading.Thread] = None
+
+    @property
+    def label(self) -> str:
+        """The server's command line, for naming it in errors."""
+        program = os.path.basename(self.command) if self.args else self.command
+        text = " ".join([program] + list(self.args or []))
+        # Keep the tail: the package or script name is what tells servers apart.
+        return text if len(text) <= 120 else "..." + text[-117:]
+
+    def _start_readers(self) -> None:
+        """Drain stdout into a queue and stderr into a tail buffer.
+
+        Reads on a pipe can't time out, so they happen on daemon threads and
+        ``send_request`` waits on the queue instead. Draining stderr also stops
+        a chatty server from filling the pipe and blocking mid-write.
+        """
+        self._stdout_lines = queue.Queue()
+        self._stderr_tail = collections.deque(maxlen=_STDERR_TAIL_LINES)
+        threading.Thread(
+            target=self._pump_stdout,
+            args=(self._process.stdout, self._stdout_lines),
+            name=f"mcp-stdout:{self._process.pid}",
+            daemon=True,
+        ).start()
+        self._stderr_reader = threading.Thread(
+            target=self._pump_stderr,
+            args=(self._process.stderr, self._stderr_tail),
+            name=f"mcp-stderr:{self._process.pid}",
+            daemon=True,
+        )
+        self._stderr_reader.start()
+
+    @staticmethod
+    def _pump_stdout(stream, lines: queue.Queue) -> None:
+        try:
+            while True:
+                line = stream.readline()
+                if not isinstance(line, str) or not line:
+                    break
+                lines.put(line)
+        except (OSError, ValueError) as e:
+            logger.debug("MCP server stdout closed: %s", e)
+        finally:
+            lines.put(_EOF)
+
+    @staticmethod
+    def _pump_stderr(stream, tail: collections.deque) -> None:
+        try:
+            while True:
+                line = stream.readline()
+                if not isinstance(line, str) or not line:
+                    return
+                tail.append(line)
+        except (OSError, ValueError) as e:
+            logger.debug("MCP server stderr closed: %s", e)
 
     def _build_argv(self) -> List[str]:
         """Resolve this transport's command into an argv list for ``shell=False``.
@@ -183,6 +259,8 @@ class StdioTransport(MCPTransport):
             )
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")
+
+            self._start_readers()
 
             # Brief pause to catch immediate crashes (e.g. missing binary, SIGSEGV on load)
             time.sleep(0.1)
@@ -269,6 +347,12 @@ class StdioTransport(MCPTransport):
         # Only read stderr from a dead process to avoid blocking
         if self._process.poll() is None:
             return ""
+        if self._stderr_tail is not None:
+            # The process is gone, so its stderr reader reaches EOF promptly.
+            if self._stderr_reader is not None:
+                self._stderr_reader.join(timeout=1)
+            stderr = "".join(self._stderr_tail)
+            return stderr.strip()[-2000:] if stderr else ""
         try:
             stderr = self._process.stderr.read()
         except (OSError, ValueError) as e:
@@ -292,21 +376,31 @@ class StdioTransport(MCPTransport):
         return RuntimeError(msg)
 
     def send_request(
-        self, method: str, params: Dict[str, Any] = None
+        self,
+        method: str,
+        params: Dict[str, Any] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Send a JSON-RPC request via stdin and read response from stdout.
+        """Send a JSON-RPC request via stdin and wait for its reply.
+
+        Notifications and replies to earlier, timed-out requests are skipped;
+        a request from the server gets a "method not found" error back so it
+        doesn't wait on us. The wait ends early once the agent abandons the
+        tool call (``tool_cancelled()``).
 
         Args:
             method: JSON-RPC method name
             params: Optional parameters dictionary
+            timeout: Seconds to wait for the reply; defaults to ``self.timeout``
 
         Returns:
             dict: JSON-RPC response
 
         Raises:
             RuntimeError: If not connected or process died
-            TimeoutError: If request times out
-            ValueError: If response is invalid JSON
+            TimeoutError: If the server doesn't reply in time
+            ToolCancelled: If the agent stopped waiting for this tool call
+            ValueError: If the server writes something other than JSON-RPC
         """
         if self._process is None:
             raise RuntimeError("Transport not connected")
@@ -315,48 +409,132 @@ class StdioTransport(MCPTransport):
         if self._process.poll() is not None:
             raise self._process_died_error()
 
-        # Build JSON-RPC request
-        request = {
-            "jsonrpc": "2.0",
-            "id": self._request_id,
-            "method": method,
-            "params": params or {},
-        }
-        self._request_id += 1
+        wait_s = self.timeout if timeout is None else timeout
+        deadline = time.monotonic() + wait_s
 
-        if self.debug:
-            logger.debug(f"Sending request: {json.dumps(request, indent=2)}")
-
+        if not self._request_lock.acquire(timeout=max(wait_s, 0)):
+            raise TimeoutError(
+                f"MCP server '{self.label}' was still busy with another request "
+                f"after {wait_s:g}s, so '{method}' was never sent."
+            )
         try:
-            # Send request
-            request_json = json.dumps(request) + "\n"
-            self._process.stdin.write(request_json)
+            request_id = self._request_id
+            self._request_id += 1
+            request = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params or {},
+            }
+
+            if self.debug:
+                logger.debug(f"Sending request: {json.dumps(request, indent=2)}")
+
+            self._write(request)
+            response = self._await_reply(request_id, method, wait_s, deadline)
+
+            if self.debug:
+                logger.debug(f"Received response: {json.dumps(response, indent=2)}")
+
+            return response
+        finally:
+            self._request_lock.release()
+
+    def _write(self, message: Dict[str, Any]) -> None:
+        try:
+            self._process.stdin.write(json.dumps(message) + "\n")
             self._process.stdin.flush()
-
-            # Read response
-            try:
-                response_line = self._process.stdout.readline()
-                if not response_line:
-                    # Process may have died while we were waiting
-                    if self._process.poll() is not None:
-                        raise self._process_died_error()
-                    raise RuntimeError("Server closed connection")
-
-                response = json.loads(response_line)
-
-                if self.debug:
-                    logger.debug(f"Received response: {json.dumps(response, indent=2)}")
-
-                return response
-
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON response: {e}")
-
-        except BrokenPipeError:
+        except (BrokenPipeError, OSError) as e:
             # Process likely died - include stderr in the error
             if self._process.poll() is not None:
-                raise self._process_died_error()
-            raise RuntimeError("Server closed connection unexpectedly")
+                raise self._process_died_error() from e
+            raise RuntimeError(
+                f"MCP server '{self.label}' closed its input unexpectedly"
+            ) from e
+
+    def _await_reply(
+        self, request_id: int, method: str, wait_s: float, deadline: float
+    ) -> Dict[str, Any]:
+        while True:
+            if tool_cancelled():
+                raise ToolCancelled(
+                    f"Stopped waiting for MCP server '{self.label}' to answer "
+                    f"'{method}': the tool call was cancelled."
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"MCP server '{self.label}' did not answer '{method}' within "
+                    f"{wait_s:g}s. It may be hung or overloaded; check that it "
+                    "starts and answers when run on its own from a terminal, "
+                    "then reconnect it."
+                )
+            try:
+                line = self._stdout_lines.get(timeout=min(remaining, _POLL_INTERVAL_S))
+            except queue.Empty:
+                continue
+
+            if line is _EOF:
+                raise self._closed_error()
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"MCP server '{self.label}' wrote non-JSON to stdout while "
+                    f"answering '{method}': {line[:200]!r}. Servers must log to "
+                    "stderr, never stdout."
+                ) from e
+            if not isinstance(message, dict):
+                raise ValueError(
+                    f"MCP server '{self.label}' sent a JSON-RPC message that is "
+                    f"not an object: {line[:200]!r}"
+                )
+
+            if "method" in message:
+                self._handle_server_message(message)
+                continue
+            if message.get("id") != request_id:
+                logger.debug(
+                    "MCP server '%s': dropping reply to id %r while waiting on %r",
+                    self.label,
+                    message.get("id"),
+                    request_id,
+                )
+                continue
+            return message
+
+    def _handle_server_message(self, message: Dict[str, Any]) -> None:
+        """Answer a server request with an error; log a notification."""
+        if "id" not in message:
+            logger.debug(
+                "MCP server '%s' notification: %s", self.label, message["method"]
+            )
+            return
+        self._write(
+            {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "error": {
+                    "code": _METHOD_NOT_FOUND,
+                    "message": "GAIA's MCP client does not support "
+                    f"'{message['method']}'",
+                },
+            }
+        )
+
+    def _closed_error(self) -> RuntimeError:
+        """The error for a server whose stdout reached EOF."""
+        try:
+            self._process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            return RuntimeError(
+                f"MCP server '{self.label}' closed its output but is still "
+                "running; reconnect it."
+            )
+        return self._process_died_error()
 
     def is_connected(self) -> bool:
         """Check if the subprocess is running.
