@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Two requests that outgrow a model's shared KV cache are a collision, not a
 conversation that got too long, and every request on the model takes its lease.
+
+New names are read inside each test, so on a checkout without the fix the
+tests fail on behaviour rather than at import.
 """
 
 import json
@@ -11,19 +14,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.llm import lemonade_client as lc
-from gaia.llm.providers.lemonade import (
-    LemonadeContextOverflowError,
-    LemonadeKVCacheSharedError,
-    _classify_lemonade_response,
-    classify_lemonade_exception,
-)
-from gaia.llm.retry import (
-    KV_CACHE_SHARED_REASON,
-    ModelCallRetrier,
-    RetryPolicy,
-    RetryState,
-    classify_http_failure,
-)
+from gaia.llm import retry
+from gaia.llm.providers import lemonade as provider
 
 MODEL = "Gemma-4-E4B-it-GGUF"
 
@@ -78,33 +70,39 @@ def test_shared_cache_failure_is_not_a_context_overflow(body):
 def test_real_overflow_still_reads_as_overflow():
     assert lc.is_context_overflow_error(OVERFLOW_BODY)
     assert not lc.is_kv_cache_shared_error(OVERFLOW_BODY)
-    assert classify_http_failure(400, OVERFLOW_BODY) is None
+    assert retry.classify_http_failure(400, OVERFLOW_BODY) is None
 
 
 @pytest.mark.parametrize("status", [500, None])
 def test_shared_cache_failure_is_retried(status):
-    assert classify_http_failure(status, SHARED_BODY) == KV_CACHE_SHARED_REASON
+    assert (
+        retry.classify_http_failure(status, SHARED_BODY) == retry.KV_CACHE_SHARED_REASON
+    )
 
 
 def test_user_is_not_told_to_start_a_fresh_task():
     error = lc.LemonadeClientError(
         f"Error in chat completions (status 500): {SHARED_BODY}"
     )
-    classified = classify_lemonade_exception(error)
-    assert isinstance(classified, LemonadeKVCacheSharedError)
+    classified = provider.classify_lemonade_exception(error)
+    assert isinstance(classified, provider.LemonadeKVCacheSharedError)
     assert classified.retryable
     assert "fresh task" not in classified.user_message
     assert "send your message again" in classified.user_message.lower()
 
 
 def test_response_envelope_classified_as_shared():
-    classified, is_error = _classify_lemonade_response(json.loads(SHARED_WRAPPED))
-    assert is_error and isinstance(classified, LemonadeKVCacheSharedError)
+    classified, is_error = provider._classify_lemonade_response(
+        json.loads(SHARED_WRAPPED)
+    )
+    assert is_error and isinstance(classified, provider.LemonadeKVCacheSharedError)
 
 
 def test_response_envelope_overflow_unchanged():
-    classified, _ = _classify_lemonade_response(json.loads(OVERFLOW_BODY), MODEL)
-    assert isinstance(classified, LemonadeContextOverflowError)
+    classified, _ = provider._classify_lemonade_response(
+        json.loads(OVERFLOW_BODY), MODEL
+    )
+    assert isinstance(classified, provider.LemonadeContextOverflowError)
 
 
 def _response(status, body):
@@ -168,12 +166,12 @@ def test_a_collision_after_output_is_not_replayed():
         yield "partial answer"
         raise openai.APIError(SHARED_BODY, request=MagicMock(), body=None)
 
-    state = RetryState()
-    retrier = ModelCallRetrier(RetryPolicy(), sleep=lambda _s: None)
+    state = retry.RetryState()
+    retrier = retry.ModelCallRetrier(retry.RetryPolicy(), sleep=lambda _s: None)
     seen = []
     with pytest.raises(openai.APIError):
         for item in retrier.stream(open_stream, is_output=bool, state=state):
             seen.append(item)
     assert seen == ["partial answer"]
     assert state.attempts == 1 and state.output_delivered
-    assert state.last_reason == KV_CACHE_SHARED_REASON
+    assert state.last_reason == retry.KV_CACHE_SHARED_REASON
