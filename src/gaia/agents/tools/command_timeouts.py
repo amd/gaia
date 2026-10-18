@@ -187,6 +187,8 @@ _SERVER_SCRIPT_STEMS = frozenset(
     {"server", "serve", "app", "wsgi", "asgi", "devserver", "dev_server"}
 )
 _SERVER_LAUNCHERS = frozenset({"node", "deno", "bun", "ts-node"})
+_PATH_BACKSLASH = re.compile(r"\\(?=[A-Za-z0-9_.])")
+_VERSIONED_PYTHON = re.compile(r"(?:python|pypy)\d+(?:\.\d+)*")
 # Flags that hand the interpreter code or a script to run.
 _RUN_FLAGS = frozenset({"-e", "-c", "--eval", "-command", "-file", "-encodedcommand"})
 
@@ -299,39 +301,44 @@ def command_basename(token: str) -> str:
     return name
 
 
-def _runs_a_server(tokens: List[str]) -> bool:
-    """Whether one already-split command starts a server that never exits."""
-    launcher = None  # set while the next operand is the script it runs
-    for i, token in enumerate(tokens):
-        lowered = token.lower()
-        name = command_basename(token)
-        if name in _SERVER_BINARIES or lowered == "runserver":
+def _is_python_launcher(binary: str) -> bool:
+    """``python``, ``py``, and versioned ones like ``python3.12``."""
+    return binary in _PYTHON_LAUNCHERS or bool(_VERSIONED_PYTHON.fullmatch(binary))
+
+
+def _starts_a_server(binary: str, args: List[str], launched_by_python: bool) -> bool:
+    """Whether the command whose binary is *binary* runs a server.
+
+    Only the command position counts: ``pip install uvicorn`` installs a
+    server, it doesn't run one.
+    """
+    operands = [arg.lower() for arg in args if not arg.startswith("-")]
+    first = operands[0] if operands else ""
+    if binary in _SERVER_BINARIES:
+        return True
+    if launched_by_python and binary in _SERVER_MODULES:  # ``python -m http.server``
+        return True
+    if first in _SERVER_SUBCOMMANDS.get(binary, ()):
+        return True
+    if binary in _RUN_SCRIPT_BINARIES and first == "run":
+        if len(operands) > 1 and operands[1] in _SERVER_RUN_SCRIPTS:
             return True
-        if token == "-m" and i + 1 < len(tokens):
-            if tokens[i + 1].lower() in _SERVER_MODULES:
-                return True
-        if name in _SERVER_SUBCOMMANDS or name in _RUN_SCRIPT_BINARIES:
-            operands = [t.lower() for t in tokens[i + 1 :] if not t.startswith("-")]
-            first = operands[0] if operands else ""
-            if first in _SERVER_SUBCOMMANDS.get(name, ()):
-                return True
-            if name in _RUN_SCRIPT_BINARIES and first == "run":
-                if len(operands) > 1 and operands[1] in _SERVER_RUN_SCRIPTS:
-                    return True
-        if launcher is not None and not token.startswith("-"):
-            stem, _, suffix = name.rpartition(".")
-            if suffix in ("py", "js", "mjs", "ts") and stem in _SERVER_SCRIPT_STEMS:
-                return True
-            launcher = None
-        if name in _PYTHON_LAUNCHERS or name in _SERVER_LAUNCHERS:
-            launcher = name
-    return False
+    if binary == "manage.py" and first == "runserver":
+        return True
+    if binary == "php" and "-s" in (arg.lower() for arg in args):
+        return True
+    if launched_by_python:
+        script = binary
+    elif binary in _SERVER_LAUNCHERS and operands:
+        script = command_basename(operands[0])
+    else:
+        return False
+    stem, _, suffix = script.rpartition(".")
+    return suffix in ("py", "js", "mjs", "ts") and stem in _SERVER_SCRIPT_STEMS
 
 
 def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     """The class of one already-split command, wrappers peeled off."""
-    if _runs_a_server(tokens):
-        return DEFAULT
     command_class, launched_by_python = _classify_peeled(tokens)
     if command_class is DEFAULT and launched_by_python:
         return SCRIPT
@@ -354,8 +361,8 @@ def _classify_peeled(tokens: List[str]) -> Tuple[TimeoutClass, bool]:
             index += 1
             continue
         binary = command_basename(token)
-        if binary in _WRAPPERS:
-            launcher_seen = launcher_seen or binary in _PYTHON_LAUNCHERS
+        if binary in _WRAPPERS or _is_python_launcher(binary):
+            launcher_seen = launcher_seen or _is_python_launcher(binary)
             index += 1
             continue
         break
@@ -363,6 +370,8 @@ def _classify_peeled(tokens: List[str]) -> Tuple[TimeoutClass, bool]:
         return DEFAULT, False
 
     binary = command_basename(tokens[index])
+    if _starts_a_server(binary, tokens[index + 1 :], launcher_seen):
+        return DEFAULT, False
     if binary in _INTERPRETERS:
         return _classify_interpreter(binary, tokens[index + 1 :]), launcher_seen
     command_class = _classify_binary(tokens, index)
@@ -376,7 +385,7 @@ def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
     """``script`` when *binary* is given something to run, else ``default``.
 
     A shell handed a command line (``bash -lc "pip install x"``, ``cmd /c
-    build.bat``) takes the class of that command line.
+    build.bat``, ``pwsh -Command "npm ci"``) takes that command line's class.
     """
     lowered = [arg.lower() for arg in args]
     if binary == "cmd":
@@ -384,8 +393,20 @@ def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
             if arg in ("/c", "/k"):
                 return classify_command(" ".join(args[i + 1 :]))
         return DEFAULT
+    if binary in ("pwsh", "powershell"):
+        for i, arg in enumerate(lowered):
+            if arg in ("-command", "-c"):
+                return classify_command(" ".join(args[i + 1 :]))
+            if arg in ("-file", "-encodedcommand"):
+                return SCRIPT
+            if not arg.startswith("-"):
+                # A bare command line is what -Command would run.
+                return classify_command(" ".join(args[i:]))
+        return DEFAULT
     if binary in _SHELLS:
         for i, arg in enumerate(lowered):
+            if not arg.startswith("-"):
+                break  # ``bash run.sh -c cfg.yml``: a script's own flags
             # ``-c`` alone or in a cluster: ``-lc``, ``-ec``, ``-xec``.
             if re.fullmatch(r"-[a-z]*c[a-z]*", arg) and i + 1 < len(args):
                 return classify_command(args[i + 1])
@@ -472,6 +493,9 @@ def _tokenize(command: str) -> List[str]:
     the whole thing is timed as a 30s command. Newlines are preserved as
     separators too, while quoted text remains untouched.
     """
+    # Keep a backslash before a path character, so a Windows path such as
+    # C:\Python\python.exe keeps its separators; an escaped quote still works.
+    command = _PATH_BACKSLASH.sub(r"\\\\", command)
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
     lexer.whitespace_split = True
     lexer.whitespace = " \t\r"

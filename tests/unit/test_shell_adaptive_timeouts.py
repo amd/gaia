@@ -296,7 +296,16 @@ class TestTimeoutClasses:
             ("bash -c 'pytest -q'", "test"),
             ("bash -c 'ls -la'", "default"),
             ("bash -lc 'pip install requests'", "build"),
-            ("bash -ec 'python analyze.py'", "script"),
+            # Each of these differs from what -c/a cluster/an operand alone gives.
+            ("bash -ec 'pip install requests'", "build"),
+            ("bash -lc 'ls'", "default"),
+            ("bash run.sh -c cfg.yml", "script"),
+            ('powershell -Command "npm run build"', "build"),
+            ("pwsh -c 'pytest -q'", "test"),
+            ("powershell Get-ChildItem", "default"),
+            ("powershell -File build.ps1", "script"),
+            ("python3.12 analyze.py", "script"),
+            (r"C:\Python312\python.exe analyze.py", "script"),
             ("cmd /c build.bat", "script"),
             ("cmd /c dir", "default"),
             ("cmd /c npm install", "build"),
@@ -334,6 +343,10 @@ class TestTimeoutClasses:
             "next dev",
             "jupyter lab",
             "cd web && npm run dev",
+            "npx vite",
+            "python -m flask run",
+            "php -S localhost:8000",
+            'powershell -Command "npm run dev"',
         ],
     )
     def test_dev_servers_stay_at_the_short_default(self, command):
@@ -348,6 +361,15 @@ class TestTimeoutClasses:
             ("python analyze_app_logs.py", "script"),
             ("pytest tests/test_server.py", "test"),
             ("cat server.py", "default"),
+            # Installing or fetching a server is not running one.
+            ("pip install uvicorn", "build"),
+            ("uv pip install uvicorn", "build"),
+            ("npm install vite", "build"),
+            ("npm i nodemon", "build"),
+            ("pnpm add vite", "build"),
+            ("apt-get install -y nodemon", "build"),
+            ("git clone https://github.com/http-party/http-server", "network"),
+            ("pip install flask && flask --version", "build"),
         ],
     )
     def test_server_rules_do_not_catch_ordinary_commands(self, command, expected_class):
