@@ -179,7 +179,7 @@ describe('NewChat empty state', () => {
     });
 
     it('fetches the suggestions again on its own once the assistant has started', async () => {
-        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
         try {
             vi.mocked(api.getStartScreen)
                 .mockResolvedValueOnce({ ...START, cards: [], skills_error: 'The GAIA agent could not be started yet.' })
@@ -187,8 +187,11 @@ describe('NewChat empty state', () => {
                 .mockResolvedValue(START);
             render(<NewChat onSend={vi.fn()} />);
             expect(await screen.findByText(/didn.t start/)).toBeInTheDocument();
+            await act(async () => {});  // let the retry effect start its interval
 
             await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
+            await waitFor(() => expect(api.getStartScreen).toHaveBeenCalledTimes(2));
+            await act(async () => {});
             // Still failing: the reason stays up rather than flickering away.
             expect(screen.getByText(/didn.t start/)).toBeInTheDocument();
 
