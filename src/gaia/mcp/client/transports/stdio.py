@@ -34,6 +34,28 @@ _SHELL_OPERATOR_CHARS = frozenset(";|&<>()")
 # How often a blocked read wakes to check for cancellation.
 _POLL_INTERVAL_S = 0.25
 
+# A flag whose value is a credential: --api-key, --token, --client-secret, -k ...
+_SECRET_FLAG = re.compile(
+    r"-{1,2}(?:[\w-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|bearer)"
+    r"[\w-]*|k|p)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_a_key(token: str) -> bool:
+    """A long, mixed-case-and-digit token that isn't a file: an API key's shape."""
+    if len(token) < 20 or os.path.exists(token):
+        return False
+    classes = sum(
+        (
+            any(c.islower() for c in token),
+            any(c.isupper() for c in token),
+            any(c.isdigit() for c in token),
+        )
+    )
+    return classes == 3 or bool(re.fullmatch(r"[0-9a-fA-F]{32,}", token))
+
+
 # How long connect() watches for an immediate crash, and in how many steps.
 _STARTUP_CHECK_S = 0.1
 _STARTUP_CHECK_SLICES = 5
@@ -207,22 +229,37 @@ class StdioTransport(MCPTransport):
         return self._label
 
     def _secrets(self) -> List[str]:
-        """Every command token, argument and env value long enough to matter."""
+        """The secret values in this server's launch config, longest first.
+
+        Only values that are secrets by position or shape: env values, the
+        value of a ``KEY=VALUE`` argument or prefix, the value after a flag
+        named like a credential (``--api-key v``, ``--token=v``), and long
+        high-entropy tokens. Ordinary words such as ``python`` or ``--stdio``
+        stay readable in a server's errors.
+        """
         try:
             tokens = _split_command_string(self.command)
         except ValueError:
             tokens = self.command.split()
-        values = [self.command, *tokens, *(self.args or [])]
-        values += list((self.env or {}).values())
-        parts = set()
-        for value in values:
-            value = str(value)
-            parts.add(value)
-            parts.update(re.split(r"[=\s]", value))
-        return sorted((v for v in parts if len(v) >= 4), key=len, reverse=True)
+        tokens = [*tokens, *(self.args or [])]
+        found = {str(v) for v in (self.env or {}).values()}
+        for i, token in enumerate(tokens):
+            name, eq, value = token.partition("=")
+            if eq and value:
+                found.add(value)  # KEY=VALUE, --token=VALUE
+            if (
+                _SECRET_FLAG.fullmatch(name)
+                and not eq
+                and i + 1 < len(tokens)
+                and not tokens[i + 1].startswith("-")
+            ):
+                found.add(tokens[i + 1])  # --api-key VALUE
+            if _looks_like_a_key(token):
+                found.add(token)
+        return sorted((v for v in found if len(v) >= 4), key=len, reverse=True)
 
     def redact(self, text: str) -> str:
-        """*text* from the server with the command's arguments and env removed.
+        """*text* from the server with this server's secret values removed.
 
         A server that echoes its own command line in an error would otherwise
         carry tokens or keys passed to it into GAIA's logs.
@@ -230,6 +267,20 @@ class StdioTransport(MCPTransport):
         for secret in self._secrets():
             text = text.replace(secret, "<redacted>")
         return text
+
+    def redact_value(self, value: Any) -> Any:
+        """*value* (a decoded reply) with every string in it redacted.
+
+        Cleaned before it is serialized: JSON escaping would hide a secret
+        containing a backslash from a search of the serialized text.
+        """
+        if isinstance(value, str):
+            return self.redact(value)
+        if isinstance(value, dict):
+            return {k: self.redact_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.redact_value(v) for v in value]
+        return value
 
     def _start_readers(self) -> None:
         """Drain stdout into a queue and stderr into a tail buffer.
@@ -648,7 +699,10 @@ class StdioTransport(MCPTransport):
                 raise
 
             if self.debug:
-                logger.debug(f"Received response: {json.dumps(response, indent=2)}")
+                logger.debug(
+                    "Received response: %s",
+                    json.dumps(self.redact_value(response), indent=2),
+                )
 
             return response
         finally:
@@ -805,13 +859,13 @@ class StdioTransport(MCPTransport):
                 detail = error.get("message") if isinstance(error, dict) else error
                 raise RuntimeError(
                     f"MCP server '{self.label}' rejected '{method}': "
-                    f"{self.redact(str(detail))}"
+                    f"{self.redact_value(detail)}"
                 )
             if message.get("id") != request_id:
                 logger.debug(
                     "MCP server '%s': dropping reply to id %r while waiting on %r",
                     self.label,
-                    message.get("id"),
+                    self.redact_value(message.get("id")),
                     request_id,
                 )
                 continue
@@ -823,7 +877,9 @@ class StdioTransport(MCPTransport):
         """Answer a server request; log a notification."""
         if "id" not in message:
             logger.debug(
-                "MCP server '%s' notification: %s", self.label, message["method"]
+                "MCP server '%s' notification: %s",
+                self.label,
+                self.redact_value(message["method"]),
             )
             return
         if message["method"] == "ping":

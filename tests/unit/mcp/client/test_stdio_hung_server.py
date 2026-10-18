@@ -344,37 +344,58 @@ echo = " ".join(sys.argv) + " " + os.environ.get("TOKEN", "")
 # The token most likely to be the secret, to place across the cut.
 skip = {"--mode", mode, "-u", sys.argv[0]}
 tok = max([a for a in argv if a not in skip] + [os.environ.get("TOKEN", "")], key=len)
+
+def send(msg):
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
 if mode == "die":  # stderr's kept tail is 2,000 characters
     sys.stderr.write(echo + "x" * 3000 + tok + "y" * (2000 - len(tok) // 2))
     sys.exit(2)
-req = json.loads(sys.stdin.readline())
-if mode == "stdout":  # a non-JSON line is cut to 200 characters
-    sys.stdout.write("z" * (200 - len(tok) // 2) + tok + " " + echo + "\n")
-else:  # the server's own error reply
-    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
-                                 "error": {"code": -32603, "message": echo}}) + "\n")
-sys.stdout.flush()
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    if mode == "stdout":  # a non-JSON line is cut to 200 characters
+        sys.stdout.write("z" * (200 - len(tok) // 2) + tok + " " + echo + "\n")
+        sys.stdout.flush()
+    elif mode == "reject":  # the server's own error reply to initialize
+        send({"jsonrpc": "2.0", "id": req["id"],
+              "error": {"code": -32603, "message": echo}})
+    elif req["method"] == "initialize":  # echoed in metadata GAIA logs
+        send({"jsonrpc": "2.0", "method": echo})
+        send({"jsonrpc": "2.0", "id": echo, "result": {}})
+        send({"jsonrpc": "2.0", "id": req["id"],
+              "result": {"serverInfo": {"name": echo}, "note": echo}})
+    else:  # tools/list or tools/call: a structured, non-string error
+        send({"jsonrpc": "2.0", "id": req["id"],
+              "error": {"code": -32603, "message": {"detail": echo}}})
 """
 
 
-@pytest.mark.parametrize("mode", ["die", "stdout", "reject"])
+@pytest.mark.parametrize("mode", ["die", "stdout", "reject", "list", "call"])
 def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog, mode):
-    """Property: no 4-character run of a secret in a server's command, args or
-    env reaches its label, GAIA's logs (debug on), an error, or last_error.
+    """Property: no 4-character run of a secret ever reaches the server's
+    label, GAIA's logs (at DEBUG, with debug on), an error, last_error, or a
+    tool result, when the secret sits where config secrets sit: an env
+    value, a KEY=VALUE, the value of a credential flag, or the program.
 
-    The stub echoes its whole command line and env back the way a server that
-    rejects its options does: on stderr as it dies, as a stray stdout line,
-    or in its error reply to initialize.
+    The stub echoes its whole command line and env back the way a server
+    that rejects its options does: on stderr as it dies, as a stray stdout
+    line, in an error reply, in metadata, and in a structured tool error.
     """
     import logging
 
     from gaia.mcp.client.mcp_client import MCPClient
 
+    # GAIA pins these loggers at INFO; the debug lines are under test too.
+    for name in ("gaia.mcp.client.transports.stdio", "gaia.mcp.client.mcp_client"):
+        caplog.set_level(logging.DEBUG, logger=name)
     script = tmp_path / "echo.py"
     script.write_text(_ECHO_STUB)
     exe = sys.executable.replace("\\", "/")
-    caplog.set_level(logging.DEBUG)
     checked = 0
+    debug_lines = 0
     for secret in _SECRETS:
         for config in _configs(secret, exe, str(script).replace("\\", "/")):
             config = dict(config)
@@ -395,18 +416,59 @@ def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog, mode
                 )
                 seen.append(client.transport.label)
                 try:
-                    client.connect()
+                    if client.connect():
+                        if mode == "list":
+                            seen.append(repr(client.list_tools()))
+                        elif mode == "call":
+                            seen.append(repr(client.call_tool("x", {})))
                     seen.append(str(client.last_error))
                 finally:
                     client.disconnect()
             except ValueError as e:  # an unparseable command line
                 seen.append(str(e))
             seen.extend(r.getMessage() for r in caplog.records)
+            debug_lines += sum(r.levelno == logging.DEBUG for r in caplog.records)
             text = "\n".join(seen)
             leaked = [g for g in _grams(secret) if g in text]
             assert not leaked, (config, leaked, text[:800])
             checked += 1
     assert checked == len(_SECRETS) * 11
+    assert debug_lines, "no DEBUG record was captured, so debug logs went unchecked"
+
+
+def test_ordinary_words_in_a_server_error_stay_readable(tmp_path):
+    """Only secret values are removed; the rest of an error must read as sent."""
+    from gaia.mcp.client.mcp_client import MCPClient
+
+    script = tmp_path / "shipping_server.py"
+    script.write_text(
+        _PRELUDE
+        + textwrap.indent(
+            textwrap.dedent("""
+        if req["method"] == "initialize":
+            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+        else:
+            send({"jsonrpc": "2.0", "id": req["id"], "error": {
+                "code": -32000,
+                "message": "shipping lookup failed: python --stdio server"}})
+        """),
+            "    ",
+        )
+    )
+    client = MCPClient.from_config(
+        "ship",
+        {
+            "command": sys.executable,
+            "args": ["-u", str(script), "--stdio", "--api-key", "Zq9vKe7wP2"],
+        },
+    )
+    try:
+        assert client.connect(), client.last_error
+        result = client.call_tool("track_shipment", {})
+    finally:
+        client.disconnect()
+
+    assert result == {"error": "shipping lookup failed: python --stdio server"}
 
 
 def test_a_missing_program_named_in_the_os_error_is_not_logged(monkeypatch, caplog):
@@ -842,7 +904,7 @@ def test_a_launcher_that_dies_during_the_startup_check_has_its_child_stopped(
     assert not psutil.pid_exists(child_pid), "the dead launcher's child kept running"
 
 
-@pytest.mark.parametrize("bad", [float("inf"), float("nan"), 1e9, 601])
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), 1e9, 601, 10**400])
 def test_a_timeout_that_could_never_end_is_refused(bad):
     from gaia.mcp.client.mcp_client import server_timeout
 
@@ -857,6 +919,7 @@ def test_one_bad_timeout_fails_only_its_own_server(monkeypatch):
         def get_servers(self):
             return {
                 "bad": {"command": "unused", "timeout": float("inf")},
+                "huge": {"command": "unused", "timeout": 10**400},
                 "good": {"command": "unused"},
             }
 
@@ -868,3 +931,4 @@ def test_one_bad_timeout_fails_only_its_own_server(monkeypatch):
 
     assert "good" in manager._clients
     assert "at most 600" in manager._failed["bad"]
+    assert "at most 600" in manager._failed["huge"]

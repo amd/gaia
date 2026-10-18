@@ -3,7 +3,6 @@
 """MCP Client for interacting with MCP servers."""
 
 import json
-import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -368,10 +367,11 @@ def server_timeout(name: str, config: Dict[str, Any], default: float) -> float:
     value = config.get("timeout")
     if value is None:
         return default
+    # A comparison, not math.isfinite: it refuses NaN and infinity, and an
+    # integer too large for a float, which isfinite would raise on.
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
-        or not math.isfinite(value)
         or not 0 < value <= MAX_SERVER_TIMEOUT_S
     ):
         raise ValueError(
@@ -466,15 +466,16 @@ class MCPClient:
         )
         return cls(name, transport, debug=debug)
 
-    def _redact(self, text: Any) -> str:
-        """A server's own error text, cleaned of its command line and env.
+    def _redact(self, value: Any) -> Any:
+        """A server's own reply value, with its launch secrets removed.
 
         A server can echo the options it was started with back in an error.
+        Structured values are cleaned before anything turns them into text.
         """
         # Only a stdio server has a command line and env to echo.
         if isinstance(self.transport, StdioTransport):
-            return self.transport.redact(str(text))
-        return str(text)
+            return self.transport.redact_value(value)
+        return value
 
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
@@ -517,7 +518,7 @@ class MCPClient:
                 error = response["error"]
                 self.last_error = (
                     "Initialization failed: "
-                    f"{self._redact(error.get('message', 'Unknown error'))}"
+                    f"{self._redact(error.get('message', 'Unknown error'))!s}"
                 )
                 logger.debug(f"MCP server '{self.name}': {self.last_error}")
                 # A server that refused to initialise must not keep running.
@@ -528,7 +529,8 @@ class MCPClient:
             self.server_info = result.get("serverInfo", {})
 
             logger.debug(
-                f"Connected to '{self.name}' - {self.server_info.get('name', 'Unknown')}"
+                f"Connected to '{self.name}' - "
+                f"{self._redact(self.server_info.get('name', 'Unknown'))}"
             )
             return True
 
@@ -660,7 +662,7 @@ class MCPClient:
 
         if "error" in response:
             error = response["error"]
-            error_msg = self._redact(error.get("message", "Unknown error"))
+            error_msg = str(self._redact(error.get("message", "Unknown error")))
 
             # Enhance validation errors with schema context
             if error.get("code") == -32602:  # JSON-RPC invalid params error
@@ -675,7 +677,7 @@ class MCPClient:
 
         if self.debug:
             logger.debug(f"Tool {tool_name} completed successfully")
-            logger.debug(f"  Response: {json.dumps(result, indent=2)}")
+            logger.debug("  Response: %s", json.dumps(self._redact(result), indent=2))
 
         return result
 
