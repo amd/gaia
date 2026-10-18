@@ -66,9 +66,9 @@ type channelReadyMsg struct{ ch <-chan interface{} }
 type cancelRequestFailedMsg struct{ err error }
 
 // queuedSendTimeout bounds how long a follow-up drained from the queue (#2917)
-// may run before this surfaces an actionable nudge. It sits below the SSE
-// client's absolute 300s read-idle watchdog (sse.go's defaultReadTimeout) —
-// a normal local turn takes 60-120s (see
+// may go without any event before this surfaces an actionable nudge. It sits
+// below the relay's idle budget, which is at least 300s (see turnReadTimeout
+// in client/sse.go) — a normal local turn takes 60-120s (see
 // TestTheComposerAcceptsTypingWhileTheAgentWorks) — so this fires only once a
 // queued follow-up is clearly running long, while leaving the same Esc/
 // Ctrl+C escape hatch every other turn already has.
@@ -440,6 +440,9 @@ type ChatModel struct {
 	err          error
 	queryStart   time.Time // tracks when the current query started
 	lastEventAt  time.Time // when the running turn last heard from the agent
+	// modelQueue is the agent's latest "waiting for the model" status this turn,
+	// "" once anything else arrives.
+	modelQueue string
 	// userWait is how long this turn sat on a question or permission prompt;
 	// the answer's timing excludes it so the user's pause isn't read as slowness.
 	userWait      time.Duration
@@ -1054,6 +1057,10 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.lastEventAt = time.Now()
+		m.modelQueue = ""
+		if st, ok := msg.event.(event.CanonicalStatusEvent); ok && st.Phase == "model_queue" {
+			m.modelQueue = st.Message
+		}
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
@@ -1118,21 +1125,18 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Already resolved, or superseded by a newer turn — nothing to say.
 			return m, nil
 		}
-		// A turn parked on a prompt is waiting on the user, and one still sending updates is working.
-		if m.awaitingUser() {
-			return m, queuedSendWatchdog(msg.turnSeq)
+		if stalled, recheck := m.queuedStallCheck(time.Now()); !stalled {
+			return m, queuedSendWatchdogAfter(msg.turnSeq, recheck)
 		}
-		if quiet := time.Since(m.lastEventAt); quiet < queuedSendTimeout {
-			return m, queuedSendWatchdogAfter(msg.turnSeq, queuedSendTimeout-quiet)
+		notice := fmt.Sprintf(
+			"[!] the queued follow-up has had no update for %s. If no other chat or app is "+
+				"using the model, check `gaia daemon status`. Press Esc (or Ctrl+C) to stop waiting.",
+			queuedSendTimeout)
+		if m.modelQueue != "" {
+			notice = "[!] the queued follow-up is still waiting for the model: " + m.modelQueue +
+				". Press Esc (or Ctrl+C) to stop waiting."
 		}
-		m.messages = append(m.messages, Message{
-			Role: RoleStatus,
-			Content: fmt.Sprintf(
-				"[!] the queued follow-up has had no update for %s. It is most likely "+
-					"waiting its turn for the model while another chat or app uses it. "+
-					"Press Esc (or Ctrl+C) to stop waiting.",
-				queuedSendTimeout),
-		})
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: notice})
 		m.updateViewport()
 		return m, nil
 
@@ -2721,7 +2725,21 @@ func (m *ChatModel) trackUserWait(now time.Time) {
 	case !waiting && !m.userWaitStart.IsZero():
 		m.userWait += now.Sub(m.userWaitStart)
 		m.userWaitStart = time.Time{}
+		// The agent was silent because it waited on the user; its quiet starts now.
+		m.lastEventAt = now
 	}
+}
+
+// queuedStallCheck reports whether a queued follow-up has gone quiet long
+// enough to name, and otherwise how long until it could have.
+func (m ChatModel) queuedStallCheck(now time.Time) (stalled bool, recheck time.Duration) {
+	if m.awaitingUser() {
+		return false, queuedSendTimeout
+	}
+	if quiet := now.Sub(m.lastEventAt); quiet < queuedSendTimeout {
+		return false, queuedSendTimeout - quiet
+	}
+	return true, 0
 }
 
 // turnElapsed is the turn's wall clock minus the time spent waiting on the user.

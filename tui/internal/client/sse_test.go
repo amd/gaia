@@ -40,6 +40,9 @@ type fakeRelay struct {
 	queryBody   string
 	// queryDelay holds the /query response, headers included, this long.
 	queryDelay time.Duration
+	// statusExtra is appended to the /daemon/v1/status body, e.g. the relay
+	// budget a daemon advertises: `,"agent_read_timeout_s":0.4`.
+	statusExtra string
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
@@ -206,7 +209,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/daemon/v1/status":
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d}`, os.Getpid())
+		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d%s}`, os.Getpid(), f.statusExtra)
 
 	case strings.HasSuffix(r.URL.Path, "/ensure"):
 		w.Header().Set("Content-Type", "application/json")

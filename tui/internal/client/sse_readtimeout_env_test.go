@@ -5,26 +5,52 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestAgentReadTimeoutFollowsTheRelaySetting(t *testing.T) {
-	for _, tc := range []struct {
-		env  string
-		want time.Duration
-	}{
-		{"", 300 * time.Second},
-		{"100", 300 * time.Second},                            // never shorter than the default
-		{"600", 660 * time.Second},                            // plus the relay's grace for the tool's own error
-		{"inf", maxAgentReadTimeout + agentToolTimeoutGrace},  // timeouts.py reads this as no limit
-		{"1e30", maxAgentReadTimeout + agentToolTimeoutGrace}, // clamped, never wrapped to a short timeout
-	} {
-		t.Setenv("GAIA_AGENT_TOOL_TIMEOUT", tc.env)
+// The table is generated from, and checked against, src/gaia/daemon/timeouts.py
+// (tests/unit/test_agent_read_timeout_table.py), so the two parsers cannot drift.
+func TestAgentReadTimeoutMatchesThePythonTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "daemon", "agent_read_timeout_cases.json"))
+	if err != nil {
+		t.Fatalf("read the shared table: %v", err)
+	}
+	var table struct {
+		Cases []struct {
+			Value   string `json:"value"`
+			Seconds any    `json:"seconds"`
+			Error   bool   `json:"error"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatalf("parse the shared table: %v", err)
+	}
+	limit := maxAgentReadTimeout + agentToolTimeoutGrace
+	for _, tc := range table.Cases {
+		t.Setenv("GAIA_AGENT_TOOL_TIMEOUT", tc.Value)
 		got, err := agentReadTimeout()
-		if err != nil || got != tc.want {
-			t.Errorf("GAIA_AGENT_TOOL_TIMEOUT=%q: got %v, %v; want %v", tc.env, got, err, tc.want)
+		if tc.Error {
+			if err == nil {
+				t.Errorf("%q: Python rejects it, Go returned %v", tc.Value, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q: Python accepts it, Go failed: %v", tc.Value, err)
+			continue
+		}
+		// Past a century the duration is capped; Python's float has no such limit.
+		want := limit
+		if secs, ok := tc.Seconds.(float64); ok && time.Duration(secs*float64(time.Second)) < limit && secs < limit.Seconds() {
+			want = time.Duration(secs * float64(time.Second))
+		}
+		if got != want {
+			t.Errorf("%q: got %v, Python gives %v", tc.Value, got, tc.Seconds)
 		}
 	}
 }

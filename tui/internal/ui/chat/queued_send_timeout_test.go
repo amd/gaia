@@ -6,6 +6,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/components"
@@ -99,9 +100,9 @@ func TestQueuedSendStalledMsgIsQuietWhileTheTurnKeepsUpdating(t *testing.T) {
 	}
 }
 
-// The likely cause of a long silence on a shared machine is a turn waiting for
-// the model, not a broken daemon, so the notice says so.
-func TestQueuedSendStalledNoticeNamesTheModelWait(t *testing.T) {
+// With no word from the agent about a queue, a long silence could be a wait
+// for the model or a stuck daemon, so the notice keeps the diagnostic step.
+func TestQueuedSendStalledNoticeKeepsTheDiagnosticWithoutAQueueSignal(t *testing.T) {
 	m := newTestChat(t)
 	m.turnSeq = 1
 	m.streaming = true
@@ -110,11 +111,76 @@ func TestQueuedSendStalledNoticeNamesTheModelWait(t *testing.T) {
 	m = updated.(ChatModel)
 
 	last := m.messages[len(m.messages)-1].Content
-	if !strings.Contains(last, "waiting its turn for the model") {
-		t.Errorf("the notice must name the model wait: %q", last)
+	if !strings.Contains(last, "no update for 3m0s") || !strings.Contains(last, "gaia daemon status") {
+		t.Errorf("the notice must say what it saw and keep the next step: %q", last)
+	}
+	if strings.Contains(last, "most likely") {
+		t.Errorf("the notice must not guess at a cause it was never told: %q", last)
+	}
+}
+
+// When the agent said it is queued for the model, the notice says that instead.
+func TestQueuedSendStalledNoticeNamesAReportedModelQueue(t *testing.T) {
+	m := newTestChat(t)
+	m.turnSeq = 1
+	m.streaming = true
+	ch := make(chan interface{})
+	m.events = ch
+	queued := event.CanonicalStatusEvent{Type: "status", Phase: "model_queue",
+		Message: "Waiting for the model — gaia-chat is using it, 2nd in line (40s)"}
+	updated, _ := m.Update(eventMsg{ch: ch, event: queued})
+	m = updated.(ChatModel)
+	m.lastEventAt = time.Now().Add(-4 * time.Minute)
+
+	updated, _ = m.Update(queuedSendStalledMsg{turnSeq: 1})
+	m = updated.(ChatModel)
+
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "still waiting for the model") || !strings.Contains(last, "2nd in line") {
+		t.Errorf("the notice must name the queue the agent reported: %q", last)
 	}
 	if strings.Contains(last, "gaia daemon status") {
-		t.Errorf("the notice must not send the user to the daemon for a model wait: %q", last)
+		t.Errorf("a reported queue is not a daemon problem: %q", last)
+	}
+}
+
+// The silence is counted from the last event OR the end of the user's own
+// wait, so answering a prompt does not trip the notice a moment later.
+func TestAnsweringAPromptRestartsTheQuietClock(t *testing.T) {
+	m := newTestChat(t)
+	m.turnSeq = 1
+	m.streaming = true
+	start := time.Now()
+	m.lastEventAt = start.Add(-10 * time.Minute)
+	cm := components.NewConfirmationModel("run", "write_file", "Write?", "")
+	m.confirmation = &cm
+	m.trackUserWait(start.Add(-9 * time.Minute))
+	m.confirmation = nil
+	m.trackUserWait(start)
+
+	stalled, recheck := m.queuedStallCheck(start.Add(5 * time.Second))
+	if stalled {
+		t.Fatal("a turn whose prompt was answered 5 s ago was called stalled")
+	}
+	if recheck != queuedSendTimeout-5*time.Second {
+		t.Errorf("re-check in %v, want the remaining %v", recheck, queuedSendTimeout-5*time.Second)
+	}
+}
+
+func TestTheStallWatchdogRechecksAfterTheRemainingQuietTime(t *testing.T) {
+	m := newTestChat(t)
+	now := time.Now()
+	m.lastEventAt = now.Add(-100 * time.Second)
+
+	stalled, recheck := m.queuedStallCheck(now)
+	if stalled || recheck != 80*time.Second {
+		t.Errorf("got stalled=%v recheck=%v, want false and 80s", stalled, recheck)
+	}
+
+	cm := components.NewConfirmationModel("run", "write_file", "Write?", "")
+	m.confirmation = &cm
+	if stalled, recheck = m.queuedStallCheck(now); stalled || recheck != queuedSendTimeout {
+		t.Errorf("while a prompt is open: stalled=%v recheck=%v, want false and the full %v", stalled, recheck, queuedSendTimeout)
 	}
 }
 
