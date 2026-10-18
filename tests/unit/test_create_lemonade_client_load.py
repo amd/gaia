@@ -106,3 +106,13 @@ def test_the_load_is_bounded_by_the_load_wait(monkeypatch):
     with listing, pull, cloud, patch.object(lc.LemonadeClient, "load_model") as load:
         lc.create_lemonade_client(model=MODEL, auto_load=True, verbose=False)
     load.assert_called_once_with(MODEL, timeout=900)
+
+
+def test_fail_fast_load_wait_still_loads(monkeypatch):
+    """GAIA_LLM_LOAD_WAIT=0 means "don't wait on a busy server", not "send a
+    load with no time to run": a zero timeout is rejected outright."""
+    monkeypatch.setenv("GAIA_LLM_LOAD_WAIT", "0")
+    listing, pull, cloud = _patches([], available=[MODEL])
+    with listing, pull, cloud, patch.object(lc.LemonadeClient, "load_model") as load:
+        lc.create_lemonade_client(model=MODEL, auto_load=True, verbose=False)
+    assert load.call_args.kwargs["timeout"] >= 60

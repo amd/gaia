@@ -1012,6 +1012,8 @@ PROBE_TIMEOUT = (3.05, 5.0)
 SYSTEM_INFO_TIMEOUT = (3.05, 15.0)
 #: ``/models``; with ``show_all`` it lists the whole catalog.
 CATALOG_TIMEOUT = (3.05, 30.0)
+#: Shortest timeout ``create_lemonade_client`` gives a load of an on-disk model.
+_MIN_LOAD_SECONDS = 60.0
 #: Seconds between status probes while a busy server is waited for.
 _BUSY_POLL_SECONDS = 5.0
 #: ``(connect, read)`` for a probe made while waiting. Short, so Stop is seen
@@ -7873,9 +7875,10 @@ def create_lemonade_client(
                         f"Model '{model_name}' found in registry, proceeding with load"
                     )
 
-            # Not 60 s (it can queue behind another app's load), and not the
-            # download-sized default: the model is already on disk here.
-            client.load_model(model_name, timeout=RetryPolicy.from_env().load_wait)
+            # GAIA_LLM_LOAD_WAIT, floored at the time a load alone needs: 0
+            # means "don't wait on a busy server", not "no time to load".
+            load_timeout = max(RetryPolicy.from_env().load_wait, _MIN_LOAD_SECONDS)
+            client.load_model(model_name, timeout=load_timeout)
         except LemonadeClientError as e:
             # Re-raised as is: callers branch on its type (auth, memory, disk).
             client.log.error(f"Failed to load {model_name}: {e}")
