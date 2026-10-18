@@ -31,15 +31,7 @@ const CANVAS: Record<Theme, string> = {
 /** Single writer for the theme, so the frame can never disagree with the app. */
 export function applyTheme(theme: Theme): void {
     document.documentElement.setAttribute('data-theme', theme);
-    // The desktop app draws the window controls; keep them on the same canvas.
-    if (window.gaiaWindow) {
-        const tokens = getComputedStyle(document.documentElement);
-        const color = tokens.getPropertyValue('--bg-primary').trim();
-        const symbolColor = tokens.getPropertyValue('--text-primary').trim();
-        window.gaiaWindow.setColors({ color, symbolColor }).catch((err: unknown) => {
-            console.error('applyTheme: the desktop window controls did not take the theme', err);
-        });
-    }
+    syncTitleBar();
     const meta = document.querySelector('meta[name="theme-color"]');
     if (!meta) {
         // Not thrown: the app is already themed by the line above, and blanking
@@ -52,4 +44,24 @@ export function applyTheme(theme: Theme): void {
         return;
     }
     meta.setAttribute('content', CANVAS[theme]);
+}
+
+/**
+ * Paint the desktop app's window controls and the browser frame from the live
+ * canvas and text tokens, so a palette reaches them too. Call after the theme
+ * or palette changes.
+ */
+export function syncTitleBar(): void {
+    const root = document.documentElement;
+    const tokens = getComputedStyle(root);
+    const color = tokens.getPropertyValue('--bg-primary').trim();
+    const symbolColor = tokens.getPropertyValue('--text-primary').trim();
+    if (window.gaiaWindow && color && symbolColor) {
+        window.gaiaWindow.setColors({ color, symbolColor }).catch((err: unknown) => {
+            console.error('syncTitleBar: the desktop window controls did not take the colors', err);
+        });
+    }
+    if (root.dataset.palette && color) {
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
+    }
 }
