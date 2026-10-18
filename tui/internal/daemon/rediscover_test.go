@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -123,6 +124,10 @@ func TestDoNeverReplaysARequestThatReachedTheDaemon(t *testing.T) {
 		if err != nil {
 			t.Errorf("hijack: %v", err)
 			return
+		}
+		// A reset, not a clean close: the failure a crashed daemon actually produces.
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			_ = tcp.SetLinger(0)
 		}
 		conn.Close()
 	}))
