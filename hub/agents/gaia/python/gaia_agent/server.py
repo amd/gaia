@@ -42,7 +42,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
@@ -892,7 +892,8 @@ async def _off_loop(
 
     The thread can't be stopped, so if the request is cancelled while it runs,
     *on_abandon* is called once it finishes — with its result, or ``None`` if
-    it raised — to release whatever the abandoned call took.
+    it raised — to release whatever the abandoned call took. It runs on a
+    thread of its own: closing an agent blocks, and the loop must not.
     """
     task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
     try:
@@ -902,36 +903,39 @@ async def _off_loop(
 
             def _cleanup(done: "asyncio.Future") -> None:
                 failed = done.cancelled() or done.exception() is not None
-                on_abandon(None if failed else done.result())
+                threading.Thread(
+                    target=on_abandon,
+                    args=(None if failed else done.result(),),
+                    name="query-setup-cleanup",
+                    daemon=True,
+                ).start()
 
             task.add_done_callback(_cleanup)
         raise
 
 
-async def _acquire_turn(session: Any) -> bool:
-    """Take *session*'s run lock; ``False`` when another turn is still live.
+def _checkout_turn(session_id: str, **kwargs: Any) -> Tuple[Any, bool]:
+    """The session for *session_id* and whether this request took its turn.
 
     A turn the user already stopped still holds the lock until its model call
     returns, which for a long answer is most of a minute. Refusing the next
     message for all that time made Stop look broken, so a stopped turn is
     waited out instead. A turn that is NOT stopped is still refused at once.
+    Blocking: run it with ``_off_loop``.
     """
-    if session.run_lock.acquire(blocking=False):
-        return True
+    session, took = session_registry.checkout(session_id, **kwargs)
+    if took:
+        return session, True
     stopping = session.active_cancel
     if stopping is None or not stopping.is_set():
-        return False
+        return session, False
+    # Eviction must take the lock too, so holding it means still registered.
+    return session, session.run_lock.acquire(True, STOPPED_TURN_WAIT_S)
 
-    def _release_if_taken(taken: bool) -> None:
-        if taken:
-            session.run_lock.release()
 
-    return await _off_loop(
-        session.run_lock.acquire,
-        True,
-        STOPPED_TURN_WAIT_S,
-        on_abandon=_release_if_taken,
-    )
+def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
+    if checked_out is not None and checked_out[1]:
+        checked_out[0].run_lock.release()
 
 
 @router.post("/query")
@@ -1001,12 +1005,11 @@ async def query(request: QueryRequest):
             # the model goes on telling the user the skill is still loaded.
             # Building an agent takes seconds; on the loop it would freeze
             # every other run's stream, heartbeats included.
-            session = await _off_loop(
-                functools.partial(
-                    session_registry.get_or_create, request.session_id, **kwargs
-                )
+            session, took_turn = await _off_loop(
+                functools.partial(_checkout_turn, request.session_id, **kwargs),
+                on_abandon=_release_abandoned_turn,
             )
-            if not await _acquire_turn(session):
+            if not took_turn:
                 session = None  # not ours to release
                 raise HTTPException(
                     status_code=409,
@@ -1023,7 +1026,7 @@ async def query(request: QueryRequest):
                 # loaded skill — the two things a retained session exists to
                 # keep. run_lock is held here, so no turn is mid-inference.
                 try:
-                    # May load a model or wait behind another session's lease.
+                    # Builds the new client and checks its server is reachable.
                     display = await _off_loop(
                         session.switch_model,
                         target,

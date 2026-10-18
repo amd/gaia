@@ -8,10 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Opening a session or switching its model no longer freezes the other
   sessions.** The sidecar built a new session's agent, and ran a `/model`
-  switch that may wait for a model to load, on its event loop. Every other
-  session's stream stopped for that long, heartbeats included, so the TUI and
-  the daemon relay saw an idle connection. That setup now runs on a worker
-  thread, and a request that goes away mid-setup still releases its session.
+  switch (which builds a new client and checks its server), on its event
+  loop. Every other session's stream stopped for that long, heartbeats
+  included, so the TUI and the daemon relay saw an idle connection. That
+  setup now runs on a worker thread, and a request that goes away mid-setup
+  still releases its session.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two
