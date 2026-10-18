@@ -3,17 +3,18 @@
 
 /**
  * Tests for asking before quitting with work in progress
- * (src/gaia/apps/webui/services/quit-guard.cjs), and the source-level
- * contract that main.cjs runs every quit through it.
+ * (src/gaia/apps/webui/services/quit-guard.cjs): the dialog, the quit and
+ * window-close flows main.cjs installs, and the backend call's timeout.
  */
 
-const fs = require("fs");
-const path = require("path");
 const {
   backendJson,
   describeWork,
   confirmQuit,
   installQuitGuard,
+  attachWindowGuards,
+  RESTART_FOR_UPDATE,
+  CHECK_TIMEOUT_MS,
 } = require("../../src/gaia/apps/webui/services/quit-guard.cjs");
 
 const idle = { answers: [], indexing: [] };
@@ -226,38 +227,139 @@ describe("installQuitGuard", () => {
   });
 });
 
-describe("main.cjs wires the guard", () => {
-  // main.cjs can't be required without launching Electron; these pin the wiring
-  // whose behaviour installQuitGuard's tests above cover.
-  const MAIN = fs.readFileSync(
-    path.resolve(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"),
-    "utf8"
-  );
-  const block = (start, end) => {
-    const i = MAIN.indexOf(start);
-    expect(i).toBeGreaterThan(-1);
-    return MAIN.slice(i, MAIN.indexOf(end, i));
-  };
+describe("attachWindowGuards", () => {
+  const { EventEmitter } = require("events");
 
-  test("asks only while the GAIA service runs, about its real work", () => {
-    const body = block("const quitGuard = installQuitGuard({", "\n});");
-    expect(body).toContain("updater: electronAutoUpdater");
-    expect(body).toContain("shouldAsk: () => Boolean(trayManager && backendProcess)");
-    expect(body).toContain("fetchWorkInProgress(backendPort)");
+  function setup({ minimizeToTray = true, noticeDue = true, platform = "win32", confirmed = false, quitting = false } = {}) {
+    const win = new EventEmitter();
+    win.hide = jest.fn();
+    const app = { quit: jest.fn() };
+    const guard = { confirmed, allow: jest.fn() };
+    const tray = {
+      minimizeToTray,
+      closeNoticeDue: noticeDue,
+      showCloseNotice: jest.fn(async () => false),
+    };
+    const reportNoticeError = jest.fn();
+    attachWindowGuards(win, {
+      app,
+      guard,
+      getTray: () => tray,
+      isQuitting: () => quitting,
+      platform,
+      reportNoticeError,
+    });
+    const close = () => {
+      const ev = { preventDefault: jest.fn() };
+      win.emit("close", ev);
+      return ev;
+    };
+    return { win, app, guard, tray, reportNoticeError, close };
+  }
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  test("close to tray hides the window and shows the notice", async () => {
+    const { win, tray, close, app } = setup();
+    const ev = close();
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(win.hide).toHaveBeenCalled();
+    await flush();
+    expect(tray.showCloseNotice).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
   });
 
-  test("closing the window when it quits asks first and keeps the window", () => {
-    const body = block('mainWindow.on("close", (event) => {', 'mainWindow.on("closed"');
-    expect(body).toMatch(/!quitGuard\.confirmed\) \{\s*event\.preventDefault\(\);\s*app\.quit\(\);/);
-    expect(body).toMatch(/trayManager\s*\.showCloseNotice\(\)/);
+  test("Quit GAIA in the notice quits", async () => {
+    const { tray, close, app } = setup();
+    tray.showCloseNotice.mockResolvedValueOnce(true);
+    close();
+    await flush();
+    await flush();
+    expect(app.quit).toHaveBeenCalledTimes(1);
   });
 
-  test("an OS sign-out or shutdown never waits on the question", () => {
-    expect(MAIN).toContain('mainWindow.on("session-end", () => quitGuard.allow())');
-    expect(MAIN).toContain('powerMonitor.on("shutdown", () => quitGuard.allow())');
+  test("a failing notice is reported, not swallowed", async () => {
+    const { tray, close, reportNoticeError } = setup();
+    tray.showCloseNotice.mockRejectedValueOnce(new Error("EACCES"));
+    close();
+    await flush();
+    await flush();
+    expect(reportNoticeError).toHaveBeenCalledWith(expect.objectContaining({ message: "EACCES" }));
   });
 
-  test("the GAIA service exiting shows on the tray", () => {
-    expect(MAIN).toContain("trayManager.setBackendAlive(false)");
+  test("once shown, the notice isn't asked for again", () => {
+    const { tray, close } = setup({ noticeDue: false });
+    close();
+    expect(tray.showCloseNotice).not.toHaveBeenCalled();
+  });
+
+  test("with close-to-tray off, closing runs the quit guard and keeps the window", () => {
+    const { win, close, app } = setup({ minimizeToTray: false });
+    const ev = close();
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(app.quit).toHaveBeenCalledTimes(1);
+  });
+
+  test("once the guard agreed, the window closes", () => {
+    const { close, app } = setup({ minimizeToTray: false, confirmed: true });
+    const ev = close();
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  test("on macOS closing just closes; the app keeps running", () => {
+    const { close, app } = setup({ minimizeToTray: false, platform: "darwin" });
+    const ev = close();
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  test("while quitting, the window closes without being hidden", () => {
+    const { win, close } = setup({ quitting: true });
+    const ev = close();
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(win.hide).not.toHaveBeenCalled();
+  });
+
+  test("a Windows sign-out lets the quit through without asking", () => {
+    const { win, guard } = setup();
+    win.emit("session-end");
+    expect(guard.allow).toHaveBeenCalled();
+  });
+});
+
+describe("the update restart wording", () => {
+  test("says restarting, not quitting, loses the answer", async () => {
+    const showMessageBox = jest.fn(async () => ({ response: 1 }));
+    const go = await confirmQuit({
+      action: RESTART_FOR_UPDATE,
+      getWork: async () => ({ answers: [{ session_id: "a", title: "Trip plan" }], indexing: [] }),
+      showMessageBox,
+    });
+    expect(go).toBe(true);
+    const opts = showMessageBox.mock.calls[0][0];
+    expect(opts.title).toBe("Restart to update?");
+    expect(opts.buttons).toEqual(["Keep running", "Restart anyway"]);
+    expect(opts.detail).toBe("Restarting stops the answer in 'Trip plan', and that answer will be lost.");
+  });
+});
+
+describe("backendJson timeout", () => {
+  test("a service that never answers fails after the timeout, naming it", async () => {
+    // Hangs until aborted, as a wedged backend does.
+    const fetchImpl = (_url, { signal }) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason));
+      });
+    const started = Date.now();
+    await expect(backendJson(4321, "/api/system/work-in-progress", { fetchImpl, timeoutMs: 50 })).rejects.toThrow(
+      /the GAIA service at http:\/\/127\.0\.0\.1:4321\/api\/system\/work-in-progress did not answer/
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("the quit check uses a bounded timeout", () => {
+    expect(CHECK_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(CHECK_TIMEOUT_MS).toBeLessThanOrEqual(5000);
   });
 });

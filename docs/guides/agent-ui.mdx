@@ -282,14 +282,16 @@ The menu:
 - **Show GAIA**.
 - **Free memory…** unloads the chat model to give its memory back, after
   asking. Your next message loads it again. It is greyed out, with the reason,
-  while an answer is running, when no model is loaded, or when the model runs
-  in the cloud.
+  while an answer is running in this window, when no model is loaded, or when
+  the model runs in the cloud. If an answer elsewhere or a document index still
+  needs the model, it says so instead of asking.
 - **Settings…** and **Quit GAIA**.
 
 The first time you close the window, GAIA says once that it is still running
-in the tray. If you quit while an answer is being written or a document is
-indexing, GAIA asks first and says that the answer will be lost; quitting
-while idle doesn't ask.
+in the tray. If you quit, or choose **Restart now** for an update, while an
+answer is being written or a document is indexing, GAIA asks first and says
+that the answer will be lost; when idle it doesn't ask. Keeping GAIA running
+puts an update off until you next quit.
 
 **Settings → General → Desktop app** has three switches, each applied as soon
 as you flip it:

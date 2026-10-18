@@ -11,7 +11,7 @@
  *   idle       no badge
  *   working    an open ring, like a spinner
  *   waiting    an hourglass: waiting for the model to load or answer
- *   needs-you  a solid disc (with "!" where there is room)
+ *   needs-you  a solid disc, with "!" wherever the badge is big enough
  *   error      a solid triangle
  *
  * Bitmaps are Electron's native layout: premultiplied BGRA, row-major.
@@ -33,8 +33,13 @@ const BADGE_RADIUS = 0.27;
 // ... cut out of the logo with this much clear space around it.
 const BADGE_GAP = 0.07;
 const SUPERSAMPLE = 4;
+// The "!" needs this badge radius (px) for its 0.32-radius bar to be ~2 px wide.
+const MARK_MIN_RADIUS_PX = 6;
 
-/** Point-in-shape tests in badge space: u, v in [-1, 1], v grows downward. */
+/**
+ * Point-in-shape tests in badge space: u, v in [-1, 1], v grows downward;
+ * `radiusPx` is the badge's drawn radius, for detail that needs room.
+ */
 const SHAPES = {
   working(u, v) {
     const r = Math.hypot(u, v);
@@ -47,10 +52,10 @@ const SHAPES = {
     if (Math.abs(v) >= 0.75) return Math.abs(u) <= 0.8;
     return Math.abs(u) <= 0.75 * Math.abs(v) + 0.14;
   },
-  "needs-you"(u, v, size) {
+  "needs-you"(u, v, radiusPx) {
     if (Math.hypot(u, v) > 1) return false;
-    // "!" only where it is at least a pixel wide.
-    if (size >= 32 && Math.abs(u) <= 0.16) {
+    // The "!" is what tells needs-you from the unread dot, so draw it wherever it fits.
+    if (radiusPx >= MARK_MIN_RADIUS_PX && Math.abs(u) <= 0.16) {
       if (v >= -0.62 && v <= 0.2) return false;
       if (v >= 0.38 && v <= 0.64) return false;
     }
@@ -110,7 +115,7 @@ function paintBadge(out, size, kind, { template, knockout, center, radius }) {
           for (let c = 0; c < 4; c++) out[i + c] = Math.round(out[i + c] * (1 - cut));
         }
       }
-      const cov = coverage(px, py, (x, y) => shape((x - cx) / rad, (y - cy) / rad, size));
+      const cov = coverage(px, py, (x, y) => shape((x - cx) / rad, (y - cy) / rad, rad));
       if (cov === 0) continue;
       const keep = 1 - cov;
       const a = 255 * cov;

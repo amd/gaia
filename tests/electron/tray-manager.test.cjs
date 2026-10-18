@@ -735,6 +735,21 @@ describe("Windows taskbar overlay", () => {
     expect(win.setOverlayIcon.mock.calls.length).toBe(calls);
   });
 
+  test("a reopened window gets the overlay again", () => {
+    setPlatform("win32");
+    const win = createMockWindow();
+    const mgr = newTray(win);
+    mgr.create();
+    mgr.setActivity(activity({ needsYou: [{ id: "a", title: "A", reason: "approval" }] }));
+    win._isDestroyed = true;
+    mgr.windowClosed();
+    const fresh = createMockWindow();
+    mgr._reopenWindow.mockReturnValue(fresh);
+    mgr._showWindow();
+    mgr.setActivity(activity({ needsYou: [{ id: "a", title: "A", reason: "approval" }] }));
+    expect(fresh.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("needs-you"), "1 chat needs you");
+  });
+
   test("is Windows-only", () => {
     setPlatform("darwin");
     const win = createMockWindow();
@@ -747,10 +762,23 @@ describe("Windows taskbar overlay", () => {
 
 describe("Free memory", () => {
   const realFetch = global.fetch;
+  const IDLE_WORK = { answers: [], indexing: [] };
 
   afterEach(() => {
     global.fetch = realFetch;
   });
+
+  /** The GAIA service: work-in-progress answers `work`; unload-model answers `unload`. */
+  function backend({ work = IDLE_WORK, unload = { ok: true, status: 200, body: { status: "unloaded" } } } = {}) {
+    global.fetch = jest.fn(async (url) => {
+      if (String(url).endsWith("/api/system/work-in-progress")) {
+        return { ok: true, status: 200, json: async () => work };
+      }
+      return { ok: unload.ok, status: unload.status, json: async () => unload.body };
+    });
+  }
+  const unloadCalls = () =>
+    global.fetch.mock.calls.filter(([url]) => String(url).endsWith("/api/system/unload-model"));
 
   function freeMemoryTray() {
     setPlatform("win32");
@@ -766,22 +794,24 @@ describe("Free memory", () => {
 
   test("asks first, unloads the model, and the status line shows it", async () => {
     const { mgr, win } = freeMemoryTray();
+    backend();
     electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
-    global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ status: "unloaded" }) }));
 
     await mgr._freeMemory();
 
     expect(electronMock.dialog.showMessageBox.mock.calls[0][0].message).toBe(
       "Unload Gemma-4-E4B-it-GGUF from memory?"
     );
-    expect(global.fetch).toHaveBeenCalledWith(
-      "http://127.0.0.1:4321/api/system/unload-model",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ "X-Gaia-UI": "1", "Content-Type": "application/json" }),
-        body: JSON.stringify({ model_name: "Gemma-4-E4B-it-GGUF" }),
-      })
-    );
+    expect(unloadCalls()).toEqual([
+      [
+        "http://127.0.0.1:4321/api/system/unload-model",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ "X-Gaia-UI": "1", "Content-Type": "application/json" }),
+          body: JSON.stringify({ model_name: "Gemma-4-E4B-it-GGUF" }),
+        }),
+      ],
+    ]);
     expect(mgr.tray._contextMenu._template[0].label).toBe("No model loaded · idle");
     expect(freeItem(mgr).enabled).toBe(false);
     expect(win.webContents.send).toHaveBeenCalledWith("tray:command", { type: "refresh-status" });
@@ -789,25 +819,74 @@ describe("Free memory", () => {
 
   test("does nothing when the user cancels", async () => {
     const { mgr } = freeMemoryTray();
+    backend();
     electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });
-    global.fetch = jest.fn();
     await mgr._freeMemory();
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(unloadCalls()).toHaveLength(0);
+  });
+
+  test.each([
+    [{ answers: [{ session_id: "b", title: "Elsewhere" }], indexing: [] }, "An answer is being written."],
+    [{ answers: [], indexing: [{ document_id: "d", filename: "report.pdf" }] }, "A document is being indexed."],
+    [
+      { answers: [{ session_id: "a", title: null }, { session_id: "b", title: null }], indexing: [{ document_id: "d" }] },
+      "2 answers are being written. A document is being indexed.",
+    ],
+  ])("says why it can't, without asking or unloading, while work runs (%#)", async (work, reason) => {
+    const { mgr } = freeMemoryTray();
+    backend({ work });
+    await mgr._freeMemory();
+    expect(electronMock.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    const box = electronMock.dialog.showMessageBox.mock.calls[0][0];
+    expect(box.message).toBe("The model is in use.");
+    expect(box.detail).toBe(`${reason} Try again when it has finished.`);
+    expect(unloadCalls()).toHaveLength(0);
+  });
+
+  test("a failed check is shown, and nothing is unloaded", async () => {
+    const { mgr } = freeMemoryTray();
+    global.fetch = jest.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await mgr._freeMemory();
+    const box = electronMock.dialog.showMessageBox.mock.calls[0][0];
+    expect(box.type).toBe("error");
+    expect(box.message).toBe("GAIA couldn't check whether the model is in use.");
+    expect(box.detail).toMatch(/ECONNREFUSED/);
+  });
+
+  test("a second click while the first is open opens no second dialog", async () => {
+    const { mgr } = freeMemoryTray();
+    backend();
+    let answer;
+    electronMock.dialog.showMessageBox.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    const first = mgr._freeMemory();
+    await new Promise((r) => setImmediate(r));
+    await mgr._freeMemory();
+    expect(electronMock.dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    answer({ response: 1 });
+    await first;
   });
 
   test("shows the backend's reason when it refuses", async () => {
     const { mgr } = freeMemoryTray();
+    backend({ unload: { ok: false, status: 409, body: { detail: "A document is still being indexed." } } });
     electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 });
-    global.fetch = jest.fn(async () => ({
-      ok: false,
-      status: 409,
-      json: async () => ({ detail: "A document is still being indexed." }),
-    }));
     await mgr._freeMemory();
     const errorBox = electronMock.dialog.showMessageBox.mock.calls[1][0];
     expect(errorBox.type).toBe("error");
     expect(errorBox.detail).toBe("A document is still being indexed.");
     expect(mgr.tray._contextMenu._template[0].label).toMatch(/^Gemma/);
+  });
+
+  test("an unexpected failure from the menu reaches the user", async () => {
+    const { mgr } = freeMemoryTray();
+    jest.spyOn(mgr, "_freeMemoryFlow").mockRejectedValueOnce(new Error("boom"));
+    const errors = jest.spyOn(console, "error").mockImplementation(() => {});
+    freeItem(mgr).click();
+    await new Promise((r) => setImmediate(r));
+    expect(electronMock.dialog.showErrorBox).toHaveBeenCalledWith("GAIA", "Free memory failed: boom");
+    errors.mockRestore();
   });
 
   test("is disabled while an answer is running", () => {

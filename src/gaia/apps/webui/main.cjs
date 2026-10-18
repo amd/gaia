@@ -62,9 +62,12 @@ try {
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const {
+  attachWindowGuards,
   confirmQuit,
   fetchWorkInProgress,
   installQuitGuard,
+  QUIT,
+  RESTART_FOR_UPDATE,
 } = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
@@ -580,32 +583,23 @@ function createWindow() {
     reportBlockedLink(url);
   });
 
-  // ── Minimize-to-tray on close (C4 fix) ──────────────────────────────
-  // Intercept window close — hide instead of closing when tray mode is active
-  mainWindow.on("close", (event) => {
-    if (isQuitting) return;
-    if (trayManager && trayManager.minimizeToTray) {
-      event.preventDefault();
-      mainWindow.hide();
-      console.log("[main] Window hidden to tray");
-      if (trayManager.closeNoticeDue) {
-        trayManager
-          .showCloseNotice()
-          .then((quit) => { if (quit) app.quit(); })
-          .catch((err) => console.error("[main] First-close notice failed:", err.message));
-      }
-      return;
-    }
-    // Closing the window quits here, so it goes through the quit guard first;
-    // the window stays open if the user keeps GAIA running.
-    if (process.platform !== "darwin" && !quitGuard.confirmed) {
-      event.preventDefault();
-      app.quit();
-    }
+  // ── Minimize-to-tray on close (C4 fix), first-close notice, quit guard ──
+  attachWindowGuards(mainWindow, {
+    app,
+    guard: quitGuard,
+    getTray: () => trayManager,
+    isQuitting: () => isQuitting,
+    platform: process.platform,
+    reportNoticeError: (err) => {
+      console.error("[main] First-close notice failed:", err.message);
+      const where = process.platform === "darwin" ? "menu bar" : "tray";
+      dialog.showErrorBox(
+        "GAIA is still running",
+        `GAIA is still running in the ${where}. Quit from the ${where} menu to stop it.\n\n` +
+          `(The usual notice failed: ${err.message})`
+      );
+    },
   });
-
-  // Windows signs out or shuts down: never hold it up with a question.
-  mainWindow.on("session-end", () => quitGuard.allow());
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -1178,7 +1172,7 @@ app.whenReady().then(async () => {
   // Any failure here is logged and swallowed — the app continues to run
   // even if auto-update is unavailable.
   try {
-    autoUpdater.init(mainWindow);
+    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart });
   } catch (err) {
     console.error(
       "[main] Failed to init auto-updater:",
@@ -1264,21 +1258,36 @@ app.on("window-all-closed", () => {
 
 let cleanupDone = false;
 
+/** Only while the GAIA service runs: without it, no answer is running. */
+function workCanBeLost() {
+  return Boolean(trayManager && backendProcess);
+}
+
+/** Ask about losing work in front of the window, even when it was hidden in the tray. */
+function askAboutRunningWork(action) {
+  return confirmQuit({
+    action,
+    getWork: () => fetchWorkInProgress(backendPort),
+    showMessageBox: (opts) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return dialog.showMessageBox(opts);
+      if (!mainWindow.isVisible()) mainWindow.show();
+      return dialog.showMessageBox(mainWindow, opts);
+    },
+  });
+}
+
+/** The update dialog's "Restart now": the installer starts at once, so ask first. */
+function confirmUpdateRestart() {
+  return workCanBeLost() ? askAboutRunningWork(RESTART_FOR_UPDATE) : Promise.resolve(true);
+}
+
 // Every quit asks first while an answer or index job would be lost; an
-// update restart (already confirmed in its dialog) and an OS shutdown don't.
+// update restart (asked in confirmUpdateRestart) and an OS shutdown don't.
 const quitGuard = installQuitGuard({
   app,
   updater: electronAutoUpdater,
-  // Only while the GAIA service runs: without it, no answer is running.
-  shouldAsk: () => Boolean(trayManager && backendProcess),
-  confirm: () =>
-    confirmQuit({
-      getWork: () => fetchWorkInProgress(backendPort),
-      showMessageBox: (opts) =>
-        mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()
-          ? dialog.showMessageBox(mainWindow, opts)
-          : dialog.showMessageBox(opts),
-    }),
+  shouldAsk: workCanBeLost,
+  confirm: () => askAboutRunningWork(QUIT),
   onQuitting: () => {
     isQuitting = true;
     // Mark any subsequent backend exit as intentional so we don't pop the

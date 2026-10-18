@@ -24,7 +24,18 @@ const fs = require("fs");
 const os = require("os");
 const { drawStateIcon, drawOverlayIcon, STATES } = require("./tray-icons.cjs");
 const { validateActivity, deriveTrayView, buildMenuTemplate } = require("./tray-state.cjs");
-const { backendJson } = require("./quit-guard.cjs");
+const { backendJson, fetchWorkInProgress } = require("./quit-guard.cjs");
+
+/** Why the model can't be freed right now, from the backend's work list; null when it can. */
+function describeBusy(work) {
+  const answers = work.answers.length;
+  const docs = work.indexing.length;
+  if (answers === 0 && docs === 0) return null;
+  const parts = [];
+  if (answers > 0) parts.push(answers === 1 ? "An answer is being written." : `${answers} answers are being written.`);
+  if (docs > 0) parts.push(docs === 1 ? "A document is being indexed." : `${docs} documents are being indexed.`);
+  return parts.join(" ");
+}
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -264,6 +275,8 @@ class TrayManager {
   /** The window was closed (not hidden): what it last reported no longer holds. */
   windowClosed() {
     this._activity = null;
+    // A new window has no overlay yet, whatever the last one showed.
+    this._overlayKey = null;
     this._render();
   }
 
@@ -397,7 +410,11 @@ class TrayManager {
       newChat: () => this._command({ type: "new-chat" }),
       showWindow: () => this._showWindow(),
       freeMemory: () => {
-        this._freeMemory().catch((err) => console.error("[tray] Free memory failed:", err));
+        // A menu click has no caller to report to, so the user hears about it.
+        this._freeMemory().catch((err) => {
+          console.error("[tray] Free memory failed:", err);
+          dialog.showErrorBox("GAIA", `Free memory failed: ${err.message}`);
+        });
       },
       openSettings: () => this._command({ type: "open-settings", section: "general" }),
       quit: () => this._quit(),
@@ -418,7 +435,48 @@ class TrayManager {
 
   async _freeMemory() {
     if (this._freeingMemory || !this._view || !this._view.canFreeMemory) return;
-    const model = this._view.modelName;
+    // Set before the first dialog, so a second click can't open a second one.
+    this._freeingMemory = true;
+    try {
+      await this._freeMemoryFlow(this._view.modelName);
+    } finally {
+      this._freeingMemory = false;
+    }
+  }
+
+  async _freeMemoryFlow(model) {
+    const failed = (message, detail) =>
+      dialog.showMessageBox({
+        type: "error",
+        title: "Free memory",
+        message,
+        detail,
+        buttons: ["OK"],
+        noLink: true,
+      });
+
+    // The window only knows its own chats; the backend knows every answer
+    // and index job, so ask it now rather than poll it all the time.
+    let work;
+    try {
+      work = await fetchWorkInProgress(this._backendPort);
+    } catch (err) {
+      await failed("GAIA couldn't check whether the model is in use.", err.message);
+      return;
+    }
+    const busy = describeBusy(work);
+    if (busy) {
+      await dialog.showMessageBox({
+        type: "info",
+        title: "Free memory",
+        message: "The model is in use.",
+        detail: `${busy} Try again when it has finished.`,
+        buttons: ["OK"],
+        noLink: true,
+      });
+      return;
+    }
+
     const { response } = await dialog.showMessageBox({
       type: "question",
       title: "Free memory?",
@@ -431,7 +489,6 @@ class TrayManager {
       noLink: true,
     });
     if (response !== 0) return;
-    this._freeingMemory = true;
     try {
       await backendJson(this._backendPort, "/api/system/unload-model", {
         method: "POST",
@@ -439,17 +496,8 @@ class TrayManager {
         timeoutMs: 30000,
       });
     } catch (err) {
-      await dialog.showMessageBox({
-        type: "error",
-        title: "Free memory",
-        message: "GAIA couldn't free the model's memory.",
-        detail: err.message,
-        buttons: ["OK"],
-        noLink: true,
-      });
+      await failed("GAIA couldn't free the model's memory.", err.message);
       return;
-    } finally {
-      this._freeingMemory = false;
     }
     console.log(`[tray] Unloaded ${model} to free memory`);
     // The backend just confirmed it; the window's next status read agrees.
@@ -467,6 +515,8 @@ class TrayManager {
   _showWindow() {
     if (!this.mainWindow || this.mainWindow.isDestroyed()) {
       this.mainWindow = this._reopenWindow();
+      this._overlayKey = null;
+      this._renderOverlay();
       return true;
     }
     if (this.mainWindow.isMinimized()) {

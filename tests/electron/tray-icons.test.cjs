@@ -127,8 +127,10 @@ describe("taskbar overlay", () => {
     expect(out[inside + 3]).toBe(255);
   });
 
-  test("needs-you shows a mark the unread dot doesn't", () => {
-    expect(drawOverlayIcon("needs-you", 32).equals(drawOverlayIcon("unread", 32))).toBe(false);
+  // Colour alone isn't enough (#5350): compare shapes, i.e. the alpha channel.
+  const alpha = (buf) => Buffer.from(buf.filter((_, i) => i % 4 === 3));
+  test.each([[16], [20], [24], [32]])("at %ipx needs-you has a mark the unread dot doesn't", (size) => {
+    expect(alpha(drawOverlayIcon("needs-you", size)).equals(alpha(drawOverlayIcon("unread", size)))).toBe(false);
   });
 });
 

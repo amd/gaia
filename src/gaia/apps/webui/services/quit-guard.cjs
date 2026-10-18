@@ -57,21 +57,30 @@ function quoteList(names) {
   return `${quoted.slice(0, 2).join(", ")} and ${quoted.length - 2} more`;
 }
 
+/** What is about to happen, in the dialog's words. */
+const QUIT = Object.freeze({ title: "Quit GAIA?", verb: "Quitting", confirm: "Quit anyway" });
+const RESTART_FOR_UPDATE = Object.freeze({
+  title: "Restart to update?",
+  verb: "Restarting",
+  confirm: "Restart anyway",
+});
+
 /**
  * The warning for this work, or null when nothing would be lost.
  *
  * @param {{answers: Array<{title: string|null}>, indexing: Array<{filename: string|null}>}} work
+ * @param {string} [verb] "Quitting" or "Restarting".
  */
-function describeWork(work) {
+function describeWork(work, verb = QUIT.verb) {
   const answers = work.answers.map((a) => a.title || "a chat");
   const files = work.indexing.map((d) => d.filename || "a document");
   if (answers.length === 0 && files.length === 0) return null;
 
   const lines = [];
   if (answers.length === 1) {
-    lines.push(`Quitting stops the answer in ${quoteList(answers)}, and that answer will be lost.`);
+    lines.push(`${verb} stops the answer in ${quoteList(answers)}, and that answer will be lost.`);
   } else if (answers.length > 1) {
-    lines.push(`Quitting stops the answers in ${quoteList(answers)}, and those answers will be lost.`);
+    lines.push(`${verb} stops the answers in ${quoteList(answers)}, and those answers will be lost.`);
   }
   if (files.length > 0) {
     lines.push(`Indexing ${quoteList(files)} stops too; add ${files.length === 1 ? "it" : "them"} again later.`);
@@ -88,29 +97,30 @@ function describeWork(work) {
 }
 
 /**
- * Whether the quit should go ahead. Asks only when work would be lost, or
- * when the check itself failed and the answer is unknown.
+ * Whether the quit (or update restart) should go ahead. Asks only when work
+ * would be lost, or when the check itself failed and the answer is unknown.
  *
- * @param {{getWork: () => Promise<object>, showMessageBox: (opts: object) => Promise<{response: number}>}} deps
+ * @param {{getWork: () => Promise<object>, showMessageBox: (opts: object) => Promise<{response: number}>,
+ *   action?: typeof QUIT}} deps `action` is QUIT (the default) or RESTART_FOR_UPDATE.
  * @returns {Promise<boolean>}
  */
-async function confirmQuit({ getWork, showMessageBox }) {
+async function confirmQuit({ getWork, showMessageBox, action = QUIT }) {
   let warning;
   try {
-    warning = describeWork(await getWork());
+    warning = describeWork(await getWork(), action.verb);
   } catch (err) {
     warning = {
       message: "GAIA couldn't check whether it is still working.",
-      detail: `${err.message}\n\nIf an answer is being written, quitting stops it and the answer will be lost.`,
+      detail: `${err.message}\n\nIf an answer is being written, ${action.verb.toLowerCase()} stops it and the answer will be lost.`,
     };
   }
   if (!warning) return true;
   const { response } = await showMessageBox({
     type: "warning",
-    title: "Quit GAIA?",
+    title: action.title,
     message: warning.message,
     detail: warning.detail,
-    buttons: ["Keep running", "Quit anyway"],
+    buttons: ["Keep running", action.confirm],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
@@ -171,11 +181,51 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
   };
 }
 
+/**
+ * What closing the window does: hide it to the tray (telling the user once),
+ * or, when closing quits, run the quit guard first and keep the window open
+ * until it agrees. An OS sign-out (Windows' session-end) never waits on it.
+ *
+ * @param {Electron.BrowserWindow} win
+ * @param {{app: Electron.App, guard: ReturnType<typeof installQuitGuard>,
+ *   getTray: () => (object|null), isQuitting: () => boolean, platform: string,
+ *   reportNoticeError: (err: Error) => void}} deps
+ */
+function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, reportNoticeError }) {
+  win.on("close", (event) => {
+    if (isQuitting()) return;
+    const tray = getTray();
+    if (tray && tray.minimizeToTray) {
+      event.preventDefault();
+      win.hide();
+      console.log("[main] Window hidden to tray");
+      if (tray.closeNoticeDue) {
+        Promise.resolve()
+          .then(() => tray.showCloseNotice())
+          .then((quit) => {
+            if (quit) app.quit();
+          })
+          .catch(reportNoticeError);
+      }
+      return;
+    }
+    // macOS keeps the app running without a window, so only there does close just close.
+    if (platform !== "darwin" && !guard.confirmed) {
+      event.preventDefault();
+      app.quit();
+    }
+  });
+  win.on("session-end", () => guard.allow());
+}
+
 module.exports = {
+  attachWindowGuards,
   backendJson,
   fetchWorkInProgress,
   describeWork,
   confirmQuit,
   installQuitGuard,
+  QUIT,
+  RESTART_FOR_UPDATE,
   CHECK_TIMEOUT_MS,
 };
