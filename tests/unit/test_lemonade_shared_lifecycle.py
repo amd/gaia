@@ -232,6 +232,7 @@ class TestSlowButAliveEmbeddedServer:
     def test_no_work_at_all_since_the_record_is_stalled(
         self, manager, slow_health, monkeypatch
     ):
+        monkeypatch.setattr(emb, "_RESAMPLE_SECONDS", 0.0)
         _record_own_server(manager, slow_health.port, monkeypatch)
         self._recorded(manager, emb._QUIET_SECONDS + 1, {"111": 5.0})
         self._backends(monkeypatch, {"111": 5.0})
@@ -245,11 +246,37 @@ class TestSlowButAliveEmbeddedServer:
     ):
         """Nothing runs that could release it: lemond downloads and installs
         backends inside a load, which runs with the router lock released."""
+        monkeypatch.setattr(emb, "_RESAMPLE_SECONDS", 0.0)
         _record_own_server(manager, slow_health.port, monkeypatch)
         self._recorded(manager, emb._QUIET_SECONDS + 1, {})
         self._backends(monkeypatch, {})
 
         assert manager.status().unresponsive_pid == os.getpid()
+
+    def test_waking_from_sleep_is_not_stuck(self, manager, slow_health, monkeypatch):
+        """Suspended past the quiet window: the counters froze while the clock
+        ran, and they move again within seconds of waking."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS + 3600, {"111": 5.0})
+        samples = iter([{"111": 5.0}, {"111": 5.4}])
+        monkeypatch.setattr(emb, "backend_activity", lambda pid: next(samples))
+        monkeypatch.setattr(emb, "_RESAMPLE_SECONDS", 0.0)
+
+        status = manager.status()
+        assert status.running and status.busy, "a server that just woke was stuck"
+        recorded = json.loads(manager.busy_since_path.read_text(encoding="utf-8"))
+        assert recorded["activity"] == {"111": 5.4}
+
+    def test_a_resample_that_cannot_be_read_is_no_verdict(
+        self, manager, slow_health, monkeypatch
+    ):
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS + 1, {"111": 5.0})
+        samples = iter([{"111": 5.0}, None])
+        monkeypatch.setattr(emb, "backend_activity", lambda pid: next(samples))
+        monkeypatch.setattr(emb, "_RESAMPLE_SECONDS", 0.0)
+
+        assert manager.status().busy
 
     def test_no_work_within_the_quiet_window_is_still_busy(
         self, manager, slow_health, monkeypatch
@@ -440,6 +467,7 @@ class TestSlowButAliveSupervisedServer:
         """A wedged system Lemonade still answers /live; once its backends have
         been quiet too long GAIA says so rather than attaching to it forever."""
         monkeypatch.setattr(sup, "_listener_pid", lambda port: os.getpid())
+        monkeypatch.setattr(emb, "_RESAMPLE_SECONDS", 0.0)
         monkeypatch.setattr(emb, "backend_activity", lambda pid: {"111": 5.0})
         s = supervisor(slow_health.port)
         assert s.ensure_running(ctx_size=65536).started is False
@@ -448,6 +476,20 @@ class TestSlowButAliveSupervisedServer:
         with pytest.raises(sup.LemonadeStartError) as exc:
             s.ensure_running(ctx_size=65536)
         assert "stuck" in str(exc.value)
+
+    def test_a_system_server_waking_from_sleep_is_not_stuck(
+        self, supervisor, slow_health, monkeypatch
+    ):
+        monkeypatch.setattr(sup, "_listener_pid", lambda port: os.getpid())
+        monkeypatch.setattr(emb, "_RESAMPLE_SECONDS", 0.0)
+        samples = iter([{"111": 5.0}, {"111": 5.0}, {"111": 5.4}])
+        monkeypatch.setattr(emb, "backend_activity", lambda pid: next(samples))
+        s = supervisor(slow_health.port)
+        assert s.ensure_running(ctx_size=65536).started is False
+        (seen,) = s._busy_seen.values()
+        seen["quiet_since"] -= emb._QUIET_SECONDS + 3600
+
+        assert s.ensure_running(ctx_size=65536).started is False
 
     def test_a_recovered_server_starts_fresh_at_its_next_swap(
         self, supervisor, slow_health, monkeypatch

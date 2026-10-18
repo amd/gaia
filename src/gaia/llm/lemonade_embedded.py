@@ -156,6 +156,9 @@ _PORT_ATTEMPTS = 3
 _MIN_RETRY_SECONDS = 5.0
 # A busy server whose backends did nothing for this long is wedged.
 _QUIET_SECONDS = 300
+# Before a stuck verdict, sample again: after sleep or hibernate the counters
+# were frozen while the clock ran, and they move again within seconds of waking.
+_RESAMPLE_SECONDS = 3.0
 _STOP_TIMEOUT = 20.0
 _DOWNLOAD_TIMEOUT = 300
 
@@ -278,6 +281,12 @@ def backend_activity(pid: int) -> Optional[Dict[int, float]]:
             return None
         activity[str(child.pid)] = total
     return activity
+
+
+def resample_backends(pid: int) -> Optional[Dict[str, float]]:
+    """:func:`backend_activity` again after :data:`_RESAMPLE_SECONDS`."""
+    time.sleep(_RESAMPLE_SECONDS)
+    return backend_activity(pid)
 
 
 class QuietWatch:
@@ -1346,6 +1355,10 @@ class EmbeddedLemonade:
                 pid,
             )
         record, wedged = QuietWatch.assess(seen, activity, time.time())
+        if wedged:
+            again = resample_backends(pid)
+            if again != activity:
+                record, wedged = QuietWatch.assess(None, again, time.time())
         if record is None or record is seen:
             return wedged
         self.root.mkdir(parents=True, exist_ok=True)

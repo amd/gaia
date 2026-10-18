@@ -420,7 +420,11 @@ class LemonadeSupervisor:
             LemonadeStartError: Its backends have done no work for too long,
                 so its router is wedged rather than working.
         """
-        from gaia.llm.lemonade_embedded import QuietWatch, backend_activity
+        from gaia.llm.lemonade_embedded import (
+            QuietWatch,
+            backend_activity,
+            resample_backends,
+        )
 
         key = (client.host, client.port)
         if not _busy_lemonade(client):
@@ -438,6 +442,10 @@ class LemonadeSupervisor:
         record, wedged = QuietWatch.assess(
             self._busy_seen.get(key), activity, time.monotonic()
         )
+        if wedged:
+            again = resample_backends(pid)
+            if again != activity:
+                record, wedged = QuietWatch.assess(None, again, time.monotonic())
         if record is not None:
             self._busy_seen[key] = record
         if not wedged:
