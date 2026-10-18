@@ -684,6 +684,28 @@ def current_cancel_check() -> Optional[Callable[[], bool]]:
     return _retry_cancelled.get()
 
 
+def current_retry_listener() -> Optional[Callable[[RetryNotice], None]]:
+    """The listener installed by :func:`model_retry_notices`, if any."""
+    return _retry_listener.get()
+
+
+def sleep_unless_cancelled(
+    sleep: Callable[[float], None],
+    seconds: float,
+    is_cancelled: Optional[Callable[[], bool]],
+) -> bool:
+    """Sleep *seconds* in slices of ``_CANCEL_CHECK_INTERVAL``; False as soon
+    as *is_cancelled* says Stop was pressed."""
+    remaining = seconds
+    while remaining > 0:
+        if is_cancelled is not None and is_cancelled():
+            return False
+        pause = min(_CANCEL_CHECK_INTERVAL, remaining)
+        sleep(pause)
+        remaining -= pause
+    return not (is_cancelled is not None and is_cancelled())
+
+
 class _StallBudget:
     """Stalled attempts of one request. Each already spent a whole idle limit,
     so its time is kept out of the retry deadline (or one stall would rule out
@@ -812,7 +834,13 @@ class _LoadWait:
                             )
                         )
                     last_notice = clock()
-                retrier._sleep(pause)
+                if not sleep_unless_cancelled(retrier._sleep, pause, is_cancelled):
+                    retrier._log.warning(
+                        "%s failed while %s; cancelled during the wait",
+                        what,
+                        loading,
+                    )
+                    return False
                 state.waited += pause
                 loading = probe()
             return True
