@@ -76,6 +76,7 @@ const {
   describeBlockedUrl,
 } = require("./services/link-policy.cjs");
 const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
+const { installWindowKeys } = require("./services/window-keys.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
 // Electron-recommended switch for distro-agnostic Linux behaviour: picks
@@ -575,6 +576,7 @@ function createWindow() {
   // macOS keeps its menu, which carries copy, paste and quit.
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
+    installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
   }
   mainWindow.setMenuBarVisibility(false);
 

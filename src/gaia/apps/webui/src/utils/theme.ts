@@ -31,7 +31,6 @@ const CANVAS: Record<Theme, string> = {
 /** Single writer for the theme, so the frame can never disagree with the app. */
 export function applyTheme(theme: Theme): void {
     document.documentElement.setAttribute('data-theme', theme);
-    syncTitleBar();
     const meta = document.querySelector('meta[name="theme-color"]');
     if (!meta) {
         // Not thrown: the app is already themed by the line above, and blanking
@@ -48,8 +47,8 @@ export function applyTheme(theme: Theme): void {
 
 /**
  * Paint the desktop app's window controls and the browser frame from the live
- * canvas and text tokens, so a palette reaches them too. Call after the theme
- * or palette changes.
+ * canvas and text tokens, so a palette reaches them too. applyPalette calls it,
+ * and every theme change is followed by applyPalette, so the colors go once.
  */
 export function syncTitleBar(): void {
     const root = document.documentElement;

@@ -698,7 +698,8 @@ textarea:focus-visible {
     -webkit-app-region: drag;
 }
 :root[data-titlebar] :is(button, a, input, textarea, select, label, summary,
-    [role="button"], [role="tab"], [role="menu"], [role="dialog"], [contenteditable="true"]) {
+    [role="button"], [role="tab"], [role="menu"], [role="dialog"], [contenteditable="true"],
+    .settings-overlay) {
     -webkit-app-region: no-drag;
 }
 /* Windows and Linux: minimize, maximize and close sit at the top right. */
