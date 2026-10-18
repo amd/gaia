@@ -9383,6 +9383,8 @@ def _print_embedded_status(manager):
     print(f"Installed: {'yes' if status.installed else 'no'} ({manager.dist_dir})")
     if status.running:
         print(f"Running:   yes on {status.base_url} (pid {status.pid})")
+        if status.busy:
+            print("           busy loading or swapping a model; requests wait for it")
     elif status.unresponsive_pid:
         print(
             f"Running:   process {status.unresponsive_pid} is up on port "

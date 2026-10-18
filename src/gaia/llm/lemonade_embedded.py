@@ -143,7 +143,17 @@ def _lemond_config(ctx_size: Optional[int] = None) -> Dict[str, object]:
 
 
 _HEALTH_PATH = "/api/v1/health"
+# lemond's liveness route: no auth, and unlike /health it takes no router lock,
+# so it still answers while a model load or eviction holds that lock.
+_LIVE_PATH = "/live"
+_HEALTH_TIMEOUT = 3.0
 _START_TIMEOUT = 60.0
+# Starts on a port GAIA chose; another program can take it before lemond binds.
+_PORT_ATTEMPTS = 3
+# A retry needs at least this long left to start and answer.
+_MIN_RETRY_SECONDS = 5.0
+# Past lemond's own request budget, a busy router lock is wedged, not working.
+_BUSY_GRACE_SECONDS = 60
 _STOP_TIMEOUT = 20.0
 _DOWNLOAD_TIMEOUT = 300
 
@@ -156,6 +166,14 @@ UNKNOWN = "unknown"
 
 class EmbeddedLemonadeError(RuntimeError):
     """An embedded Lemonade operation failed. Message names the remedy."""
+
+
+class _PortTaken(Exception):
+    """lemond exited because another program holds the port it was given."""
+
+    def __init__(self, port: int):
+        super().__init__(f"port {port} is held by another program")
+        self.port = port
 
 
 class UnsupportedPlatformError(EmbeddedLemonadeError):
@@ -174,14 +192,20 @@ class EmbeddedStatus:
         pid: Process id of the running instance, if any.
         base_url: OpenAI-compatible base URL, if running.
         dist_dir: Where the artifact is unpacked.
-        unresponsive_pid: A daemon process that is alive but not answering.
-            Set only when ``running`` is False; the caller must stop it rather
-            than start a second one.
+        unresponsive_pid: A daemon process that is alive but not answering:
+            neither health nor liveness replies, or it has been busy longer
+            than any request may run. Set only when ``running`` is False; the
+            caller must stop it rather than start a second one.
         owner_pid: The GAIA daemon that owns the instance, if one claimed it.
             None for one ``gaia init`` or ``gaia lemonade embedded start``
             started that no daemon has taken over yet.
         owner_started: That daemon's process start time, so a recycled pid is
             not mistaken for it.
+        busy: The instance is running and answers liveness, but its health
+            endpoint is slow -- a model load or eviction holds the lock that
+            endpoint needs. Requests sent now wait their turn, so callers reuse
+            it rather than restart it. Busy for longer than a request may run,
+            it is reported through ``unresponsive_pid`` instead.
     """
 
     installed: bool
@@ -194,6 +218,40 @@ class EmbeddedStatus:
     unresponsive_pid: Optional[int] = None
     owner_pid: Optional[int] = None
     owner_started: Optional[float] = None
+    busy: bool = False
+
+
+def answers_liveness(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Whether a Lemonade Server on *host*:*port* answers ``/live``.
+
+    A server that answers this but not ``/health`` is up and busy, not stalled.
+
+    Args:
+        host: Host to probe.
+        port: Port to probe.
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        True when the route returns lemond's ``{"status": "ok"}``.
+    """
+    try:
+        with urllib.request.urlopen(
+            f"http://{host}:{port}{_LIVE_PATH}", timeout=timeout
+        ) as response:
+            return json.loads(response.read().decode("utf-8")) == {"status": "ok"}
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _busy_limit() -> int:
+    """How long a server may stay busy before it counts as stalled.
+
+    lemond ends any request after ``global_timeout``, which GAIA sets to this
+    same budget, so an eviction waiting on one cannot outlast it by much.
+    """
+    from gaia.llm.lemonade_client import request_budget_seconds
+
+    return request_budget_seconds() + _BUSY_GRACE_SECONDS
 
 
 def pid_exists(pid: int) -> bool:
@@ -583,6 +641,11 @@ class EmbeddedLemonade:
         return self.root / "last_port.json"
 
     @property
+    def busy_since_path(self) -> Path:
+        """When the recorded instance was first seen busy."""
+        return self.root / "busy_since.json"
+
+    @property
     def log_path(self) -> Path:
         """File the daemon's stdout and stderr are appended to."""
         return self.root / "lemond.log"
@@ -911,10 +974,13 @@ class EmbeddedLemonade:
         """
         self.state_path.unlink(missing_ok=True)
         self.env_path.unlink(missing_ok=True)
+        self.busy_since_path.unlink(missing_ok=True)
 
     # -- lifecycle --------------------------------------------------------
 
-    def _health(self, port: int, api_key: str, timeout: float = 3.0) -> Optional[dict]:
+    def _health(
+        self, port: int, api_key: str, timeout: Optional[float] = None
+    ) -> Optional[dict]:
         """Probe the health endpoint of a candidate instance.
 
         The API key doubles as an identity check: only the daemon GAIA started
@@ -924,11 +990,14 @@ class EmbeddedLemonade:
         Args:
             port: Port to probe.
             api_key: Bearer token the instance was started with.
-            timeout: Per-request timeout in seconds.
+            timeout: Per-request timeout in seconds; defaults to
+                :data:`_HEALTH_TIMEOUT`.
 
         Returns:
             The decoded health payload, or None if it did not answer.
         """
+        if timeout is None:
+            timeout = _HEALTH_TIMEOUT
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}{_HEALTH_PATH}",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -1015,9 +1084,10 @@ class EmbeddedLemonade:
         """Report whether the embedded instance is installed and running.
 
         The state file is only discarded once the recorded process is gone.
-        A daemon that is up but slow to answer -- loading a multi-gigabyte
-        backend, say -- is reported through ``unresponsive_pid`` and keeps its
-        state, so ``stop`` can still reach it.
+        A daemon whose health endpoint is slow but that still answers
+        liveness -- one evicting a model, say -- is running and ``busy``. One
+        that answers neither is reported through ``unresponsive_pid`` and keeps
+        its state, so ``stop`` can still reach it.
 
         Returns:
             The current :class:`EmbeddedStatus`.
@@ -1047,6 +1117,7 @@ class EmbeddedLemonade:
         owner_started = state.get("owner_started")
         owner_started = float(owner_started) if owner_started else None
         if self._health(int(port), api_key) is not None:
+            self.busy_since_path.unlink(missing_ok=True)
             return EmbeddedStatus(
                 installed=installed,
                 running=True,
@@ -1060,6 +1131,39 @@ class EmbeddedLemonade:
             )
 
         identity = self._identify(int(pid), int(port), api_key)
+        if identity == OWN and answers_liveness("127.0.0.1", int(port)):
+            busy_for, limit = self._busy_for(int(pid)), _busy_limit()
+        else:
+            busy_for = limit = None
+        if busy_for is not None and busy_for > limit:
+            log.warning(
+                "Embedded Lemonade (pid %s) has been busy for %.0fs, longer than "
+                "any request may run (%ss); treating it as stalled",
+                pid,
+                busy_for,
+                limit,
+            )
+        elif busy_for is not None:
+            log.info(
+                "Embedded Lemonade (pid %s) is busy: it answers liveness on port "
+                "%s but not health within %.0fs, so a model load or eviction is "
+                "under way; requests will wait for it",
+                pid,
+                port,
+                _HEALTH_TIMEOUT,
+            )
+            return EmbeddedStatus(
+                installed=installed,
+                running=True,
+                version=state.get("version", self.version),
+                port=int(port),
+                pid=int(pid),
+                base_url=self.base_url_for(int(port)),
+                dist_dir=self.dist_dir if installed else None,
+                owner_pid=owner_pid,
+                owner_started=owner_started,
+                busy=True,
+            )
         if identity != OTHER:
             log.warning(
                 "Embedded Lemonade (pid %s) is not answering on port %s%s",
@@ -1085,6 +1189,24 @@ class EmbeddedLemonade:
         log.debug("Recorded instance (pid %s) is gone; clearing state", pid)
         self._clear_state()
         return stopped
+
+    def _busy_for(self, pid: int) -> float:
+        """Seconds the recorded *pid* has been seen busy, starting the clock now
+        if it was not busy before."""
+        now = time.time()
+        try:
+            seen = json.loads(self.busy_since_path.read_text(encoding="utf-8"))
+            if seen.get("pid") == pid:
+                return max(0.0, now - float(seen["since"]))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            log.warning("Resetting unreadable %s (%s)", self.busy_since_path, e)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.busy_since_path.write_text(
+            json.dumps({"pid": pid, "since": now}), encoding="utf-8"
+        )
+        return 0.0
 
     def recorded_health(self) -> Tuple[bool, Optional[dict]]:
         """Ask the recorded instance for its ``/health`` payload.
@@ -1319,16 +1441,21 @@ class EmbeddedLemonade:
                     f"{self.version}. Run `gaia lemonade embedded stop` first, "
                     f"then start again to pick up the new version."
                 )
-            log.info("Embedded Lemonade already running on port %s", existing.port)
+            log.info(
+                "Embedded Lemonade already running on port %s%s",
+                existing.port,
+                " (busy loading or swapping a model)" if existing.busy else "",
+            )
             return existing
 
         if existing.unresponsive_pid:
             raise EmbeddedLemonadeError(
                 f"Embedded Lemonade (pid {existing.unresponsive_pid}) is running "
-                f"but not answering on port {existing.port}. Starting another "
-                f"would leave two servers behind. Run "
-                f"`gaia lemonade embedded stop`, check {self.log_path} for why "
-                f"it stalled, then start again."
+                f"but not answering on port {existing.port}: it is not loading "
+                f"a model, or has been stuck longer than any request may run. "
+                f"Starting another would leave two servers behind. Check "
+                f"{self.log_path} for why it stalled; if it shows no progress, run "
+                f"`gaia lemonade embedded stop`, then start again."
             )
 
         if not self.is_installed():
@@ -1341,7 +1468,74 @@ class EmbeddedLemonade:
             self.install()
 
         self.write_config()
+        chosen = port is None
         port = port or self._choose_port()
+        deadline = time.monotonic() + timeout
+        attempt = 1
+        while True:
+            process, api_key = self._spawn(port, owner_pid, owner_started)
+            try:
+                self._wait_healthy(process, port, api_key, timeout, deadline)
+                break
+            except _PortTaken as taken:
+                self._discard(process)
+                out_of_time = deadline - time.monotonic() < _MIN_RETRY_SECONDS
+                if not chosen or attempt >= _PORT_ATTEMPTS or out_of_time:
+                    raise EmbeddedLemonadeError(
+                        f"Embedded Lemonade could not bind port {port}: another "
+                        f"program took it first (tried {attempt} port"
+                        f"{'s' if attempt > 1 else ''}). Run "
+                        f"`gaia lemonade embedded start --port <free port>`, or "
+                        f"free the port; {self.log_path} has the daemon's own "
+                        f"error."
+                    ) from taken
+                previous, port = port, _free_port()
+                attempt += 1
+                log.warning(
+                    "Port %s was taken by another program before Lemonade could "
+                    "bind it; retrying on port %s (attempt %s of %s)",
+                    previous,
+                    port,
+                    attempt,
+                    _PORT_ATTEMPTS,
+                )
+            except BaseException:
+                self._discard(process)
+                raise
+
+        self._write_state(
+            {
+                "pid": process.pid,
+                "port": port,
+                "api_key": api_key,
+                "version": self.version,
+                "owner_pid": owner_pid,
+                "owner_started": owner_started,
+            }
+        )
+        self._write_env_file(port, api_key)
+        self._record_port(port)
+        log.info("Embedded Lemonade %s ready on port %s", self.version, port)
+        return EmbeddedStatus(
+            installed=True,
+            running=True,
+            version=self.version,
+            port=port,
+            pid=process.pid,
+            base_url=self.base_url_for(port),
+            dist_dir=self.dist_dir,
+            owner_pid=owner_pid,
+            owner_started=owner_started,
+        )
+
+    def _spawn(
+        self, port: int, owner_pid: Optional[int], owner_started: Optional[float]
+    ) -> Tuple[subprocess.Popen, str]:
+        """Launch lemond on *port* and record it before it is healthy.
+
+        Returns:
+            The process and the API key it was started with.
+        """
         api_key = secrets.token_urlsafe(32)
 
         env = child_env({"LEMONADE_API_KEY": api_key, **vulkan_workarounds()})
@@ -1384,60 +1578,54 @@ class EmbeddedLemonade:
                 "owner_started": owner_started,
             }
         )
+        return process, api_key
 
-        healthy = False
-        try:
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise EmbeddedLemonadeError(
-                        f"Embedded Lemonade exited immediately (code "
-                        f"{process.returncode}) on port {port}. Read "
-                        f"{self.log_path} for the daemon's own error, then retry "
-                        f"with `gaia lemonade embedded start --port <other>` if "
-                        f"the port was taken."
-                    )
-                if self._health(port, api_key) is not None:
-                    healthy = True
-                    break
-                time.sleep(0.25)
-            if not healthy:
+    def _wait_healthy(
+        self,
+        process: subprocess.Popen,
+        port: int,
+        api_key: str,
+        timeout: float,
+        deadline: float,
+    ) -> None:
+        """Wait for a freshly spawned lemond to answer health.
+
+        Raises:
+            _PortTaken: It exited because another program holds *port*.
+            EmbeddedLemonadeError: It exited for another reason, or did not
+                answer by *deadline*.
+        """
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                # lemond exits when either loopback address is already bound.
+                try:
+                    taken = not _port_free(port)
+                except OSError as e:
+                    log.warning("Could not check whether port %s is free: %s", port, e)
+                    taken = False
+                if taken:
+                    raise _PortTaken(port)
                 raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade did not answer {_HEALTH_PATH} on port "
-                    f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
-                    f"it was doing, then retry."
+                    f"Embedded Lemonade exited immediately (code "
+                    f"{process.returncode}) on port {port}. Read "
+                    f"{self.log_path} for the daemon's own error, then retry."
                 )
-        except BaseException:
-            self._terminate(process)
-            recorded = self._read_state()
-            if recorded is None or recorded.get("pid") == process.pid:
-                self._clear_state()
-            raise
+            if self._health(port, api_key) is not None:
+                return
+            time.sleep(0.25)
+        raise EmbeddedLemonadeError(
+            f"Embedded Lemonade did not answer {_HEALTH_PATH} on port "
+            f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
+            f"it was doing, then retry."
+        )
 
-        self._write_state(
-            {
-                "pid": process.pid,
-                "port": port,
-                "api_key": api_key,
-                "version": self.version,
-                "owner_pid": owner_pid,
-                "owner_started": owner_started,
-            }
-        )
-        self._write_env_file(port, api_key)
-        self._record_port(port)
-        log.info("Embedded Lemonade %s ready on port %s", self.version, port)
-        return EmbeddedStatus(
-            installed=True,
-            running=True,
-            version=self.version,
-            port=port,
-            pid=process.pid,
-            base_url=self.base_url_for(port),
-            dist_dir=self.dist_dir,
-            owner_pid=owner_pid,
-            owner_started=owner_started,
-        )
+    def _discard(self, process: subprocess.Popen) -> None:
+        """Kill a start that failed and forget it, unless another took over."""
+        if process.poll() is None:
+            self._terminate(process)
+        recorded = self._read_state()
+        if recorded is None or recorded.get("pid") == process.pid:
+            self._clear_state()
 
     def stop(self, timeout: float = _STOP_TIMEOUT) -> bool:
         """Stop the recorded instance and its inference backends.

@@ -298,10 +298,14 @@ class LemonadeSupervisor:
         """Spawn and wait. Caller holds the lock and has re-probed."""
         host, port, target = client.host, client.port, client.base_url
 
-        # Something is listening but not answering /health. It may be a server
-        # that started a second ago, so give it a grace window — but if it never
-        # answers it is a stranger, and evicting it is not ours to do.
+        # Something is listening but not answering /health. A Lemonade that is
+        # loading or evicting a model still answers /live, and requests queue
+        # behind it. Anything else may be a server that started a second ago, so
+        # give it a grace window — but if it never answers it is a stranger, and
+        # evicting it is not ours to do.
         if _port_is_open(host, port):
+            if _busy_lemonade(client):
+                return False
             log.info(
                 "lemonade: %s:%s accepts connections but does not answer health yet; "
                 "waiting up to %.0fs",
@@ -310,6 +314,8 @@ class LemonadeSupervisor:
                 _OCCUPIED_PORT_GRACE_S,
             )
             if _wait_for_health(client, _OCCUPIED_PORT_GRACE_S):
+                return False
+            if _busy_lemonade(client):
                 return False
             raise self._occupied_port_error(host, port)
 
@@ -490,6 +496,42 @@ def _probe(client) -> bool:
     except Exception as e:  # noqa: BLE001 — any failure means "not answering"
         log.debug("lemonade: health probe failed at %s: %s", client.base_url, e)
         return False
+
+
+def _busy_lemonade(client) -> bool:
+    """Whether *client*'s server is a Lemonade answering liveness but not health.
+
+    ``/live`` alone is a common reply, so lemond's lock-free ``/docs`` index
+    must answer too before a slow port counts as a busy Lemonade.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    from gaia.llm.lemonade_client import lemonade_auth_headers
+    from gaia.llm.lemonade_embedded import answers_liveness
+
+    host, port = client.host, client.port
+    if not answers_liveness(host, port):
+        return False
+    request = urllib.request.Request(
+        f"{client.base_url}/docs",
+        headers=lemonade_auth_headers(getattr(client, "api_key", None)),
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.0) as response:
+            index = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    if not (isinstance(index, dict) and index.get("format") == "text/markdown"):
+        return False
+    log.info(
+        "lemonade: %s:%s answers liveness but not health, so a model load or "
+        "eviction is under way; using it, and requests will wait for it",
+        host,
+        port,
+    )
+    return True
 
 
 def _port_is_open(host: str, port: int, timeout: float = 0.5) -> bool:
