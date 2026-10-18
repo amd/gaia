@@ -43,6 +43,11 @@ def _transport(script, timeout=30):
     return t
 
 
+def _written(path):
+    """Whether a stub has finished writing *path* (it can exist while empty)."""
+    return path.exists() and path.read_text().strip() != ""
+
+
 def _call_with_watchdog(fn, limit=10.0):
     """Run *fn* in a thread so a regression fails the test instead of hanging it."""
     box = {}
@@ -278,6 +283,9 @@ def test_the_error_label_never_carries_an_argument():
         ("uvx", ["--api-key", "XYZ", "my-server"]),
         ("uvx my-server --api-key=XYZ", None),
         ("python", ["-c", "TOKEN='XYZ'"]),
+        ("API_KEY=XYZ uvx srv", None),
+        ("uvx --api-key XYZ", ["srv"]),
+        ("'API KEY=XYZ' uvx srv", None),
     ):
         assert "XYZ" not in StdioTransport(command, args=args).label
 
@@ -344,7 +352,7 @@ def test_disconnect_stops_the_servers_children(tmp_path):
             """))
     transport = _transport(script)
     deadline = time.monotonic() + 10
-    while not child_pid_file.exists() and time.monotonic() < deadline:
+    while not _written(child_pid_file) and time.monotonic() < deadline:
         time.sleep(0.05)
     child_pid = int(child_pid_file.read_text())
     assert psutil.pid_exists(child_pid)
@@ -378,6 +386,9 @@ def test_a_server_that_misses_the_connect_deadline_is_stopped(tmp_path, monkeypa
     manager.load_from_config()
 
     assert "timed out" in manager._failed["stuck"]
+    deadline = time.monotonic() + 10
+    while not _written(pid_file) and time.monotonic() < deadline:
+        time.sleep(0.05)
     pid = int(pid_file.read_text())
     deadline = time.monotonic() + 10
     while psutil.pid_exists(pid) and time.monotonic() < deadline:
@@ -417,7 +428,7 @@ def test_children_of_an_exited_server_are_still_stopped(tmp_path):
             """))
     transport = _transport(script)
     deadline = time.monotonic() + 10
-    while not child_pid_file.exists() and time.monotonic() < deadline:
+    while not _written(child_pid_file) and time.monotonic() < deadline:
         time.sleep(0.05)
     child_pid = int(child_pid_file.read_text())
     # Children are recorded while the launcher runs; a real npx outlives this.
@@ -634,3 +645,11 @@ def test_a_launch_that_cannot_start_its_readers_stops_the_server(tmp_path, monke
     while psutil.pid_exists(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not psutil.pid_exists(pid), "a failed launch left the server running"
+
+
+def test_the_label_keeps_a_quoted_program_path_with_spaces():
+    t = StdioTransport('"C:/Program Files/nodejs/node.exe" server.js')
+    assert t.label == "node.exe"
+    assert StdioTransport("C:/Program Files/nodejs/node.exe", args=["s.js"]).label == (
+        "node.exe"
+    )

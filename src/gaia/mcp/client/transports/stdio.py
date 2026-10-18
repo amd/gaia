@@ -119,6 +119,20 @@ def _split_command_string(command: str) -> List[str]:
     return [os.path.expandvars(os.path.expanduser(token)) for token in tokens]
 
 
+def _program_token(command: str) -> str:
+    """The first token of a command line, tokenized as ``_split_command_string`` does.
+
+    No validation or expansion: this only names the program in an error.
+    """
+    raw = command.replace("\\", "\\\\") if os.name == "nt" else command
+    lexer = shlex.shlex(raw, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        return next(iter(lexer), "")
+    except ValueError:
+        return ""
+
+
 class StdioTransport(MCPTransport):
     """Stdio-based transport using subprocess for MCP servers.
 
@@ -173,12 +187,17 @@ class StdioTransport(MCPTransport):
 
     @property
     def label(self) -> str:
-        """The server's configured name and executable, for errors."""
-        if self.args:
-            executable = self.command
-        else:
-            executable = self.command.split()[0] if self.command.split() else "?"
-        executable = os.path.basename(executable.rstrip("/\\")) or executable
+        """The server's configured name and executable, for errors.
+
+        Only the program itself: with ``args`` set, ``command`` is the program
+        whole; without, the first token of the command line, split the way
+        the launch splits it. Anything that isn't a plain program name shows
+        as ``?``.
+        """
+        program = self.command if self.args else _program_token(self.command)
+        executable = os.path.basename(program.rstrip("/\\")) or program
+        if not executable or "=" in executable or any(c.isspace() for c in executable):
+            executable = "?"
         return f"{self.name} ({executable})" if self.name else executable
 
     def _start_readers(self) -> None:
@@ -345,6 +364,7 @@ class StdioTransport(MCPTransport):
         proc, self._process = self._process, None
         if proc is None or proc.poll() is not None:
             return
+        self._stop_children()
         try:
             proc.kill()
             proc.wait(timeout=5)
