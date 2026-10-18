@@ -842,6 +842,7 @@ class _LoadWait:
                     )
                     return False
                 state.waited += pause
+                # The probe can take a second; Stop is checked again at the top.
                 loading = probe()
             return True
         finally:

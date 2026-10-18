@@ -17,7 +17,7 @@ import pytest
 
 from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_manager import LemonadeManager
-from gaia.llm.retry import model_retry_notices
+from gaia.llm.retry import StreamCancelledError, model_retry_notices
 
 # Local loopback fakes only.
 pytestmark = pytest.mark.allow_network
@@ -339,3 +339,35 @@ def test_auto_start_does_not_launch_over_a_busy_server(isolated_home, stalled):
             host="127.0.0.1", port=stalled.port, auto_start=True, verbose=False
         )
     launch.assert_not_called()
+
+
+# ── Stop against a real stalled socket ───────────────────────────────────
+
+
+def _stop_after(seconds):
+    deadline = time.monotonic() + seconds
+    return lambda: time.monotonic() >= deadline
+
+
+def test_stop_reaches_the_busy_wait_within_about_two_seconds(isolated_home, stalled):
+    """The probes themselves stall here, so the bound includes one probe."""
+    client = lc.LemonadeClient(base_url=stalled.base_url, verbose=False)
+    started = time.monotonic()
+    with model_retry_notices(lambda _n: None, is_cancelled=_stop_after(0.3)):
+        with pytest.raises(StreamCancelledError):
+            client._wait_while_busy(MODEL)
+    assert time.monotonic() - started < 2.5
+
+
+def test_stop_reaches_the_load_wait_within_about_two_seconds(isolated_home, stalled):
+    client = lc.LemonadeClient(base_url=stalled.base_url, verbose=False)
+    retrier = client._model_retrier(MODEL)
+
+    def call():
+        raise lc.requests.exceptions.ConnectionError("reset")
+
+    started = time.monotonic()
+    with model_retry_notices(lambda _n: None, is_cancelled=_stop_after(0.3)):
+        with pytest.raises(lc.requests.exceptions.ConnectionError):
+            retrier.call(call)
+    assert time.monotonic() - started < 2.5
