@@ -38,6 +38,9 @@ class ReasoningEffortToolsMixin:
         return getattr(self, "model_id", None) or resolve_default_chat_model()
 
     def model_grades_reasoning(self) -> bool:
+        # Claude ignores llama.cpp template fields.
+        if getattr(self, "_use_claude", False):
+            return False
         return requested_reasoning_effort(self._effort_model()) is not None
 
     def register_reasoning_effort_tools(self) -> None:
@@ -48,12 +51,14 @@ class ReasoningEffortToolsMixin:
 
         @tool(display_label="Setting reasoning effort")
         def set_reasoning_effort(level: str, reason: str = "") -> Dict[str, Any]:
-            """Set how much you reason before each next step: low, medium or high.
+            """Set how much you reason for the rest of this request: low, medium or high.
 
-            Raise it before a hard step: a multi-step plan, debugging, a
-            calculation, a subtle comparison. Lower it for routine steps:
-            reading or listing files, simple lookups, short replies. Lasts
-            until you change it or the user sends a new message.
+            Set it once, when you know what the request needs: high for a
+            multi-step plan, debugging, a calculation or a subtle comparison;
+            low when the rest is routine (reading or listing files, lookups,
+            a short reply). Each change makes the model re-read the whole
+            conversation, so do not switch it step by step. Lasts until the
+            user sends a new message.
 
             Args:
                 level: "low", "medium" or "high".
@@ -62,6 +67,15 @@ class ReasoningEffortToolsMixin:
             return self._set_reasoning_effort(level, reason)
 
     def _set_reasoning_effort(self, level: str, reason: str) -> Dict[str, Any]:
+        if not self.model_grades_reasoning():
+            # The session switched to a model with no effort setting.
+            return {
+                "status": "error",
+                "error": (
+                    f"{self._effort_model()} has no reasoning-effort setting, so "
+                    "nothing changed. Continue without it."
+                ),
+            }
         chosen = (level or "").strip().lower()
         if chosen not in REASONING_EFFORTS:
             return {
@@ -90,6 +104,6 @@ class ReasoningEffortToolsMixin:
 
     def reasoning_effort_kwargs(self) -> Dict[str, Any]:
         """Request fields carrying the level the agent chose, if it chose one."""
-        if not self._reasoning_effort:
+        if not self._reasoning_effort or not self.model_grades_reasoning():
             return {}
         return {"chat_template_kwargs": {"reasoning_effort": self._reasoning_effort}}

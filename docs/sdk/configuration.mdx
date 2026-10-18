@@ -99,8 +99,9 @@ the machine out of memory.
 
 Set `GAIA_REASONING_EFFORT` to `low`, `medium` or `high` to choose where a model that
 grades its reasoning (gpt-oss) starts each request. Unset, it starts at `medium`. The
-agent can still change it per step with `set_reasoning_effort`, and a request that
-passes `chat_template_kwargs.reasoning_effort` itself wins over both. Any other value
+agent can still change it for the rest of a request with `set_reasoning_effort`, and a
+request that passes `chat_template_kwargs.reasoning_effort` itself wins over both: chat
+titles, memory upkeep, document summaries and `gaia llm` pass `low`. Any other value
 fails the request with an error naming the variable. Models with an on/off thinking
 switch ignore it.
 

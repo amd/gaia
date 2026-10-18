@@ -6744,6 +6744,8 @@ Do NOT wrap conversational replies in JSON.
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools
         no_calls = {"tool_choice": "none"} if tools else {}
+        # The same effort as the loop: a change rewrites the prompt's start.
+        no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(

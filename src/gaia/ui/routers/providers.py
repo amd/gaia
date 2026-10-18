@@ -276,9 +276,12 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
                 "evidence": ranked[1].evidence if ranked else None,
             }
         )
-    # A custom model Lemonade has not registered yet is not in its list.
+    # A custom model Lemonade has not registered yet is not in its list; a
+    # missing built-in is one this Lemonade cannot pull, so it stays out.
     for model_id in offered:
-        if not any(_model_ids_match(model_id, m["id"]) for m in out):
+        if model_id.startswith("user.") and not any(
+            _model_ids_match(model_id, m["id"]) for m in out
+        ):
             out.append(
                 {
                     "id": model_id,

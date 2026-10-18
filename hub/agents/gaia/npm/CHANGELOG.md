@@ -6,6 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **gpt-oss 20B and 120B are supported models.** On a model that grades its
+  reasoning, the agent gets `set_reasoning_effort` (low, medium or high) to
+  choose how hard it thinks for the rest of the request; every new message
+  starts again at medium. It is not registered on other models, so the
+  agent's 95 tools on Gemma and Qwen are unchanged.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

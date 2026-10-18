@@ -156,3 +156,35 @@ def test_agent_without_the_mixin_sends_nothing_extra():
             silent_mode=True, skip_lemonade=True, model_id=DEFAULT_MODEL_NAME
         )
     assert plain._reasoning_request_kwargs() == {}
+
+
+def test_after_a_switch_to_another_model_the_tool_refuses_and_sends_nothing(
+    clean_registry,
+):
+    agent = _build(GPT_OSS_20B_MODEL_NAME)
+    agent._set_reasoning_effort("high", "")
+    agent.model_id = DEFAULT_MODEL_NAME  # what a mid-session model switch does
+    out = agent._set_reasoning_effort("low", "")
+    assert out["status"] == "error" and DEFAULT_MODEL_NAME in out["error"]
+    assert agent.reasoning_effort_kwargs() == {}
+
+
+def test_not_offered_when_the_agent_runs_on_claude(clean_registry):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _EffortAgent(
+            silent_mode=True,
+            skip_lemonade=True,
+            model_id=GPT_OSS_20B_MODEL_NAME,
+            use_claude=True,
+        )
+    assert "set_reasoning_effort" not in _TOOL_REGISTRY
+
+
+def test_final_answer_call_keeps_the_chosen_level(clean_registry):
+    """A level change rewrites the prompt's start; the wrap-up must not flip it back."""
+    agent = _build(GPT_OSS_20B_MODEL_NAME)
+    chat = _script(agent, "Done.")
+    agent._set_reasoning_effort("high", "")
+    msgs = [{"role": "user", "content": "q"}]
+    agent._closing_answer(msgs, msgs, "Answer now.", 1)
+    assert _efforts(chat, streaming=False) == ["high"]

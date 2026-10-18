@@ -659,6 +659,13 @@ def test_registered_gpt_oss_is_listed_once_under_lemonades_id(client, lemonade):
     assert [i for i in ids if "oss-20b" in i] == ["ggml-gpt-oss-20b-MXFP4-GGUF"]
 
 
+def test_a_builtin_this_lemonade_does_not_list_is_not_offered(client, lemonade):
+    lemonade.models = []
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert ids == ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]
+
+
 def test_downloaded_gpt_oss_lists_even_when_memory_is_unknown(client, lemonade):
     lemonade.models = [{**_GPT_OSS[0], "downloaded": True}]
     lemonade.answers[("GET", "system-info")] = (200, {"devices": {}})

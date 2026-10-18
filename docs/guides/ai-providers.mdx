@@ -116,11 +116,13 @@ grows with memory exactly as Qwen3.6's does, from 65,536 up to 131,072.
 
 **Reasoning effort.** gpt-oss always reasons; it takes a low, medium or high
 effort instead of an on/off switch. GAIA starts every request at medium, and
-the agent raises or lowers it per step with its `set_reasoning_effort` tool:
-high before a hard plan or a calculation, low for reading files or a short
-reply. The next message starts at medium again. Set `GAIA_REASONING_EFFORT` to
-`low`, `medium` or `high` to change that starting point. Short background
-calls (titles, memory upkeep) always use low.
+the agent sets it for the rest of a request with its `set_reasoning_effort`
+tool: high for a hard plan or a calculation, low when the rest is routine. It
+sets it once rather than per step, because each change makes the model re-read
+the whole conversation. The next message starts at medium again. Set
+`GAIA_REASONING_EFFORT` to `low`, `medium` or `high` to change that starting
+point. Calls that need only a short, structured reply always use low: chat
+titles, memory upkeep, document summaries and `gaia llm`.
 
 ### Context length follows memory
 
