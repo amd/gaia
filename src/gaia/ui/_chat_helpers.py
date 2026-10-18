@@ -3544,13 +3544,18 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-def _queued_status_event(position: int, ordinal) -> dict:
+# A waiting turn re-sends its place this often, so clients never see a silent stream.
+_QUEUE_HEARTBEAT_SECONDS = 10.0
+
+
+def _queued_status_event(position: int, ordinal, waited_s: int = 0) -> dict:
     """The status a turn shows while another chat has the model (#5226)."""
     return {
         "type": "status",
         "status": "working",
         "phase": "queued",
         "queue_position": position,
+        "queue_waited_s": waited_s,
         "message": f"Waiting for the GPU — {ordinal(position)} in line",
     }
 
@@ -3621,16 +3626,29 @@ async def _run_chat_lifecycle(
         outcome.observe(data)
         run.emit(data)
 
+    queued_at = _time.monotonic()
+
     def _announce_place(position: int) -> None:
-        _emit(_sse(_queued_status_event(position, ordinal)))
+        waited = int(_time.monotonic() - queued_at)
+        _emit(_sse(_queued_status_event(position, ordinal, waited)))
+
+    async def _heartbeat() -> None:
+        while True:
+            await asyncio.sleep(_QUEUE_HEARTBEAT_SECONDS)
+            position = turn_queue.position(session_id)
+            if position:
+                _announce_place(position)
 
     try:
+        heartbeat = asyncio.create_task(_heartbeat())
         try:
             await turn_queue.acquire(session_id, on_position=_announce_place)
         except TurnCancelled:
             msg_id = db.add_message(session_id, "assistant", "Cancelled.")
             _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
             return
+        finally:
+            heartbeat.cancel()
         try:
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
