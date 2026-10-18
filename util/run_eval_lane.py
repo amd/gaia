@@ -12,7 +12,9 @@ aimed at real GitHub), the judge's credentials inherited by the agent under
 test, and agent state left in the real ``~/.gaia`` by an earlier run. This
 script takes the lane environment from ``util/eval_lane_matrix.py`` and repeats
 the workflow's setup step for step, including a fresh GAIA home per category
-(``util/eval_gaia_home.py``) under ``--out``, deleted when the category ends.
+(``util/eval_gaia_home.py``) under ``--out``, deleted when the category ends
+clean. A category with any result other than PASS keeps its home (chat
+history, agent steps, memory) under ``--out/kept-homes/<category>``.
 
 Categories run one at a time, each against its own backend (CLAUDE.md: one eval
 per Lemonade). Logs and scorecard paths land in ``--out``.
@@ -255,6 +257,7 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
         stdout=open(log_path, "w", encoding="utf-8"),
         stderr=subprocess.STDOUT,
     )
+    code = None
     try:
         deadline = time.monotonic() + 600
         while not _get(f"{p['backend']}/api/health"):
@@ -312,7 +315,48 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
             check=False,
         )
         _stop_tree(backend)
-        shutil.rmtree(cat_home, ignore_errors=True)
+        problem = _category_problem(code, args.out / f"{category}.log")
+        if problem:
+            kept = _keep_home(cat_home, args.out / "kept-homes" / category)
+            print(f"    {problem}; its GAIA home is kept at {kept}", flush=True)
+        else:
+            shutil.rmtree(cat_home, ignore_errors=True)
+
+
+def _category_problem(code, log_path: Path) -> str | None:
+    """Why the category's GAIA home is worth keeping, or None when it passed."""
+    if code is None:
+        return "the eval did not run to completion"
+    if code != 0:
+        return f"the eval exited {code}"
+    log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    outputs = [
+        line.split("Output:", 1)[1].strip()
+        for line in log.splitlines()
+        if line.startswith("Output:")
+    ]
+    if not outputs:
+        return f"{log_path} names no results directory"
+    scorecard = Path(outputs[-1]) / "scorecard.json"
+    if not scorecard.is_file():
+        return f"{scorecard} was not written"
+    statuses = [
+        s.get("status")
+        for s in json.loads(scorecard.read_text(encoding="utf-8")).get("scenarios", [])
+    ]
+    not_passed = [s for s in statuses if s != "PASS" and not str(s).startswith("SKIP")]
+    if not_passed:
+        return f"{len(not_passed)} scenario(s) did not pass"
+    return None
+
+
+def _keep_home(cat_home: Path, dest: Path) -> Path:
+    """Move *cat_home* out of the per-run tree, which is wiped on exit."""
+    if dest.exists():
+        dest = dest.with_name(f"{dest.name}-{time.strftime('%Y%m%d-%H%M%S')}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(cat_home), str(dest))
+    return dest
 
 
 def _require_empty_memory(backend: str, memory_db: Path, category: str) -> None:
