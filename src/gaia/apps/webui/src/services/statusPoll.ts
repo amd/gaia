@@ -63,34 +63,35 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
     let timer: ReturnType<typeof setTimeout> | null = null;
     // A stopped poll's probe still in flight must not reschedule.
     let generation = 0;
-    let current: AbortController | null = null;
-    let cancelled = false;
+    let current: { controller: AbortController; cancelled: boolean } | null = null;
 
     /** The outcome, or null when stop() cancelled the request. */
     const probe = async (): Promise<StatusOutcome | null> => {
-        const controller = new AbortController();
-        current = controller;
-        cancelled = false;
+        const request = { controller: new AbortController(), cancelled: false };
+        current = request;
+        const { controller } = request;
         const limit = setTimeout(() => controller.abort(), STATUS_REQUEST_TIMEOUT_MS);
         try {
             return { kind: 'ok', status: await api.getSystemStatus(controller.signal) };
         } catch (error) {
-            if (cancelled) return null;
+            if (request.cancelled) return null;
             if (controller.signal.aborted) return { kind: 'slow' };
             const httpStatus = (error as { httpStatus?: unknown })?.httpStatus;
-            if ((error as Error)?.name === 'ApiError' && typeof httpStatus === 'number') {
+            // The status handler never sends 502/504; a proxy or tunnel does when nothing answers behind it.
+            if ((error as Error)?.name === 'ApiError' && typeof httpStatus === 'number'
+                && httpStatus !== 502 && httpStatus !== 504) {
                 return { kind: 'error', httpStatus, message: (error as Error).message };
             }
             return { kind: 'unreachable', error };
         } finally {
             clearTimeout(limit);
-            if (current === controller) current = null;
+            if (current === request) current = null;
         }
     };
 
     const check = (): Promise<void> => {
         if (inFlight) return inFlight;
-        inFlight = probe()
+        const pending: Promise<void> = probe()
             .then((outcome) => {
                 if (outcome === null) return;
                 slowStreak = isSlow(outcome) ? slowStreak + 1 : 0;
@@ -101,8 +102,9 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
                     log.system.error('Could not apply the system status; the next poll will try again', err);
                 }
             })
-            .finally(() => { inFlight = null; });
-        return inFlight;
+            .finally(() => { if (inFlight === pending) inFlight = null; });
+        inFlight = pending;
+        return pending;
     };
 
     const nextDelay = () => {
@@ -127,8 +129,11 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
                 if (timer) clearTimeout(timer);
                 timer = null;
                 if (current) {
-                    cancelled = true;
-                    current.abort();
+                    // Detached, so a restart (React StrictMode) sends a fresh request at once.
+                    current.cancelled = true;
+                    current.controller.abort();
+                    current = null;
+                    inFlight = null;
                 }
             };
         },

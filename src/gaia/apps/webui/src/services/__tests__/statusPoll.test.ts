@@ -36,11 +36,49 @@ describe('createStatusPoller', () => {
         expect(mocked.getSystemStatus).toHaveBeenCalledTimes(1);
     });
 
-    it('tells a backend that answers with an error apart from one that cannot be reached (review repro)', async () => {
-        mocked.getSystemStatus.mockRejectedValue(new api.ApiError('HTTP 504', 504, 'Gateway Timeout', null));
+    it.each([500, 503])('tells a backend that answers HTTP %i apart from one that cannot be reached', async (code) => {
+        mocked.getSystemStatus.mockRejectedValue(new api.ApiError(`HTTP ${code}`, code, 'boom', null));
         const outcomes: unknown[] = [];
         await createStatusPoller((o) => outcomes.push(o)).check();
-        expect(outcomes[0]).toMatchObject({ kind: 'error', httpStatus: 504 });
+        expect(outcomes[0]).toMatchObject({ kind: 'error', httpStatus: code });
+    });
+
+    // The status handler never raises these; a dev proxy, reverse proxy or tunnel
+    // sends them when nothing answers behind it.
+    it.each([502, 504])('reads a gateway HTTP %i as an unreachable backend', async (code) => {
+        mocked.getSystemStatus.mockRejectedValue(new api.ApiError(`HTTP ${code}`, code, 'Bad Gateway', null));
+        const outcomes: unknown[] = [];
+        await createStatusPoller((o) => outcomes.push(o)).check();
+        expect(outcomes[0]).toMatchObject({ kind: 'unreachable' });
+    });
+
+    it('shares the request in flight when Check again is pressed during a slow probe', async () => {
+        let answer!: (v: never) => void;
+        mocked.getSystemStatus.mockImplementation(() => new Promise((r) => { answer = r as never; }));
+        const onOutcome = vi.fn();
+        const poller = createStatusPoller(onOutcome);
+        const first = poller.check();
+        const second = poller.check();
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(1);
+        answer({ lemonade_running: true } as never);
+        await Promise.all([first, second]);
+        expect(onOutcome).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts a fresh request when restarted right after a stop, as StrictMode does', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const signals: AbortSignal[] = [];
+        mocked.getSystemStatus.mockImplementation((s?: AbortSignal) => {
+            if (s) signals.push(s);
+            return new Promise(() => {});
+        });
+        const poller = createStatusPoller(vi.fn());
+        const stop = poller.start();
+        stop();
+        poller.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(2);
+        expect(signals[1].aborted).toBe(false);
     });
 
     it('keeps polling when handling an outcome throws, and reports it', async () => {
