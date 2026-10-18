@@ -492,3 +492,119 @@ def test_performance_before_the_first_answer_reports_the_picked_cloud_model(
     result = asyncio.run(chat.get_chat_performance(sid, db))
 
     assert result["now"] == {"model": "fireworks.deepseek-v4p1-flash"}
+
+
+# ── Where each speed comes from: the server's timings, else GAIA's own clock ─
+
+
+def _step(step, perf, **timing):
+    entry = _stats(step, perf, tools=timing.pop("tools", ()))
+    entry["content"].update(timing)
+    return entry
+
+
+# A cloud turn as the agent records it: usage with no timings, client clock per step.
+CLOUD_RESULT = {
+    "timing_summary": {"llm_seconds": 7.35, "tool_seconds": 0.005, "llm_calls": 2},
+    "conversation": [
+        _step(
+            1,
+            {"prompt_tokens": 11038, "completion_tokens": 67, "cached_tokens": 0},
+            llm_calls=1,
+            ttft_seconds=4.66,
+            output_tok_per_s=206.36,
+            tools=[{"name": "browse_directory", "seconds": 0.005}],
+        ),
+        _step(
+            2,
+            {"prompt_tokens": 12568, "completion_tokens": 176, "cached_tokens": 1920},
+            llm_calls=1,
+            ttft_seconds=1.29,
+            output_tok_per_s=162.97,
+        ),
+    ],
+}
+CLOUD = "fireworks.deepseek-v4p1-flash"
+
+
+def test_a_cloud_turn_uses_gaias_own_clock_and_says_so():
+    perf = turn_insights.summarize_turn(CLOUD_RESULT, wall_seconds=8.1, model_id=CLOUD)
+    assert perf["first_token_seconds"] == 4.66
+    assert perf["first_token_source"] == "client"
+    assert perf["prefill_source"] == "client"
+    new = 11038 + (12568 - 1920)
+    assert perf["prefill_tokens_per_second"] == round(new / (4.66 + 1.29), 1)
+    assert perf["generation_source"] == "client"
+    assert perf["generation_tokens_per_second"] == round(
+        243 / (67 / 206.36 + 176 / 162.97), 1
+    )
+    assert perf["tokens_cached"] == 1920
+    assert perf["unknown"] == {}
+
+
+def test_a_local_turn_prefers_the_servers_timings():
+    result = {
+        **LOCAL_RESULT,
+        "conversation": [
+            _step(
+                1,
+                LOCAL_RESULT["conversation"][1]["content"]["performance_stats"],
+                llm_calls=1,
+                ttft_seconds=0.9,
+                output_tok_per_s=30.0,
+            ),
+        ],
+    }
+    perf = turn_insights.summarize_turn(result, wall_seconds=5.0, model_id="M-GGUF")
+    assert perf["first_token_seconds"] == 0.5
+    assert perf["first_token_source"] == "server"
+    assert perf["generation_source"] == "server"
+    assert perf["generation_tokens_per_second"] == 40.0
+
+
+def test_unknown_values_carry_the_reason():
+    result = {
+        "timing_summary": {"llm_seconds": 2.0, "tool_seconds": 0.0},
+        "conversation": [_step(1, {"completion_tokens": 50}, llm_calls=1)],
+    }
+    perf = turn_insights.summarize_turn(result, wall_seconds=3.0, model_id=CLOUD)
+    assert perf["first_token_seconds"] is None
+    assert "streamed" in perf["unknown"]["first_token_seconds"]
+    assert "new" in perf["unknown"]["prefill_tokens_per_second"]
+    assert perf["unknown"]["generation_tokens_per_second"]
+    assert perf["unknown"]["tokens_cached"]
+
+
+def test_tool_time_outside_a_recorded_step_is_shown_not_dropped():
+    result = {
+        **CLOUD_RESULT,
+        "timing_summary": {**CLOUD_RESULT["timing_summary"], "tool_seconds": 3.405},
+    }
+    perf = turn_insights.summarize_turn(result, wall_seconds=12.0, model_id=CLOUD)
+    assert perf["tool_seconds_total"] == 3.405
+    assert perf["tools"][-1] == {"name": None, "seconds": 3.4}
+    assert sum(t["seconds"] for t in perf["tools"]) == pytest.approx(3.405)
+    assert perf["time"]["tool_seconds"] == 3.405
+
+
+def test_a_cloud_models_own_window_comes_from_the_catalog(window, monkeypatch):
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(
+        lemonade_client, "cloud_model_info", lambda m: {"ctx_size": 1048576}
+    )
+    usage = turn_insights.measure_context(_agent(), TURNS, CLOUD)
+    assert usage["model_window"] == 1048576
+    assert usage["window"] == 32768
+    assert usage["tokenizer"]["exact"] is False
+
+
+def test_context_says_why_when_an_answered_chat_has_no_agent_in_memory(db):
+    sid = db.create_session(model="Gemma-4-E4B-it-GGUF")["id"]
+    db.add_message(sid, "user", "hi")
+    db.add_message(sid, "assistant", "hello")
+
+    result = asyncio.run(chat.get_context_usage(sid, db))
+
+    assert result["available"] is False
+    assert "next message" in result["reason"]

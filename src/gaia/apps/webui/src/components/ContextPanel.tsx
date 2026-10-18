@@ -16,7 +16,11 @@ const exact = (n: number) => n.toLocaleString('en-US');
 /** "1.2K", with the exact count on hover. */
 function Tokens({ n }: { n: number | null | undefined }) {
     if (n == null) return <span className="cp-unknown">{UNKNOWN}</span>;
-    const short = n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    const short = n < 1000
+        ? String(n)
+        : n < 1_000_000
+            ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`
+            : `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
     return <span title={`${exact(n)} tokens`}>{short}</span>;
 }
 
@@ -104,16 +108,31 @@ function TimeSplit({ t }: { t: TurnPerformance['time'] }) {
     );
 }
 
+/** "unknown", with the reason on hover when one is known. */
+function Unknown({ why }: { why?: string }) {
+    return <span className="cp-unknown" title={why}>{UNKNOWN}</span>;
+}
+
+const SOURCE_HINT = {
+    server: 'Reported by the model server',
+    client: 'Measured by GAIA on the stream, network included',
+} as const;
+
+function sourceHint(source: 'server' | 'client' | null | undefined): string | undefined {
+    return source ? SOURCE_HINT[source] : undefined;
+}
+
 function TurnStats({ turn }: { turn: TurnPerformance }) {
     const hit = hitRate(turn.tokens_cached, turn.tokens_in);
-    const toolSeconds = turn.tools.reduce((a, t) => a + (t.seconds ?? 0), 0);
+    const why = turn.unknown ?? {};
+    const toolList = turn.tools.map((t) => `${t.name ?? 'tool work outside a step'}: ${t.seconds ?? '?'} s`).join('\n');
     return (
         <>
             <TimeSplit t={turn.time} />
             <dl className="cp-rows">
-                <Row label="First word">
+                <Row label="First word" hint={sourceHint(turn.first_token_source)}>
                     {turn.first_token_seconds == null
-                        ? <span className="cp-unknown">{UNKNOWN}</span>
+                        ? <Unknown why={why.first_token_seconds} />
                         : <>in <Seconds s={turn.first_token_seconds} /></>}
                 </Row>
                 <Row label="Reading the prompt" hint="Prefill: new prompt tokens over time to first token">
@@ -121,22 +140,33 @@ function TurnStats({ turn }: { turn: TurnPerformance }) {
                         ? <span title="Too few new tokens to give a reading speed; the rest came from the cache">
                             only {turn.tokens_new} new tokens
                         </span>
-                        : <Rate r={turn.prefill_tokens_per_second} />}
+                        : turn.prefill_tokens_per_second == null
+                            ? <Unknown why={why.prefill_tokens_per_second} />
+                            : <>
+                                <Rate r={turn.prefill_tokens_per_second} />
+                                {turn.prefill_source === 'client' && (
+                                    <span className="cp-chip" title="Measured by GAIA from the first word, so it includes network and queue time">approx.</span>
+                                )}
+                            </>}
                 </Row>
-                <Row label="Writing the answer" hint="Generation speed, weighted by tokens">
-                    <Rate r={turn.generation_tokens_per_second} />
+                <Row label="Writing the answer" hint={sourceHint(turn.generation_source) ?? 'Generation speed, weighted by tokens'}>
+                    {turn.generation_tokens_per_second == null
+                        ? <Unknown why={why.generation_tokens_per_second} />
+                        : <Rate r={turn.generation_tokens_per_second} />}
                 </Row>
-                <Row label="Tokens in → out">
+                <Row label="Tokens in → out" hint={why.tokens}>
                     <Tokens n={turn.tokens_in} /> → <Tokens n={turn.tokens_out} />
                 </Row>
                 <Row label="Reused from cache" hint="Prompt tokens the server did not have to read again">
                     {turn.tokens_cached == null
-                        ? <span className="cp-unknown">{UNKNOWN}</span>
+                        ? <Unknown why={why.tokens_cached} />
                         : <><Tokens n={turn.tokens_cached} />{hit != null && ` (${hit}%)`}</>}
                 </Row>
                 <Row label="Model calls">{turn.model_calls}</Row>
-                <Row label="Tool calls" hint={turn.tools.map((t) => `${t.name}: ${t.seconds ?? '?'} s`).join('\n') || undefined}>
-                    {turn.tool_calls === 0 ? 'none' : <>{turn.tool_calls} · <Seconds s={toolSeconds} /></>}
+                <Row label="Tool calls" hint={toolList || undefined}>
+                    {turn.tool_calls === 0 && !turn.tool_seconds_total
+                        ? 'none'
+                        : <>{turn.tool_calls} · <Seconds s={turn.tool_seconds_total ?? 0} /></>}
                 </Row>
                 <Row label="Model loads">
                     {turn.loads.length === 0 ? 'none' : (
@@ -314,6 +344,11 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
                                     <strong>{pct(usage.used, usage.window)}% used</strong>
                                     {' · '}<Tokens n={usage.used} /> of <Tokens n={usage.window} /> tokens
                                     {usage.model && <> · <span className="cp-model">{usage.model}</span></>}
+                                    {usage.model_window != null && usage.model_window > usage.window && (
+                                        <span className="cp-window-note" title="GAIA admits this much of the window, so older turns drop out of view sooner than the model would need">
+                                            {' '}· GAIA uses <Tokens n={usage.window} /> of the model's <Tokens n={usage.model_window} />
+                                        </span>
+                                    )}
                                     {usage.tokenizer && !usage.tokenizer.exact && (
                                         <span className="cp-chip" title={usage.tokenizer.reason}>approx.</span>
                                     )}

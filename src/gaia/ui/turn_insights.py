@@ -74,6 +74,17 @@ def where_model_runs(model_id: Optional[str]) -> Optional[str]:
     return None if may_be_cloud_model(model_id) else "local"
 
 
+def cloud_model_window(model_id: Optional[str]) -> Optional[int]:
+    """The cloud model's own context window from Lemonade's catalog, if listed."""
+    from gaia.llm.lemonade_client import cloud_model_info
+
+    info = cloud_model_info(model_id) or {}
+    value = info.get("ctx_size")
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def _same_model(a: Optional[str], b: Optional[str]) -> bool:
     def bare(name: Optional[str]) -> str:
         name = (name or "").lower()
@@ -127,7 +138,9 @@ def measure_context(agent: Any, turns: list, model_id: Optional[str]) -> Dict[st
         return usage
 
     if where_model_runs(model_id) not in ("local", None):
-        return estimate("The cloud model's tokenizer is not available here.")
+        usage = estimate("The cloud model's tokenizer is not available here.")
+        usage["model_window"] = cloud_model_window(model_id)
+        return usage
     base_url, headers = _lemonade()
     try:
         loaded = _loaded_chat_model(base_url, headers)
@@ -358,41 +371,118 @@ def summarize_turn(
             _ROUND,
         )
 
-    new = _sum(c["new"] for c in calls)
-    prefill_pairs = [(c["new"], c["ttft"]) for c in calls if c["new"] and c["ttft"]]
-    prefill = (
-        round(sum(n for n, _ in prefill_pairs) / sum(t for _, t in prefill_pairs), 1)
-        if prefill_pairs
-        else None
-    )
-    gen_pairs = [(c["output"], c["rate"]) for c in calls if c["output"] and c["rate"]]
-    generation = (
-        round(sum(o for o, _ in gen_pairs) / sum(o / r for o, r in gen_pairs), 1)
-        if gen_pairs
-        else None
-    )
+    speeds = _speeds(steps, calls)
     tokens_in = _sum(c["prompt"] for c in calls)
     cached = _sum(c["cached"] for c in calls)
     tokens_out = _sum(c["output"] for c in calls)
+    listed = [{"name": t.get("name"), "seconds": _num(t.get("seconds"))} for t in tools]
+    # Tool time the step timer measured outside any recorded step: shown, never dropped.
+    unlisted = round(tool_s - sum(t["seconds"] or 0.0 for t in listed), _ROUND)
+    if unlisted >= 0.05:
+        listed.append({"name": None, "seconds": unlisted})
+    unknown: Dict[str, str] = dict(speeds.pop("unknown"))
+    if cached is None:
+        unknown["tokens_cached"] = (
+            "The model server didn't report reused prompt tokens."
+        )
+    if tokens_in is None or tokens_out is None:
+        unknown["tokens"] = "Not every model call reported its token counts."
+    if model is None and attempts > 1:
+        unknown["time"] = (
+            "The turn was retried, and the failed attempt's model time wasn't recorded."
+        )
     return {
         "model": model_id,
         "time": split,
-        "first_token_seconds": calls[0]["ttft"] if calls else None,
-        "prefill_tokens_per_second": prefill,
-        "generation_tokens_per_second": generation,
+        **speeds,
         "model_calls": int(timing.get("llm_calls") or len(calls)),
         "tokens_in": tokens_in,
-        "tokens_new": new,
+        "tokens_new": _sum(c["new"] for c in calls),
         "tokens_cached": cached,
         "tokens_out": tokens_out,
         # The whole templated prompt of the turn's last request, as the server counted it.
         "last_prompt_tokens": calls[-1]["prompt"] if calls else None,
         "tool_calls": len(tools),
-        "tools": [
-            {"name": t.get("name"), "seconds": _num(t.get("seconds"))} for t in tools
-        ],
+        "tool_seconds_total": round(tool_s, _ROUND),
+        "tools": listed,
         "loads": loads,
         "cost": _cost(model_id, tokens_in, cached, tokens_out),
+        "unknown": unknown,
+    }
+
+
+def _weighted_rate(pairs: List[Tuple[float, float]]) -> Optional[float]:
+    """Tokens over seconds summed across calls, from ``(tokens, rate)`` pairs."""
+    pairs = [(n, r) for n, r in pairs if n and r]
+    if not pairs:
+        return None
+    return round(sum(n for n, _ in pairs) / sum(n / r for n, r in pairs), 1)
+
+
+def _speeds(steps: List[Dict[str, Any]], calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """First word, prompt reading and writing speed, each with where it came from.
+
+    ``server``: the model server's own per-request timings (local llama.cpp).
+    ``client``: measured by GAIA on the stream, for any provider. A client
+    first-token time includes network and queueing, so a prompt-reading speed
+    derived from it is ``approx``; generation measured after the first token
+    is not affected by either.
+    """
+    unknown: Dict[str, str] = {}
+    first = calls[0]["ttft"] if calls else None
+    first_source = "server" if first else None
+    client_first = _num(steps[0].get("ttft_seconds")) if steps else None
+    if not first and client_first:
+        first, first_source = client_first, "client"
+    if not first:
+        unknown["first_token_seconds"] = (
+            "The reply wasn't streamed, so there was no first word to time."
+        )
+
+    prefill_pairs = [(c["new"], c["ttft"]) for c in calls if c["new"] and c["ttft"]]
+    prefill_source = "server" if prefill_pairs else None
+    if not prefill_pairs:
+        # Only steps with one model call: their first-token time is that call's.
+        prefill_pairs = [
+            (c["new"], _num(s.get("ttft_seconds")))
+            for s, c in zip(steps, calls)
+            if s.get("llm_calls") == 1 and c["new"] and _num(s.get("ttft_seconds"))
+        ]
+        prefill_source = "client" if prefill_pairs else None
+    prefill = (
+        round(sum(n for n, _ in prefill_pairs) / sum(t for _, t in prefill_pairs), 1)
+        if prefill_pairs
+        else None
+    )
+    if prefill is None:
+        unknown["prefill_tokens_per_second"] = (
+            "The model server didn't report how many prompt tokens were new."
+            if not any(c["new"] for c in calls)
+            else "No first-word time was measured to divide by."
+        )
+
+    generation = _weighted_rate([(c["output"], c["rate"]) for c in calls])
+    generation_source = "server" if generation else None
+    if generation is None:
+        generation = _weighted_rate(
+            [
+                (c["output"], _num(s.get("output_tok_per_s")))
+                for s, c in zip(steps, calls)
+            ]
+        )
+        generation_source = "client" if generation else None
+    if generation is None:
+        unknown["generation_tokens_per_second"] = (
+            "No output token count and timing were reported together."
+        )
+    return {
+        "first_token_seconds": first,
+        "first_token_source": first_source,
+        "prefill_tokens_per_second": prefill,
+        "prefill_source": prefill_source,
+        "generation_tokens_per_second": generation,
+        "generation_source": generation_source,
+        "unknown": unknown,
     }
 
 

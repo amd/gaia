@@ -277,6 +277,8 @@ export interface ContextUsage {
     categories?: Array<{ key: string; label: string; tokens: number }>;
     tool_loading?: { loaded: string[]; on_demand: string[] };
     model?: string | null;
+    /** A cloud model's own window from the catalog, when larger than what GAIA admits. */
+    model_window?: number | null;
     /** What the agent moved out of the window to keep going; absent when it reports nothing. */
     context_state?: ContextState | null;
 }
@@ -303,8 +305,13 @@ export interface TurnPerformance {
         own_seconds: number | null;
     };
     first_token_seconds: number | null;
+    /** `server`: the model server's own timing. `client`: measured by GAIA on the stream. */
+    first_token_source?: 'server' | 'client' | null;
     prefill_tokens_per_second: number | null;
+    /** `client` means derived from GAIA's first-token time, so it includes network time. */
+    prefill_source?: 'server' | 'client' | null;
     generation_tokens_per_second: number | null;
+    generation_source?: 'server' | 'client' | null;
     model_calls: number;
     tokens_in: number | null;
     tokens_new: number | null;
@@ -313,9 +320,14 @@ export interface TurnPerformance {
     /** The last request's whole templated prompt, as the server counted it. */
     last_prompt_tokens: number | null;
     tool_calls: number;
-    tools: Array<{ name: string; seconds: number | null }>;
+    /** All tool time the step timer measured, the same total as the time split. */
+    tool_seconds_total?: number;
+    /** A null name is tool time measured outside any recorded step. */
+    tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
     cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** Why a value is unknown, keyed by field. */
+    unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
 
 export interface ChatPerformance {

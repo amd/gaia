@@ -648,9 +648,16 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
 
     agent = cached_session_agent(session_id)
     if agent is None:
+        # Measuring needs the chat's agent, which lives in memory between turns.
+        answered = db.latest_message_id(session_id, role="assistant") is not None
         return {
             "available": False,
-            "reason": "Measured once GAIA has answered in this chat.",
+            "reason": (
+                "Measured again with your next message: GAIA restarted or "
+                "switched models since this chat's last answer."
+                if answered
+                else "Measured once GAIA has answered in this chat."
+            ),
         }
     from ..turn_insights import (
         context_categories,

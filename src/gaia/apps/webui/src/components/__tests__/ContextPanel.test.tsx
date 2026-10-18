@@ -249,6 +249,39 @@ describe('ContextPanel', () => {
         expect(await within(panel()).findByText('Cloud · Fireworks AI')).toBeInTheDocument();
     });
 
+    it('on a cloud turn, shows GAIA-measured speeds, marks prompt reading approx., and explains unknowns', async () => {
+        const cloud: TurnPerformance = {
+            ...TURN,
+            first_token_seconds: 4.66, first_token_source: 'client',
+            prefill_tokens_per_second: 3640.5, prefill_source: 'client',
+            generation_tokens_per_second: 175.4, generation_source: 'client',
+            tokens_cached: null,
+            tool_seconds_total: 4.7,
+            tools: [{ name: 'browse_directory', seconds: 1.3 }, { name: null, seconds: 3.4 }],
+            unknown: { tokens_cached: "The model server didn't report reused prompt tokens." },
+            cost: { kind: 'estimate', usd: 0.004 },
+        };
+        mockedApi.getChatPerformance.mockResolvedValue(perf([cloud]));
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        const first = (await screen.findByText('First word')).closest('.cp-row') as HTMLElement;
+        expect(first).toHaveAttribute('title', expect.stringMatching(/Measured by GAIA/));
+        expect(within(first).getByText('4.7 s')).toBeInTheDocument();
+        const reading = screen.getByText('Reading the prompt').closest('.cp-row') as HTMLElement;
+        expect(within(reading).getByText('approx.')).toBeInTheDocument();
+        expect(within(screen.getByText('Writing the answer').closest('.cp-row') as HTMLElement).getByText('175 tokens/s')).toBeInTheDocument();
+        const cache = screen.getByText('Reused from cache').closest('.cp-row') as HTMLElement;
+        expect(within(cache).getByText('unknown')).toHaveAttribute('title', expect.stringMatching(/didn't report/));
+        const tools = screen.getByText('Tool calls').closest('.cp-row') as HTMLElement;
+        expect(tools).toHaveTextContent('2 · 4.7 s');
+        expect(tools).toHaveAttribute('title', expect.stringMatching(/tool work outside a step: 3.4 s/));
+    });
+
+    it("shows how much of a cloud model's window GAIA uses", async () => {
+        mockedApi.getContextUsage.mockResolvedValue({ available: true, ...usage({ model_window: 1048576 }) });
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        expect(await screen.findByText(/GAIA uses/)).toHaveTextContent("GAIA uses 66K of the model's 1M");
+    });
+
     it('closes on Escape', async () => {
         const onClose = vi.fn();
         render(<ContextPanel sessionId="s1" busy={false} onClose={onClose} />);

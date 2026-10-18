@@ -534,3 +534,44 @@ def test_process_query_trace_and_summary_carry_the_breakdown(_clean_registry):
     )
     # The turn is over, so the SDK no longer reports into it.
     assert agent.chat.llm_call_sink is None
+
+
+def test_a_step_whose_tool_fails_still_records_its_stats(_clean_registry):
+    """The error-recovery path used to skip the step's record, losing its tool and tokens."""
+
+    @tool
+    def flaky_lookup() -> dict:
+        """Look something up, and fail."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "error", "error": "Access denied"}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    replies = [
+        json.dumps({"thought": "look", "tool": "flaky_lookup", "tool_args": {}}),
+        json.dumps({"thought": "done", "answer": "I couldn't look it up."}),
+    ]
+    provider = FakeProvider(
+        replies,
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        finish="stop",
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("What is the value?", max_steps=5)
+
+    records = [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+    assert [r["step"] for r in records] == [1, 2]
+    assert records[0]["tools"][0]["name"] == "flaky_lookup"
+    assert result["timing_summary"]["tool_seconds"] == pytest.approx(
+        sum(t["seconds"] for r in records for t in r["tools"]), abs=1e-3
+    )
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
