@@ -197,6 +197,8 @@ func IsRouteMissing(path string, status int, detail string) bool {
 type RequestError struct {
 	Op     string
 	Detail string
+	// Err is the transport error behind Detail, when there is one.
+	Err error
 }
 
 func (e *RequestError) Error() string {
@@ -204,3 +206,5 @@ func (e *RequestError) Error() string {
 		"could not %s: %s. Check `gaia daemon status` and the daemon log at %s.",
 		e.Op, e.Detail, logPathForMessage())
 }
+
+func (e *RequestError) Unwrap() error { return e.Err }

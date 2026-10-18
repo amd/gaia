@@ -473,11 +473,31 @@ type Request struct {
 // the request replayed exactly once. The instance whose token authorized the
 // response is returned so the caller can reuse it (e.g. to cancel a run).
 //
+// A daemon restart can also move it to a new port. When the connection cannot
+// be made, instance.json is re-read once and, if it names a different live
+// daemon, the request is replayed there: a failed dial never reached any
+// server, so the replay cannot run anything twice.
+//
 // The caller owns resp.Body and must close it.
 func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Response, *Instance, error) {
 	resp, err := c.send(ctx, inst, r)
 	if err != nil {
-		return nil, inst, err
+		if !isDialFailure(err) {
+			return nil, inst, err
+		}
+		moved, rerr := c.rediscover(ctx, inst)
+		if rerr != nil {
+			return nil, inst, fmt.Errorf("%w (instance.json now names another daemon, but it is not usable either: %v)", err, rerr)
+		}
+		if moved == nil {
+			return nil, inst, err
+		}
+		c.opts.Logf("daemon: %s refused the connection; instance.json now names %s, retrying %s %s",
+			inst.BaseURL(), moved.BaseURL(), r.Method, r.Path)
+		inst = moved
+		if resp, err = c.send(ctx, inst, r); err != nil {
+			return nil, inst, err
+		}
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, inst, nil
@@ -540,6 +560,32 @@ func (c *Client) refresh(ctx context.Context, old *Instance, path string) (*Inst
 	return fresh, nil
 }
 
+// isDialFailure reports a request that never connected, so no server saw it.
+func isDialFailure(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
+// rediscover returns the daemon instance.json now records in place of old: nil
+// when it names no other daemon, an error when it names one that is unusable.
+func (c *Client) rediscover(ctx context.Context, old *Instance) (*Instance, error) {
+	fresh, err := ReadInstance()
+	if err != nil {
+		c.opts.Logf("daemon: no replacement for %s in instance.json: %v", old.BaseURL(), err)
+		return nil, nil
+	}
+	if fresh.BaseURL() == old.BaseURL() && fresh.Token == old.Token {
+		return nil, nil
+	}
+	if err := c.verify(ctx, fresh); err != nil {
+		return nil, err
+	}
+	if err := fresh.CheckVersion(); err != nil {
+		return nil, err
+	}
+	return fresh, nil
+}
+
 func (c *Client) send(ctx context.Context, inst *Instance, r Request) (*http.Response, error) {
 	req, err := c.newRequest(ctx, inst, r.Method, r.Path, r.Body, r.Header)
 	if err != nil {
@@ -551,7 +597,7 @@ func (c *Client) send(ctx context.Context, inst *Instance, r Request) (*http.Res
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, &RequestError{Op: c.opDescription(r), Detail: err.Error()}
+		return nil, &RequestError{Op: c.opDescription(r), Detail: err.Error(), Err: err}
 	}
 	return resp, nil
 }
