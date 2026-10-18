@@ -34,6 +34,7 @@ the handler's thread-safe ``queue.Queue``; that boundary is unchanged.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Awaitable, Callable, Dict, List, Optional
 
@@ -42,6 +43,34 @@ logger = logging.getLogger(__name__)
 # Sentinel pushed to a subscriber queue when the run is complete so the
 # subscriber generator knows to stop awaiting and close cleanly.
 DONE = object()
+
+# Most a run keeps for re-attaching clients. Chunks merge and keepalives are
+# dropped, so a normal reply stays far below this; past it the oldest
+# progress is trimmed and the client is told.
+MAX_REPLAY_BYTES = 8 * 1024 * 1024
+
+# Chromium holds SSE frames under ~512 bytes until its buffer fills.
+_FLUSH_BYTES = 512
+
+_TRIMMED_NOTE = (
+    'data: {"type": "status", "status": "info", "message": "Earlier progress '
+    "of this reply is not shown here; the full answer is saved when it "
+    'finishes."}\n\n'
+)
+
+
+def _padded(frame: str) -> str:
+    if len(frame) >= _FLUSH_BYTES:
+        return frame
+    return frame + ": " + "x" * (_FLUSH_BYTES - len(frame) - 4) + "\n\n"
+
+
+def _parse(frame: str) -> Optional[dict]:
+    try:
+        event = json.loads(frame[len("data: ") :])
+    except ValueError:
+        return None
+    return event if isinstance(event, dict) else None
 
 
 class Run:
@@ -52,9 +81,12 @@ class Run:
         # The run's SSEOutputHandler, set by the lifecycle once constructed.
         # Held so an external cancel can signal the producer to bail.
         self.handler = None
-        # Append-only log of every SSE ``data: ...`` string emitted so far.
-        # New subscribers replay this before receiving live events.
+        # What a re-attaching subscriber replays: every ``data:`` frame so
+        # far, unpadded, with consecutive chunks merged (see ``_record``).
         self.buffer: List[str] = []
+        self._buffer_bytes = 0
+        self._last_event: Optional[dict] = None
+        self._trimmed = False
         # Live subscriber queues. emit() fans out to each; finish() closes them.
         self.subscribers: List[asyncio.Queue] = []
         self.done = asyncio.Event()
@@ -63,9 +95,68 @@ class Run:
     # ── Producer side (called from the lifecycle task) ────────────────
     def emit(self, data: str) -> None:
         """Record an SSE event and fan it out to all live subscribers."""
-        self.buffer.append(data)
+        self._record(data)
         for q in self.subscribers:
             q.put_nowait(data)
+
+    def _record(self, data: str) -> None:
+        """Keep what a re-attaching client needs to rebuild the reply, and no more.
+
+        Keepalives and padding are dropped, consecutive plain chunks become
+        one chunk, and a ``working`` status replaces the one just before it,
+        as the client shows them. Past ``MAX_REPLAY_BYTES`` the oldest frames
+        go, behind a note that says so.
+        """
+        line = data.split("\n", 1)[0]
+        if not line.startswith("data: "):
+            return
+        event = _parse(line)
+        prev = self._last_event
+        merged = None
+        if event is not None and prev is not None and self.buffer:
+            if (
+                event.get("type") == "chunk"
+                and set(event) == {"type", "content"}
+                and prev.get("type") == "chunk"
+                and set(prev) == {"type", "content"}
+            ):
+                merged = {
+                    "type": "chunk",
+                    "content": (prev.get("content") or "")
+                    + (event.get("content") or ""),
+                }
+            elif (
+                event.get("type") == "status"
+                and event.get("status") == "working"
+                and prev.get("type") == "status"
+                and prev.get("status") == "working"
+            ):
+                merged = event
+        if merged is not None:
+            self._buffer_bytes -= len(self.buffer.pop())
+            event = merged
+            line = f"data: {json.dumps(merged)}"
+        frame = line + "\n\n"
+        self.buffer.append(frame)
+        self._buffer_bytes += len(frame)
+        self._last_event = event
+        if self._buffer_bytes > MAX_REPLAY_BYTES:
+            self._trim()
+
+    def _trim(self) -> None:
+        if not self._trimmed:
+            logger.warning(
+                "Run %s: replay buffer passed %d bytes; trimming the oldest "
+                "progress a re-attaching client would see",
+                self.session_id[:8],
+                MAX_REPLAY_BYTES,
+            )
+            self._trimmed = True
+            self.buffer.insert(1, _TRIMMED_NOTE)
+            self._buffer_bytes += len(_TRIMMED_NOTE)
+        # Keep the first frame and the note; drop from just after them.
+        while self._buffer_bytes > MAX_REPLAY_BYTES and len(self.buffer) > 3:
+            self._buffer_bytes -= len(self.buffer.pop(2))
 
     def finish(self) -> None:
         """Mark the run complete and close out every live subscriber."""
@@ -85,7 +176,7 @@ class Run:
         """
         q: asyncio.Queue = asyncio.Queue()
         for item in self.buffer:
-            q.put_nowait(item)
+            q.put_nowait(_padded(item))
         if self.done.is_set():
             q.put_nowait(DONE)
         else:
