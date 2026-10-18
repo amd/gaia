@@ -185,7 +185,7 @@ One item too big for the cap is a different problem from a long history.
   full item is stored behind a handle. Every quoted line must exist at its cited line, or
   the result falls back to today's condensed form (cut to the cap: whole list items
   dropped from the end, or head and tail of text around a `[truncated]` marker) with a
-  visible "extraction failed: <reason>" note, logged at WARNING. **Never** applied to
+  visible `"extraction failed: <reason>"` note, logged at WARNING. **Never** applied to
   source code the agent may edit, diffs, configs, structured records, or a
   `read_tool_output` fetch.
 - **Fresh-context sub-tasks** for bulky read-heavy steps (multi-source research,
