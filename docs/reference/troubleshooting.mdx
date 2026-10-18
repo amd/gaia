@@ -147,9 +147,9 @@ icon: "bug"
       logs each retry. Free a port and start it there with
       `gaia lemonade embedded start --port <port>`.
     - **`busy` in `gaia lemonade embedded status`** — the server is loading or swapping a
-      model, so its health check is slow. It is working, and requests wait for it. If it
-      stays busy longer than any request may run, GAIA reports it as not answering and
-      names the command that restarts it.
+      model, so its health check is slow. It is working, and requests wait for it. If its
+      model backends then do no work at all for five minutes, GAIA reports it as not
+      answering and names the command that restarts it.
 
     To start over with a fresh copy, run `gaia init --force-reinstall`.
   </Accordion>

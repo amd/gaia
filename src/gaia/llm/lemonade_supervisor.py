@@ -143,8 +143,10 @@ class LemonadeSupervisor:
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen] = None
         self._log_handle = None
-        # When each busy (host, port) was first seen busy, to bound the wait.
-        self._busy_since: dict = {}
+        # The QuietWatch record of each busy (host, port).
+        self._busy_seen: dict = {}
+        # Ports already warned about: their processes cannot be inspected.
+        self._uninspectable: set = set()
 
     # -- introspection -----------------------------------------------------
 
@@ -196,6 +198,7 @@ class LemonadeSupervisor:
         # This sits in front of every agent construction and every CLI call, so
         # anything added here is latency paid by users who never needed it.
         if _probe(client):
+            self._busy_seen.pop((client.host, client.port), None)
             return LemonadeState(
                 base_url=target,
                 started=False,
@@ -222,6 +225,7 @@ class LemonadeSupervisor:
             # Re-probe under the lock: another daemon thread may have started
             # the very server we were about to start.
             if _probe(client):
+                self._busy_seen.pop((client.host, client.port), None)
                 return LemonadeState(
                     base_url=target,
                     started=False,
@@ -316,6 +320,7 @@ class LemonadeSupervisor:
                 _OCCUPIED_PORT_GRACE_S,
             )
             if _wait_for_health(client, _OCCUPIED_PORT_GRACE_S):
+                self._busy_seen.pop((host, port), None)
                 return False
             if self._attach_if_busy(client):
                 return False
@@ -412,23 +417,35 @@ class LemonadeSupervisor:
         """Whether to use a busy Lemonade on *client*'s port.
 
         Raises:
-            LemonadeStartError: It has been busy longer than any request may
-                run, so its router is wedged rather than working.
+            LemonadeStartError: Its backends have done no work for too long,
+                so its router is wedged rather than working.
         """
-        from gaia.llm.lemonade_embedded import busy_limit
+        from gaia.llm.lemonade_embedded import QuietWatch, backend_activity
 
         key = (client.host, client.port)
         if not _busy_lemonade(client):
-            self._busy_since.pop(key, None)
+            self._busy_seen.pop(key, None)
             return False
-        busy_for = time.monotonic() - self._busy_since.setdefault(key, time.monotonic())
-        limit = busy_limit()
-        if busy_for <= limit:
+        pid = _listener_pid(client.port)
+        activity = backend_activity(pid) if pid else None
+        if activity is None and key not in self._uninspectable:
+            self._uninspectable.add(key)
+            log.warning(
+                "lemonade: cannot inspect the processes behind port %s, so GAIA "
+                "cannot tell a slow server from a stuck one; using it as busy",
+                client.port,
+            )
+        record, wedged = QuietWatch.assess(
+            self._busy_seen.get(key), activity, time.monotonic()
+        )
+        if record is not None:
+            self._busy_seen[key] = record
+        if not wedged:
             return True
         raise LemonadeStartError(
-            f"The Lemonade Server on port {client.port} has answered liveness "
-            f"but not health for {busy_for:.0f}s, longer than any request may "
-            f"run ({limit}s), so it is stuck rather than loading a model.\n"
+            f"The Lemonade Server on port {client.port} answers liveness but not "
+            f"health, and its backends have done no work for over "
+            f"{_quiet_seconds()}s, so it is stuck rather than loading a model.\n"
             f"To fix: restart it ({describe_start_hint().instruction}).\n"
             "See https://amd-gaia.ai/docs/reference/troubleshooting"
         )
@@ -559,6 +576,25 @@ def _busy_lemonade(client) -> bool:
         port,
     )
     return True
+
+
+def _quiet_seconds() -> int:
+    from gaia.llm.lemonade_embedded import _QUIET_SECONDS
+
+    return _QUIET_SECONDS
+
+
+def _listener_pid(port: int) -> Optional[int]:
+    """The pid listening on *port*, or None when the OS will not say."""
+    import psutil
+
+    try:
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.status == psutil.CONN_LISTEN and conn.laddr.port == port:
+                return conn.pid
+    except psutil.AccessDenied:
+        pass
+    return None
 
 
 def _port_is_open(host: str, port: int, timeout: float = 0.5) -> bool:

@@ -30,6 +30,7 @@ acceptable. lemond invalidates stale binaries itself via the
 import errno
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -41,6 +42,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -152,8 +154,8 @@ _START_TIMEOUT = 60.0
 _PORT_ATTEMPTS = 3
 # A retry needs at least this long left to start and answer.
 _MIN_RETRY_SECONDS = 5.0
-# Past lemond's own request budget, a busy router lock is wedged, not working.
-_BUSY_GRACE_SECONDS = 60
+# A busy server whose backends did nothing for this long is wedged.
+_QUIET_SECONDS = 300
 _STOP_TIMEOUT = 20.0
 _DOWNLOAD_TIMEOUT = 300
 
@@ -243,15 +245,73 @@ def answers_liveness(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def busy_limit() -> int:
-    """How long a server may stay busy before it counts as stalled.
+def backend_activity(pid: int) -> Optional[Dict[int, float]]:
+    """CPU seconds plus MB of disk I/O for each backend process under *pid*.
 
-    lemond ends any request after ``global_timeout``, which GAIA sets to this
-    same budget, so an eviction waiting on one cannot outlast it by much.
+    The backends (llama-server and friends) do the work a busy router waits
+    on: generating the request an eviction drains, or reading the next model.
+    lemond itself is left out, since it spends CPU answering the probes; a
+    download it runs happens with the router lock released, so health answers.
+
+    Returns:
+        ``{"<pid>": activity}`` (string keys, as stored in JSON), or None when
+        the OS will not show the tree.
     """
-    from gaia.llm.lemonade_client import request_budget_seconds
+    import psutil
 
-    return request_budget_seconds() + _BUSY_GRACE_SECONDS
+    try:
+        children = psutil.Process(pid).children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+    activity = {}
+    for child in children:
+        try:
+            times = child.cpu_times()
+            total = times.user + times.system
+            if hasattr(child, "io_counters"):  # absent on macOS
+                io = child.io_counters()
+                total += (io.read_bytes + io.write_bytes) / 1e6
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        activity[str(child.pid)] = total
+    return activity
+
+
+class QuietWatch:
+    """Whether a busy server is wedged, from evidence rather than a clock.
+
+    Each sighting records every backend's cumulative activity. The server is
+    wedged only when a later sighting finds the same backends with exactly the
+    same counters more than :data:`_QUIET_SECONDS` after that record: proof
+    that none of them did any work since, however long nobody was looking. A
+    backend that started, exited or did anything restarts the record.
+    """
+
+    @staticmethod
+    def assess(
+        seen: Optional[dict], activity: Optional[Dict[str, float]], now: float
+    ) -> Tuple[Optional[dict], bool]:
+        """Return the record to keep and whether the server is wedged.
+
+        Args:
+            seen: The previous record for this server, if any.
+            activity: :func:`backend_activity`, or None without evidence, which
+                never counts as wedged.
+            now: The current time.
+        """
+        if activity is None:
+            return seen, False
+        quiet_since = (seen or {}).get("quiet_since")
+        unchanged = (
+            seen is not None
+            and seen.get("activity") == activity
+            and isinstance(quiet_since, (int, float))
+            and math.isfinite(quiet_since)
+            and quiet_since <= now
+        )
+        if not unchanged:
+            return {"quiet_since": now, "activity": activity}, False
+        return seen, now - quiet_since > _QUIET_SECONDS
 
 
 def pid_exists(pid: int) -> bool:
@@ -707,7 +767,7 @@ class EmbeddedLemonade:
 
     @property
     def busy_since_path(self) -> Path:
-        """When the recorded instance was first seen busy."""
+        """Since when the busy instance's backends have been quiet."""
         return self.root / "busy_since.json"
 
     @property
@@ -1201,19 +1261,18 @@ class EmbeddedLemonade:
             identity = OTHER
         else:
             identity = self._identify(int(pid), int(port), api_key)
+        wedged = None
         if identity == OWN and answers_liveness("127.0.0.1", int(port)):
-            busy_for, limit = self._busy_for(int(pid)), busy_limit()
-        else:
-            busy_for = limit = None
-        if busy_for is not None and busy_for > limit:
+            wedged = self._wedged(int(pid))
+        if wedged:
             log.warning(
-                "Embedded Lemonade (pid %s) has been busy for %.0fs, longer than "
-                "any request may run (%ss); treating it as stalled",
+                "Embedded Lemonade (pid %s) answers liveness but not health, and "
+                "its backends have done no work for over %ss; treating it as "
+                "stalled",
                 pid,
-                busy_for,
-                limit,
+                _QUIET_SECONDS,
             )
-        elif busy_for is not None:
+        elif wedged is not None:
             log.info(
                 "Embedded Lemonade (pid %s) is busy: it answers liveness on port "
                 "%s but not health within %.0fs, so a model load or eviction is "
@@ -1260,23 +1319,50 @@ class EmbeddedLemonade:
         self._clear_state()
         return stopped
 
-    def _busy_for(self, pid: int) -> float:
-        """Seconds the recorded *pid* has been seen busy, starting the clock now
-        if it was not busy before."""
-        now = time.time()
+    def _wedged(self, pid: int) -> bool:
+        """Whether busy *pid* is wedged (see :class:`QuietWatch`).
+
+        The record lives in :attr:`busy_since_path` so separate GAIA processes
+        share it, and is replaced atomically so a reader never sees half of it.
+        """
+        seen = None
         try:
-            seen = json.loads(self.busy_since_path.read_text(encoding="utf-8"))
-            if seen.get("pid") == pid:
-                return max(0.0, now - float(seen["since"]))
+            raw = json.loads(self.busy_since_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("pid") == pid:
+                seen = raw
         except FileNotFoundError:
             pass
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        except (OSError, ValueError) as e:
             log.warning("Resetting unreadable %s (%s)", self.busy_since_path, e)
+        activity = backend_activity(pid)
+        if activity is None:
+            log.warning(
+                "Could not inspect the backends of Embedded Lemonade (pid %s), so "
+                "GAIA cannot tell a slow server from a stuck one; treating it as "
+                "busy",
+                pid,
+            )
+        record, wedged = QuietWatch.assess(seen, activity, time.time())
+        if record is None or record is seen:
+            return wedged
         self.root.mkdir(parents=True, exist_ok=True)
-        self.busy_since_path.write_text(
-            json.dumps({"pid": pid, "since": now}), encoding="utf-8"
+        tmp = self.busy_since_path.with_name(
+            f"{self.busy_since_path.name}.{os.getpid()}.{threading.get_ident()}"
         )
-        return 0.0
+        try:
+            tmp.write_text(json.dumps({"pid": pid, **record}), encoding="utf-8")
+            os.replace(tmp, self.busy_since_path)
+        except OSError as e:
+            # Windows refuses a replace while another process reads the file.
+            tmp.unlink(missing_ok=True)
+            log.warning(
+                "Could not record the backend activity of pid %s in %s (%s); "
+                "the next check compares against the previous record",
+                pid,
+                self.busy_since_path,
+                e,
+            )
+        return wedged
 
     def _log_tail(self, lines: int = 3) -> str:
         """The last *lines* non-health lines of lemond's log, `` | ``-joined."""
@@ -1599,10 +1685,15 @@ class EmbeddedLemonade:
                 self._discard(process)
                 out_of_time = deadline - time.monotonic() < _MIN_RETRY_SECONDS
                 if not chosen or attempt >= _PORT_ATTEMPTS or out_of_time:
+                    what = (
+                        "is in use by another program"
+                        if not chosen
+                        else f"was taken by another program first (tried "
+                        f"{attempt} port{'s' if attempt > 1 else ''})"
+                    )
                     raise EmbeddedLemonadeError(
-                        f"Embedded Lemonade could not bind port {port}: another "
-                        f"program took it first (tried {attempt} port"
-                        f"{'s' if attempt > 1 else ''}). Run "
+                        f"Embedded Lemonade could not bind port {port}: it "
+                        f"{what}. Run "
                         f"`gaia lemonade embedded start --port <free port>`, or "
                         f"free the port; {self.log_path} has the daemon's own "
                         f"error."

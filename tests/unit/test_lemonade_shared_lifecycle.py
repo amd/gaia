@@ -23,6 +23,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import psutil
 import pytest
 
 from gaia.llm import lemonade_embedded as emb
@@ -33,6 +34,13 @@ from gaia.llm.lemonade_supervisor import LemonadeSupervisor
 pytestmark = pytest.mark.allow_network
 
 KEY = "test-key"
+# What a real lemond 2026.40.0 answered on /api/v1/docs while a model eviction
+# held its router lock (and /health timed out): the supervisor's fingerprint.
+_REAL_DOCS_INDEX = json.loads(
+    (
+        Path(__file__).parents[1] / "fixtures/lemonade/lemond_docs_index_2026.40.0.json"
+    ).read_text(encoding="utf-8")
+)
 # Loopback only: never route the probe through a system proxy (macOS reads one).
 _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -63,7 +71,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/live":
             body = {"status": "ok"}
         elif self.path == "/api/v1/docs" and self.server.lemonade:
-            body = {"docs": [], "format": "text/markdown", "version": "x"}
+            body = _REAL_DOCS_INDEX
         elif self.path == "/api/v1/health":
             if self.headers.get("Authorization") != f"Bearer {KEY}":
                 self.send_response(401)
@@ -155,21 +163,133 @@ class TestSlowButAliveEmbeddedServer:
         assert "not answering" in str(exc.value)
         assert "gaia lemonade embedded stop" in str(exc.value)
 
-    def test_busy_longer_than_any_request_is_stalled(
-        self, manager, slow_health, monkeypatch
-    ):
-        """A router lock held past lemond's request budget is wedged, not working."""
-        _record_own_server(manager, slow_health.port, monkeypatch)
-        monkeypatch.setattr(emb, "busy_limit", lambda: 30)
-        assert manager.status().busy  # first seen busy: the clock starts
+    def _recorded(self, manager, seconds_ago, activity):
         manager.busy_since_path.write_text(
-            json.dumps({"pid": os.getpid(), "since": time.time() - 31}),
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "quiet_since": time.time() - seconds_ago,
+                    "activity": activity,
+                }
+            ),
             encoding="utf-8",
         )
+
+    def _backends(self, monkeypatch, activity):
+        monkeypatch.setattr(emb, "backend_activity", lambda pid: activity)
+
+    def test_work_since_an_old_record_is_busy_not_stalled(
+        self, manager, slow_health, monkeypatch
+    ):
+        """No caller polls status(), so the record may be hours old; what
+        matters is whether the backends did anything since."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, 3 * 3600, {"111": 5.0})
+        self._backends(monkeypatch, {"111": 9.0})
+
+        status = manager.status()
+        assert status.running and status.busy, "a working server was called stalled"
+
+    def test_a_replaced_backend_counts_as_work(self, manager, slow_health, monkeypatch):
+        """An eviction kills the old llama-server and the load starts a new one."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, 3 * 3600, {"111": 5.0})
+        self._backends(monkeypatch, {"222": 0.0})
+
+        assert manager.status().busy
+
+    def test_a_backend_appearing_counts_as_work(
+        self, manager, slow_health, monkeypatch
+    ):
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, 3 * 3600, {})
+        self._backends(monkeypatch, {"222": 0.0})
+
+        assert manager.status().busy
+
+    def test_the_first_quiet_sighting_is_only_recorded(
+        self, manager, slow_health, monkeypatch
+    ):
+        """`gaia init` looks once; one sighting can prove nothing."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._backends(monkeypatch, {"111": 5.0})
+
+        assert manager.status().busy
+        recorded = json.loads(manager.busy_since_path.read_text(encoding="utf-8"))
+        assert recorded["activity"] == {"111": 5.0}
+
+    def test_no_work_at_all_since_the_record_is_stalled(
+        self, manager, slow_health, monkeypatch
+    ):
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS + 1, {"111": 5.0})
+        self._backends(monkeypatch, {"111": 5.0})
 
         status = manager.status()
         assert not status.running
         assert status.unresponsive_pid == os.getpid()
+
+    def test_a_lock_held_with_no_backends_is_stalled_too(
+        self, manager, slow_health, monkeypatch
+    ):
+        """Nothing runs that could release it: lemond downloads and installs
+        backends inside a load, which runs with the router lock released."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS + 1, {})
+        self._backends(monkeypatch, {})
+
+        assert manager.status().unresponsive_pid == os.getpid()
+
+    def test_no_work_within_the_quiet_window_is_still_busy(
+        self, manager, slow_health, monkeypatch
+    ):
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS - 30, {"111": 5.0})
+        self._backends(monkeypatch, {"111": 5.0})
+
+        assert manager.status().busy
+
+    def test_without_evidence_it_is_never_called_stalled(
+        self, manager, slow_health, monkeypatch
+    ):
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, 3 * 3600, {"111": 5.0})
+        self._backends(monkeypatch, None)
+
+        assert manager.status().busy
+
+    def test_activity_is_read_from_the_real_process_tree(self, tmp_path):
+        """A working backend's counters move; an idle one's stay put."""
+        script = tmp_path / "tree.py"
+        lines = [
+            "import subprocess, sys, time",
+            "work = 'while True: pass' if sys.argv[1] == 'busy' else "
+            "'import time; time.sleep(120)'",
+            "child = subprocess.Popen([sys.executable, '-c', work])",
+            "time.sleep(120)",
+        ]
+        script.write_text(
+            "".join(line + chr(10) for line in lines),
+            encoding="utf-8",
+        )
+        trees = {
+            kind: subprocess.Popen([sys.executable, str(script), kind])
+            for kind in ("busy", "idle")
+        }
+        try:
+            time.sleep(3)  # let the children start
+            before = {k: emb.backend_activity(t.pid) for k, t in trees.items()}
+            time.sleep(1)
+            after = {k: emb.backend_activity(t.pid) for k, t in trees.items()}
+            assert before["busy"] and before["idle"]
+            assert after["busy"] != before["busy"]
+            assert after["idle"] == before["idle"]
+        finally:
+            for tree in trees.values():
+                for child in psutil.Process(tree.pid).children(recursive=True):
+                    child.kill()
+                tree.kill()
+                tree.wait(timeout=10)
 
     def test_liveness_alone_never_vouches_for_another_process(
         self, manager, slow_health, monkeypatch
@@ -229,17 +349,49 @@ class TestSlowButAliveSupervisedServer:
         assert state.started is False
         assert state.owned is False
 
-    def test_busy_longer_than_any_request_is_an_error(
+    def test_a_quiet_busy_system_server_is_an_error(
         self, supervisor, slow_health, monkeypatch
     ):
-        """A wedged system Lemonade still answers /live; past the request budget
-        GAIA says so rather than attaching to it forever."""
+        """A wedged system Lemonade still answers /live; once its backends have
+        been quiet too long GAIA says so rather than attaching to it forever."""
+        monkeypatch.setattr(sup, "_listener_pid", lambda port: os.getpid())
+        monkeypatch.setattr(emb, "backend_activity", lambda pid: {"111": 5.0})
         s = supervisor(slow_health.port)
         assert s.ensure_running(ctx_size=65536).started is False
-        monkeypatch.setattr(emb, "busy_limit", lambda: 0)
+        (seen,) = s._busy_seen.values()
+        seen["quiet_since"] -= emb._QUIET_SECONDS + 1
         with pytest.raises(sup.LemonadeStartError) as exc:
             s.ensure_running(ctx_size=65536)
         assert "stuck" in str(exc.value)
+
+    def test_a_recovered_server_starts_fresh_at_its_next_swap(
+        self, supervisor, slow_health, monkeypatch
+    ):
+        """busy -> healthy -> busy: the first swap's record must not carry over."""
+        monkeypatch.setattr(sup, "_listener_pid", lambda port: os.getpid())
+        monkeypatch.setattr(emb, "backend_activity", lambda pid: {"111": 5.0})
+        s = supervisor(slow_health.port)
+        assert s.ensure_running(ctx_size=65536).started is False
+        (seen,) = s._busy_seen.values()
+        seen["quiet_since"] -= emb._QUIET_SECONDS + 1
+
+        healthy = _SlowClient(slow_health.port)
+        healthy.health_check = lambda timeout=None: {"status": "ok"}
+        monkeypatch.setattr(s, "_client", lambda: healthy)
+        assert s.ensure_running(ctx_size=65536).started is False
+        assert not s._busy_seen, "the recovered server kept its quiet record"
+
+        monkeypatch.setattr(s, "_client", lambda: _SlowClient(slow_health.port))
+        assert s.ensure_running(ctx_size=65536).started is False
+
+    def test_a_system_server_it_cannot_inspect_is_never_called_stuck(
+        self, supervisor, slow_health, monkeypatch
+    ):
+        """macOS hides the listener's pid without root: no evidence, no verdict."""
+        monkeypatch.setattr(sup, "_listener_pid", lambda port: None)
+        s = supervisor(slow_health.port)
+        assert s.ensure_running(ctx_size=65536).started is False
+        assert s.ensure_running(ctx_size=65536).started is False
 
     def test_another_app_answering_live_is_not_taken_for_lemonade(self, supervisor):
         stranger = _FakeLemond(health_delay=4.0, lemonade=False)
@@ -369,7 +521,7 @@ class TestPortTakenBeforeLemondBinds:
         with pytest.raises(EmbeddedLemonadeError) as exc:
             manager.start(timeout=30)
 
-        assert "took it first" in str(exc.value)
+        assert "taken by another program" in str(exc.value)
         assert len(fake_lemond) == emb._PORT_ATTEMPTS
         assert not manager.state_path.exists()
 
@@ -381,6 +533,7 @@ class TestPortTakenBeforeLemondBinds:
             manager.start(port=port, timeout=30)
         assert len(fake_lemond) == 1
         assert str(port) in str(exc.value)
+        assert "is in use by another program" in str(exc.value)
 
 
 def test_fake_lemond_matches_the_real_bind_rule(tmp_path):
