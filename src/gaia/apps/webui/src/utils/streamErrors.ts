@@ -6,8 +6,8 @@ import { ApiError, parseErrorDetail, StreamTimeoutError } from '../services/api'
 /** How many times a turn's lost stream is re-attached before the view gives up. */
 export const MAX_STREAM_RECONNECTS = 3;
 
-/** Wait before each re-attach: the first is immediate, later ones give a restarting backend time. */
-export const RECONNECT_DELAYS_MS = [0, 1_000, 3_000];
+/** Wait before each re-attach: the first is immediate, later ones span a backend restart (~13 s in all). */
+export const RECONNECT_DELAYS_MS = [0, 3_000, 10_000];
 
 /** A re-attach found neither the run nor its saved answer. */
 export const RUN_LOST_TEXT = 'The answer to your last message was lost: its run stopped before it finished, '

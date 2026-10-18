@@ -155,7 +155,7 @@ describe('ChatView stream reliability', () => {
         await driveSend();
         act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
         for (let i = 0; i < 3; i++) {
-            await waitFor(() => expect(attachCallbacks.length).toBe(i + 1), { timeout: 5_000 });
+            await waitFor(() => expect(attachCallbacks.length).toBe(i + 1), { timeout: 12_000 });
             act(() => attachCallbacks[i].onError(new api.StreamStalledError(30_000)));
         }
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(3);
@@ -297,7 +297,7 @@ describe('ChatView stream reliability', () => {
         act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
         act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
         await act(async () => { fireEvent.click(screen.getByLabelText('Stop')); });
-        await new Promise((r) => setTimeout(r, 1_500));
+        await new Promise((r) => setTimeout(r, 3_500));
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
     });
 
@@ -325,7 +325,7 @@ describe('ChatView stream reliability', () => {
         view.rerender(<ChatView sessionId="other" />);
         act(() => useChatStore.setState({ currentSessionId: SESSION.id }));
         view.rerender(<ChatView sessionId={SESSION.id} />);
-        await new Promise((r) => setTimeout(r, 1_500));
+        await new Promise((r) => setTimeout(r, 3_500));
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
     });
 
