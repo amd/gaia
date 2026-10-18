@@ -1062,19 +1062,24 @@ def send_request(
     and executable.
 
     Secrets: GAIA's own messages never include a server's command, arguments
-    or env. Text the server sends back (stderr, error replies, results in
-    debug logs) is cleaned of the known secret values in its launch config,
-    and of nothing else:
-    - env values whose name looks secret (`*KEY*`, `*TOKEN*`, `*SECRET*`,
-      `*PASSWORD*`, `*CREDENTIAL*`, `*AUTH*` but not `AUTHOR`);
-    - the value after a secret flag (`--api-key v`, `--token=v`), judged by
-      whole words, so `--max-tokens 4096` is left alone;
-    - `KEY=VALUE` where `KEY` looks secret by the same rule;
-    - the user and password of a `user:pass@` URL, and an Authorization or
+    or env. Text the server sends back (stderr, errors, a validation error's
+    schema, results in debug logs) is cleaned of the known secret values in
+    its launch config, and of nothing else:
+    - env values whose name has a word containing key, token, secret,
+      password, credential or auth (`GITHUB_TOKEN`, `PROXY_AUTHORIZATION`),
+      except `AUTHOR` and `AUTHORS`;
+    - the value after a secret flag (`--api-key v`, `--token=v`,
+      `--accessToken v`), judged by whole words, so `--max-tokens=4096` is
+      left alone;
+    - `KEY=VALUE` where `KEY` looks secret by the name rule;
+    - a URL's userinfo (`user:pass@` or `TOKEN@`), and an Authorization or
       Bearer header value inside an argument.
-    Each is matched raw, JSON-escaped, and as a code-page-mangled decode.
-    Debug logs of raw traffic (`debug=True`) can still hold other server
-    output.
+    Each is matched raw, JSON-escaped, and as a code-page-mangled decode;
+    overlapping matches are removed together. Values under 4 characters are
+    not matched, and a secret echoed as a JSON number is out of scope. A
+    successful tool result is returned to the agent as the server sent it;
+    only errors and logs are cleaned. Debug logs of raw traffic
+    (`debug=True`) can still hold other server output.
     Writes are bounded too: a server that stops reading its input is stopped
     rather than left blocking the request, and waiting behind another request
     ends on Stop.

@@ -627,7 +627,8 @@ class MCPClient:
             error_msg,
             "",
             "Expected tool schema:",
-            json.dumps(tool_def.input_schema, indent=2),
+            # The schema is the server's text, so it is cleaned like any other.
+            json.dumps(self._redact(tool_def.input_schema), indent=2),
             "",
             "Your arguments:",
             json.dumps(arguments, indent=2),

@@ -39,9 +39,9 @@ _POLL_INTERVAL_S = 0.25
 #
 # A name that holds a secret, for an env var or KEY=VALUE: API_KEY,
 # GITHUB_TOKEN, CLIENT_SECRET, DB_PASSWORD, OAUTH_CREDENTIALS. Not AUTHOR.
-_SECRET_NAME = re.compile(
-    r"key|token|secret|passw(?:or)?d|credential|auth(?!or)", re.IGNORECASE
-)
+_SECRET_NAME_PART = re.compile(r"key|token|secret|passw(?:or)?d|credential|auth")
+# The one word that matches "auth" without being a credential.
+_NOT_SECRET_WORDS = frozenset({"author", "authors"})
 # Words that make a flag's value a secret, matched whole: --api-key,
 # --access-token, --password. Not --max-tokens, --no-auth or --monkey-patch.
 _SECRET_FLAG_WORDS = frozenset(
@@ -56,20 +56,38 @@ _SECRET_FLAG_WORDS = frozenset(
         "credentials",
     }
 )
-# user:pass@ in a URL; the value of an Authorization or Bearer header.
-_URL_USERINFO = re.compile(r"[a-zA-Z][\w+.-]*://([^/@\s:]+):([^/@\s]+)@")
+# user:pass@ or TOKEN@ in a URL; the value of an Authorization or Bearer header.
+_URL_USERINFO = re.compile(r"[a-zA-Z][\w+.-]*://([^/@\s]+)@")
 _AUTH_HEADER = re.compile(
     r"(?:authorization\s*[:=]\s*(?:bearer|basic|token)?\s*|\bbearer\s+)([^\s\"',;]+)",
     re.IGNORECASE,
 )
 
 
+def _words(name: str) -> List[str]:
+    """``--accessToken`` / ``ACCESS_TOKEN`` / ``access-token`` -> access, token."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", name.lstrip("-"))
+    return [word for word in re.split(r"[-_.]+", spaced.lower()) if word]
+
+
 def _is_secret_flag(flag: str) -> bool:
-    """``--api-key`` or ``--access-token``, judged by whole words of the name."""
+    """``--api-key``, ``--accessToken``: judged by whole words of the name."""
     if not flag.startswith("-"):
         return False
-    words = re.split(r"[-_.]+", flag.lstrip("-").lower())
-    return any(word in _SECRET_FLAG_WORDS for word in words)
+    return any(word in _SECRET_FLAG_WORDS for word in _words(flag))
+
+
+def _is_secret_name(name: str) -> bool:
+    """An env or KEY=VALUE name holding a secret: API_KEY, AUTHORIZATION.
+
+    Any word containing key, token, secret, password, credential or auth, so
+    GITHUB_TOKEN and PROXY_AUTHORIZATION count; AUTHOR and AUTHORS don't.
+    """
+    return any(
+        _SECRET_NAME_PART.search(word)
+        for word in _words(name)
+        if word not in _NOT_SECRET_WORDS
+    )
 
 
 def _encodings(secret: str) -> List[str]:
@@ -277,8 +295,11 @@ class StdioTransport(MCPTransport):
           ``--api-key=v`` forms (whole words: ``key``, ``token``, ``secret``,
           ``password``, ``credential``; so not ``--max-tokens``);
         - ``KEY=VALUE`` where ``KEY`` looks secret by the same name rule;
-        - the user and password of a ``user:pass@`` URL;
+        - the userinfo of a URL (``user:pass@`` or ``TOKEN@``);
         - an Authorization or Bearer header value inside an argument.
+
+        Values shorter than 4 characters are not matched: they would remove
+        ordinary text. A secret echoed back as a JSON number is out of scope.
         """
         try:
             tokens = _split_command_string(self.command)
@@ -288,17 +309,23 @@ class StdioTransport(MCPTransport):
         found = {
             str(value)
             for name, value in (self.env or {}).items()
-            if _SECRET_NAME.search(str(name))
+            if _is_secret_name(str(name))
         }
         for i, token in enumerate(tokens):
             name, eq, value = token.partition("=")
-            if eq and value and (_is_secret_flag(name) or _SECRET_NAME.search(name)):
+            # A flag is judged by whole words; a bare KEY by the name rule.
+            secret_key = (
+                _is_secret_flag(name) if name.startswith("-") else _is_secret_name(name)
+            )
+            if eq and value and secret_key:
                 found.add(value)  # --token=VALUE, API_KEY=VALUE
             if not eq and _is_secret_flag(token) and i + 1 < len(tokens):
                 found.add(tokens[i + 1])  # --api-key VALUE
         for text in [*tokens, *(str(v) for v in (self.env or {}).values())]:
             for match in _URL_USERINFO.finditer(text):
-                found.update(match.groups())
+                userinfo = match.group(1)
+                found.add(userinfo)
+                found.update(userinfo.split(":", 1))
             found.update(match.group(1) for match in _AUTH_HEADER.finditer(text))
         forms = {
             form for secret in found if len(secret) >= 4 for form in _encodings(secret)
@@ -314,9 +341,28 @@ class StdioTransport(MCPTransport):
         in, and of nothing else. Debug logs of raw traffic (``debug=True``)
         can still hold other server output.
         """
+        # Spans, merged, so two secrets that overlap leave no piece of either.
+        spans = []
         for secret in self._secrets():
-            text = text.replace(secret, "<redacted>")
-        return text
+            start = text.find(secret)
+            while start != -1:
+                spans.append((start, start + len(secret)))
+                start = text.find(secret, start + 1)
+        if not spans:
+            return text
+        spans.sort()
+        merged = [list(spans[0])]
+        for start, end in spans[1:]:
+            if start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        out, last = [], 0
+        for start, end in merged:
+            out += [text[last:start], "<redacted>"]
+            last = end
+        out.append(text[last:])
+        return "".join(out)
 
     def redact_value(self, value: Any) -> Any:
         """*value* (a decoded reply) with every string in it redacted, keys too.

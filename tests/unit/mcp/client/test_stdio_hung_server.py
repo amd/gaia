@@ -7,6 +7,7 @@ blocking reads, and process lifecycle are the real ones.
 """
 
 import os
+import re
 import sys
 import textwrap
 import threading
@@ -965,28 +966,60 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
             "true",
             "--data",
             long_path,
+            "--max-tokens=4096",
+            "--tokenizer=gpt2-xl",
+            "--keyboard=dvorak",
+            "--monkey-patch=true",
+            "--author=Alice",
         ],
-        env={"NODE_ENV": "production", "LOG_LEVEL": "debug", "AUTHOR": "Alice"},
+        env={
+            "NODE_ENV": "production",
+            "LOG_LEVEL": "debug",
+            "AUTHOR": "Alice",
+            "GIT_AUTHOR_NAME": "Alice Smith",
+        },
     )
     text = (
         f"max tokens 4096 on port 3000 and 8080 via stdio at info by Alice; "
-        f"production debug true {long_path}"
+        f"production debug true {long_path} gpt2-xl dvorak Alice Smith"
     )
     assert t.redact(text) == text
 
 
 @pytest.mark.parametrize(
-    "args,env,secret",
+    "args,env,secret,forms",
     [
-        (["--url", "https://bob:hunter2222@db.example/x"], {}, "hunter2222"),
-        (["--header", "Authorization: Bearer Zq9vKe7wP2.tok"], {}, "Zq9vKe7wP2.tok"),
-        ([], {"GITHUB_TOKEN": 'Zq9v\\"Ke7w\u00e9P2'}, 'Zq9v\\"Ke7w\u00e9P2'),
-        ([], {"API_KEY": "p\u00e4ssw\u00f6rd1234"}, "p\u00e4ssw\u00f6rd1234"),
+        (
+            ["--url", "https://bob:hunter2222@db.example/x"],
+            {},
+            "hunter2222",
+            ["hunter2222"],
+        ),
+        (
+            ["--header", "Authorization: Bearer Zq9vKe7wP2.tok"],
+            {},
+            "Zq9vKe7wP2.tok",
+            ["Zq9vKe7wP2.tok"],
+        ),
+        # Raw, and as json.dumps writes it (ASCII-escaped, and not).
+        (
+            [],
+            {"GITHUB_TOKEN": 'Zq9v\\"Ke7wéP2'},
+            'Zq9v\\"Ke7wéP2',
+            ['Zq9v\\"Ke7wéP2', 'Zq9v\\\\\\"Ke7w\\u00e9P2', 'Zq9v\\\\\\"Ke7wéP2'],
+        ),
+        # Raw, and as a cp1252 write decodes through a UTF-8 pipe.
+        (
+            [],
+            {"API_KEY": "pässwörd1234"},
+            "pässwörd1234",
+            ["pässwörd1234", "p�ssw�rd1234"],
+        ),
     ],
     ids=["url-userinfo", "bearer-header", "json-escapes", "cp1252-env"],
 )
 def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
-    tmp_path, args, env, secret
+    tmp_path, args, env, secret, forms
 ):
     """Raw, JSON-escaped in a non-object line, as a dict key, and cp1252-mangled."""
     from gaia.mcp.client.mcp_client import MCPClient
@@ -1034,5 +1067,99 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
 
     text = "\n".join(seen)
     assert "<redacted>" in text
-    for form in stdio_module._encodings(secret):
+    for form in forms:
         assert form not in text, (form, text)
+    # Runs of letters and digits read the same in every encoding, repr included.
+    for run in re.findall(r"[A-Za-z0-9]{4,}", secret):
+        for i in range(len(run) - 3):
+            assert run[i : i + 4] not in text, (run[i : i + 4], text)
+
+
+def test_a_validation_error_never_echoes_a_secret_from_the_tool_schema(
+    tmp_path, caplog
+):
+    """A -32602 rejection adds the server's own inputSchema to the error."""
+    import logging
+
+    from gaia.mcp.client.mcp_client import MCPClient
+
+    secret = "Zq9vKe7wP2secret"
+    script = tmp_path / "schema_echo.py"
+    script.write_text(
+        _PRELUDE
+        + textwrap.indent(
+            textwrap.dedent("""
+        conf = " ".join(sys.argv)
+        if req["method"] == "initialize":
+            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+        elif req["method"] == "tools/list":
+            send({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [
+                {"name": "x", "inputSchema": {"description": conf,
+                                              conf: {"type": "string"}}}]}})
+        else:
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "error": {"code": -32602, "message": "bad params"}})
+        """),
+            "    ",
+        )
+    )
+    caplog.set_level(logging.DEBUG, logger="gaia.mcp.client.mcp_client")
+    client = MCPClient.from_config(
+        "schema",
+        {"command": sys.executable, "args": ["-u", str(script), "--api-key", secret]},
+    )
+    try:
+        assert client.connect(), client.last_error
+        result = client.call_tool("x", {})
+    finally:
+        client.disconnect()
+
+    text = repr(result) + "\n".join(r.getMessage() for r in caplog.records)
+    assert "input validation failed" in result["error"]
+    assert secret not in text
+
+
+def test_a_reused_pid_is_never_taken_for_the_server():
+    """Only a process created after this launch can be the server we track."""
+    t = StdioTransport(sys.executable, args=["-c", "pass"])
+    t._started_at = time.time()
+    # This test's own process existed long before the "launch".
+    assert t._own_process(os.getpid()) is None
+    t._started_at = 0.0
+    assert t._own_process(os.getpid()) is not None
+
+
+@pytest.mark.parametrize(
+    "args,env,secret",
+    [
+        ([], {"AUTHORIZATION": "Basic Zq9vKe7w"}, "Basic Zq9vKe7w"),
+        ([], {"PROXY_AUTHORIZATION": "Zq9vKe7wP2"}, "Zq9vKe7wP2"),
+        (["--accessToken", "Zq9vKe7wP2"], {}, "Zq9vKe7wP2"),
+        (["--clientSecret=Zq9vKe7wP2"], {}, "Zq9vKe7wP2"),
+        (["https://Zq9vKe7wP2@api.example/v1"], {}, "Zq9vKe7wP2"),
+    ],
+    ids=[
+        "authorization-env",
+        "proxy-authorization-env",
+        "camel-flag",
+        "camel-flag-equals",
+        "user-only-userinfo",
+    ],
+)
+def test_contract_secret_positions_are_cleaned(args, env, secret):
+    t = StdioTransport(sys.executable, args=["-u", "srv.py", *args], env=env)
+    assert secret not in t.redact(f"failed: {secret} rejected")
+
+
+def test_overlapping_secrets_leave_no_piece_of_either():
+    t = StdioTransport(
+        sys.executable, args=["--token", "abcdefgh", "--api-key", "efghijkl"]
+    )
+    assert t.redact("xx abcdefghijkl yy") == "xx <redacted> yy"
+
+
+def test_values_under_four_characters_are_not_matched():
+    t = StdioTransport(sys.executable, args=["--token", "abc"])
+    assert t.redact("abc stays: a short value would erase ordinary words") == (
+        "abc stays: a short value would erase ordinary words"
+    )
