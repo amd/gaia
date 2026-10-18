@@ -74,6 +74,8 @@ class _IndexJob:
         self.embed_started: Optional[float] = None
         self.embedded = 0
         self.total: Optional[int] = None
+        #: Seconds the batch now embedding has waited on a busy embedder.
+        self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
         self.done = threading.Event()
@@ -82,6 +84,9 @@ class _IndexJob:
         if self.embed_started is None:
             self.embed_started = time.monotonic()
         self.embedded, self.total = embedded, total
+
+    def waiting(self, seconds: int) -> None:
+        self.embedder_wait = seconds
 
     def seconds_remaining(self) -> Optional[int]:
         if not (self.total and self.embedded and self.embed_started):
@@ -110,7 +115,7 @@ def _index_within_budget(
             def _run():
                 try:
                     job.result = rag.index_document(
-                        path, progress_callback=job.progress
+                        path, progress_callback=job.progress, wait_callback=job.waiting
                     )
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
@@ -152,18 +157,25 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
         progress = f"{job.embedded:,} of {job.total:,} chunks embedded"
     remaining = job.seconds_remaining()
     eta = f", about {max(1, round(remaining / 60))} min left" if remaining else ""
+    waiting = (
+        f" The embedding model has been waiting {job.embedder_wait}s for its "
+        "current batch: the GPU is busy with other work, so indexing is queued."
+        if job.embedder_wait
+        else ""
+    )
     return {
         "status": "in_progress",
         "file_name": name,
         "message": (
             f"{name} is large and is still being indexed in the background "
             f"({progress} after {elapsed}s{eta}). It cannot be searched yet; "
-            "nothing failed."
+            f"nothing failed.{waiting}"
         ),
         "chunks_embedded": job.embedded,
         "total_chunks": job.total,
         "elapsed_seconds": elapsed,
         "estimated_seconds_remaining": remaining,
+        "embedder_wait_seconds": job.embedder_wait,
         "hint": (
             "Tell the user the document is still indexing and how long is left. "
             "To answer now, read the relevant part of the file directly with "
@@ -178,7 +190,12 @@ def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
 
-def _embedding_next_step(unreachable: bool, retry: str) -> str:
+def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
+    if busy:
+        return (
+            "The GPU is busy with another model or app. Wait for that work to "
+            f"finish, then {retry}."
+        )
     if unreachable:
         from gaia.llm.lemonade_launcher import describe_start_hint
 
@@ -196,7 +213,9 @@ def _embedding_error(error: EmbeddingUnavailableError) -> Dict[str, Any]:
         "status": "error",
         "error_type": "embedding_unavailable",
         "error": f"Document search did not run. {error}",
-        "next_step": _embedding_next_step(error.unreachable, "retry the search"),
+        "next_step": _embedding_next_step(
+            error.unreachable, "retry the search", busy=error.busy
+        ),
         "instruction": (
             "Tell the user document search is unavailable, why, and the next "
             "step. The documents were not searched, so do not say they hold "
@@ -212,7 +231,9 @@ def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
         "error_type": "embedding_unavailable",
         "error": f"Indexing failed: {stats.get('error')}",
         "next_step": _embedding_next_step(
-            bool(stats.get("lemonade_unreachable")), "index it again"
+            bool(stats.get("lemonade_unreachable")),
+            "index it again",
+            busy=bool(stats.get("embedder_busy")),
         ),
     }
 
