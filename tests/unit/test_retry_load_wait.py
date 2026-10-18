@@ -11,16 +11,7 @@ import pytest
 import requests
 
 from gaia.llm import lemonade_client as lc
-from gaia.llm.retry import (
-    DEFAULT_LOAD_WAIT,
-    LOAD_WAIT_ENV,
-    ModelCallRetrier,
-    RetryNotice,
-    RetryPolicy,
-    RetryState,
-    model_retry_notices,
-    retry_state_of,
-)
+from gaia.llm import retry
 
 MODEL = "Gemma-4-E4B-it-GGUF"
 BIG = "Qwen3-30B-A3B-Instruct-2507-GGUF"
@@ -38,9 +29,13 @@ class FakeClock:
 
 
 def _health(status):
-    entries = [{"model_name": MODEL, "recipe": "llamacpp", "status": "ready"}]
+    entries = [
+        {"model_name": MODEL, "type": "llm", "recipe": "llamacpp", "status": "ready"}
+    ]
     if status:
-        entries.append({"model_name": BIG, "recipe": "llamacpp", "status": status})
+        entries.append(
+            {"model_name": BIG, "type": "llm", "recipe": "llamacpp", "status": status}
+        )
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {"status": "ok", "all_models_loaded": entries}
@@ -89,8 +84,8 @@ def test_chat_waits_out_another_apps_cold_load():
 
 def test_load_wait_is_bounded_and_named():
     clock = FakeClock()
-    retrier = ModelCallRetrier(
-        RetryPolicy(load_wait=60),
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(load_wait=60),
         sleep=clock.sleep,
         clock=clock,
         server_loading=lambda: f"Lemonade is loading {BIG}",
@@ -99,10 +94,10 @@ def test_load_wait_is_bounded_and_named():
     def call():
         raise requests.exceptions.ConnectionError("reset")
 
-    state = RetryState()
+    state = retry.RetryState()
     with pytest.raises(requests.exceptions.ConnectionError) as info:
         retrier.call(call, state=state)
-    assert retry_state_of(info.value) is state
+    assert retry.retry_state_of(info.value) is state
     assert state.exhausted and BIG in state.last_reason
     assert 60 <= clock.now <= 61
     assert state.attempts == 1
@@ -112,8 +107,8 @@ def test_load_wait_is_announced():
     clock = FakeClock()
     seen = []
     loading = iter([f"Lemonade is loading {BIG}"] * 3 + [None])
-    retrier = ModelCallRetrier(
-        RetryPolicy(),
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(),
         sleep=clock.sleep,
         clock=clock,
         server_loading=lambda: next(loading),
@@ -126,17 +121,17 @@ def test_load_wait_is_announced():
             raise requests.exceptions.ConnectionError("reset")
         return "ok"
 
-    with model_retry_notices(seen.append):
+    with retry.model_retry_notices(seen.append):
         assert retrier.call(call) == "ok"
-    assert seen and isinstance(seen[0], RetryNotice)
+    assert seen and isinstance(seen[0], retry.RetryNotice)
     assert BIG in seen[0].reason
 
 
 def test_no_load_reported_keeps_the_deadline():
     """Without a reported load the 120 s budget applies exactly as before."""
     clock = FakeClock()
-    retrier = ModelCallRetrier(
-        RetryPolicy(),
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(),
         sleep=clock.sleep,
         clock=clock,
         server_loading=lambda: None,
@@ -146,7 +141,7 @@ def test_no_load_reported_keeps_the_deadline():
         clock.now += 150
         raise requests.exceptions.ConnectionError("reset")
 
-    state = RetryState()
+    state = retry.RetryState()
     with pytest.raises(requests.exceptions.ConnectionError):
         retrier.call(call, state=state)
     assert state.attempts == 1 and state.exhausted
@@ -154,8 +149,8 @@ def test_no_load_reported_keeps_the_deadline():
 
 def test_load_wait_stops_on_cancel():
     clock = FakeClock()
-    retrier = ModelCallRetrier(
-        RetryPolicy(),
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(),
         sleep=clock.sleep,
         clock=clock,
         server_loading=lambda: f"Lemonade is loading {BIG}",
@@ -164,19 +159,21 @@ def test_load_wait_stops_on_cancel():
     def call():
         raise requests.exceptions.ConnectionError("reset")
 
-    with model_retry_notices(lambda _n: None, is_cancelled=lambda: clock.now >= 10):
+    with retry.model_retry_notices(
+        lambda _n: None, is_cancelled=lambda: clock.now >= 10
+    ):
         with pytest.raises(requests.exceptions.ConnectionError):
             retrier.call(call)
     assert clock.now < 20
 
 
 def test_load_wait_env(monkeypatch):
-    assert RetryPolicy.from_env().load_wait == DEFAULT_LOAD_WAIT
-    monkeypatch.setenv(LOAD_WAIT_ENV, "900")
-    assert RetryPolicy.from_env().load_wait == 900
-    monkeypatch.setenv(LOAD_WAIT_ENV, "soon")
-    with pytest.raises(ValueError, match=LOAD_WAIT_ENV):
-        RetryPolicy.from_env()
+    assert retry.RetryPolicy.from_env().load_wait == retry.DEFAULT_LOAD_WAIT
+    monkeypatch.setenv(retry.LOAD_WAIT_ENV, "900")
+    assert retry.RetryPolicy.from_env().load_wait == 900
+    monkeypatch.setenv(retry.LOAD_WAIT_ENV, "soon")
+    with pytest.raises(ValueError, match=retry.LOAD_WAIT_ENV):
+        retry.RetryPolicy.from_env()
 
 
 @pytest.mark.parametrize(
@@ -223,8 +220,11 @@ def test_slow_probes_count_against_the_load_wait():
         clock.now += 8
         return f"Lemonade is loading {BIG}"
 
-    retrier = ModelCallRetrier(
-        RetryPolicy(load_wait=60), sleep=clock.sleep, clock=clock, server_loading=probe
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(load_wait=60),
+        sleep=clock.sleep,
+        clock=clock,
+        server_loading=probe,
     )
 
     def call():
@@ -245,8 +245,8 @@ def test_cloud_requests_do_not_wait_for_a_local_load():
 def test_retries_off_means_off_during_a_load():
     """GAIA_LLM_RETRY_ATTEMPTS=1 is not overridden by a reported load."""
     clock = FakeClock()
-    retrier = ModelCallRetrier(
-        RetryPolicy(max_attempts=1),
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(max_attempts=1),
         sleep=clock.sleep,
         clock=clock,
         server_loading=lambda: f"Lemonade is loading {BIG}",
@@ -260,3 +260,122 @@ def test_retries_off_means_off_during_a_load():
     with pytest.raises(requests.exceptions.ConnectionError):
         retrier.call(call)
     assert len(calls) == 1 and clock.now == 0
+
+
+# ── Review follow-ups ─────────────────────────────────────────────────────
+
+
+def test_repeated_loads_never_exceed_the_attempt_cap():
+    """Load reported, load ends, request fails again, load reported... The
+    attempt cap still holds, and so does one notice per wait."""
+    clock = FakeClock()
+    flip = {"loading": False}
+
+    def probe():
+        flip["loading"] = not flip["loading"]
+        return f"Lemonade is loading {BIG}" if flip["loading"] else None
+
+    notices = []
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(max_attempts=5),
+        sleep=clock.sleep,
+        clock=clock,
+        server_loading=probe,
+    )
+    calls = []
+
+    def call():
+        calls.append(1)
+        raise requests.exceptions.ConnectionError("reset")
+
+    with retry.model_retry_notices(notices.append):
+        with pytest.raises(requests.exceptions.ConnectionError):
+            retrier.call(call)
+    assert len(calls) <= 5
+    assert len(notices) <= 5
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        # Another app's speech or embedding model: not our slot pool.
+        {"model_name": "whisper-v3", "type": "transcription", "status": "loading"},
+        {"model_name": "embed", "type": "embedding", "status": "loading"},
+        # A download is not a load: it holds no slot and can take hours.
+        {"model_name": BIG, "type": "llm", "status": "downloading"},
+    ],
+)
+def test_unrelated_activity_is_not_a_load(entry):
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:1/api/v1", verbose=False)
+    response = _health(None)
+    response.json.return_value["all_models_loaded"].append(
+        dict(entry, recipe="llamacpp")
+    )
+    with patch.object(lc.requests, "get", return_value=response):
+        assert client._server_load_in_progress() is None
+
+
+def test_stop_ends_the_load_wait_within_half_a_second():
+    clock = FakeClock()
+    retrier = retry.ModelCallRetrier(
+        retry.RetryPolicy(),
+        sleep=clock.sleep,
+        clock=clock,
+        server_loading=lambda: f"Lemonade is loading {BIG}",
+    )
+
+    def call():
+        raise requests.exceptions.ConnectionError("reset")
+
+    with retry.model_retry_notices(
+        lambda _n: None, is_cancelled=lambda: clock.now >= 0.2
+    ):
+        with pytest.raises(requests.exceptions.ConnectionError):
+            retrier.call(call)
+    assert clock.now <= 0.5 + 1e-9
+
+
+def test_stop_ends_the_busy_server_wait():
+    clock = FakeClock()
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:1/api/v1", verbose=False)
+    client._retry_sleep = clock.sleep
+    client._retry_clock = clock
+    busy = lc.LemonadeStatus(running=False)
+    busy.busy = True
+    with patch.object(client, "get_status", return_value=busy):
+        with retry.model_retry_notices(
+            lambda _n: None, is_cancelled=lambda: clock.now >= 1
+        ):
+            with pytest.raises(retry.StreamCancelledError):
+                client._wait_while_busy(MODEL)
+    assert clock.now <= 1.5
+
+
+def test_busy_wait_is_announced_not_printed(capsys):
+    """A library reports through the retry notice, not stdout/stderr."""
+    clock = FakeClock()
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:1/api/v1", verbose=False)
+    client._retry_sleep = clock.sleep
+    client._retry_clock = clock
+    busy = lc.LemonadeStatus(running=False)
+    busy.busy = True
+    ready = lc.LemonadeStatus(running=True)
+    notices = []
+    with patch.object(client, "get_status", side_effect=[busy, busy, ready]):
+        with retry.model_retry_notices(notices.append):
+            assert client._wait_while_busy(MODEL).running
+    assert notices and "busy" in notices[0].reason
+    assert capsys.readouterr().err == ""
+
+
+def test_a_slow_load_is_not_labelled_a_busy_server():
+    """Only a status probe that goes unanswered means "busy"; a /load that
+    times out is the load's own failure."""
+    client = lc.LemonadeClient(base_url="http://127.0.0.1:1/api/v1", verbose=False)
+    with patch.object(
+        lc.requests, "post", side_effect=requests.exceptions.ReadTimeout("slow")
+    ):
+        with pytest.raises(lc.LemonadeClientError) as info:
+            client._send_request("post", f"{client.base_url}/load", {}, timeout=5)
+    assert not isinstance(info.value, lc.LemonadeUnresponsiveError)
+    assert "busy" not in str(info.value)

@@ -17,6 +17,7 @@ import pytest
 
 from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_manager import LemonadeManager
+from gaia.llm.retry import model_retry_notices
 
 # Local loopback fakes only.
 pytestmark = pytest.mark.allow_network
@@ -229,32 +230,24 @@ def test_health_check_default_is_a_short_probe(isolated_home, stalled):
 # ── B6: per-call status probes are short and cached ──────────────────────
 
 
-def test_chat_does_not_reprobe_status_every_call(isolated_home, fake, monkeypatch):
+def test_each_chat_is_one_short_probe_and_no_catalog_read(isolated_home, fake):
     client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
     for _ in range(3):
         client.chat_completions(MODEL, [{"role": "user", "content": "hi"}])
     assert fake.count("POST", "/chat/completions") == 3
-    assert fake.count("GET", "/health") <= 1
+    assert fake.count("GET", "/health") == 3
+    assert fake.count("GET", "/models") == 0
     assert fake.count("POST", "/load") == 0
 
 
-def test_status_cache_is_dropped_by_a_load(isolated_home, fake, monkeypatch):
+def test_a_reload_by_someone_else_is_seen_on_the_next_request(isolated_home, fake):
+    """Another app evicts the model and Lemonade reloads it at its own 32K
+    default (#1030): the very next request notices and restores the window."""
     client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
     client.chat_completions(MODEL, [{"role": "user", "content": "hi"}])
-    probes = fake.count("GET", "/health")
-    client.load_model(MODEL, ctx_size=65536)
+    fake.loaded[0]["recipe_options"]["ctx_size"] = 32768
     client.chat_completions(MODEL, [{"role": "user", "content": "hi"}])
-    assert fake.count("GET", "/health") > probes
-
-
-def test_only_a_probe_extends_residency(isolated_home, fake, monkeypatch):
-    """An answered request may have been served by a reload at Lemonade's own
-    window, so it never stands in for the /health check."""
-    client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
-    client.chat_completions(MODEL, [{"role": "user", "content": "hi"}])
-    monkeypatch.setattr(lc, "RESIDENCY_RECHECK_SECONDS", 0.0)
-    client.chat_completions(MODEL, [{"role": "user", "content": "hi"}])
-    assert fake.count("GET", "/health") == 2
+    assert fake.count("POST", "/load") == 1
 
 
 @pytest.fixture
@@ -263,23 +256,27 @@ def quick_probes(monkeypatch):
     monkeypatch.setattr(lc, "_BUSY_POLL_SECONDS", 0.5)
 
 
-def test_first_request_waits_for_a_busy_server(
-    isolated_home, fake, quick_probes, capsys
-):
+def test_first_request_waits_for_a_busy_server(isolated_home, fake, quick_probes):
     """/health stalls while another app loads a model, then answers: the
     request waits for it, says so, and never sends a load."""
     fake.health_delay = 60
     threading.Timer(3, lambda: setattr(fake, "health_delay", 0)).start()
     client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
+    notices = []
+
+    def chat():
+        with model_retry_notices(notices.append):
+            return client.chat_completions(MODEL, [{"role": "user", "content": "hi"}])
+
     results, errors, elapsed = _run_bounded(
-        lambda: client.chat_completions(MODEL, [{"role": "user", "content": "hi"}]),
+        chat,
         n=1,
         limit=40,
     )
     assert not errors, errors
     assert results[0]["choices"][0]["message"]["content"] == "hi"
     assert fake.count("POST", "/load") == 0
-    assert "is busy" in capsys.readouterr().err
+    assert notices and "busy" in notices[0].reason
 
 
 def test_a_server_that_never_answers_fails_loudly(

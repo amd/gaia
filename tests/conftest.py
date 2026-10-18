@@ -152,7 +152,6 @@ def _fixed_machine_memory(request, monkeypatch):
 
     monkeypatch.setattr(lemonade_client, "_FITTED_CTX_CACHE", {})
     monkeypatch.setattr(lemonade_client, "_SYSTEM_INFO_CACHE", {})
-    monkeypatch.setattr(lemonade_client, "_RESIDENT", {})
     if request.node.get_closest_marker("real_free_memory"):
         return
     monkeypatch.setattr(
