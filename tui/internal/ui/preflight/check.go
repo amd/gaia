@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	gaiaLemonade "github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -343,8 +344,8 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 	row.Line = "not installed"
 	row.Detail = fmt.Sprintf("The background service has no agent registered as %q.", cfg.AgentID)
 	row.Remedy = Remedy{
-		Action:  "Install it from the hub, then re-check.",
-		Command: "gaia hub install " + cfg.AgentID,
+		Action:  "Install it, then re-check.",
+		Command: catalog.InstallCommand(cfg.AgentID),
 		Where:   daemonLog(),
 	}
 	return row.commit(rep)
@@ -1360,7 +1361,7 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 				cfg.AgentName, detailSuffix(detail)),
 			remedy: Remedy{
 				Action:  "Update the agent if you want this verified before launch.",
-				Command: "gaia hub install " + cfg.AgentID,
+				Command: catalog.InstallCommand(cfg.AgentID),
 				Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 			},
 			trace: trace(outcome),

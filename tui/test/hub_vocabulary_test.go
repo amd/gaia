@@ -1,9 +1,13 @@
 package test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,12 +35,13 @@ func TestNoSourceStillSpeaksHub(t *testing.T) {
 	// of this to internal/ui is exactly why three of them survived review.
 	//
 	// `gaia hub install` is deliberately NOT here: that is the Python CLI, it
-	// still exists, and it is the correct way to install a sidecar agent.
+	// still works, and it installs a non-flagship sidecar agent by id. Where it
+	// may appear is pinned by TestNoStringSendsUsersToTheAgentHub.
 	deadCommands := []string{"gaia tui list", "gaia tui install", "gaia tui uninstall"}
 
 	// Banned in the SCREENS only: the browser's own vocabulary. "Agent Hub" is
-	// not among them — the hub service is real, HubClient still talks to it,
-	// and only the browsing UI is gone.
+	// checked separately, in string literals only: the download service is
+	// real and HubClient still talks to it, but users no longer meet the name.
 	browserWords := []string{"Coming Soon", "Available (", "Installed (", "vote", "Vote"}
 
 	root := filepath.Join(repoTUIDir(t), "internal")
@@ -108,5 +113,62 @@ func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
 					"Python CLI: %q", filepath.Base(path), i+1, strings.TrimSpace(line))
 			}
 		}
+	}
+}
+
+// GAIA ships one agent, so "the Agent Hub" is no longer something a user is
+// sent to (#5172). Only string literals are checked — comments may still name
+// the download service the installer talks to.
+//
+// The flagship installs with `gaia init`, so `gaia hub install` may only be
+// spelled inside catalog.InstallCommand, which maps every other agent id to it.
+// A literal elsewhere is how a remedy ends up telling a user to run
+// `gaia hub install gaia`.
+func TestNoStringSendsUsersToTheAgentHub(t *testing.T) {
+	root := filepath.Join(repoTUIDir(t), "internal")
+	fset := token.NewFileSet()
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			inInstallCommand := isFunc && fn.Recv == nil && fn.Name.Name == "InstallCommand" &&
+				rel == "catalog/catalog.go"
+			ast.Inspect(decl, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				text, unquoteErr := strconv.Unquote(lit.Value)
+				if unquoteErr != nil {
+					text = lit.Value
+				}
+				line := fset.Position(lit.Pos()).Line
+				if strings.Contains(text, "Agent Hub") {
+					t.Errorf("internal/%s:%d tells the user about the Agent Hub: %q", rel, line, text)
+				}
+				if strings.Contains(text, "gaia hub install") && !inInstallCommand {
+					t.Errorf("internal/%s:%d spells `gaia hub install` itself; use "+
+						"catalog.InstallCommand so the flagship gets `gaia init`: %q", rel, line, text)
+				}
+				return true
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
 	}
 }

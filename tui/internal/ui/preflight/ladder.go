@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
@@ -84,6 +85,15 @@ func (l Ladder) agentCommand(verb, fallback string) string {
 		return fallback
 	}
 	return verb + " " + l.AgentID
+}
+
+// installCommand names how to install the agent, or how to list what the
+// service knows when no agent was named.
+func (l Ladder) installCommand() string {
+	if l.AgentID == "" {
+		return "gaia daemon agents"
+	}
+	return catalog.InstallCommand(l.AgentID)
 }
 
 // daemonLog is the daemon's own log path, resolved for embedding in a remedy.
@@ -247,7 +257,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 			Cause: fmt.Sprintf("The background service does not know the agent %q.", l.agent()),
 			Remedy: "Install it, then check it is registered. " +
 				detailSuffix(trimmed),
-			Command: l.agentCommand("gaia hub install", "gaia daemon agents"),
+			Command: l.installCommand(),
 			Where:   daemonLog(),
 		}
 	case http.StatusServiceUnavailable:

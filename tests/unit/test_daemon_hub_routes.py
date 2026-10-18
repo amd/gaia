@@ -681,7 +681,7 @@ def test_unknown_id_message_leads_with_the_actionable_clause(monkeypatch):
     "probe,expected_lead",
     [
         ("installed", "is installed but the daemon does not supervise it"),
-        ("hub", "is published on the Agent Hub but this GAIA build cannot run it"),
+        ("hub", "is published but this GAIA build cannot run it"),
         ("agent", "is a GAIA agent but is not published as an installable sidecar"),
     ],
 )

@@ -314,7 +314,7 @@ class AgentInfo(BaseModel):
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
-    # Agent Hub metadata — used by the frontend to render rich discovery cards.
+    # Display metadata in the /api/agents contract; the Agent UI renders none of it.
     category: str = "general"
     tags: List[str] = Field(default_factory=list)
     icon: str = ""  # lucide icon name

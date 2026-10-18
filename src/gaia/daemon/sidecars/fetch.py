@@ -93,8 +93,8 @@ def _join_url(base: str, name: str) -> str:
 def _install_remedy(agent_dir_name: str) -> str:
     return (
         f"Install it with `gaia hub install {agent_dir_name}` (or `gaia agent "
-        f"install {agent_dir_name}`, or the Agent UI's hub panel), which downloads "
-        "the binary from the Agent Hub and verifies its SHA-256 against the hub "
+        f"install {agent_dir_name}`, or Install in the Agent UI), which downloads "
+        "the published binary and verifies its SHA-256 against the published "
         "manifest — independent of this lock. To run from source instead, use dev mode."
     )
 
@@ -154,8 +154,7 @@ def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResul
             f"hub-installed agent binary at {binary_path} does not match the "
             f"SHA-256 its install sentinel recorded:\n"
             f"  expected {sentinel.artifact_sha256}\n  actual   {actual}\n"
-            "The install is corrupt or was tampered with — reinstall the agent "
-            "from the Agent Hub."
+            "The install is corrupt or was tampered with — reinstall the agent."
         )
     logger.info(
         "sidecar fetch: using hub-installed verified binary %s (v%s)",

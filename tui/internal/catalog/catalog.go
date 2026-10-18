@@ -308,9 +308,9 @@ func ResolveExecutable(nameOrPath, agentID string) (string, error) {
 	}
 	if l.Unverified != "" {
 		return "", fmt.Errorf(
-			"%w: reinstall %s with `gaia hub install %s` — %s exists but the install "+
+			"%w: reinstall %s with `%s` — %s exists but the install "+
 				"is unverified (no %s), so it is not safe to run",
-			ErrNoExecutable, agentID, agentID, l.Unverified, SentinelName)
+			ErrNoExecutable, agentID, InstallCommand(agentID), l.Unverified, SentinelName)
 	}
 	return "", errors.New(MissingBinaryMessage(nameOrPath, l))
 }
@@ -544,6 +544,16 @@ func readSentinel(path string) (*InstalledRecord, error) {
 
 // FlagshipID is the agent the TUI boots into. GAIA ships one.
 const FlagshipID = "gaia"
+
+// InstallCommand is the command a user runs to install agentID, or to finish an
+// install that left no sentinel. `gaia init` installs the flagship whenever it
+// is missing; any other agent installs by id through the Python CLI.
+func InstallCommand(agentID string) string {
+	if agentID == FlagshipID {
+		return "gaia init"
+	}
+	return "gaia hub install " + agentID
+}
 
 func seedAgents() []Agent {
 	return []Agent{
