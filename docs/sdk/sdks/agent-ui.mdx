@@ -1943,7 +1943,8 @@ model with no known price reads as unknown, never $0. Cloud models from
 
   <Accordion title="GET /api/spending">
     This month's cloud chat turns in the Agent UI at list price, without cache
-    discounts: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
+    discounts. A turn that fails or is stopped before it answers isn't counted,
+    so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
     known price, counted apart), `by_model`, `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.

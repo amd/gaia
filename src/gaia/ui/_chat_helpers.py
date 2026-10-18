@@ -2407,6 +2407,13 @@ async def _get_chat_response(
         finally:
             agent.console = activity._inner
 
+        # Without counts the turn is still recorded, as one of unknown cost.
+        counts = (
+            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            if isinstance(result, dict)
+            else {}
+        )
+        spending.record_turn(db, model_id, counts)
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -3465,7 +3472,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
-            spending.record_turn(db, model_id, inference_stats)
 
             msg_id = db.upsert_message(
                 request.session_id,
@@ -3476,6 +3482,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
             )
+            spending.record_turn(db, model_id, inference_stats)
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat

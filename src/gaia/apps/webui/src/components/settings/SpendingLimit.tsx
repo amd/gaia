@@ -103,7 +103,7 @@ export function SpendingLimit() {
             </form>
             <span className="settings-hint">
                 Counts cloud chats in GAIA&rsquo;s Agent UI at list price, without cache discounts. Your provider&rsquo;s bill
-                is the final word. Models with an unknown price, like the AMD LLM Gateway&rsquo;s, add nothing to the total,
+                is the final word. Turns that fail or are stopped before a reply aren&rsquo;t counted. Models with an unknown price, like the AMD LLM Gateway&rsquo;s, add nothing to the total,
                 but are stopped too once the limit is reached.
             </span>
             {error && <p className="settings-error" role="alert">{error}</p>}

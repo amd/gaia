@@ -178,6 +178,8 @@ def test_streaming_chat_refuses_a_cloud_turn_over_the_limit(db, monkeypatch):
     _turn(db, inp=1_000_000, out=100_000)
     db.set_setting("custom_model", FLASH)
     session = db.create_session(title="t", agent_type="gaia")
+    # The check must not depend on which agents this machine has registered.
+    monkeypatch.setattr(_chat_helpers, "_agent_registry", None)
 
     def no_agent(*_a, **_k):
         raise AssertionError("an agent was built for a refused turn")
@@ -222,6 +224,7 @@ def test_non_streaming_chat_refuses_a_cloud_turn_over_the_limit(db, monkeypatch)
     _turn(db, inp=1_000_000, out=100_000)
     db.set_setting("custom_model", FLASH)
     session = db.create_session(title="t", agent_type="gaia")
+    monkeypatch.setattr(_chat_helpers, "_agent_registry", None)
     monkeypatch.setattr(
         _chat_helpers,
         "_get_cached_agent",
@@ -247,3 +250,59 @@ def test_cloud_model_lists_carry_their_price(monkeypatch):
     by_id = {m["id"]: m for m in providers._list_models("fireworks")}
     assert by_id[FLASH]["price"] == spending.price_card(FLASH)
     assert by_id["fireworks.brand-new"]["price"] is None
+
+
+class _CloudAgent:
+    """A cached agent stand-in whose turn reports token totals, as process_query does."""
+
+    def __init__(self, result):
+        self._result = result
+        self.indexed_files = set()
+        self.conversation_history = []
+        self.rag = None
+        self.console = None
+        self._cancel_event = __import__("threading").Event()
+
+    def _register_tools(self):
+        pass
+
+    def process_query(self, _message, **_kwargs):
+        return self._result
+
+
+@pytest.mark.parametrize(
+    "result,priced",
+    [
+        ({"result": "4", "input_tokens": 1_000_000, "output_tokens": 100_000}, True),
+        # No counts: still recorded, as a turn of unknown cost, never as $0.
+        ("4", False),
+    ],
+)
+def test_non_streaming_cloud_turns_are_recorded(db, monkeypatch, result, priced):
+    import asyncio
+
+    from gaia.ui import _chat_helpers
+    from gaia.ui.models import ChatRequest
+
+    monkeypatch.setattr(_chat_helpers, "_agent_registry", None)
+    monkeypatch.setattr(
+        _chat_helpers, "_maybe_load_expected_model", lambda *a, **k: None
+    )
+    _chat_helpers._agent_cache.clear()
+    db.set_setting("custom_model", FLASH)
+    session = db.create_session(title="t", model=FLASH, agent_type="chat")
+    _chat_helpers._store_agent(session["id"], FLASH, [], _CloudAgent(result), "chat")
+    try:
+        request = ChatRequest(session_id=session["id"], message="2+2?", stream=False)
+        answer = asyncio.run(_chat_helpers._get_chat_response(db, session, request))
+    finally:
+        _chat_helpers._agent_cache.clear()
+    assert "4" in answer
+    report = spending.month_report(db)
+    assert report["turns"] == 1
+    if priced:
+        assert report["total_usd"] == pytest.approx(
+            price(FLASH, 1_000_000, 0, 100_000), abs=1e-4
+        )
+    else:
+        assert report["unpriced_turns"] == 1
