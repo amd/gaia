@@ -179,11 +179,12 @@ def unrestricted(monkeypatch):
 class TestTimeoutClasses:
     """Every class in the table is named, enumerated, and has a stated default."""
 
-    def test_the_four_classes_and_their_defaults(self):
+    def test_the_classes_and_their_defaults(self):
         assert {name: cls.seconds for name, cls in TIMEOUT_CLASSES.items()} == {
             "test": 900,
             "build": 1800,
             "network": 300,
+            "script": 600,
             "default": 30,
         }
 
@@ -258,6 +259,43 @@ class TestTimeoutClasses:
     )
     def test_everything_else(self, command):
         assert classify_command(command).name == "default"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python analyze.py big.csv",
+            "python3 -u scripts/train.py --epochs 3",
+            "py -3 report.py",
+            "python -m mypkg.analyze data/",
+            "python -c \"import pandas; print(pandas.read_csv('big.csv').shape)\"",
+            "uv run python analyze.py",
+            "FOO=1 python analyze.py",
+            "node scripts/migrate.js",
+            "Rscript model.R",
+            "bash ./run_all.sh",
+            "./run_all.sh",
+            r"powershell -File .\convert.ps1",
+            "cd data && python clean.py | tail -5",
+        ],
+    )
+    def test_scripts_get_the_script_class(self, command):
+        # A user's script is real work: under a saturated machine it is the
+        # first thing a 30s kill hits.
+        assert classify_command(command).name == "script"
+
+    @pytest.mark.parametrize(
+        "command,expected_class",
+        [
+            ("python -m pytest tests/", "test"),
+            ("python -m pip install requests", "build"),
+            ("python --version", "default"),
+            ("python", "default"),
+        ],
+    )
+    def test_python_running_a_known_tool_keeps_that_tools_class(
+        self, command, expected_class
+    ):
+        assert classify_command(command).name == expected_class
 
     def test_a_pipeline_takes_its_longest_segment(self):
         # The shell waits for the whole pipeline, so `grep` does not make a
@@ -352,6 +390,7 @@ class TestResolveTimeout:
         ("cd . && pytest tests/", 900, "test"),
         ("pip install -e . && pytest -q", 1800, "build"),
         ("git clone --help", 300, "network"),
+        ("python analyze.py big.csv", 600, "script"),
         ("ls -la", 30, "default"),
     ],
 )

@@ -334,11 +334,14 @@ classifies it and applies the class default. An explicit `timeout=` always wins.
 | `test` | 900s | pytest, tox, jest/vitest, `cargo test`, `go test`, `npm test`, `mvn test`, `gaia eval` |
 | `build` | 1800s | pip/uv/poetry/conda/apt installs, make, cmake, ninja, msbuild, tsc, `cargo build`, `npm ci`, `docker build` |
 | `network` | 300s | `git clone/fetch/pull/push`, gh, curl, wget, ssh/scp/rsync, `docker pull` |
+| `script` | 600s | a script run by an interpreter — `python x.py`, `python -m pkg`, `python -c`, node, Rscript, bash/pwsh scripts, `./x.sh` |
 | `default` | 30s | everything else — the read-only allowlist (ls, cat, grep, `git status`) |
 
 A pipeline takes the longest class of any segment: `pytest -q \| tail` is a test
 run whose output happens to be filtered. Wrappers are transparent, so
 `python -m pytest`, `uv run pytest` and `npx jest` all classify as `test`.
+Python launchers still count, though: `python -m mypkg` or `python analyze.py`
+runs a script, so it gets `script`, not the 30s default.
 
 A timeout above the 3600s ceiling is **refused, not clamped** — a command killed
 at a limit its caller never chose is a failure with no visible cause.

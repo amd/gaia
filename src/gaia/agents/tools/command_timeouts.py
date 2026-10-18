@@ -7,7 +7,7 @@ legitimately take minutes. The model *can* pass ``timeout=`` itself, but nothing
 tells it how long the command it is about to run should take, so it rarely does.
 
 This module answers that question up front: classify the command text, apply the
-class default. Four classes, no hidden heuristics, table below.
+class default. Five classes, no hidden heuristics, table below.
 
 +----------------+---------+------------------------------------------------+
 | class          | default | matches                                        |
@@ -22,6 +22,10 @@ class default. Four classes, no hidden heuristics, table below.
 +----------------+---------+------------------------------------------------+
 | ``network``    |   300 s | ``git clone/fetch/pull/push``, gh, curl, wget, |
 |                |         | ssh/scp/rsync, ``docker pull``, hf downloads   |
++----------------+---------+------------------------------------------------+
+| ``script``     |   600 s | a script run by an interpreter — ``python      |
+|                |         | x.py``, ``python -m pkg``, ``python -c``,      |
+|                |         | node, Rscript, bash/pwsh scripts, ``./x.sh``   |
 +----------------+---------+------------------------------------------------+
 | ``default``    |    30 s | everything else — the read-only allowlist      |
 |                |         | (ls, cat, grep, stat, git status …)            |
@@ -58,18 +62,26 @@ class TimeoutClass:
 TEST = TimeoutClass("test", 900, "test runners")
 BUILD = TimeoutClass("build", 1800, "builds, compiles and package installs")
 NETWORK = TimeoutClass("network", 300, "VCS and network calls")
+SCRIPT = TimeoutClass("script", 600, "scripts run by an interpreter")
 DEFAULT = TimeoutClass("default", 30, "everything else")
 
 #: Every class, keyed by name. The enumerated set the tool description states.
 TIMEOUT_CLASSES: Dict[str, TimeoutClass] = {
-    cls.name: cls for cls in (TEST, BUILD, NETWORK, DEFAULT)
+    cls.name: cls for cls in (TEST, BUILD, NETWORK, SCRIPT, DEFAULT)
 }
+
+# Python launchers. Peeled like wrappers so ``python -m pytest`` stays a test
+# run, but whatever they run that is not a known tool is a script.
+_PYTHON_LAUNCHERS = frozenset({"python", "python3", "py", "pypy", "pypy3"})
 
 # Tokens that front a real command without changing what it is.
 # ``python -m pytest`` is pytest; ``sudo make install`` is make.
-_WRAPPERS = frozenset(
-    {"python", "python3", "py", "pypy", "sudo", "env", "nohup", "time", "npx", "uvx"}
+_WRAPPERS = _PYTHON_LAUNCHERS | frozenset(
+    {"sudo", "env", "nohup", "time", "npx", "uvx"}
 )
+
+# A file run directly (``./run_all.sh``) is a script, whatever its name.
+_SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".bat", ".cmd", ".js", ".rb", ".pl", ".r")
 
 # ``<wrapper> run <the actual command>`` — classify the remainder instead.
 _DELEGATING = frozenset({("uv", "run"), ("poetry", "run"), ("pipx", "run")})
@@ -131,6 +143,18 @@ _BINARY_CLASS: Dict[str, TimeoutClass] = {
     "kubectl": NETWORK,
     "helm": NETWORK,
     "ping": NETWORK,
+    # interpreters running a script
+    "node": SCRIPT,
+    "ruby": SCRIPT,
+    "perl": SCRIPT,
+    "php": SCRIPT,
+    "rscript": SCRIPT,
+    "julia": SCRIPT,
+    "bash": SCRIPT,
+    "sh": SCRIPT,
+    "zsh": SCRIPT,
+    "pwsh": SCRIPT,
+    "powershell": SCRIPT,
 }
 
 # Multiplexers: the subcommand decides. Anything not listed for a binary falls
@@ -244,22 +268,43 @@ def command_basename(token: str) -> str:
 
 def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     """The class of one already-split command, wrappers peeled off."""
+    command_class, launched_by_python = _classify_peeled(tokens)
+    if command_class is DEFAULT and launched_by_python:
+        return SCRIPT
+    return command_class
+
+
+def _classify_peeled(tokens: List[str]) -> Tuple[TimeoutClass, bool]:
+    """``(class, whether a python launcher ran something)`` for one command."""
     index = 0
+    launcher_seen = False
     while index < len(tokens):
         token = tokens[index]
         if _ENV_ASSIGNMENT.fullmatch(token):
             index += 1
             continue
         if token.startswith("-"):  # a flag, incl. python's -m
+            # ``python -c CODE``: the code is the script.
+            if launcher_seen and token == "-c":
+                return SCRIPT, True
             index += 1
             continue
         binary = command_basename(token)
         if binary in _WRAPPERS:
+            launcher_seen = launcher_seen or binary in _PYTHON_LAUNCHERS
             index += 1
             continue
         break
     else:
-        return DEFAULT
+        return DEFAULT, False
+
+    if tokens[index].lower().endswith(_SCRIPT_SUFFIXES):
+        return SCRIPT, launcher_seen
+    return _classify_binary(tokens, index), launcher_seen
+
+
+def _classify_binary(tokens: List[str], index: int) -> TimeoutClass:
+    """The class of the command whose binary is ``tokens[index]``."""
 
     binary = command_basename(tokens[index])
     operands: List[Tuple[int, str]] = []
