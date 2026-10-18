@@ -190,6 +190,33 @@ class WarmUpStatus(BaseModel):
     error: Optional[str] = None
 
 
+class RunningAnswer(BaseModel):
+    """A chat whose answer is still being written."""
+
+    session_id: str
+    title: Optional[str] = None
+
+
+class RunningIndexJob(BaseModel):
+    """A document still being indexed."""
+
+    document_id: str
+    filename: Optional[str] = None
+
+
+class WorkInProgress(BaseModel):
+    """Work that quitting or unloading the model would cut short."""
+
+    answers: List[RunningAnswer]
+    indexing: List[RunningIndexJob]
+
+
+class UnloadModelResponse(BaseModel):
+    """The model server dropped its models from memory."""
+
+    status: str  # unloaded
+
+
 class InitTaskInfo(BaseModel):
     """Summary of a boot-time initialization task (embedded in SystemStatus)."""
 

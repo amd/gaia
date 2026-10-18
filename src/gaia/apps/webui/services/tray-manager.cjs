@@ -4,26 +4,33 @@
 /**
  * GAIA Agent UI — Tray Manager (T1)
  *
- * Manages the Electron system tray icon, context menu, and minimize-to-tray
- * behaviour. Co-located alongside main.cjs per the T0 co-location decision.
+ * The system tray icon: what GAIA is doing right now, what needs the user,
+ * and the menu to act on it. Co-located alongside main.cjs per the T0
+ * co-location decision.
  *
- * Responsibilities:
- *   - Create Tray instance with GAIA icon on app startup
- *   - Build context menu (Show Window, Open in Browser, Quit)
- *   - Handle "minimize to tray" on window close (configurable)
- *   - Handle "show window" on tray click / double-click
- *   - Expose IPC handlers for renderer to query/update tray config
+ *   - The icon and tooltip follow the state the window reports over
+ *     `tray:set-activity` (idle, working, waiting for the model, needs you,
+ *     error); see tray-state.cjs and tray-icons.cjs.
+ *   - The menu: status line, Needs you, New chat, recent chats, Free memory,
+ *     Settings, Quit. Menu actions reach the window over `tray:command`.
+ *   - Windows gets a taskbar overlay for needs-you and unread.
+ *   - Tray settings (close to tray, start at login, start minimized) are read
+ *     and saved over `tray:get-config` / `tray:set-config`.
  */
 
-const { Tray, Menu, nativeImage, ipcMain, app, shell } = require("electron");
+const { Tray, Menu, nativeImage, ipcMain, app, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { drawStateIcon, drawOverlayIcon, STATES } = require("./tray-icons.cjs");
+const { validateActivity, deriveTrayView, buildMenuTemplate } = require("./tray-state.cjs");
+const { backendJson } = require("./quit-guard.cjs");
 
 // ── Constants ────────────────────────────────────────────────────────────
 
 const GAIA_DIR = path.join(os.homedir(), ".gaia");
 const CONFIG_PATH = path.join(GAIA_DIR, "tray-config.json");
+const LINUX_AUTOSTART_FILE = "gaia-agent-ui.desktop";
 
 // ── Default config ───────────────────────────────────────────────────────
 
@@ -34,7 +41,47 @@ const DEFAULT_CONFIG = {
     startOnLogin: false,
   },
   agents: {},
+  notices: {
+    firstClose: false,
+  },
 };
+
+/**
+ * Tray icon bitmaps per platform: the size the tray draws at (DIP) and each
+ * scale's source asset. Windows trays are 16 DIP; Linux StatusNotifier hosts
+ * scale a 32px icon down, which stays sharp where upscaling blurs; macOS
+ * menu-bar extras are template images the OS tints for light and dark.
+ */
+const ICON_SPECS = {
+  win32: {
+    template: false,
+    reps: [
+      { scale: 1, px: 16, file: "tray-icon.png" },
+      { scale: 1.25, px: 20, file: "tray-icon.png" },
+      { scale: 1.5, px: 24, file: "tray-icon.png" },
+      { scale: 2, px: 32, file: "tray-icon.png" },
+    ],
+  },
+  darwin: {
+    template: true,
+    reps: [
+      { scale: 1, px: 16, file: "tray-iconTemplate.png" },
+      { scale: 2, px: 32, file: "tray-iconTemplate@2x.png" },
+    ],
+  },
+  linux: {
+    template: false,
+    reps: [
+      { scale: 1, px: 32, file: "tray-icon.png" },
+      { scale: 2, px: 64, file: "tray-icon@2x.png" },
+    ],
+  },
+};
+
+const OVERLAY_REPS = [
+  { scale: 1, px: 16 },
+  { scale: 2, px: 32 },
+];
 
 const AGENT_LOG_LEVELS = ["debug", "info", "warn", "error"];
 
@@ -74,13 +121,24 @@ function validateAgents(agents, where) {
   return out;
 }
 
+/**
+ * A path as one quoted Exec= argument: the Desktop Entry spec escapes " ` $ \
+ * inside the quotes, then escapes every backslash again as a string value.
+ */
+function desktopExecArg(file) {
+  // "%" starts a field code (%f, %u…) anywhere in Exec=, so it is doubled.
+  const quoted = `"${file.replace(/%/g, "%%").replace(/["`$\\]/g, (c) => `\\${c}`)}"`;
+  return quoted.replace(/\\/g, "\\\\");
+}
+
 // ── TrayManager ──────────────────────────────────────────────────────────
 
 class TrayManager {
   /**
    * @param {Electron.BrowserWindow} mainWindow
    * @param {object} [options]
-   * @param {number} [options.backendPort=4200] - Backend port for "Open in Browser"
+   * @param {number} [options.backendPort=4200] - The GAIA service's port, for Free memory
+   * @param {() => Electron.BrowserWindow} options.reopenWindow - Recreate a closed window (macOS keeps the app running without one)
    */
   constructor(mainWindow, options = {}) {
     /** @type {Electron.BrowserWindow} */
@@ -89,17 +147,43 @@ class TrayManager {
     /** @type {number} */
     this._backendPort = options.backendPort || 4200;
 
+    if (typeof options.reopenWindow !== "function") {
+      throw new TypeError("TrayManager needs options.reopenWindow to bring back a closed window");
+    }
+    this._reopenWindow = options.reopenWindow;
+
+    /** Menu commands waiting for a reopened window to start listening. */
+    this._pendingCommands = [];
+
     /** @type {Electron.Tray | null} */
     this.tray = null;
 
     /** @type {number} Unread notifications reflected in the tooltip/badge. */
     this._notificationCount = 0;
 
+    /** Last snapshot from the window; null until it first reports. */
+    this._activity = null;
+
+    /** False once the GAIA service process has exited. */
+    this._backendAlive = true;
+
+    this._freeingMemory = false;
+
+    /** @type {ReturnType<typeof deriveTrayView> | null} */
+    this._view = null;
+    this._menuKey = null;
+    this._overlayKey = null;
+
     /** @type {object} */
     this.config = this._loadConfig();
 
+    this._iconSpec = ICON_SPECS[process.platform] || ICON_SPECS.linux;
+
+    /** @type {Map<string, Electron.NativeImage>} One image per tray state, built on first use. */
+    this._icons = new Map();
+
     /** @type {Electron.NativeImage} */
-    this._icon = this._loadTrayIcon();
+    this._icon = this._iconFor("idle");
 
     this._registerIpcHandlers();
   }
@@ -111,16 +195,13 @@ class TrayManager {
     if (this.tray) return;
 
     this.tray = new Tray(this._icon);
-    // Re-apply any count that arrived before the tray existed.
-    this.setNotificationCount(this._notificationCount);
 
-    // Single-click: show/focus window
+    // Windows: a click shows the window. macOS and most Linux trays open the
+    // menu on click instead, where "Show GAIA" does the same.
     this.tray.on("click", () => this._showWindow());
-
-    // Double-click (Windows): show/focus window
     this.tray.on("double-click", () => this._showWindow());
 
-    this._rebuildContextMenu();
+    this._render();
     console.log("[tray] System tray icon created");
   }
 
@@ -133,14 +214,16 @@ class TrayManager {
     console.log("[tray] System tray icon destroyed");
   }
 
-  /** Update the context menu. */
+  /** Rebuild the icon, tooltip and menu from the current state. */
   refresh() {
-    this._rebuildContextMenu();
+    this._menuKey = null;
+    this._overlayKey = null;
+    this._render();
   }
 
   /**
-   * Reflect the unread-notification count in the tray tooltip (and the dock /
-   * launcher badge where the platform has one).
+   * Reflect the unread-notification count in the tray tooltip, the dock /
+   * launcher badge, and the Windows taskbar overlay.
    *
    * @param {number} count Unread notifications; negative/NaN is treated as 0.
    */
@@ -154,22 +237,45 @@ class TrayManager {
     }
     this._notificationCount = unread;
 
-    const trayAlive =
-      this.tray &&
-      !(typeof this.tray.isDestroyed === "function" && this.tray.isDestroyed());
-    if (trayAlive) {
-      this.tray.setToolTip(
-        unread > 0
-          ? `GAIA — ${unread} unread notification${unread === 1 ? "" : "s"}`
-          : "GAIA"
-      );
-    }
-
     // Dock (macOS) / Unity launcher (Linux) badge. Windows has no
-    // app.setBadgeCount equivalent — the tooltip above is the badge there.
+    // app.setBadgeCount equivalent; the taskbar overlay stands in for it.
     if (process.platform !== "win32" && typeof app.setBadgeCount === "function") {
       app.setBadgeCount(unread);
     }
+    this._render();
+  }
+
+  /**
+   * Take a snapshot of what GAIA is doing from the window.
+   * @throws {TypeError} When the snapshot is malformed; nothing changes then.
+   */
+  setActivity(raw) {
+    this._activity = validateActivity(raw);
+    this._render();
+    // The window reports once its tray bridge listens, so held commands can go.
+    const win = this.mainWindow;
+    if (this._pendingCommands.length && win && !win.isDestroyed()) {
+      for (const command of this._pendingCommands.splice(0)) {
+        win.webContents.send("tray:command", command);
+      }
+    }
+  }
+
+  /** The window was closed (not hidden): what it last reported no longer holds. */
+  windowClosed() {
+    this._activity = null;
+    this._render();
+  }
+
+  /** Mark the GAIA service process as running or exited. */
+  setBackendAlive(alive) {
+    this._backendAlive = Boolean(alive);
+    this._render();
+  }
+
+  /** @returns {string} The tray state now showing: one of tray-icons.STATES. */
+  get state() {
+    return this._view ? this._view.state : "idle";
   }
 
   /** @returns {number} The unread count last passed to setNotificationCount. */
@@ -192,68 +298,238 @@ class TrayManager {
     return this.config.tray.startOnLogin;
   }
 
-  // ── Private: Context Menu ────────────────────────────────────────────
+  /** @returns {boolean} Whether the one-time "still running in the tray" notice is still due. */
+  get closeNoticeDue() {
+    return !this.config.notices.firstClose;
+  }
 
-  _rebuildContextMenu() {
-    if (!this.tray) return;
+  /**
+   * Tell the user, once, that closing the window left GAIA running.
+   * Saved as shown before it opens, so a crash mid-dialog never repeats it.
+   * @returns {Promise<boolean>} True when the user chose to quit from the notice.
+   */
+  async showCloseNotice() {
+    if (!this.closeNoticeDue) return false;
+    const next = { ...this.config, notices: { ...this.config.notices, firstClose: true } };
+    this._saveConfig(next);
+    this.config = next;
+    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      title: "GAIA is still running",
+      message: `GAIA is still running in the ${where}.`,
+      detail: `Quit from the ${where} menu to stop it. Closing the window keeps your model loaded, so the next chat starts quickly.`,
+      buttons: ["OK", "Quit GAIA"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    return response === 1;
+  }
 
-    const contextMenu = Menu.buildFromTemplate([
-      {
-        label: "Show Window",
-        click: () => this._showWindow(),
+  // ── Private: Rendering ───────────────────────────────────────────────
+
+  _render() {
+    this._view = deriveTrayView(this._activity, {
+      backendAlive: this._backendAlive,
+      unread: this._notificationCount,
+    });
+    const trayAlive =
+      this.tray &&
+      !(typeof this.tray.isDestroyed === "function" && this.tray.isDestroyed());
+    if (trayAlive) {
+      const icon = this._iconFor(this._view.state);
+      if (icon !== this._icon) {
+        this._icon = icon;
+        this.tray.setImage(icon);
+        console.log(`[tray] State: ${this._view.state}`);
+      }
+      this.tray.setToolTip(this._view.tooltip);
+      // Linux trays never show the tooltip and only redraw the menu on
+      // setContextMenu, so the menu is rebuilt whenever its text changes.
+      const menuKey = JSON.stringify([
+        this._view.statusLine,
+        this._view.needsYou,
+        this._view.recent,
+        this._view.canFreeMemory,
+        this._view.freeMemoryHint,
+      ]);
+      if (menuKey !== this._menuKey) {
+        this._menuKey = menuKey;
+        this.tray.setContextMenu(
+          Menu.buildFromTemplate(buildMenuTemplate(this._view, this._menuActions()))
+        );
+      }
+    }
+    this._renderOverlay();
+  }
+
+  /** Windows has no badge, so the taskbar button carries needs-you and unread. */
+  _renderOverlay() {
+    if (process.platform !== "win32") return;
+    const win = this.mainWindow;
+    if (!win || win.isDestroyed() || typeof win.setOverlayIcon !== "function") return;
+    const needs = this._view.state === "needs-you" ? this._view.needsYou.length : 0;
+    const unread = this._notificationCount;
+    let key = "none";
+    if (needs > 0) key = `needs-you:${needs}`;
+    else if (unread > 0) key = `unread:${unread}`;
+    if (key === this._overlayKey) return;
+    this._overlayKey = key;
+    if (needs > 0) {
+      win.setOverlayIcon(
+        this._overlayImage("needs-you"),
+        `${needs} ${needs === 1 ? "chat needs" : "chats need"} you`
+      );
+    } else if (unread > 0) {
+      win.setOverlayIcon(
+        this._overlayImage("unread"),
+        `${unread} unread notification${unread === 1 ? "" : "s"}`
+      );
+    } else {
+      win.setOverlayIcon(null, "");
+    }
+  }
+
+  _menuActions() {
+    return {
+      openChat: (sessionId) => this._command({ type: "open-chat", sessionId }),
+      newChat: () => this._command({ type: "new-chat" }),
+      showWindow: () => this._showWindow(),
+      freeMemory: () => {
+        this._freeMemory().catch((err) => console.error("[tray] Free memory failed:", err));
       },
-      {
-        label: "Open in Browser",
-        click: () => shell.openExternal(`http://localhost:${this._backendPort}`),
-      },
-      { type: "separator" },
-      {
-        label: "Quit",
-        click: () => this._quit(),
-      },
-    ]);
-    this.tray.setContextMenu(contextMenu);
+      openSettings: () => this._command({ type: "open-settings", section: "general" }),
+      quit: () => this._quit(),
+    };
+  }
+
+  /** Show the window and hand it a menu action. */
+  _command(command) {
+    const reopened = this._showWindow();
+    if (reopened) {
+      this._pendingCommands.push(command);
+      return;
+    }
+    this.mainWindow.webContents.send("tray:command", command);
+  }
+
+  // ── Private: Free memory ─────────────────────────────────────────────
+
+  async _freeMemory() {
+    if (this._freeingMemory || !this._view || !this._view.canFreeMemory) return;
+    const model = this._view.modelName;
+    const { response } = await dialog.showMessageBox({
+      type: "question",
+      title: "Free memory?",
+      message: `Unload ${model} from memory?`,
+      detail:
+        "This frees the memory the model uses. Your next message, here or in another GAIA app, loads it again, which takes a moment.",
+      buttons: ["Free memory", "Cancel"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response !== 0) return;
+    this._freeingMemory = true;
+    try {
+      await backendJson(this._backendPort, "/api/system/unload-model", {
+        method: "POST",
+        body: { model_name: model },
+        timeoutMs: 30000,
+      });
+    } catch (err) {
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Free memory",
+        message: "GAIA couldn't free the model's memory.",
+        detail: err.message,
+        buttons: ["OK"],
+        noLink: true,
+      });
+      return;
+    } finally {
+      this._freeingMemory = false;
+    }
+    console.log(`[tray] Unloaded ${model} to free memory`);
+    // The backend just confirmed it; the window's next status read agrees.
+    if (this._activity) this._activity = { ...this._activity, model: null };
+    this._render();
+    const win = this.mainWindow;
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("tray:command", { type: "refresh-status" });
+    }
   }
 
   // ── Private: Window management ───────────────────────────────────────
 
+  /** @returns {boolean} True when the window had to be recreated. */
   _showWindow() {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) return;
-
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
+      this.mainWindow = this._reopenWindow();
+      return true;
+    }
     if (this.mainWindow.isMinimized()) {
       this.mainWindow.restore();
     }
     this.mainWindow.show();
     this.mainWindow.focus();
+    return false;
   }
 
-  async _quit() {
+  _quit() {
     console.log("[tray] Quit requested");
+    // main.cjs's before-quit asks first when work would be lost.
     app.quit();
   }
 
-  // ── Private: Icon loading ────────────────────────────────────────────
+  // ── Private: Icons ───────────────────────────────────────────────────
 
   /**
-   * Pick the platform-appropriate tray icon. The menu bar is ~22pt tall, so
-   * each platform gets a purpose-built small asset — never the 4K app icon.
+   * The tray image for a state: the logo from the platform's small assets
+   * (never the 4K app icon) with that state's badge drawn on.
    * @returns {Electron.NativeImage}
    */
-  _loadTrayIcon() {
-    if (process.platform === "win32") {
-      return this._loadIcon("tray-icon.ico");
+  _iconFor(state) {
+    if (!STATES.includes(state)) throw new Error(`[tray] unknown tray state "${state}"`);
+    const cached = this._icons.get(state);
+    if (cached) return cached;
+    const spec = this._iconSpec;
+    const image = nativeImage.createEmpty();
+    for (const rep of spec.reps) {
+      let source = this._loadIcon(rep.file);
+      if (source.getSize().width !== rep.px) {
+        source = source.resize({ width: rep.px, height: rep.px, quality: "best" });
+      }
+      const buffer = drawStateIcon(
+        { width: rep.px, height: rep.px, buffer: source.toBitmap() },
+        state,
+        { template: spec.template }
+      );
+      image.addRepresentation({ scaleFactor: rep.scale, width: rep.px, height: rep.px, buffer });
     }
-    if (process.platform === "darwin") {
-      // macOS menu-bar extras must be template images: the OS tints the
-      // alpha mask for light/dark mode. Electron auto-discovers the @2x
-      // retina variant by name.
-      const img = this._loadIcon("tray-iconTemplate.png");
-      img.setTemplateImage(true);
-      return img;
+    // macOS menu-bar extras must be template images: the OS tints the
+    // alpha mask for light/dark mode.
+    if (spec.template) image.setTemplateImage(true);
+    this._icons.set(state, image);
+    return image;
+  }
+
+  _overlayImage(kind) {
+    const key = `overlay:${kind}`;
+    const cached = this._icons.get(key);
+    if (cached) return cached;
+    const image = nativeImage.createEmpty();
+    for (const rep of OVERLAY_REPS) {
+      image.addRepresentation({
+        scaleFactor: rep.scale,
+        width: rep.px,
+        height: rep.px,
+        buffer: drawOverlayIcon(kind, rep.px),
+      });
     }
-    // Linux: full-colour 32px PNG (+@2x); StatusNotifier hosts scale it
-    // down to their 16-24px slot, which stays sharp where upscaling blurs.
-    return this._loadIcon("tray-icon.png");
+    this._icons.set(key, image);
+    return image;
   }
 
   _loadIcon(filename) {
@@ -283,7 +559,12 @@ class TrayManager {
       console.warn("[tray] Could not load tray config:", err.message);
     }
     if (!isPlainObject(loaded)) {
-      return { ...DEFAULT_CONFIG, tray: { ...DEFAULT_CONFIG.tray }, agents: {} };
+      return {
+        ...DEFAULT_CONFIG,
+        tray: { ...DEFAULT_CONFIG.tray },
+        agents: {},
+        notices: { ...DEFAULT_CONFIG.notices },
+      };
     }
 
     // Scoped to the agents section: one bad entry must not cost the user their
@@ -312,11 +593,18 @@ class TrayManager {
       }
     }
 
+    const storedNotices = isPlainObject(loaded.notices) ? loaded.notices : {};
+    const notices = { ...DEFAULT_CONFIG.notices };
+    for (const key of Object.keys(DEFAULT_CONFIG.notices)) {
+      if (typeof storedNotices[key] === "boolean") notices[key] = storedNotices[key];
+    }
+
     return {
       ...DEFAULT_CONFIG,
       ...loaded,
       tray,
       agents,
+      notices,
     };
   }
 
@@ -336,6 +624,10 @@ class TrayManager {
   // ── Private: IPC handlers ────────────────────────────────────────────
 
   _registerIpcHandlers() {
+    ipcMain.handle("tray:set-activity", (_event, activity) => {
+      this.setActivity(activity);
+    });
+
     ipcMain.handle("tray:get-config", () => {
       return this.config;
     });
@@ -372,28 +664,87 @@ class TrayManager {
         tray: tray ?? this.config.tray,
         agents: agents ? { ...this.config.agents, ...agents } : this.config.agents,
       };
-      this._saveConfig(next);
-      this.config = next;
-
-      if (tray !== null && "startOnLogin" in cfg.tray) {
-        this._applyLoginItemSetting(tray.startOnLogin);
+      // The OS login item first: if it can't be set, nothing is saved, so the
+      // toggle never claims a state the OS doesn't have.
+      const loginChanged =
+        tray !== null && tray.startOnLogin !== this.config.tray.startOnLogin;
+      if (loginChanged) this._applyLoginItemSetting(tray.startOnLogin);
+      try {
+        this._saveConfig(next);
+      } catch (err) {
+        // Keep the OS and the saved toggle in step: undo the login item.
+        if (loginChanged) this._applyLoginItemSetting(this.config.tray.startOnLogin);
+        throw err;
       }
+      this.config = next;
 
       return this.config;
     });
   }
 
-  /** Register/unregister the app from OS login startup. */
+  /**
+   * Register or remove GAIA as a login item. "Start minimized" decides
+   * whether that launch shows the window, the same as any other launch.
+   * @throws {Error} When the OS refused; the caller's save is skipped.
+   */
   _applyLoginItemSetting(enabled) {
+    if (process.platform === "linux") {
+      this._applyLinuxAutostart(enabled);
+    } else {
+      const item = { path: app.getPath("exe"), args: [] };
+      const what = enabled ? "add GAIA to" : "remove GAIA from";
+      try {
+        app.setLoginItemSettings({ ...item, openAtLogin: enabled });
+      } catch (err) {
+        throw new Error(`Could not ${what} the apps that start at sign-in: ${err.message}`);
+      }
+      // The OS can refuse without throwing; read back what it actually has.
+      const now = app.getLoginItemSettings(item);
+      if (enabled && now.status === "requires-approval") {
+        throw new Error(
+          "macOS needs your approval to start GAIA at sign-in. Allow it in System Settings → General → Login Items, then turn this on again."
+        );
+      }
+      if (now.openAtLogin !== enabled) {
+        throw new Error(
+          `Could not ${what} the apps that start at sign-in: the system still reports it ${now.openAtLogin ? "on" : "off"}. ` +
+            "Check your startup apps in the system settings."
+        );
+      }
+    }
+    console.log(`[tray] Login item ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  /** Electron has no login items on Linux; desktops read XDG autostart entries. */
+  _applyLinuxAutostart(enabled) {
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+    const file = path.join(configHome, "autostart", LINUX_AUTOSTART_FILE);
+    // An AppImage's exe is a temporary mount; APPIMAGE is the file the user runs.
+    const exe = process.env.APPIMAGE || app.getPath("exe");
     try {
-      app.setLoginItemSettings({
-        openAtLogin: enabled,
-        path: app.getPath("exe"),
-        args: enabled ? ["--minimized"] : [],
-      });
-      console.log(`[tray] Login item ${enabled ? "enabled" : "disabled"}`);
+      if (enabled) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(
+          file,
+          [
+            "[Desktop Entry]",
+            "Type=Application",
+            "Name=GAIA",
+            "Comment=Start GAIA when you sign in",
+            `Exec=${desktopExecArg(exe)}`,
+            "X-GNOME-Autostart-enabled=true",
+            "",
+          ].join("\n"),
+          "utf8"
+        );
+      } else if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      }
     } catch (err) {
-      console.warn("[tray] Could not set login item:", err.message);
+      throw new Error(
+        `Could not ${enabled ? "write" : "remove"} the autostart entry ${file}: ${err.message}. ` +
+          "Check that the folder is writable."
+      );
     }
   }
 }

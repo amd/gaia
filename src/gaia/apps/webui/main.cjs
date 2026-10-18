@@ -13,7 +13,14 @@
 //   services/notification-service.js  — Desktop notifications + permission prompts (T5)
 //   preload.cjs                       — contextBridge for IPC channels (T0/T1)
 
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const {
+  app,
+  autoUpdater: electronAutoUpdater,
+  BrowserWindow,
+  dialog,
+  powerMonitor,
+  shell,
+} = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -54,6 +61,11 @@ try {
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const {
+  confirmQuit,
+  fetchWorkInProgress,
+  installQuitGuard,
+} = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
 const PortManager = require("./services/port-manager.cjs");
@@ -386,6 +398,7 @@ async function startBackend() {
     }
     const crashed = !isIntentionalKill && code !== 0 && code !== null;
     backendProcess = null;
+    if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
     if (crashed && !isQuitting) {
       // Fire-and-forget — don't block the event loop.
@@ -570,15 +583,33 @@ function createWindow() {
   // ── Minimize-to-tray on close (C4 fix) ──────────────────────────────
   // Intercept window close — hide instead of closing when tray mode is active
   mainWindow.on("close", (event) => {
-    if (!isQuitting && trayManager && trayManager.minimizeToTray) {
+    if (isQuitting) return;
+    if (trayManager && trayManager.minimizeToTray) {
       event.preventDefault();
       mainWindow.hide();
       console.log("[main] Window hidden to tray");
+      if (trayManager.closeNoticeDue) {
+        trayManager
+          .showCloseNotice()
+          .then((quit) => { if (quit) app.quit(); })
+          .catch((err) => console.error("[main] First-close notice failed:", err.message));
+      }
+      return;
+    }
+    // Closing the window quits here, so it goes through the quit guard first;
+    // the window stays open if the user keeps GAIA running.
+    if (process.platform !== "darwin" && !quitGuard.confirmed) {
+      event.preventDefault();
+      app.quit();
     }
   });
 
+  // Windows signs out or shuts down: never hold it up with a question.
+  mainWindow.on("session-end", () => quitGuard.allow());
+
   mainWindow.on("closed", () => {
     mainWindow = null;
+    if (trayManager) trayManager.windowClosed();
   });
 
   // Show window when ready (unless --minimized or startMinimized config)
@@ -664,6 +695,25 @@ async function loadApp() {
 
 // ── Services Setup ─────────────────────────────────────────────────────────
 
+/**
+ * Recreate the window after it was closed (macOS keeps the app running).
+ * Services are re-pointed at it, not re-created: their IPC handlers stay.
+ * @returns {Electron.BrowserWindow}
+ */
+function reopenWindow() {
+  createWindow();
+  // Asked for from the tray or the dock: show it even when starting minimized.
+  mainWindow.once("ready-to-show", () => mainWindow && mainWindow.show());
+  if (agentProcessManager) agentProcessManager.mainWindow = mainWindow;
+  if (trayManager) trayManager.mainWindow = mainWindow;
+  if (notificationService) notificationService.mainWindow = mainWindow;
+  loadApp().catch((err) => {
+    console.error("[main] Failed to load the reopened window:", err.message);
+    dialog.showErrorBox("GAIA", `GAIA couldn't reopen its window: ${err.message}`);
+  });
+  return mainWindow;
+}
+
 function initializeServices() {
   console.log("[main] Initializing services...");
 
@@ -676,7 +726,10 @@ function initializeServices() {
   });
 
   // T1: Tray Manager (system tray icon + context menu)
-  trayManager = new TrayManager(mainWindow, { backendPort });
+  trayManager = new TrayManager(mainWindow, {
+    backendPort,
+    reopenWindow: () => reopenWindow(),
+  });
   trayManager.create();
 
   // T5: Notification Service (routes agent notifications to OS + renderer)
@@ -1169,18 +1222,12 @@ app.whenReady().then(async () => {
     }
   }
 
-  app.on("activate", async () => {
+  // macOS and Linux: the shutdown is the OS's, so don't ask.
+  powerMonitor.on("shutdown", () => quitGuard.allow());
+
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-      // Re-wire existing services to the new window (don't re-create — IPC handlers are already registered)
-      if (agentProcessManager) agentProcessManager.mainWindow = mainWindow;
-      if (trayManager) trayManager.mainWindow = mainWindow;
-      if (notificationService) notificationService.mainWindow = mainWindow;
-      try {
-        await loadApp();
-      } catch (err) {
-        console.error("[main] Failed to load app on activate:", err.message);
-      }
+      reopenWindow();
     } else if (mainWindow) {
       mainWindow.show();
     }
@@ -1217,11 +1264,31 @@ app.on("window-all-closed", () => {
 
 let cleanupDone = false;
 
-app.on("before-quit", () => {
-  isQuitting = true;
-  // Mark any subsequent backend exit as intentional so we don't pop the
-  // crash dialog during normal shutdown.
-  isIntentionalKill = true;
+// Every quit asks first while an answer or index job would be lost; an
+// update restart (already confirmed in its dialog) and an OS shutdown don't.
+const quitGuard = installQuitGuard({
+  app,
+  updater: electronAutoUpdater,
+  // Only while the GAIA service runs: without it, no answer is running.
+  shouldAsk: () => Boolean(trayManager && backendProcess),
+  confirm: () =>
+    confirmQuit({
+      getWork: () => fetchWorkInProgress(backendPort),
+      showMessageBox: (opts) =>
+        mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()
+          ? dialog.showMessageBox(mainWindow, opts)
+          : dialog.showMessageBox(opts),
+    }),
+  onQuitting: () => {
+    isQuitting = true;
+    // Mark any subsequent backend exit as intentional so we don't pop the
+    // crash dialog during normal shutdown.
+    isIntentionalKill = true;
+  },
+  onError: (err) => {
+    console.error("[main] Quit check failed:", err);
+    dialog.showErrorBox("GAIA", `GAIA couldn't finish quitting: ${err.message}`);
+  },
 });
 
 app.on("will-quit", (event) => {

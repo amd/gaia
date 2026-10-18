@@ -3,6 +3,7 @@
 
 import { useChatStore } from '../../stores/chatStore';
 import type { ThemePreference } from '../../utils/theme';
+import { DesktopAppSettings } from './DesktopAppSettings';
 
 const THEMES: Array<{ value: ThemePreference; label: string }> = [
     { value: 'light', label: 'Light' },
@@ -44,6 +45,7 @@ export function GeneralSettings() {
                     ))}
                 </div>
             </div>
+            <DesktopAppSettings />
             <div className="settings-field">
                 <span className="settings-label">Keyboard shortcuts</span>
                 <dl className="shortcut-list">

@@ -586,6 +586,36 @@ class AttachDocumentRequest(BaseModel):
     ```
   </Accordion>
 
+  <Accordion title="GET /api/system/work-in-progress">
+    Answers still being written and documents still being indexed. The desktop app reads it when you quit, to warn that the work would be lost; nothing polls it.
+
+    **Response (200):**
+    ```json
+    {
+      "answers": [{ "session_id": "3f2a…", "title": "Trip plan" }],
+      "indexing": [{ "document_id": "9c1d…", "filename": "report.pdf" }]
+    }
+    ```
+
+    `title` or `filename` is `null` when the chat or document was deleted while it ran. `indexing` covers background uploads and the document monitor's re-indexes.
+  </Accordion>
+
+  <Accordion title="POST /api/system/unload-model">
+    Unload one model from the model server to free its memory; the embedding model and any other loaded model stay. The next message loads it again. Used by the desktop tray's **Free memory**.
+
+    **Request:**
+    ```json
+    { "model_name": "Gemma-4-E4B-it-GGUF" }
+    ```
+
+    **Response (200):**
+    ```json
+    { "status": "unloaded" }
+    ```
+
+    `409` while an answer is running or a document is indexing in this app. `422` without a `model_name`. `502` with the model server's error when it refuses.
+  </Accordion>
+
   <Accordion title="POST /api/system/warm-up">
     Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, and on a PC with under 24 GB of RAM, where the model loads with the first message instead. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 

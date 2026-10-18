@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   tray: {
     getConfig: () => ipcRenderer.invoke("tray:get-config"),
     setConfig: (cfg) => ipcRenderer.invoke("tray:set-config", cfg),
+    // What GAIA is doing, for the tray icon, tooltip and menu.
+    setActivity: (activity) => ipcRenderer.invoke("tray:set-activity", activity),
+    // Tray menu actions: open-chat, new-chat, open-settings, refresh-status.
+    onCommand: (cb) => onEvent("tray:command", cb),
     onNavigate: (cb) => onEvent("tray:navigate", cb),
   },
 

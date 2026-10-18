@@ -125,7 +125,9 @@ interface ChatState {
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
-    setLiveStatus: (status: string | null) => void;
+    /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
+    livePhase: string | null;
+    setLiveStatus: (status: string | null, phase?: string | null) => void;
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
@@ -276,7 +278,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -325,9 +327,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, awaitingUser: false }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
     liveStatus: null,
-    setLiveStatus: (status) => set({ liveStatus: status }),
+    livePhase: null,
+    setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},

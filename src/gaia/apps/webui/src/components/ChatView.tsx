@@ -882,7 +882,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
-                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
+                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
@@ -926,7 +926,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(event.tool ? `Running ${event.tool}` : 'Running a tool');
+                        useChatStore.getState().setLiveStatus(event.tool ? `Running ${event.tool}` : 'Running a tool', 'tool');
                     }
                 }
             },
