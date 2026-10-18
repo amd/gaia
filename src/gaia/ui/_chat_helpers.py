@@ -1989,6 +1989,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         from gaia.llm.lemonade_choice import is_users_server
         from gaia.llm.lemonade_client import (
+            _model_ids_match,
             cloud_model_provider,
             lemonade_auth_headers,
             resolve_ctx_size,
@@ -2005,11 +2006,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
-        expected_lower = model_id.lower()
+        # Lemonade lists a user. model without the namespace.
         chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
         # A cloud model occupies no local slot: nothing to load, nothing to evict.
         if any(
-            (m.get("model_name") or "").lower() == expected_lower
+            _model_ids_match(m.get("model_name"), model_id)
             and m.get("recipe") == "cloud"
             for m in chat_models
         ) or cloud_model_provider(model_id, None):
@@ -2018,11 +2019,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         required_ctx = resolve_ctx_size(model_id)
         chat_models = [m for m in chat_models if m.get("recipe") != "cloud"]
         active_is_expected = any(
-            (m.get("model_name") or "").lower() == expected_lower for m in chat_models
+            _model_ids_match(m.get("model_name"), model_id) for m in chat_models
         )
         active_ctx = 0
         for m in chat_models:
-            if (m.get("model_name") or "").lower() == expected_lower:
+            if _model_ids_match(m.get("model_name"), model_id):
                 active_ctx = m.get("recipe_options", {}).get("ctx_size") or 0
                 break
         # Reload conditions:
@@ -2081,7 +2082,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     if m.get("type") in ("llm", "vlm") and m.get("recipe") != "cloud"
                 ]
                 if any(
-                    (m.get("model_name") or "").lower() == expected_lower
+                    _model_ids_match(m.get("model_name"), model_id)
                     and (m.get("recipe_options", {}).get("ctx_size") or 0)
                     >= required_ctx
                     for m in resident_chat_models
