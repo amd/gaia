@@ -83,9 +83,18 @@ class BrokerUnavailableError(Exception):
     daemon has no broker at all" — those need opposite responses.
     """
 
-    def __init__(self, message: str, *, status_code: Optional[int] = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        unreachable: bool = False,
+    ):
         super().__init__(message)
         self.status_code = status_code
+        #: The daemon could not be reached at all — the one transport failure
+        #: that may mean a cached address went stale after a restart.
+        self.unreachable = unreachable
 
 
 class LeaseWaitCancelled(Exception):
@@ -464,7 +473,8 @@ def acquire_lease(
         raise BrokerUnavailableError(
             f"{unreachable}: {e}. The daemon may be down — check `gaia daemon "
             "status` and `gaia daemon logs`. Refusing a direct load that would "
-            "race-evict another process's model."
+            "race-evict another process's model.",
+            unreachable=True,
         ) from e
     with r:
         if r.status_code != 200:
@@ -710,7 +720,9 @@ def _acquire_with_reattach(
                 _broker_base(),
             )
             return None
-        stale = e.status_code is None or e.status_code in _STALE_ATTACH_STATUSES
+        # Not a silence mid-queue (the daemon was there; re-queueing would
+        # lose the place in line) and not a config error.
+        stale = e.unreachable or e.status_code in _STALE_ATTACH_STATUSES
         if _attached is None or not _discovery_enabled or not stale:
             raise
         logger.info(

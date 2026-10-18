@@ -226,3 +226,34 @@ def test_stop_during_a_queued_preflight_load_stays_quiet(monkeypatch):
 
     warnings = [e for e in handler.events if e.get("status") == "warning"]
     assert warnings == [], f"Stop was reported as a failure: {warnings}"
+
+
+def test_stop_during_a_queued_preflight_stays_quiet_on_the_non_streaming_path(
+    monkeypatch, caplog
+):
+    """The non-streaming turn passes no handler; its Stop reaches the wait only
+    through the turn scope. So only the LeaseWaitCancelled branch keeps the
+    stopped wait from being logged as a failed load."""
+    import contextlib
+    import logging
+
+    import httpx
+
+    monkeypatch.setattr(helpers, "_eval_provider_kwargs", lambda: {})
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Health())
+
+    @contextlib.contextmanager
+    def _stopped_while_queued(*_a, **_k):
+        broker_client.check_cancelled("the model slot")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(broker_client, "model_lease", _stopped_while_queued)
+    stop = threading.Event()
+    stop.set()
+
+    with caplog.at_level(logging.INFO):
+        with broker_client.interactive_turn(cancel=stop):
+            helpers._maybe_load_expected_model("M-GGUF")
+
+    assert "Pre-flight model check failed" not in caplog.text
+    assert "stopped with the turn" in caplog.text

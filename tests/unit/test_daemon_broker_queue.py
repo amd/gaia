@@ -811,3 +811,63 @@ def test_a_non_finite_wait_or_hold_is_refused(daemon_factory, field, value):
         timeout=10,
     )
     assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        broker_client.BrokerUnavailableError(
+            "the model-slot broker stopped answering while 'm' was queued"
+        ),
+        broker_client.BrokerUnavailableError(
+            "GAIA_MODEL_LEASE_WAIT_S must be a number of seconds; got 'soon'"
+        ),
+    ],
+    ids=["silent-mid-queue", "bad-env-value"],
+)
+def test_only_an_unreachable_daemon_triggers_a_reattach(monkeypatch, failure):
+    """Re-discovering after a mid-queue silence or a config error would drop
+    the request to the back of the line, or retry a request that cannot work."""
+    monkeypatch.setattr(broker_client, "_attached", ("http://127.0.0.1:1", "t"))
+    monkeypatch.setattr(broker_client, "_discovery_enabled", True)
+    attempts = []
+
+    def _acquire(model, **_kw):
+        attempts.append(model)
+        raise failure
+
+    monkeypatch.setattr(broker_client, "acquire_lease", _acquire)
+    monkeypatch.setattr(broker_client, "attach_broker_env", lambda: True)
+
+    with pytest.raises(broker_client.BrokerUnavailableError):
+        broker_client._acquire_with_reattach("m", None)
+
+    assert attempts == ["m"], "re-queued after a failure that was not a stale attach"
+
+
+def test_an_unreachable_daemon_still_triggers_one_reattach(monkeypatch):
+    monkeypatch.setattr(broker_client, "_attached", ("http://127.0.0.1:1", "t"))
+    monkeypatch.setattr(broker_client, "_discovery_enabled", True)
+    attempts = []
+
+    def _acquire(model, **_kw):
+        attempts.append(model)
+        if len(attempts) == 1:
+            raise broker_client.BrokerUnavailableError(
+                "could not reach the model-slot broker", unreachable=True
+            )
+        return {"lease_id": "L"}
+
+    monkeypatch.setattr(broker_client, "acquire_lease", _acquire)
+    monkeypatch.setattr(broker_client, "attach_broker_env", lambda: True)
+
+    assert broker_client._acquire_with_reattach("m", None) == {"lease_id": "L"}
+    assert attempts == ["m", "m"]
+
+
+def test_the_in_process_broker_refuses_a_non_finite_hold():
+    broker = ModelSlotBroker()
+    for bad in (float("nan"), float("inf"), 0, -5):
+        with pytest.raises(ValueError):
+            broker.acquire("m", renewable=True, max_hold_s=bad)
+    assert broker.snapshot()["waiting"] == []

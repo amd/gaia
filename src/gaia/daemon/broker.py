@@ -236,6 +236,16 @@ class ModelSlotBroker:
             LeaseCancelledError: *cancel* was set before the grant.
         """
         priority = LeasePriority.parse(priority)
+        if max_hold_s is not None and not (
+            isinstance(max_hold_s, (int, float))
+            and not isinstance(max_hold_s, bool)
+            and math.isfinite(max_hold_s)
+            and max_hold_s > 0
+        ):
+            # NaN compares false with everything and would turn the cap off.
+            raise ValueError(
+                f"max_hold_s must be a finite number > 0; got {max_hold_s!r}"
+            )
         deadline = None if timeout is None else self._now() + timeout
         with self._cv:
             self._seq += 1

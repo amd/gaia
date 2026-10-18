@@ -1132,7 +1132,9 @@ def test_reattaches_after_a_daemon_restart_rotates_its_token(monkeypatch):
     def _acquire(model, **kwargs):
         attempts.append(broker_client._attached)
         if len(attempts) == 1:
-            raise broker_client.BrokerUnavailableError("HTTP 401: token rotated")
+            raise broker_client.BrokerUnavailableError(
+                "HTTP 401: token rotated", status_code=401
+            )
         return {"lease_id": "L-new"}
 
     monkeypatch.setattr(broker_client, "acquire_lease", _acquire)
