@@ -149,3 +149,44 @@ func TestDoNeverReplaysARequestThatReachedTheDaemon(t *testing.T) {
 		t.Error("a request that already reached a daemon was replayed to the new one")
 	}
 }
+
+// instance.json rewritten to a daemon that is not answering either: both the
+// original failure and the reason the replacement was rejected reach the user.
+func TestDoReportsBothFailuresWhenTheRecordedReplacementIsDead(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadPort := portOf(t, dead.URL)
+	dead.Close()
+	f.srv.Close()
+	f.writeInstance(func(i *Instance) {
+		i.Port = deadPort
+		i.Token = "token-B"
+	})
+
+	_, got, err := c.Do(context.Background(), inst, Request{
+		Method: http.MethodPost,
+		Path:   APIPrefix + "/status",
+		Op:     "cancel the 'gaia' run",
+	})
+	if err == nil {
+		t.Fatal("expected an error when the recorded replacement is dead too")
+	}
+	if got != inst {
+		t.Errorf("Do returned the unusable replacement instead of the caller's instance")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "cancel the 'gaia' run") {
+		t.Errorf("error must keep the original operation: %v", err)
+	}
+	if !strings.Contains(msg, "instance.json was rewritten, but the daemon it names is not usable either") {
+		t.Errorf("error must add why the replacement was rejected: %v", err)
+	}
+}

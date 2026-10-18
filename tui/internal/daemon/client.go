@@ -487,7 +487,7 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 		}
 		moved, rerr := c.rediscover(ctx, inst)
 		if rerr != nil {
-			return nil, inst, fmt.Errorf("%w (instance.json now names another daemon, but it is not usable either: %v)", err, rerr)
+			return nil, inst, fmt.Errorf("%w (instance.json was rewritten, but the daemon it names is not usable either: %v)", err, rerr)
 		}
 		if moved == nil {
 			return nil, inst, err
