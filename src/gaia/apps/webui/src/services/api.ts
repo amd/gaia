@@ -768,7 +768,10 @@ async function consumeSSEResponse(
     let totalChars = 0;
     let agentEventCount = 0;
     let queued = false;
+    // An `error` event already closed the turn through onError.
     let errorReceived = false;
+    // A fatal agent_error ends the turn; the closing `done` may never come.
+    let fatalAgentError = false;
 
     try {
         while (true) {
@@ -780,12 +783,14 @@ async function consumeSSEResponse(
                 if (!(err instanceof StreamStalledError)) {
                     log.stream.error('SSE connection cut mid-stream', err);
                     if (doneReceived || errorReceived) return;
+                    if (fatalAgentError) break;
                     throw new StreamDroppedError(err);
                 }
                 log.stream.error(`SSE stream silent for ${err.idleMs / 1000}s; dropping the connection`);
                 await reader.cancel().catch((cancelErr) => log.stream.warn('Could not cancel the stalled stream', cancelErr));
                 // The turn already ended for the caller; a dead connection after that changes nothing.
                 if (doneReceived || errorReceived) return;
+                if (fatalAgentError) break;
                 throw err;
             }
             const { done, value } = next;
@@ -839,7 +844,7 @@ async function consumeSSEResponse(
                         } else if (AGENT_EVENT_TYPES.has(event.type)) {
                             agentEventCount++;
                             if (event.type === 'agent_error' && !(event as { recoverable?: boolean }).recoverable) {
-                                errorReceived = true;
+                                fatalAgentError = true;
                             }
                             log.stream.debug(`Agent event: ${event.type}`, event);
                             callbacks.onAgentEvent(event);

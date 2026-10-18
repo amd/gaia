@@ -122,7 +122,7 @@ describe('chat stream idle watchdog (E4)', () => {
         expect(cb.onError).not.toHaveBeenCalled();
     });
 
-    it('ends the turn on an agent error that is not recoverable', async () => {
+    it('ends the turn on an agent error that is not recoverable, even if the connection then dies', async () => {
         const s = openStream();
         fetchMock().mockResolvedValue(s.response);
         const cb = callbacks();
@@ -131,6 +131,20 @@ describe('chat stream idle watchdog (E4)', () => {
         s.send({ type: 'agent_error', content: 'The model stopped answering.' });
         await vi.advanceTimersByTimeAsync(31_000);
         expect(cb.onError).not.toHaveBeenCalled();
+        expect(cb.onDone).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the turn once when an error event is followed by a dead connection', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'error', content: 'boom' });
+        s.cut();
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(cb.onError).toHaveBeenCalledTimes(1);
+        expect(cb.onDone).not.toHaveBeenCalled();
     });
 
     it('keeps watching after a recoverable agent error', async () => {

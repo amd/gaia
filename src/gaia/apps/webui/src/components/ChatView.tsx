@@ -36,6 +36,7 @@ const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
+const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
@@ -264,6 +265,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const abortRef = useRef<AbortController | null>(null);
     /** Reconnects spent on the current turn's stream. */
     const reconnectsRef = useRef(0);
+    /** A re-attach waiting out its delay; cleared when the chat changes or the turn stops. */
+    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // Stop keeps the stream open until the server's closing `done` arrives.
     const [stopping, setStopping] = useState(false);
     const stopRequestedRef = useRef(false);
@@ -444,6 +447,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 clearTimeout(policyToastTimerRef.current);
                 policyToastTimerRef.current = null;
             }
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+            }
             setPolicyToast(null);
             streamBufferRef.current = '';
         };
@@ -479,6 +486,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         api.cancelStream(sessionId).catch((err) => {
             log.stream.error('Stop request failed; waiting for the stream to close', err);
         });
+        // Between a lost stream and its re-attach there is no stream to wait on.
+        if (reconnectTimerRef.current) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+            closeStoppedTurnLocallyRef.current?.();
+            return;
+        }
         stopTimerRef.current = setTimeout(() => {
             log.stream.error(
                 `No closing event ${STOP_GRACE_MS}ms after Stop; closing the turn locally (session=${sessionId})`,
@@ -570,7 +584,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setLiveAgentStep(0);
         toolOccurredRef.current = false;
         if (reconnect) {
-            useChatStore.getState().setLiveStatus(`Connection lost. Reconnecting (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
+            useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
         }
 
         log.stream.info('Starting agent stream...');
@@ -639,7 +653,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onConnected: () => {
                 if (isStale()) return;
                 const store = useChatStore.getState();
-                if (store.liveStatus === api.SEND_WAITING_NOTICE_TEXT) store.setLiveStatus(null);
+                if (store.liveStatus === api.SEND_WAITING_NOTICE_TEXT || store.liveStatus?.startsWith(RECONNECTING_PREFIX)) {
+                    store.setLiveStatus(null);
+                }
             },
             onChunk: (event) => {
                 if (isStale()) return; // stop writing after a session switch (#1580)
@@ -704,8 +720,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
                     const { addNotification: addNotif, notifications } = useNotificationStore.getState();
-                    // A re-attach replays the run; keep the prompt as the user left it.
-                    if (event.confirm_id && notifications.some((n) => n.id === event.confirm_id)) return;
+                    // A re-attach replays the run: keep an answered prompt as it is, and
+                    // bring back one still waiting that earlier replayed steps hid.
+                    const known = event.confirm_id ? notifications.find((n) => n.id === event.confirm_id) : undefined;
+                    if (known) {
+                        if (!known.response && known.dismissed) {
+                            useNotificationStore.setState((st) => ({
+                                notifications: st.notifications.map((n) => (n.id === known.id ? { ...n, dismissed: false } : n)),
+                            }));
+                        }
+                        return;
+                    }
                     const isPathAccess = toolName === PATH_ACCESS_TOOL;
                     const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
                     addNotif({
@@ -1085,12 +1110,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const attempt = ++reconnectsRef.current;
                     const delay = RECONNECT_DELAYS_MS[attempt - 1] ?? 0;
                     log.chat.warn(`Stream for session=${sessionId} lost (${err.name}); reconnecting in ${delay}ms (${attempt}/${MAX_STREAM_RECONNECTS})`);
-                    useChatStore.getState().setLiveStatus(`Connection lost. Reconnecting (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
+                    useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
                     const reattach = () => {
+                        reconnectTimerRef.current = null;
                         if (isStale() || stopRequestedRef.current) return;
                         sendMessageRef.current(undefined, { attach: true, reconnect: attempt });
                     };
-                    if (delay > 0) setTimeout(reattach, delay);
+                    if (delay > 0) reconnectTimerRef.current = setTimeout(reattach, delay);
                     else reattach();
                     return;
                 }

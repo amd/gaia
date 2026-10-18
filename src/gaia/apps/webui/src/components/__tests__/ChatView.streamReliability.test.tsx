@@ -110,7 +110,7 @@ afterEach(() => {
 
 /** Type/render + click Send, and wait for sendMessageStream to be invoked. */
 async function driveSend() {
-    render(<ChatView sessionId={SESSION.id} />);
+    const view = render(<ChatView sessionId={SESSION.id} />);
 
     await act(async () => {
         fireEvent.change(screen.getByLabelText('Message'), {
@@ -120,6 +120,7 @@ async function driveSend() {
     });
 
     expect(capturedCallbacks).not.toBeNull();
+    return view;
 }
 
 
@@ -298,5 +299,49 @@ describe('ChatView stream reliability', () => {
         await act(async () => { fireEvent.click(screen.getByLabelText('Stop')); });
         await new Promise((r) => setTimeout(r, 1_500));
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the prompt the run is still waiting on after a reconnect replays earlier steps', async () => {
+        await driveSend();
+        const prompt = { type: 'permission_request', tool: 'write_file', confirm_id: 'c3', args: {} } as never;
+        act(() => capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'read_file' } as never));
+        act(() => capturedCallbacks!.onAgentEvent({ type: 'tool_end', tool: 'read_file' } as never));
+        act(() => capturedCallbacks!.onAgentEvent(prompt));
+        act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
+        // The replay starts from the top: earlier steps, then the prompt still open.
+        act(() => attachCallbacks[0].onAgentEvent({ type: 'tool_start', tool: 'read_file' } as never));
+        act(() => attachCallbacks[0].onAgentEvent({ type: 'tool_end', tool: 'read_file' } as never));
+        act(() => attachCallbacks[0].onAgentEvent(prompt));
+        const shown = useNotificationStore.getState().notifications.filter((n) => n.id === 'c3');
+        expect(shown).toHaveLength(1);
+        expect(shown[0].dismissed).toBe(false);
+    });
+
+    it('does not re-attach twice when the user leaves and comes back during a reconnect wait', async () => {
+        const view = await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        act(() => useChatStore.setState({ currentSessionId: 'other' }));
+        view.rerender(<ChatView sessionId="other" />);
+        act(() => useChatStore.setState({ currentSessionId: SESSION.id }));
+        view.rerender(<ChatView sessionId={SESSION.id} />);
+        await new Promise((r) => setTimeout(r, 1_500));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the turn at once when Stop lands during a reconnect wait', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        await act(async () => { fireEvent.click(screen.getByLabelText('Stop')); });
+        await waitFor(() => expect(useChatStore.getState().isStreaming).toBe(false), { timeout: 1_000 });
+    });
+
+    it('clears the reconnecting notice once the re-attach connects', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
+        await waitFor(() => expect(document.body.textContent).toContain('Reconnecting (attempt 1 of 3)'));
+        act(() => attachCallbacks[0].onConnected?.());
+        await waitFor(() => expect(document.body.textContent).not.toContain('Reconnecting (attempt 1 of 3)'));
     });
 });
