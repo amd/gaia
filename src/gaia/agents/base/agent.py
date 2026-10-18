@@ -7231,15 +7231,18 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _is_loaded_ctx_too_small(self) -> bool:
-        """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than the window GAIA loads that
-        model with (``resolve_ctx_size``).
+        """Probe Lemonade's health endpoint to see whether this agent's own
+        model is loaded with a context size below its target window.
+
+        The target is ``resolve_ctx_size`` clamped to the model's trained
+        ``max_context_window``; other loaded models are ignored.
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False on any probe failure, or when the agent has no model
+        id, so the caller falls through to the safe in-loop trim path
+        rather than crashing.
         """
         try:
             import httpx
@@ -7276,16 +7279,14 @@ Do NOT wrap conversational replies in JSON.
             data = resp.json()
             own_model = getattr(self, "model_id", None)
             if not own_model:
-                # the "_model_ids_match" treats two empty names as equal, so without
-                # an id, every entry lacking an 'id' would match
+                # Empty names compare equal in _model_ids_match, so
+                # a missing id would match anything.
                 return False
             for m in data.get("all_models_loaded", []):
                 if m.get("type") not in ("llm", "vlm"):
                     continue
 
-                # Only the agent's own model will decide the trim vs reload. A smaller
-                # resident model (vision, embedder listed as llm/vlm) says
-                # nothing about whether this overflow was a bad load (#5063).
+                # Judges only the agent's own model, other residents don't matter.
                 if not (
                     _model_ids_match(m.get("model_name"), own_model)
                     or _model_ids_match(m.get("id"), own_model)
@@ -7293,11 +7294,7 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                # Agent's model against its own window: an NPU model is right
-                # at 32K, a memory-sized GPU model may be far above 64K.
-                # Clamp to the trained ceiling, as the load path does: a
-                # model correctly loaded at max_context_window below the
-                # target can't be reloaded any larger (#5063)
+                # Clamp like the load path: a model at its max can't reload larger.
                 expected_ctx = resolve_effective_ctx_size(
                     resolve_ctx_size(
                         model=m.get("model_name"),

@@ -39,7 +39,7 @@ def _probe(entries, model_id=OWN_MODEL):
         patch("gaia.llm.lemonade_client.resolve_ctx_size", return_value=EXPECTED),
         patch(
             "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
-            return_value="http://localhost:13305doesnot/api/v1",
+            return_value="http://localhost:13305/api/v1",
         ),
     ):
         return Agent._is_loaded_ctx_too_small(agent)
