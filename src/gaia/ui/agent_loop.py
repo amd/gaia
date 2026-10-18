@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
-from gaia.ui.agent_threads import run_in_own_thread
+from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
 from gaia.ui.run_manager import run_manager
 from gaia.ui.turn_queue import turn_queue
 
@@ -55,9 +55,6 @@ _OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
 
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
-
-# How long a timed-out tick's thread gets to stop before the model is freed.
-_TICK_STOP_GRACE_SECONDS = 10.0
 
 # How long a user-message followup waits for the triggering turn to release the session
 _FOLLOWUP_GRACE_SECONDS = 10.0
@@ -514,14 +511,15 @@ class AgentLoop:
             logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
             cancel_event.set()
             sse_handler.cancelled.set()
-            done, _ = await asyncio.wait({worker}, timeout=_TICK_STOP_GRACE_SECONDS)
-            if not done:
+            finished = await wait_until_off_the_model(
+                worker, sse_handler, what=f"Tick for session {session_id[:8]}"
+            )
+            if not finished:
                 logger.error(
-                    "AgentLoop: tick for session %s still running %.0fs after "
-                    "it was stopped; freeing the model and holding the session "
+                    "AgentLoop: tick for session %s is stuck in a tool after it "
+                    "was stopped; freeing the model and holding the session "
                     "until its thread exits",
                     session_id[:8],
-                    _TICK_STOP_GRACE_SECONDS,
                 )
                 self._lingering_ticks[session_id] = worker
                 return LoopDirective("idle", reason="tick timed out")

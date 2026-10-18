@@ -194,15 +194,20 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert len(agent.calls) == 1
 
 
-async def test_timed_out_tick_frees_the_model_while_its_thread_winds_down(
+async def test_a_timed_out_tick_stuck_in_a_tool_frees_the_model_not_the_session(
     env, monkeypatch
 ):
     monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.2)
     monkeypatch.setattr(agent_loop_mod, "_TICK_STOP_GRACE_SECONDS", 0.2, raising=False)
     loop, session, agent = _make("chat")
     unstick = threading.Event()
-    # Stuck where the tick's cancel can't reach it, e.g. a hung tool call.
-    agent.process_query = lambda _message: unstick.wait(30) and "late"
+
+    def hung_tool(_message):
+        agent.console.print_tool_usage("run_shell_command")
+        unstick.wait(30)  # A tool the stop can't reach.
+        return "late"
+
+    agent.process_query = hung_tool
     try:
         await asyncio.wait_for(
             loop._run_step(AgentTrigger("idle_tick", session["id"])), 5
@@ -211,6 +216,53 @@ async def test_timed_out_tick_frees_the_model_while_its_thread_winds_down(
         # The session's agent is still in use until the thread exits.
         lock = loop._app_state.session_locks[session["id"]]
         assert lock.locked()
+        unstick.set()
+        for _ in range(100):
+            if not lock.locked():
+                break
+            await asyncio.sleep(0.02)
+        assert not lock.locked()
+    finally:
+        unstick.set()
+
+
+async def test_a_timed_out_tick_mid_model_call_keeps_the_model_until_it_stops(
+    env, monkeypatch
+):
+    monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.2)
+    monkeypatch.setattr(agent_loop_mod, "_TICK_STOP_GRACE_SECONDS", 0.2, raising=False)
+    loop, session, agent = _make("chat")
+    unstick = threading.Event()
+    # Generating: no tool is running, so the GPU is still in use.
+    agent.process_query = lambda _message: unstick.wait(30) and "late"
+    try:
+        step = asyncio.create_task(
+            loop._run_step(AgentTrigger("idle_tick", session["id"]))
+        )
+        await asyncio.sleep(0.8)
+        assert not step.done()
+        assert agent_loop_mod.turn_queue.locked(), "freed the GPU mid-generation"
+        unstick.set()
+        await asyncio.wait_for(step, 5)
+        assert not agent_loop_mod.turn_queue.locked()
+    finally:
+        unstick.set()
+
+
+async def test_a_tick_cancelled_at_shutdown_keeps_its_session_until_it_stops(env):
+    loop, session, agent = _make("chat")
+    unstick = threading.Event()
+    agent.process_query = lambda _message: unstick.wait(30) and "late"
+    try:
+        step = asyncio.create_task(
+            loop._run_step(AgentTrigger("idle_tick", session["id"]))
+        )
+        await asyncio.sleep(0.3)
+        step.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await step
+        lock = loop._app_state.session_locks[session["id"]]
+        assert lock.locked(), "released the session while its tick still runs"
         unstick.set()
         for _ in range(100):
             if not lock.locked():

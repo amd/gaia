@@ -55,3 +55,31 @@ def run_in_own_thread(fn: Callable[[], Any], *, name: str) -> asyncio.Future:
 
     threading.Thread(target=target, name=name, daemon=True).start()
     return future
+
+
+async def wait_until_off_the_model(
+    worker: asyncio.Future, console, *, what: str, log_every: float = 60.0
+) -> bool:
+    """After telling *worker*'s agent to stop, wait while it may use the model.
+
+    A model call in progress keeps the model (the agent ends it at the next
+    token once its console is cancelled). Returns True once the thread has
+    finished, or False as soon as it is inside a tool (*console*'s
+    ``tool_running()``): outside any model call, and, told to stop, it starts
+    no other, so the caller can free the model while the tool returns.
+    """
+    waited = 0.0
+    while True:
+        done, _ = await asyncio.wait({worker}, timeout=0.5)
+        if done:
+            return True
+        if console is not None and console.tool_running():
+            return False
+        waited += 0.5
+        if waited % log_every == 0:
+            logger.warning(
+                "%s still stopping after %.0f s; it keeps the model until its "
+                "model call ends",
+                what,
+                waited,
+            )

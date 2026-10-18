@@ -94,3 +94,27 @@ def test_timed_out_scheduled_run_stops_and_keeps_the_model_until_it_has(
             client.portal.call(scenario)
     finally:
         unstick.set()
+
+
+def test_a_timed_out_run_stuck_in_a_tool_frees_the_model(monkeypatch, queue):
+    monkeypatch.setenv("GAIA_SCHEDULE_TIMEOUT", "0.2")
+    unstick = threading.Event()
+
+    def hung_tool(_db, _prompt, *_args, console=None, **_kwargs):
+        console.print_tool_usage("run_shell_command")
+        unstick.wait(30)
+        return "late"
+
+    monkeypatch.setattr(server, "_run_scheduled_prompt", hung_tool)
+    try:
+        with TestClient(server.create_app(db_path=":memory:")) as client:
+            executor = client.app.state.scheduler._executor
+
+            async def scenario():
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(executor("hangs in a tool"), 5)
+                assert not queue.locked(), "a run stuck in a tool held the GPU"
+
+            client.portal.call(scenario)
+    finally:
+        unstick.set()

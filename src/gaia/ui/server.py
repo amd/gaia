@@ -232,11 +232,16 @@ def lemonade_is_remote() -> bool:
 
 
 def _run_scheduled_prompt(
-    db: ChatDatabase, prompt: str, cancel_event: Optional[threading.Event] = None
+    db: ChatDatabase,
+    prompt: str,
+    cancel_event: Optional[threading.Event] = None,
+    console=None,
 ) -> str:
     """Run one scheduled prompt through a fresh GAIA agent; returns the answer.
 
-    Setting *cancel_event* stops the agent at its next step.
+    Setting *cancel_event* stops the agent at its next step; *console*
+    (an ``SSEOutputHandler`` in background mode) reports whether a tool is
+    running, and cancelling it ends a streaming model reply.
     """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -269,20 +274,13 @@ def _run_scheduled_prompt(
         agent = GaiaAgent(config)
     agent._incognito_reason = "memory_off"
     agent._cancel_event = cancel_event
-    console = getattr(agent, "console", None)
-    if cancel_event is not None and console is not None:
-        # The agent stops a streaming model reply when its console is cancelled.
-        if getattr(console, "cancelled", None) is None:
-            console.cancelled = cancel_event
+    if console is not None:
+        agent.console = console
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
         return val if val is not None else result.get("answer", "")
     return str(result) if result else ""
-
-
-# How often a scheduled run that is still stopping says so in the log.
-_SCHEDULE_STOP_LOG_SECONDS = 60.0
 
 
 class _ScheduledRuns:
@@ -291,8 +289,9 @@ class _ScheduledRuns:
     A run waits in the turn queue (it builds and drives an agent on the same
     model) and gets *timeout* seconds once it reaches the model. On timeout
     its agent is told to stop, a model reply in progress included, and the
-    run keeps its place on the model until its thread has actually stopped:
-    chats wait in line meanwhile and see that they are waiting.
+    run keeps its place on the model while a model call may still run: chats
+    wait in line meanwhile and see that they are waiting. A run stuck in a
+    tool frees the model; told to stop, it calls the model no more.
     """
 
     def __init__(self, db: ChatDatabase, timeout: float):
@@ -300,33 +299,32 @@ class _ScheduledRuns:
         self._timeout = timeout
 
     async def run(self, prompt: str) -> str:
-        from gaia.ui.agent_threads import run_in_own_thread
+        from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
+        from gaia.ui.sse_handler import SSEOutputHandler
         from gaia.ui.turn_queue import turn_queue
 
         await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
         try:
             cancel = threading.Event()
+            # Background mode: nobody is watching, so gated tools are denied.
+            console = SSEOutputHandler(background_mode=True)
             worker = run_in_own_thread(
-                lambda: _run_scheduled_prompt(self._db, prompt, cancel_event=cancel),
+                lambda: _run_scheduled_prompt(
+                    self._db, prompt, cancel_event=cancel, console=console
+                ),
                 name="gaia-scheduled-run",
             )
             done, _ = await asyncio.wait({worker}, timeout=self._timeout)
             if done:
                 return worker.result()
             cancel.set()
-            waited = 0.0
-            while True:
-                done, _ = await asyncio.wait(
-                    {worker}, timeout=_SCHEDULE_STOP_LOG_SECONDS
-                )
-                if done:
-                    break
-                waited += _SCHEDULE_STOP_LOG_SECONDS
+            console.cancelled.set()
+            if not await wait_until_off_the_model(
+                worker, console, what="Scheduled run"
+            ):
                 logger.error(
-                    "Scheduled run still stopping %.0fs after its %gs timeout; "
-                    "it keeps the model until it does (a tool it called has not "
-                    "returned)",
-                    waited,
+                    "Scheduled run is stuck in a tool after its %gs timeout; "
+                    "freeing the model (it calls the model no more)",
                     self._timeout,
                 )
             raise asyncio.TimeoutError(
