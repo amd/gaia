@@ -121,34 +121,50 @@ function App() {
     const slowSince = useRef<number | null>(null);
     // A backend that answers late is busy, not gone; only a refused request means it is unreachable.
     const [backendSlow, setBackendSlow] = useState(false);
+    // The backend answered the status request with an HTTP error: reachable, but failing.
+    const [backendError, setBackendError] = useState<string | null>(null);
     const applyStatus = useCallback((outcome: StatusOutcome) => {
         if (outcome.kind === 'unreachable') {
             log.system.warn('System status check failed', outcome.error);
             slowCount.current = 0;
             slowSince.current = null;
             setBackendSlow(false);
+            setBackendError(null);
             setBackendConnected(false);
             setSystemStatus(null);
+            return;
+        }
+        if (outcome.kind === 'error') {
+            log.system.warn(`System status answered HTTP ${outcome.httpStatus}`, outcome.message);
+            slowCount.current = 0;
+            slowSince.current = null;
+            setBackendSlow(false);
+            setBackendError(`HTTP ${outcome.httpStatus}: ${outcome.message}`);
+            setBackendConnected(true);
             return;
         }
         if (outcome.kind === 'slow') {
             slowCount.current += 1;
             slowSince.current ??= Date.now();
+            setBackendError(null);
             log.system.warn(`System status did not answer in time (${slowCount.current} in a row)`);
             if (Date.now() - slowSince.current >= BACKEND_SILENT_LOST_MS) {
                 // Busy does not last this long; one that never answers is as good as gone.
                 setBackendSlow(false);
                 setBackendConnected(false);
                 setSystemStatus(null);
-            } else if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) {
-                setBackendSlow(true);
+                return;
             }
+            // Something accepted the request, so the backend is back, if slow.
+            setBackendConnected(true);
+            if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) setBackendSlow(true);
             return;
         }
         const { status } = outcome;
         slowCount.current = 0;
         slowSince.current = null;
         setBackendSlow(false);
+        setBackendError(null);
         setBackendConnected(true);
         if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
         // One slow health probe under load is not an outage.
@@ -434,7 +450,7 @@ function App() {
             />
 
             <div className="main-content">
-                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} />}
+                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
                 {setup.state === 'unknown' && (
                     <div className="app-notice is-warning" role="status">
                         <span>Could not check whether GAIA is set up: {setup.error}</span>

@@ -172,6 +172,36 @@ describe('system status poll', () => {
         expect(document.body.textContent).toMatch(/Lost the connection to GAIA/i);
     });
 
+    it('shows the connection back once a backend that was unreachable answers again, even slowly', async () => {
+        fakeTimers();
+        let call = 0;
+        mocked.getSystemStatus.mockImplementation((signal?: AbortSignal) => {
+            call += 1;
+            if (call === 1) return Promise.reject(new TypeError('Failed to fetch'));
+            return new Promise((_resolve, reject) => {
+                signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+            });
+        });
+        render(<App />);
+        await advance(1_000);
+        expect(useChatStore.getState().backendConnected).toBe(false);
+        await advance(70_000);
+        expect(useChatStore.getState().backendConnected).toBe(true);
+        expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+    });
+
+    it('says the backend answered with an error, not that it is unreachable', async () => {
+        fakeTimers();
+        mocked.getSystemStatus.mockRejectedValue(
+            Object.assign(new Error('Server error. Please try again.'), { name: 'ApiError', httpStatus: 500, detail: 'boom' }),
+        );
+        useChatStore.setState({ backendConnected: true });
+        render(<App />);
+        await advance(1_000);
+        expect(useChatStore.getState().backendConnected).toBe(true);
+        expect(document.body.textContent).toMatch(/GAIA's backend answered with an error \(HTTP 500:/);
+    });
+
     it('waits long enough for the status handler to finish its own probes', async () => {
         fakeTimers();
         const signals: AbortSignal[] = [];

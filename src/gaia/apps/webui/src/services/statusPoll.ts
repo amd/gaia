@@ -9,6 +9,7 @@
  */
 
 import * as api from './api';
+import { log } from '../utils/logger';
 import type { SystemStatus } from '../types';
 
 export const STATUS_POLL_MS = 5_000;
@@ -22,7 +23,9 @@ export type StatusOutcome =
     | { kind: 'ok'; status: SystemStatus }
     /** No answer within STATUS_REQUEST_TIMEOUT_MS: the backend is busy or stuck. */
     | { kind: 'slow' }
-    /** The request failed outright: nothing is listening, or the backend errored. */
+    /** The backend answered with an HTTP error (a 5xx under load, a broken handler). */
+    | { kind: 'error'; httpStatus: number; message: string }
+    /** The request never reached a backend: nothing is listening. */
     | { kind: 'unreachable'; error: unknown };
 
 /**
@@ -37,7 +40,7 @@ export function modelServerHealth(status: SystemStatus): ModelServerHealth {
 }
 
 function isSlow(outcome: StatusOutcome): boolean {
-    return outcome.kind === 'slow'
+    return outcome.kind === 'slow' || outcome.kind === 'error'
         || (outcome.kind === 'ok' && modelServerHealth(outcome.status) === 'unresponsive');
 }
 
@@ -73,7 +76,12 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
             return { kind: 'ok', status: await api.getSystemStatus(controller.signal) };
         } catch (error) {
             if (cancelled) return null;
-            return controller.signal.aborted ? { kind: 'slow' } : { kind: 'unreachable', error };
+            if (controller.signal.aborted) return { kind: 'slow' };
+            const httpStatus = (error as { httpStatus?: unknown })?.httpStatus;
+            if ((error as Error)?.name === 'ApiError' && typeof httpStatus === 'number') {
+                return { kind: 'error', httpStatus, message: (error as Error).message };
+            }
+            return { kind: 'unreachable', error };
         } finally {
             clearTimeout(limit);
             if (current === controller) current = null;
@@ -87,7 +95,11 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
                 if (outcome === null) return;
                 slowStreak = isSlow(outcome) ? slowStreak + 1 : 0;
                 downloading = isDownloading(outcome);
-                onOutcome(outcome);
+                try {
+                    onOutcome(outcome);
+                } catch (err) {
+                    log.system.error('Could not apply the system status; the next poll will try again', err);
+                }
             })
             .finally(() => { inFlight = null; });
         return inFlight;

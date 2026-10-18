@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../api');
+vi.mock('../api', async (orig) => ({ ...(await orig<typeof import('../api')>()), getSystemStatus: vi.fn() }));
 
 import * as api from '../api';
 import { createStatusPoller } from '../statusPoll';
@@ -34,5 +34,21 @@ describe('createStatusPoller', () => {
         expect(onOutcome).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(120_000);
         expect(mocked.getSystemStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('tells a backend that answers with an error apart from one that cannot be reached (review repro)', async () => {
+        mocked.getSystemStatus.mockRejectedValue(new api.ApiError('HTTP 504', 504, 'Gateway Timeout', null));
+        const outcomes: unknown[] = [];
+        await createStatusPoller((o) => outcomes.push(o)).check();
+        expect(outcomes[0]).toMatchObject({ kind: 'error', httpStatus: 504 });
+    });
+
+    it('keeps polling when handling an outcome throws, and reports it', async () => {
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true } as never);
+        const onOutcome = vi.fn(() => { throw new Error('render failed'); });
+        const poller = createStatusPoller(onOutcome);
+        await expect(poller.check()).resolves.toBeUndefined();
+        await expect(poller.check()).resolves.toBeUndefined();
+        expect(onOutcome).toHaveBeenCalledTimes(2);
     });
 });

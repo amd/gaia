@@ -28,10 +28,12 @@ function RetryButton({ onRetry, label }: { onRetry: () => void | Promise<void>; 
     );
 }
 
-export function ConnectionBanner({ onRetry, backendSlow = false }: {
+export function ConnectionBanner({ onRetry, backendSlow = false, backendError = null }: {
     onRetry?: () => void | Promise<void>;
     /** Status requests keep timing out: the backend is busy, not gone. */
     backendSlow?: boolean;
+    /** The backend answered the status request with this HTTP error. */
+    backendError?: string | null;
 }) {
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
@@ -230,7 +232,25 @@ export function ConnectionBanner({ onRetry, backendSlow = false }: {
         );
     }
 
-    // Case 1a: the backend answers, but too slowly to read its status.
+    // Case 1a: the backend answers, but with an error.
+    if (backendError) {
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <AlertTriangle size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    GAIA's backend answered with an error ({backendError}).{' '}
+                    <span className="connection-banner__hint">
+                        It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.
+                    </span>
+                </div>
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+            </div>
+        );
+    }
+
+    // Case 1b: the backend answers, but too slowly to read its status.
     if (backendSlow) {
         return (
             <div className="connection-banner connection-banner--warning" role="status">
