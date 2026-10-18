@@ -219,16 +219,12 @@ def test_a_timed_out_request_is_cancelled_on_the_server(tmp_path):
     log = tmp_path / "seen.jsonl"
     # Logs every line it reads, notifications included, and never replies.
     script = tmp_path / "silent_logger.py"
-    script.write_text(
-        textwrap.dedent(
-            f"""
+    script.write_text(textwrap.dedent(f"""
             import sys
             for line in sys.stdin:
                 with open({str(log)!r}, "a") as f:
                     f.write(line)
-            """
-        )
-    )
+            """))
     transport = _transport(script, timeout=0.5)
     try:
         with pytest.raises(TimeoutError):
