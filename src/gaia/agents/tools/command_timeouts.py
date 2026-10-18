@@ -148,8 +148,45 @@ _BINARY_CLASS: Dict[str, TimeoutClass] = {
 # Interpreters: running something is a script, ``node --version`` is not.
 _INTERPRETERS = frozenset(
     {"node", "ruby", "perl", "php", "rscript", "julia"}
-) | frozenset({"bash", "sh", "zsh", "pwsh", "powershell"})
+) | frozenset({"bash", "sh", "zsh", "pwsh", "powershell", "cmd"})
 _SHELLS = frozenset({"bash", "sh", "zsh"})
+
+# Dev servers never exit, so a longer budget only holds the turn longer with
+# nothing to show; they stay ``default``. A server belongs in the background.
+_SERVER_BINARIES = frozenset(
+    {
+        "uvicorn",
+        "gunicorn",
+        "hypercorn",
+        "daphne",
+        "waitress-serve",
+        "http-server",
+        "live-server",
+        "nodemon",
+    }
+)
+_SERVER_SUBCOMMANDS: Dict[str, frozenset] = {
+    "flask": frozenset({"run"}),
+    "streamlit": frozenset({"run"}),
+    "jupyter": frozenset({"lab", "notebook"}),
+    "next": frozenset({"dev", "start"}),
+    "webpack": frozenset({"serve"}),
+    "ng": frozenset({"serve"}),
+    "vite": frozenset({"", "dev", "serve", "preview"}),
+    "npm": frozenset({"start"}),
+    "pnpm": frozenset({"start", "dev"}),
+    "yarn": frozenset({"start", "dev"}),
+}
+# ``npm run dev`` and friends.
+_SERVER_RUN_SCRIPTS = frozenset({"dev", "start", "serve", "preview", "watch"})
+_SERVER_MODULES = frozenset(
+    {"http.server", "uvicorn", "gunicorn", "flask", "streamlit", "jupyter"}
+)
+# ``python app.py`` / ``node server.js``: the conventional server entry points.
+_SERVER_SCRIPT_STEMS = frozenset(
+    {"server", "serve", "app", "wsgi", "asgi", "devserver", "dev_server"}
+)
+_SERVER_LAUNCHERS = frozenset({"node", "deno", "bun", "ts-node"})
 # Flags that hand the interpreter code or a script to run.
 _RUN_FLAGS = frozenset({"-e", "-c", "--eval", "-command", "-file", "-encodedcommand"})
 
@@ -262,8 +299,39 @@ def command_basename(token: str) -> str:
     return name
 
 
+def _runs_a_server(tokens: List[str]) -> bool:
+    """Whether one already-split command starts a server that never exits."""
+    launcher = None  # set while the next operand is the script it runs
+    for i, token in enumerate(tokens):
+        lowered = token.lower()
+        name = command_basename(token)
+        if name in _SERVER_BINARIES or lowered == "runserver":
+            return True
+        if token == "-m" and i + 1 < len(tokens):
+            if tokens[i + 1].lower() in _SERVER_MODULES:
+                return True
+        if name in _SERVER_SUBCOMMANDS or name in _RUN_SCRIPT_BINARIES:
+            operands = [t.lower() for t in tokens[i + 1 :] if not t.startswith("-")]
+            first = operands[0] if operands else ""
+            if first in _SERVER_SUBCOMMANDS.get(name, ()):
+                return True
+            if name in _RUN_SCRIPT_BINARIES and first == "run":
+                if len(operands) > 1 and operands[1] in _SERVER_RUN_SCRIPTS:
+                    return True
+        if launcher is not None and not token.startswith("-"):
+            stem, _, suffix = name.rpartition(".")
+            if suffix in ("py", "js", "mjs", "ts") and stem in _SERVER_SCRIPT_STEMS:
+                return True
+            launcher = None
+        if name in _PYTHON_LAUNCHERS or name in _SERVER_LAUNCHERS:
+            launcher = name
+    return False
+
+
 def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     """The class of one already-split command, wrappers peeled off."""
+    if _runs_a_server(tokens):
+        return DEFAULT
     command_class, launched_by_python = _classify_peeled(tokens)
     if command_class is DEFAULT and launched_by_python:
         return SCRIPT
@@ -305,20 +373,25 @@ def _classify_peeled(tokens: List[str]) -> Tuple[TimeoutClass, bool]:
 
 
 def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
-    """``script`` when *binary* is given something to run, else ``default``."""
+    """``script`` when *binary* is given something to run, else ``default``.
+
+    A shell handed a command line (``bash -lc "pip install x"``, ``cmd /c
+    build.bat``) takes the class of that command line.
+    """
     lowered = [arg.lower() for arg in args]
-    if binary in _SHELLS and "-c" in lowered:
-        payload_at = lowered.index("-c") + 1
-        if payload_at < len(args):
-            # ``bash -c "pytest -q"`` is a test run inside a shell.
-            return max(SCRIPT, classify_command(args[payload_at]), key=_seconds)
+    if binary == "cmd":
+        for i, arg in enumerate(lowered):
+            if arg in ("/c", "/k"):
+                return classify_command(" ".join(args[i + 1 :]))
+        return DEFAULT
+    if binary in _SHELLS:
+        for i, arg in enumerate(lowered):
+            # ``-c`` alone or in a cluster: ``-lc``, ``-ec``, ``-xec``.
+            if re.fullmatch(r"-[a-z]*c[a-z]*", arg) and i + 1 < len(args):
+                return classify_command(args[i + 1])
     if any(not arg.startswith("-") for arg in args) or _RUN_FLAGS & set(lowered):
         return SCRIPT
     return DEFAULT
-
-
-def _seconds(command_class: TimeoutClass) -> int:
-    return command_class.seconds
 
 
 def _classify_binary(tokens: List[str], index: int) -> TimeoutClass:

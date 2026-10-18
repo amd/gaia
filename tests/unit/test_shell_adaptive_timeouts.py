@@ -294,7 +294,12 @@ class TestTimeoutClasses:
             ("bash --version", "default"),
             ("sh", "default"),
             ("bash -c 'pytest -q'", "test"),
-            ("bash -c 'ls -la'", "script"),
+            ("bash -c 'ls -la'", "default"),
+            ("bash -lc 'pip install requests'", "build"),
+            ("bash -ec 'python analyze.py'", "script"),
+            ("cmd /c build.bat", "script"),
+            ("cmd /c dir", "default"),
+            ("cmd /c npm install", "build"),
             ("node -e 'console.log(1)'", "script"),
             ("npm.cmd install", "build"),
             ("npm.cmd test", "test"),
@@ -308,6 +313,44 @@ class TestTimeoutClasses:
     def test_a_known_tool_keeps_its_class_whatever_launches_it(
         self, command, expected_class
     ):
+        assert classify_command(command).name == expected_class
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python -m http.server 8000",
+            "python app.py",
+            "python3 -u server.py --port 5000",
+            "python manage.py runserver",
+            "node server.js",
+            "uvicorn main:app --reload",
+            "flask run",
+            "streamlit run dashboard.py",
+            "npm start",
+            "npm run dev",
+            "pnpm dev",
+            "yarn start",
+            "vite",
+            "next dev",
+            "jupyter lab",
+            "cd web && npm run dev",
+        ],
+    )
+    def test_dev_servers_stay_at_the_short_default(self, command):
+        # A server never exits: a longer budget only holds the turn silently.
+        assert classify_command(command).name == "default"
+
+    @pytest.mark.parametrize(
+        "command,expected_class",
+        [
+            ("vite build", "build"),
+            ("npm run build", "build"),
+            ("python analyze_app_logs.py", "script"),
+            ("pytest tests/test_server.py", "test"),
+            ("cat server.py", "default"),
+        ],
+    )
+    def test_server_rules_do_not_catch_ordinary_commands(self, command, expected_class):
         assert classify_command(command).name == expected_class
 
     def test_a_pipeline_takes_its_longest_segment(self):
