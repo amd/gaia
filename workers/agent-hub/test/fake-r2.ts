@@ -147,11 +147,16 @@ export class FakeR2 {
 }
 
 /** Build a typed Env for tests backed by a fresh FakeR2. */
-export function makeEnv(overrides?: { tokens?: unknown; maxBytes?: string }): {
+export function makeEnv(overrides?: {
+  tokens?: unknown;
+  maxBytes?: string;
+  maxReferencedBytes?: string;
+}): {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   BUCKET: any;
   PUBLISH_TOKENS?: string;
   MAX_ARTIFACT_BYTES?: string;
+  MAX_REFERENCED_ARTIFACT_BYTES?: string;
   bucket: FakeR2;
 } {
   const bucket = new FakeR2();
@@ -167,6 +172,7 @@ export function makeEnv(overrides?: { tokens?: unknown; maxBytes?: string }): {
     bucket,
     PUBLISH_TOKENS: JSON.stringify(tokens),
     MAX_ARTIFACT_BYTES: overrides?.maxBytes,
+    MAX_REFERENCED_ARTIFACT_BYTES: overrides?.maxReferencedBytes,
   };
 }
 
