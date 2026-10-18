@@ -344,4 +344,25 @@ describe('ChatView stream reliability', () => {
         act(() => attachCallbacks[0].onConnected?.());
         await waitFor(() => expect(document.body.textContent).not.toContain('Reconnecting (attempt 1 of 3)'));
     });
+    it('keeps a prompt still waiting for the user through a reconnect replay (review repro)', async () => {
+        await driveSend();
+        const prompt = { type: 'permission_request', tool: 'write_file', confirm_id: 'live1', args: {} } as never;
+        act(() => capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'read_file' } as never));
+        act(() => capturedCallbacks!.onAgentEvent({ type: 'tool_end', tool: 'read_file' } as never));
+        act(() => capturedCallbacks!.onAgentEvent(prompt));
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        // The replay starts from the top of the run.
+        act(() => attachCallbacks[0].onAgentEvent({ type: 'tool_start', tool: 'read_file' } as never));
+        act(() => attachCallbacks[0].onAgentEvent({ type: 'tool_end', tool: 'read_file' } as never));
+        act(() => attachCallbacks[0].onAgentEvent(prompt));
+        const n = useNotificationStore.getState().notifications.find((x) => x.id === 'live1');
+        expect(n?.dismissed).not.toBe(true);
+    });
+    it('clears the reconnect notice once the re-attach streams again (review repro)', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamStalledError(30_000)));
+        act(() => attachCallbacks[0].onConnected?.());
+        act(() => attachCallbacks[0].onChunk({ type: 'chunk', content: 'Answer text' }));
+        expect(useChatStore.getState().liveStatus ?? '').not.toContain('Reconnecting');
+    });
 });

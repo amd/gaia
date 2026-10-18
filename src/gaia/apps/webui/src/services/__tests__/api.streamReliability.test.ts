@@ -134,6 +134,20 @@ describe('chat stream idle watchdog (E4)', () => {
         expect(cb.onDone).toHaveBeenCalledTimes(1);
     });
 
+    it('ends the turn when a fatal agent error is followed by a cut connection (review repro)', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'agent_error', content: 'boom' });
+        await vi.advanceTimersByTimeAsync(0);
+        s.cut();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(cb.onDone).toHaveBeenCalledTimes(1);
+        expect(cb.onError).not.toHaveBeenCalled();
+    });
+
     it('closes the turn once when an error event is followed by a dead connection', async () => {
         const s = openStream();
         fetchMock().mockResolvedValue(s.response);
