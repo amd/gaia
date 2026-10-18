@@ -331,7 +331,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (cancelled) return;
                 const msgs = fromApiMessages(data.messages);
                 if (isInitial && sentRef.current !== sentBefore) {
-                    // A message went out while this loaded; the turn's own refetch syncs the list.
+                    // A message went out while this loaded; the turn's refetch, or after an error the next poll, syncs the list.
                     lastMsgCountRef.current = msgs.length;
                 } else if (isInitial) {
                     setMessages(msgs);

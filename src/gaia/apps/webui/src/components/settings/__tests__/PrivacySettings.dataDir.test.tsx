@@ -11,9 +11,9 @@ vi.mock('../../../services/api');
 
 describe('PrivacySettings data folder', () => {
     it('shows the folder the backend reports, not a guessed default', () => {
-        useChatStore.setState({ systemStatus: { data_dir: 'D:\gaia-home\chat' } as SystemStatus });
+        useChatStore.setState({ systemStatus: { data_dir: 'D:\\gaia-home\\chat' } as SystemStatus });
         render(<PrivacySettings />);
-        expect(screen.getByText('D:\gaia-home\chat')).toBeInTheDocument();
+        expect(screen.getByText('D:\\gaia-home\\chat')).toBeInTheDocument();
         expect(screen.queryByText('~/.gaia/chat/')).toBeNull();
     });
 
