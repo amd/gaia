@@ -778,7 +778,6 @@
 }
 .mem-conv-session-id {
     font-size: 12px;
-    font-family: var(--font-mono);
     font-weight: 500;
     color: var(--text-primary);
     overflow: hidden;
@@ -823,8 +822,12 @@
 }
 .mem-conv-detail-header h2 {
     font-size: 12px;
-    font-family: var(--font-mono);
     color: var(--text-secondary);
+}
+.mem-conv-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 .mem-conv-detail-body {
     padding: 16px 20px;

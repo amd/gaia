@@ -332,6 +332,9 @@
     overflow-x: auto;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
+    /* The page-wide thumb matches the table border; a wide table needs a visible cue. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-muted) transparent;
 }
 .md-table {
     width: 100%;
