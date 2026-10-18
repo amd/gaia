@@ -10,6 +10,7 @@ import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
+import { describeStreamError, MAX_STREAM_RECONNECTS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData } from '../types';
@@ -258,6 +259,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // blinked once per second — too distracting for an always-visible
     // text input). Native browser caret is plenty.
     const abortRef = useRef<AbortController | null>(null);
+    /** Reconnects spent on the current turn's stream. */
+    const reconnectsRef = useRef(0);
     // Stop keeps the stream open until the server's closing `done` arrives.
     const [stopping, setStopping] = useState(false);
     const stopRequestedRef = useRef(false);
@@ -267,7 +270,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     /** The agent's own step number for the live turn, from its `step` events. */
     const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
-    const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean }) => void>(() => {});
+    const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean; reconnect?: number }) => void>(() => {});
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -495,13 +498,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [isStreaming, handleStop]);
 
     // Send message
-    const sendMessage = useCallback(async (overrideText?: string, options?: { attach?: boolean }) => {
+    const sendMessage = useCallback(async (overrideText?: string, options?: { attach?: boolean; reconnect?: number }) => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
         // no optimistic user message, no input/attachment handling, and the
         // controller comes from api.attachToRun instead of api.sendMessageStream.
         const reattach = options?.attach === true;
+        // reconnect=N re-attaches a stream that went silent, replacing the dead one still marked live.
+        const reconnect = reattach ? options?.reconnect ?? 0 : 0;
         const text = (overrideText || input).trim();
         const hasAttachments = attach.hasUploaded;
 
@@ -516,7 +521,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
-            if (isStreaming) return;
+            if (isStreaming && !reconnect) return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
@@ -547,8 +552,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             };
             addMessage(userMsg);
         } else {
-            log.chat.info(`Re-attaching to background run for session=${sessionId}`);
+            log.chat.info(`Re-attaching to background run for session=${sessionId}${reconnect ? ` (reconnect ${reconnect})` : ''}`);
         }
+        if (!reconnect) reconnectsRef.current = 0;
 
         // Start streaming
         setStreaming(true);
@@ -560,6 +566,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         stepIdRef.current = 0;
         setLiveAgentStep(0);
         toolOccurredRef.current = false;
+        if (reconnect) {
+            useChatStore.getState().setLiveStatus(`Connection lost. Reconnecting (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
+        }
 
         log.stream.info('Starting agent stream...');
         const streamStart = log.stream.time();
@@ -883,6 +892,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         return;
                     }
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
+                    // The client's own wait notice is not a step of the turn.
+                    if (event.phase === 'waiting') return;
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
@@ -1020,6 +1031,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             });
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
+                            if (reattach && !content && msgs[msgs.length - 1]?.role === 'user') {
+                                addMessage({
+                                    id: Date.now() + 2,
+                                    session_id: sessionId,
+                                    role: 'assistant',
+                                    content: RUN_LOST_TEXT,
+                                    created_at: new Date().toISOString(),
+                                    rag_sources: null,
+                                });
+                            }
                         })
                         .catch((err) => log.chat.error(`Could not refresh messages for session=${sessionId}`, err));
                 }, 300);
@@ -1037,6 +1058,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onError: (err) => {
+                // A silent stream is a dead connection, not a failed turn: re-attach, which replays the run so far.
+                if (err.name === 'StreamStalledError' && !doneHandled && !stopRequestedRef.current && !isStale()
+                    && reconnectsRef.current < MAX_STREAM_RECONNECTS) {
+                    reconnectsRef.current += 1;
+                    log.chat.warn(`Stream for session=${sessionId} went silent; reconnecting (${reconnectsRef.current}/${MAX_STREAM_RECONNECTS})`);
+                    sendMessageRef.current(undefined, { attach: true, reconnect: reconnectsRef.current });
+                    return;
+                }
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 useChatStore.getState().closeSessionQuestions(sessionId);
                 const wasStopping = stopRequestedRef.current;
@@ -1083,8 +1112,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 const msg = err.message || '';
                 const issueFooter = '\n\n---\n*Unexpected error?* '
                     + `[Report it on GitHub](${bugReportUrl(msg.slice(0, 80))})`;
+                const described = describeStreamError(err);
 
-                if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
+                if (described) {
+                    errorContent = described;
+                } else if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
                     errorContent =
                         'The model server did not answer. Open Settings → Model to check it, '
                         + 'then send your message again.\n\n'
