@@ -165,6 +165,29 @@ _SERVER_BINARIES = frozenset(
         "nodemon",
     }
 )
+# Interpreter flags that take a value, so the value isn't read as the command.
+_VALUE_FLAGS: Dict[str, frozenset] = {
+    "node": frozenset({"-r", "--require", "--import", "--loader", "--env-file"}),
+    "bash": frozenset({"-o", "+o", "-O", "+O"}),
+    "sh": frozenset({"-o", "+o"}),
+    "zsh": frozenset({"-o", "+o"}),
+    "pwsh": frozenset(
+        {
+            "-executionpolicy",
+            "-ep",
+            "-windowstyle",
+            "-version",
+            "-workingdirectory",
+            "-wd",
+            "-inputformat",
+            "-outputformat",
+            "-configurationname",
+            "-settingsfile",
+        }
+    ),
+}
+_VALUE_FLAGS["powershell"] = _VALUE_FLAGS["pwsh"]
+
 _SERVER_SUBCOMMANDS: Dict[str, frozenset] = {
     "flask": frozenset({"run"}),
     "streamlit": frozenset({"run"}),
@@ -173,6 +196,9 @@ _SERVER_SUBCOMMANDS: Dict[str, frozenset] = {
     "webpack": frozenset({"serve"}),
     "ng": frozenset({"serve"}),
     "vite": frozenset({"", "dev", "serve", "preview"}),
+    "mkdocs": frozenset({"serve"}),
+    "hugo": frozenset({"server", "serve"}),
+    "jekyll": frozenset({"serve"}),
     "npm": frozenset({"start"}),
     "pnpm": frozenset({"start", "dev"}),
     "yarn": frozenset({"start", "dev"}),
@@ -306,13 +332,28 @@ def _is_python_launcher(binary: str) -> bool:
     return binary in _PYTHON_LAUNCHERS or bool(_VERSIONED_PYTHON.fullmatch(binary))
 
 
+def _operands(binary: str, args: List[str]) -> List[str]:
+    """*args* without flags, or the values of *binary*'s value-taking flags."""
+    value_flags = _VALUE_FLAGS.get(binary, frozenset())
+    operands: List[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg.lower() in value_flags or arg in value_flags:
+            skip = True
+        elif not arg.startswith(("-", "+")) or arg in ("-", "+"):
+            operands.append(arg)
+    return operands
+
+
 def _starts_a_server(binary: str, args: List[str], launched_by_python: bool) -> bool:
     """Whether the command whose binary is *binary* runs a server.
 
     Only the command position counts: ``pip install uvicorn`` installs a
     server, it doesn't run one.
     """
-    operands = [arg.lower() for arg in args if not arg.startswith("-")]
+    operands = [arg.lower() for arg in _operands(binary, args)]
     first = operands[0] if operands else ""
     if binary in _SERVER_BINARIES:
         return True
@@ -325,7 +366,9 @@ def _starts_a_server(binary: str, args: List[str], launched_by_python: bool) -> 
             return True
     if binary == "manage.py" and first == "runserver":
         return True
-    if binary == "php" and "-s" in (arg.lower() for arg in args):
+    if binary == "php" and (
+        "-s" in (arg.lower() for arg in args) or operands[:2] == ["artisan", "serve"]
+    ):
         return True
     if launched_by_python:
         script = binary
@@ -393,23 +436,36 @@ def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
             if arg in ("/c", "/k"):
                 return classify_command(" ".join(args[i + 1 :]))
         return DEFAULT
+    value_flags = _VALUE_FLAGS.get(binary, frozenset())
     if binary in ("pwsh", "powershell"):
-        for i, arg in enumerate(lowered):
+        i = 0
+        while i < len(lowered):
+            arg = lowered[i]
             if arg in ("-command", "-c"):
                 return classify_command(" ".join(args[i + 1 :]))
-            if arg in ("-file", "-encodedcommand"):
+            if arg in ("-file", "-f", "-encodedcommand"):
                 return SCRIPT
+            if arg in value_flags:
+                i += 2  # ``-ExecutionPolicy Bypass``
+                continue
             if not arg.startswith("-"):
                 # A bare command line is what -Command would run.
                 return classify_command(" ".join(args[i:]))
+            i += 1
         return DEFAULT
     if binary in _SHELLS:
-        for i, arg in enumerate(lowered):
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg in value_flags:
+                i += 2  # ``-o pipefail``
+                continue
             if not arg.startswith("-"):
                 break  # ``bash run.sh -c cfg.yml``: a script's own flags
             # ``-c`` alone or in a cluster: ``-lc``, ``-ec``, ``-xec``.
-            if re.fullmatch(r"-[a-z]*c[a-z]*", arg) and i + 1 < len(args):
+            if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", arg) and i + 1 < len(args):
                 return classify_command(args[i + 1])
+            i += 1
     if any(not arg.startswith("-") for arg in args) or _RUN_FLAGS & set(lowered):
         return SCRIPT
     return DEFAULT

@@ -304,6 +304,13 @@ class TestTimeoutClasses:
             ("pwsh -c 'pytest -q'", "test"),
             ("powershell Get-ChildItem", "default"),
             ("powershell -File build.ps1", "script"),
+            ("powershell -ExecutionPolicy Bypass -File build.ps1", "script"),
+            (
+                'powershell -NoProfile -ExecutionPolicy Bypass -Command "pip install x"',
+                "build",
+            ),
+            ("pwsh -WindowStyle Hidden -Command 'pytest -q'", "test"),
+            ("bash -o pipefail -c 'pytest -q'", "test"),
             ("python3.12 analyze.py", "script"),
             (r"C:\Python312\python.exe analyze.py", "script"),
             ("cmd /c build.bat", "script"),
@@ -347,6 +354,10 @@ class TestTimeoutClasses:
             "python -m flask run",
             "php -S localhost:8000",
             'powershell -Command "npm run dev"',
+            "node -r dotenv/config server.js",
+            "php artisan serve",
+            "python -m mkdocs serve",
+            "mkdocs serve",
         ],
     )
     def test_dev_servers_stay_at_the_short_default(self, command):
@@ -370,6 +381,9 @@ class TestTimeoutClasses:
             ("apt-get install -y nodemon", "build"),
             ("git clone https://github.com/http-party/http-server", "network"),
             ("pip install flask && flask --version", "build"),
+            ("node -r dotenv/config migrate.js", "script"),
+            ("php artisan migrate", "script"),
+            ("mkdocs build", "default"),
         ],
     )
     def test_server_rules_do_not_catch_ordinary_commands(self, command, expected_class):
