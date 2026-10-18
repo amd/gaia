@@ -262,6 +262,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
     from gaia.daemon.lifetime import (
+        DaemonIdle,
         LifetimeWatch,
         exit_with_pid_from_env,
         idle_exit_seconds_from_env,
@@ -355,13 +356,16 @@ def run(host: str = HOST) -> None:
     def _exit_on_own(_reason: str) -> None:
         server.should_exit = True
 
-    def _idle_seconds() -> Optional[float]:
-        # No client and no busy sidecar (the clients' own idle clock), and no
-        # scheduled job waiting to fire.
-        idle = lemonade_clients.snapshot()["idle_seconds"]
-        if idle is None or idle_limit is None or idle < idle_limit:
-            return idle
-        return None if clock.job_counts()["pending"] else idle
+    def _slots_busy() -> bool:
+        slots = broker.snapshot()
+        return slots["active"] is not None or bool(slots["waiting"])
+
+    idle = DaemonIdle(
+        clients_idle=lambda: lemonade_clients.snapshot()["idle_seconds"],
+        slots_busy=_slots_busy,
+        jobs_pending=lambda: bool(clock.job_counts()["pending"]),
+        limit=idle_limit,
+    )
 
     # Exit once nothing can find this daemon (its home or instance.json is
     # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, or, outside the
@@ -369,7 +373,7 @@ def run(host: str = HOST) -> None:
     lifetime = LifetimeWatch(
         _exit_on_own,
         exit_with_pid=exit_with_pid,
-        idle=_idle_seconds,
+        idle=idle,
         idle_limit=idle_limit,
     )
 

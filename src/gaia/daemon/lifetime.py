@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -124,6 +125,44 @@ def exit_reason(
     return None
 
 
+class DaemonIdle:
+    """Seconds since anything last used the daemon, or None while something does.
+
+    Use is a connected client or busy sidecar (*clients_idle* is None while
+    there is one), a model-slot lease held or queued (*slots_busy*), or, once
+    the time passes *limit*, a scheduled job waiting to fire (*jobs_pending*,
+    read only then so the scheduler is not queried every check).
+    """
+
+    def __init__(
+        self,
+        *,
+        clients_idle: Callable[[], Optional[float]],
+        slots_busy: Callable[[], bool],
+        jobs_pending: Callable[[], bool],
+        limit: Optional[float],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._clients_idle = clients_idle
+        self._slots_busy = slots_busy
+        self._jobs_pending = jobs_pending
+        self._limit = limit
+        self._clock = clock
+        self._slots_busy_at: Optional[float] = None
+
+    def __call__(self) -> Optional[float]:
+        now = self._clock()
+        if self._slots_busy():
+            self._slots_busy_at = now
+            return None
+        idle = self._clients_idle()
+        if idle is not None and self._slots_busy_at is not None:
+            idle = min(idle, now - self._slots_busy_at)
+        if idle is None or self._limit is None or idle < self._limit:
+            return idle
+        return None if self._jobs_pending() else idle
+
+
 class LifetimeWatch:
     """Calls *on_exit* once, from a background thread, when :func:`exit_reason`
     says the daemon should stop.
@@ -190,6 +229,7 @@ class LifetimeWatch:
 
 __all__ = [
     "CHECK_SECONDS",
+    "DaemonIdle",
     "DEFAULT_IDLE_EXIT_MINUTES",
     "EXIT_WITH_PID_ENV",
     "IDLE_EXIT_ENV",

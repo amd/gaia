@@ -336,3 +336,69 @@ def test_the_watch_shuts_an_idle_scratch_daemon_down(registered):
     finally:
         watch.stop()
     assert "nothing has used it" in reasons[0]
+
+
+# -- DaemonIdle: what counts as use --------------------------------------------
+
+
+class _Fake:
+    def __init__(self):
+        self.now = 1000.0
+        self.clients_idle = 0.0
+        self.slots_busy = False
+        self.jobs_pending = False
+        self.job_reads = 0
+
+    def jobs(self):
+        self.job_reads += 1
+        return self.jobs_pending
+
+    def idle(self, limit=600.0):
+        return lifetime.DaemonIdle(
+            clients_idle=lambda: self.clients_idle,
+            slots_busy=lambda: self.slots_busy,
+            jobs_pending=self.jobs,
+            limit=limit,
+            clock=lambda: self.now,
+        )
+
+
+def test_a_connected_client_means_in_use():
+    fake = _Fake()
+    fake.clients_idle = None
+    assert fake.idle()() is None
+
+
+def test_a_held_or_queued_model_slot_means_in_use():
+    fake = _Fake()
+    fake.clients_idle = 10_000.0
+    fake.slots_busy = True
+    assert fake.idle()() is None
+
+
+def test_the_idle_clock_restarts_when_a_slot_lease_ends():
+    fake = _Fake()
+    fake.clients_idle = 10_000.0
+    idle = fake.idle()
+    fake.slots_busy = True
+    idle()
+    fake.slots_busy = False
+    fake.now += 30.0
+    assert idle() == 30.0
+
+
+def test_a_pending_job_keeps_it_only_once_past_the_limit():
+    fake = _Fake()
+    fake.jobs_pending = True
+    fake.clients_idle = 100.0
+    assert fake.idle()() == 100.0
+    assert fake.job_reads == 0
+    fake.clients_idle = 700.0
+    assert fake.idle()() is None
+    assert fake.job_reads == 1
+
+
+def test_past_the_limit_with_nothing_pending_reports_the_idle_time():
+    fake = _Fake()
+    fake.clients_idle = 700.0
+    assert fake.idle()() == 700.0
