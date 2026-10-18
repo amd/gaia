@@ -479,6 +479,8 @@ class MCPClient:
                     f"Initialization failed: {error.get('message', 'Unknown error')}"
                 )
                 logger.debug(f"MCP server '{self.name}': {self.last_error}")
+                # A server that refused to initialise must not keep running.
+                self.disconnect()
                 return False
 
             result = response.get("result", {})

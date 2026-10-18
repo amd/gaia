@@ -13,6 +13,7 @@ import time
 
 import pytest
 
+from gaia.mcp.client.transports import stdio as stdio_module
 from gaia.mcp.client.transports.stdio import StdioTransport
 from gaia.tool_cancellation import ToolCancelled, set_tool_cancel_event
 
@@ -376,3 +377,72 @@ def test_a_server_that_misses_the_connect_deadline_is_stopped(tmp_path, monkeypa
     while psutil.pid_exists(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not psutil.pid_exists(pid), "a server that missed the deadline kept running"
+
+
+def test_tools_call_waits_for_the_agents_budget_not_the_default(tmp_path, monkeypatch):
+    # 7 s agent limit less the 5 s margin: tools/call gets 2 s, others 0.5 s.
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "7")
+    script = _stub(tmp_path, "time.sleep(3600)")
+    transport = _transport(script, timeout=0.5)
+    try:
+        listed, listed_s = _call_with_watchdog(lambda: transport.send_request("ping"))
+        called, called_s = _call_with_watchdog(
+            lambda: transport.send_request("tools/call", {"name": "x"})
+        )
+    finally:
+        transport.disconnect()
+
+    assert isinstance(listed.get("exc"), TimeoutError)
+    assert isinstance(called.get("exc"), TimeoutError)
+    assert "within 2s" in str(called["exc"])
+    assert listed_s < 1.5 and called_s >= 1.9
+
+
+def test_children_of_an_exited_server_are_still_stopped(tmp_path):
+    psutil = pytest.importorskip("psutil")
+    child_pid_file = tmp_path / "child.pid"
+    script = tmp_path / "parent_exits.py"
+    # The launcher starts the real server, then exits on a signal from stdin.
+    script.write_text(textwrap.dedent(f"""
+            import subprocess, sys
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"])
+            open({str(child_pid_file)!r}, "w").write(str(child.pid))
+            sys.stdin.readline()
+            """))
+    transport = _transport(script)
+    deadline = time.monotonic() + 10
+    while not child_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    child_pid = int(child_pid_file.read_text())
+    # Children are recorded while the launcher runs; a real npx outlives this.
+    time.sleep(4 * stdio_module._CHILD_SCAN_S)
+    transport._process.stdin.write("bye\n")
+    transport._process.stdin.flush()
+    transport._process.wait(timeout=10)
+    assert psutil.pid_exists(child_pid)
+
+    transport.disconnect()
+
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(child_pid), "an exited server's child kept running"
+
+
+def test_a_server_that_refuses_to_initialise_is_stopped(tmp_path):
+    from gaia.mcp.client.mcp_client import MCPClient
+
+    script = _stub(
+        tmp_path,
+        """
+        send({"jsonrpc": "2.0", "id": req["id"],
+              "error": {"code": -32603, "message": "bad config"}})
+        """,
+    )
+    client = MCPClient.from_config(
+        "refuses", {"command": sys.executable, "args": ["-u", str(script)]}
+    )
+
+    assert client.connect() is False
+    assert "bad config" in client.last_error
+    assert not client.transport.is_connected(), "a refused server kept running"

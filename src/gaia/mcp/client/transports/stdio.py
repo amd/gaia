@@ -10,10 +10,11 @@ import shlex
 import shutil
 import signal
 import subprocess
-import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional
+
+import psutil
 
 from gaia.env import child_env
 from gaia.logger import get_logger
@@ -31,6 +32,10 @@ _SHELL_OPERATOR_CHARS = frozenset(";|&<>()")
 
 # How often a blocked read wakes to check for cancellation.
 _POLL_INTERVAL_S = 0.25
+
+# How often a running server's child processes are recorded. A launcher that
+# starts a child and exits sooner than this can leave that child behind.
+_CHILD_SCAN_S = 0.5
 
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
@@ -158,6 +163,12 @@ class StdioTransport(MCPTransport):
         self._stdout_lines: Optional[queue.Queue] = None
         self._stderr_tail: Optional[collections.deque] = None
         self._stderr_reader: Optional[threading.Thread] = None
+        #: Descendants seen so far, by PID, so a dead parent's are still found.
+        self._children: Dict[int, "psutil.Process"] = {}
+        self._started_at = 0.0
+        #: The server process as psutil sees it; None when it can't be
+        #: confirmed as the one this connect() started.
+        self._ps_server: Optional["psutil.Process"] = None
 
     @property
     def label(self) -> str:
@@ -207,6 +218,20 @@ class StdioTransport(MCPTransport):
             daemon=True,
         )
         self._stderr_reader.start()
+        threading.Thread(
+            target=self._watch_children,
+            args=(self._process,),
+            name=f"mcp-children:{self._process.pid}",
+            daemon=True,
+        ).start()
+
+    def _watch_children(self, proc: subprocess.Popen) -> None:
+        # Once the parent exits, POSIX re-parents its children and they can no
+        # longer be found from it, so they are recorded while it runs.
+        server = self._ps_server
+        while self._process is proc and server is not None and server.is_running():
+            self._track_children()
+            time.sleep(_CHILD_SCAN_S)
 
     @staticmethod
     def _pump_stdout(stream, lines: queue.Queue) -> None:
@@ -278,6 +303,7 @@ class StdioTransport(MCPTransport):
             # credentials into the server.
             merged_env = child_env(self.env)
 
+            self._started_at = time.time()
             self._process = subprocess.Popen(
                 argv,
                 shell=False,
@@ -294,14 +320,12 @@ class StdioTransport(MCPTransport):
                 # threads (e.g. after loading native extensions via
                 # LemonadeManager) crashes the child with SIGSEGV on macOS.
                 close_fds=False,
-                # Its own session on POSIX, so disconnect() can stop the
-                # children too (``npx`` runs the real server as one).
-                **({} if sys.platform == "win32" else {"start_new_session": True}),
                 **windows_hidden_popen_kwargs(),
             )
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")
 
+            self._ps_server = self._own_process(self._process.pid)
             self._start_readers()
 
             # Brief pause to catch immediate crashes (e.g. missing binary, SIGSEGV on load)
@@ -337,7 +361,7 @@ class StdioTransport(MCPTransport):
 
             # npx and uvx run the real server as a child, which terminate()
             # alone would leave running, holding our pipes open.
-            self._kill_children()
+            self._stop_children()
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
@@ -354,30 +378,88 @@ class StdioTransport(MCPTransport):
         finally:
             self._process = None
 
-    def _kill_children(self) -> None:
-        """Stop every process the server started, before stopping the server."""
-        pid = self._process.pid
-        if not isinstance(pid, int):  # a test double
+    def _own_process(self, pid: Any) -> Optional["psutil.Process"]:
+        """*pid* as a psutil process, if it is the one this connect() started."""
+        if not isinstance(pid, int):
+            return None
+        try:
+            candidate = psutil.Process(pid)
+            # A PID that already existed before the launch is someone else's.
+            if candidate.create_time() >= self._started_at - 1:
+                return candidate
+        except psutil.Error as e:
+            logger.debug("MCP server PID %s not visible to psutil: %s", pid, e)
+        return None
+
+    def _track_children(self) -> None:
+        """Remember the processes the server has started so far.
+
+        ``npx`` and ``uvx`` run the real server as a child. Remembering them
+        lets disconnect() stop them even after the parent has exited, when
+        its tree can no longer be walked.
+        """
+        server = self._ps_server
+        if server is None:
             return
         try:
-            if sys.platform == "win32":
-                subprocess.run(  # nosec B603 B607 - fixed argv, our own child's pid
-                    ["taskkill", "/F", "/T", "/PID", str(pid)],
-                    capture_output=True,
-                    check=False,
-                    timeout=15,
-                    **windows_hidden_popen_kwargs(),
+            children = server.children(recursive=True)
+        except psutil.Error as e:
+            logger.debug("Could not list MCP server '%s' children: %s", self.label, e)
+            return
+        for child in children:
+            self._children.setdefault(child.pid, child)
+
+    def _stop_children(self) -> None:
+        """Stop every process the server started, before stopping the server."""
+        self._track_children()
+        orphans = self._orphans_of_dead_parent()
+        survivors = []
+        for child in list(self._children.values()) + orphans:
+            try:
+                # is_running() also checks create time, so a reused PID is spared.
+                if child.is_running():
+                    child.terminate()
+                    survivors.append(child)
+            except psutil.Error as e:
+                logger.debug("MCP server child %s already gone: %s", child.pid, e)
+        _, alive = psutil.wait_procs(survivors, timeout=3)
+        for child in alive:
+            try:
+                child.kill()
+            except psutil.Error as e:
+                logger.warning(
+                    "Could not stop child %s of MCP server '%s': %s",
+                    child.pid,
+                    self.label,
+                    e,
                 )
-            else:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (OSError, subprocess.SubprocessError) as e:
-            # Already gone, or unreachable; terminate()/kill() still follow.
-            logger.warning(
-                "Could not stop the children of MCP server '%s' (PID %s): %s",
-                self.label,
-                pid,
-                e,
-            )
+        self._children.clear()
+
+    def _orphans_of_dead_parent(self) -> List["psutil.Process"]:
+        """Descendants left behind once the server, or one in between, exited.
+
+        Walks parent PIDs outward from the server's, through processes that
+        already exited (a launcher such as a venv's ``python.exe`` sits in
+        between). Only processes created after the server started count, so
+        an unrelated process that reused a PID is never touched.
+        """
+        server = self._ps_server
+        if server is None or server.is_running():
+            return []
+        roots = {server.pid} | set(self._children)
+        by_parent: Dict[int, List["psutil.Process"]] = {}
+        for candidate in psutil.process_iter(["ppid", "create_time"]):
+            info = candidate.info
+            if (info.get("create_time") or 0) >= self._started_at:
+                by_parent.setdefault(info.get("ppid"), []).append(candidate)
+        found: Dict[int, "psutil.Process"] = {}
+        frontier = list(roots)
+        while frontier:
+            for child in by_parent.get(frontier.pop(), []):
+                if child.pid not in found and child.pid not in roots:
+                    found[child.pid] = child
+                    frontier.append(child.pid)
+        return list(found.values())
 
     @staticmethod
     def _format_exit_code(exit_code: int) -> str:
@@ -521,6 +603,7 @@ class StdioTransport(MCPTransport):
             return response
         finally:
             self._request_lock.release()
+            self._track_children()
 
     def _take_request_lock(self, method: str, wait_s: float, deadline: float) -> None:
         """Wait for the request in flight to finish, honouring Stop and the deadline."""
