@@ -1,6 +1,6 @@
-# Terminal Hub installers
+# GAIA Terminal UI installers
 
-Native double-click installers for the GAIA terminal hub. Each one puts two
+Native double-click installers for the GAIA Terminal UI (`gaia-tui`). Each one puts two
 executables on disk and on `PATH`:
 
 - **`gaia-tui`** — the hub itself (built from [`tui/`](../../tui))
@@ -15,9 +15,10 @@ desktop app (Agent UI), the terminal, or both — at least one — and installs 
 desktop app by running the unmodified electron-builder
 `gaia-agent-ui-<version>-x64-setup.exe` it embeds. That setup stays the app's
 owner (files, Installed-apps entry, shortcuts, autostart, uninstaller) because
-electron-updater re-runs exactly that file. The terminal keeps the
-`GAIA Terminal Hub` identity the terminal-only setup used, so either earlier
-installer is upgraded in place. Silent installs take `/S /COMPONENTS=ui,tui`; the
+electron-updater re-runs exactly that file. The terminal shows as
+`GAIA Terminal UI` but keeps the folder and registry ids of the terminal-only
+setup (`GAIA Terminal Hub`, `GAIATerminalHub`), so either earlier installer is
+upgraded in place and its old-named shortcuts are removed. Silent installs take `/S /COMPONENTS=ui,tui`; the
 exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/install.mdx).
 
 | Platform | Builder | Artifact |
