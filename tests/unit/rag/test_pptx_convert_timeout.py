@@ -84,5 +84,26 @@ def test_pid_file_is_removed_after_the_conversion(deck, tmp_path, monkeypatch):
 
 def test_script_quits_powerpoint_only_when_it_started_it():
     script = pptx_utils.PPTX_TO_PDF_PS_SCRIPT
-    assert "if ($owned) { $ppt.Quit() }" in script
+    assert "$owned -and $ppt.Presentations.Count -eq 0) { $ppt.Quit() }" in script
     assert f"$env:{pptx_utils.PID_FILE_ENV_VAR}" in script
+
+
+def test_a_failing_kill_does_not_escape_the_never_raises_contract(
+    deck, tmp_path, monkeypatch
+):
+    run = FakeRun(our_pid=4242)
+
+    def run_with_hung_taskkill(argv, **kwargs):
+        if argv[0] == "taskkill":
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(pptx_utils.subprocess, "run", run_with_hung_taskkill)
+
+    assert pptx_utils.convert_pptx_to_pdf(str(deck), str(tmp_path)) is None
+
+
+def test_setup_runs_inside_the_try_so_a_failure_still_quits():
+    script = pptx_utils.PPTX_TO_PDF_PS_SCRIPT
+    assert script.index("try {") < script.index("New-Object -ComObject")
+    assert script.index("try {") < script.index("Set-Content")

@@ -17,6 +17,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import uuid
 
 from gaia.env import child_env
 
@@ -298,14 +299,16 @@ PPTX_TO_PDF_PS_SCRIPT = (
     "$ErrorActionPreference = 'Stop'; "
     f"$in = $env:{PPTX_IN_ENV_VAR}; "
     f"$out = $env:{PDF_OUT_ENV_VAR}; "
-    "$owned = -not (Get-Process POWERPNT -ErrorAction SilentlyContinue); "
-    "$ppt = New-Object -ComObject PowerPoint.Application; "
-    "if ($owned) { "
-    "  $p = Get-Process POWERPNT -ErrorAction SilentlyContinue | Select-Object -First 1; "
-    f"  if ($p) {{ Set-Content -LiteralPath $env:{PID_FILE_ENV_VAR} -Value $p.Id }} "
-    "} "
+    "$ppt = $null; "
     "$pres = $null; "
+    "$owned = $false; "
     "try { "
+    "  $owned = -not (Get-Process POWERPNT -ErrorAction SilentlyContinue); "
+    "  $ppt = New-Object -ComObject PowerPoint.Application; "
+    "  if ($owned) { "
+    "    $p = Get-Process POWERPNT -ErrorAction SilentlyContinue | Select-Object -First 1; "
+    f"    if ($p) {{ Set-Content -LiteralPath $env:{PID_FILE_ENV_VAR} -Value $p.Id }} "
+    "  } "
     "  $pres = $ppt.Presentations.Open($in, "
     "    [int]-1, "  # ReadOnly = msoTrue
     "    [int]0, "  # Untitled = msoFalse
@@ -314,7 +317,8 @@ PPTX_TO_PDF_PS_SCRIPT = (
     "  $pres.SaveAs($out, 32); "  # 32 = ppSaveAsPDF
     "} finally { "
     "  if ($pres) { $pres.Close() }; "
-    "  if ($owned) { $ppt.Quit() } "
+    # The user may have opened a deck in our instance meanwhile; leave it be.
+    "  if ($ppt -and $owned -and $ppt.Presentations.Count -eq 0) { $ppt.Quit() } "
     "}"
 )
 
@@ -322,7 +326,12 @@ CONVERT_TIMEOUT_S = 120
 
 
 def _kill_owned_powerpoint(pid_file: str) -> None:
-    """Kill the PowerPoint this conversion started, and nothing else."""
+    """Kill the PowerPoint this conversion started, and nothing else.
+
+    A deck the user opened in that same instance while it converted goes with
+    it: PowerPoint is single-instance, and from here the two can't be told
+    apart. That window is the conversion's own, at most ``CONVERT_TIMEOUT_S``.
+    """
     try:
         with open(pid_file, encoding="utf-8") as f:
             pid = f.read().strip()
@@ -332,17 +341,32 @@ def _kill_owned_powerpoint(pid_file: str) -> None:
             "running; leaving it open. Close any stuck dialog in PowerPoint."
         )
         return
+    except OSError as e:
+        logger.warning(
+            "PPTX→PDF: could not read PID file %s (%s); leaving PowerPoint running.",
+            pid_file,
+            e,
+        )
+        return
     if not pid.isdigit():
         logger.warning("PPTX→PDF: PID file %s holds %r, not a PID", pid_file, pid)
         return
-    # The image-name filter stops a recycled PID from killing another program.
-    result = subprocess.run(
-        ["taskkill", "/f", "/pid", pid, "/fi", "IMAGENAME eq POWERPNT.EXE"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
+    try:
+        # The image-name filter stops a recycled PID from killing another program.
+        result = subprocess.run(
+            ["taskkill", "/f", "/pid", pid, "/fi", "IMAGENAME eq POWERPNT.EXE"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning(
+            "Could not stop the PowerPoint (PID %s) GAIA started for PPTX→PDF: %s",
+            pid,
+            e,
+        )
+        return
     if result.returncode != 0:
         logger.warning(
             "Could not stop the PowerPoint (PID %s) GAIA started for PPTX→PDF: %s",
@@ -380,9 +404,8 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
     pdf_name = Path(pptx_path).stem + ".pdf"
     pdf_abs = str(Path(output_dir).resolve() / pdf_name)
 
-    fd, pid_file = tempfile.mkstemp(prefix="gaia-pptx-", suffix=".pid")
-    os.close(fd)
-    os.unlink(pid_file)  # the script creates it only when it starts PowerPoint
+    # Created by the script only when it starts PowerPoint itself.
+    pid_file = os.path.join(tempfile.gettempdir(), f"gaia-pptx-{uuid.uuid4().hex}.pid")
     ps_env = child_env(
         {
             PPTX_IN_ENV_VAR: pptx_abs,
@@ -427,3 +450,5 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
             os.unlink(pid_file)
         except FileNotFoundError:
             pass
+        except OSError as e:
+            logger.warning("PPTX→PDF: could not remove PID file %s: %s", pid_file, e)
