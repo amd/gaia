@@ -143,19 +143,15 @@ _BINARY_CLASS: Dict[str, TimeoutClass] = {
     "kubectl": NETWORK,
     "helm": NETWORK,
     "ping": NETWORK,
-    # interpreters running a script
-    "node": SCRIPT,
-    "ruby": SCRIPT,
-    "perl": SCRIPT,
-    "php": SCRIPT,
-    "rscript": SCRIPT,
-    "julia": SCRIPT,
-    "bash": SCRIPT,
-    "sh": SCRIPT,
-    "zsh": SCRIPT,
-    "pwsh": SCRIPT,
-    "powershell": SCRIPT,
 }
+
+# Interpreters: running something is a script, ``node --version`` is not.
+_INTERPRETERS = frozenset(
+    {"node", "ruby", "perl", "php", "rscript", "julia"}
+) | frozenset({"bash", "sh", "zsh", "pwsh", "powershell"})
+_SHELLS = frozenset({"bash", "sh", "zsh"})
+# Flags that hand the interpreter code or a script to run.
+_RUN_FLAGS = frozenset({"-e", "-c", "--eval", "-command", "-file", "-encodedcommand"})
 
 # Multiplexers: the subcommand decides. Anything not listed for a binary falls
 # through to ``default`` — ``git status`` stays a 30s command.
@@ -298,9 +294,31 @@ def _classify_peeled(tokens: List[str]) -> Tuple[TimeoutClass, bool]:
     else:
         return DEFAULT, False
 
-    if tokens[index].lower().endswith(_SCRIPT_SUFFIXES):
+    binary = command_basename(tokens[index])
+    if binary in _INTERPRETERS:
+        return _classify_interpreter(binary, tokens[index + 1 :]), launcher_seen
+    command_class = _classify_binary(tokens, index)
+    # ``npm.cmd test`` is still a test run; only an unknown file is a script.
+    if command_class is DEFAULT and tokens[index].lower().endswith(_SCRIPT_SUFFIXES):
         return SCRIPT, launcher_seen
-    return _classify_binary(tokens, index), launcher_seen
+    return command_class, launcher_seen
+
+
+def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
+    """``script`` when *binary* is given something to run, else ``default``."""
+    lowered = [arg.lower() for arg in args]
+    if binary in _SHELLS and "-c" in lowered:
+        payload_at = lowered.index("-c") + 1
+        if payload_at < len(args):
+            # ``bash -c "pytest -q"`` is a test run inside a shell.
+            return max(SCRIPT, classify_command(args[payload_at]), key=_seconds)
+    if any(not arg.startswith("-") for arg in args) or _RUN_FLAGS & set(lowered):
+        return SCRIPT
+    return DEFAULT
+
+
+def _seconds(command_class: TimeoutClass) -> int:
+    return command_class.seconds
 
 
 def _classify_binary(tokens: List[str], index: int) -> TimeoutClass:

@@ -290,9 +290,22 @@ class TestTimeoutClasses:
             ("python -m pip install requests", "build"),
             ("python --version", "default"),
             ("python", "default"),
+            ("node --version", "default"),
+            ("bash --version", "default"),
+            ("sh", "default"),
+            ("bash -c 'pytest -q'", "test"),
+            ("bash -c 'ls -la'", "script"),
+            ("node -e 'console.log(1)'", "script"),
+            ("npm.cmd install", "build"),
+            ("npm.cmd test", "test"),
+            ("pytest.cmd tests/", "test"),
+            ("gradlew.bat test", "test"),
+            ("gaia.cmd eval agent", "test"),
+            ("cat run.sh", "default"),
+            ("grep foo main.py", "default"),
         ],
     )
-    def test_python_running_a_known_tool_keeps_that_tools_class(
+    def test_a_known_tool_keeps_its_class_whatever_launches_it(
         self, command, expected_class
     ):
         assert classify_command(command).name == expected_class
