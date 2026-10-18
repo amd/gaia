@@ -280,8 +280,8 @@ def close_store() -> None:
 def memory_stats() -> Dict:
     """Aggregate stats for dashboard header cards.
 
-    Includes v2 embedding coverage and reconciliation stats when the
-    data layer supports them.
+    Includes embedding coverage, or ``embedding: null`` and an
+    ``embedding_error`` when it could not be read.
     """
     store = _get_store()
     stats = store.get_stats()

@@ -274,3 +274,37 @@ def test_a_reply_that_is_all_reasoning_is_reported_as_such(store, caplog):
         )
 
     assert any("spent its whole" in r.getMessage() for r in caplog.records)
+
+
+def test_a_stopped_extraction_is_dropped_when_the_queue_is_full(store, monkeypatch):
+    """Requeued on a full queue, it would restart mid-turn; it is the oldest,
+    so it is the one dropped, as a new turn on a full queue drops the oldest."""
+    monkeypatch.setattr(memory_mod, "EXTRACTION_QUEUE_MAX", 1)
+    first_running = threading.Event()
+    prompts: List[str] = []
+
+    def send_messages(messages, cancel=None, **kwargs):
+        prompts.append(messages[0]["content"])
+        if len(prompts) == 1:
+            first_running.set()
+            for _ in range(200):
+                if cancel.is_set():
+                    raise LLMCallCancelled("cancelled mid-reply")
+                time.sleep(0.02)
+        return MagicMock(text="[]", finish_reason="stop")
+
+    chat = MagicMock()
+    chat.send_messages.side_effect = send_messages
+    host = _Host(store, chat)
+
+    host._after_process_query(
+        "Please remember that my favourite colour is teal", "Noted."
+    )
+    assert first_running.wait(5)
+    host._note_user_turn_started()
+    host._after_process_query("And I live in Calgary these days, by the way", "Okay.")
+    host._note_user_turn_finished()
+    assert host.wait_for_memory_extraction(timeout=5)
+
+    assert len(prompts) == 2
+    assert "Calgary" in prompts[1]

@@ -4071,14 +4071,26 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
         except LLMCallCancelled:
             # Nothing was stored; the job goes back to the front of the queue
-            # and runs again once the user is idle.
+            # and runs again once the user is idle. It is the oldest, so on a
+            # full queue it is the one dropped, as _schedule_memory_extraction
+            # does; a full queue would otherwise restart it mid-turn.
             with self._extraction_lock:
-                self._extraction_queue.appendleft(job)
-            logger.info(
-                "[MemoryMixin] extraction stopped after %.1fs so the user's new "
-                "turn gets the model; it reruns when the user is idle",
-                time.monotonic() - started,
-            )
+                full = len(self._extraction_queue) >= EXTRACTION_QUEUE_MAX
+                if not full:
+                    self._extraction_queue.appendleft(job)
+            if full:
+                logger.info(
+                    "[MemoryMixin] extraction stopped after %.1fs for the user's "
+                    "new turn and dropped: the queue is full (%d)",
+                    time.monotonic() - started,
+                    EXTRACTION_QUEUE_MAX,
+                )
+            else:
+                logger.info(
+                    "[MemoryMixin] extraction stopped after %.1fs so the user's "
+                    "new turn gets the model; it reruns when the user is idle",
+                    time.monotonic() - started,
+                )
         except Exception as e:
             logger.warning(
                 "[MemoryMixin] extraction failed after %.1fs (context=%s): %s",
