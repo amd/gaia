@@ -303,7 +303,8 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
 Each request to a server waits 30 seconds for its reply, and GAIA waits 10 seconds
 for all servers to connect. A server whose first start is slower, such as an
 `npx -y` or `uvx` package that downloads on first use, can set its own `timeout`
-in seconds, which raises both:
+(seconds, at most 600), which raises both. All servers connect together, so the
+connect wait is the longest `timeout` any of them sets:
 
 ```json
 "github": {
@@ -313,8 +314,9 @@ in seconds, which raises both:
 }
 ```
 
-A tool call waits up to the agent's own per-tool limit (`GAIA_AGENT_TOOL_TIMEOUT`,
-180 seconds by default) less 5 seconds, whichever is longer.
+A tool call waits for the longer of the server's `timeout` and the agent's own
+per-tool limit less 5 seconds (`GAIA_AGENT_TOOL_TIMEOUT`, 180 seconds by
+default, so 175).
 
 ### Popular MCP Servers
 

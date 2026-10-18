@@ -34,6 +34,10 @@ _SHELL_OPERATOR_CHARS = frozenset(";|&<>()")
 # How often a blocked read wakes to check for cancellation.
 _POLL_INTERVAL_S = 0.25
 
+# How long connect() watches for an immediate crash, and in how many steps.
+_STARTUP_CHECK_S = 0.1
+_STARTUP_CHECK_SLICES = 5
+
 # How often a running server's child processes are recorded. A launcher that
 # starts a child and exits sooner than this can leave that child behind.
 _CHILD_SCAN_S = 0.5
@@ -217,7 +221,7 @@ class StdioTransport(MCPTransport):
             parts.update(re.split(r"[=\s]", value))
         return sorted((v for v in parts if len(v) >= 4), key=len, reverse=True)
 
-    def _redact(self, text: str) -> str:
+    def redact(self, text: str) -> str:
         """*text* from the server with the command's arguments and env removed.
 
         A server that echoes its own command line in an error would otherwise
@@ -367,8 +371,12 @@ class StdioTransport(MCPTransport):
             self._ps_server = self._own_process(self._process.pid)
             self._start_readers()
 
-            # Brief pause to catch immediate crashes (e.g. missing binary, SIGSEGV on load)
-            time.sleep(0.1)
+            # Brief pause to catch immediate crashes (e.g. missing binary, SIGSEGV
+            # on load), recording children as it goes: a launcher that dies in
+            # this window must still have them stopped.
+            for _ in range(_STARTUP_CHECK_SLICES):
+                self._track_children()
+                time.sleep(_STARTUP_CHECK_S / _STARTUP_CHECK_SLICES)
             if self._process.poll() is not None:
                 error = self._process_died_error()
                 self._process = None
@@ -421,7 +429,7 @@ class StdioTransport(MCPTransport):
                 stderr = self._read_stderr()
                 if stderr:
                     logger.debug(
-                        "Server stderr before disconnect:\n%s", self._redact(stderr)
+                        "Server stderr before disconnect:\n%s", self.redact(stderr)
                     )
 
             # npx and uvx run the real server as a child, which terminate()
@@ -546,13 +554,13 @@ class StdioTransport(MCPTransport):
             if self._stderr_reader is not None:
                 self._stderr_reader.join(timeout=1)
             stderr = "".join(self._stderr_tail)
-            return stderr.strip()[-2000:] if stderr else ""
+            return self.redact(stderr.strip())[-2000:] if stderr else ""
         try:
             stderr = self._process.stderr.read()
         except (OSError, ValueError) as e:
             logger.debug("Could not read the MCP server's stderr: %s", e)
             return ""
-        return stderr.strip()[-2000:] if stderr else ""
+        return self.redact(stderr.strip())[-2000:] if stderr else ""
 
     def _process_died_error(self) -> RuntimeError:
         """Build a RuntimeError with exit code, signal name, and stderr from a dead process."""
@@ -561,7 +569,7 @@ class StdioTransport(MCPTransport):
         formatted_code = self._format_exit_code(exit_code)
         msg = f"MCP server '{self.label}' process died (exit code: {formatted_code})"
         if stderr:
-            msg += f"\nServer stderr:\n{self._redact(stderr)}"
+            msg += f"\nServer stderr:\n{self.redact(stderr)}"
         if exit_code is not None and exit_code < 0:
             msg += (
                 "\nHint: The server crashed with a signal. "
@@ -779,13 +787,13 @@ class StdioTransport(MCPTransport):
             except json.JSONDecodeError as e:
                 raise ValueError(
                     f"MCP server '{self.label}' wrote non-JSON to stdout while "
-                    f"answering '{method}': {self._redact(line[:200])!r}. Servers must log to "
+                    f"answering '{method}': {self.redact(line)[:200]!r}. Servers must log to "
                     "stderr, never stdout."
                 ) from e
             if not isinstance(message, dict):
                 raise ValueError(
                     f"MCP server '{self.label}' sent a JSON-RPC message that is "
-                    f"not an object: {self._redact(line[:200])!r}"
+                    f"not an object: {self.redact(line)[:200]!r}"
                 )
 
             if "method" in message:
@@ -797,7 +805,7 @@ class StdioTransport(MCPTransport):
                 detail = error.get("message") if isinstance(error, dict) else error
                 raise RuntimeError(
                     f"MCP server '{self.label}' rejected '{method}': "
-                    f"{self._redact(str(detail))}"
+                    f"{self.redact(str(detail))}"
                 )
             if message.get("id") != request_id:
                 logger.debug(

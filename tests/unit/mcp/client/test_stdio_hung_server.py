@@ -31,6 +31,23 @@ _PRELUDE = textwrap.dedent("""
     """)
 
 
+@pytest.fixture(autouse=True)
+def _no_stub_outlives_its_test():
+    """A failed assertion can skip disconnect(); stop what this test started."""
+    psutil = pytest.importorskip("psutil")
+    before = {p.pid for p in psutil.Process().children(recursive=True)}
+    yield
+    leftover = [
+        p for p in psutil.Process().children(recursive=True) if p.pid not in before
+    ]
+    for proc in leftover:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            continue  # it exited on its own
+    psutil.wait_procs(leftover, timeout=5)
+
+
 def _stub(tmp_path, body):
     script = tmp_path / "stub_server.py"
     script.write_text(_PRELUDE + textwrap.indent(textwrap.dedent(body), "    "))
@@ -312,50 +329,99 @@ def _configs(secret, exe, script):
     yield {"command": secret, "args": ["srv"]}
     yield {"command": f"{quoted} --flag", "args": None}
     yield {"command": f"{exe} -u {script} --api-key {quoted}", "args": None}
+    # Rejected before launch: shell syntax, and an unbalanced quote.
+    yield {"command": f"{exe} --api-key {quoted} ; echo", "args": None}
+    yield {"command": f"{exe} --api-key '{secret}", "args": None}
 
 
-def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog):
+# How the stub echoes its command line and env back. Each mode puts the
+# secret across the point where GAIA cuts what it keeps.
+_ECHO_STUB = r"""
+import json, os, sys
+argv = sys.argv[1:]
+mode = argv[argv.index("--mode") + 1] if "--mode" in argv else "die"
+echo = " ".join(sys.argv) + " " + os.environ.get("TOKEN", "")
+# The token most likely to be the secret, to place across the cut.
+skip = {"--mode", mode, "-u", sys.argv[0]}
+tok = max([a for a in argv if a not in skip] + [os.environ.get("TOKEN", "")], key=len)
+if mode == "die":  # stderr's kept tail is 2,000 characters
+    sys.stderr.write(echo + "x" * 3000 + tok + "y" * (2000 - len(tok) // 2))
+    sys.exit(2)
+req = json.loads(sys.stdin.readline())
+if mode == "stdout":  # a non-JSON line is cut to 200 characters
+    sys.stdout.write("z" * (200 - len(tok) // 2) + tok + " " + echo + "\n")
+else:  # the server's own error reply
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
+                                 "error": {"code": -32603, "message": echo}}) + "\n")
+sys.stdout.flush()
+"""
+
+
+@pytest.mark.parametrize("mode", ["die", "stdout", "reject"])
+def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog, mode):
     """Property: no 4-character run of a secret in a server's command, args or
-    env ever reaches its label, GAIA's logs, or an error raised to a caller.
+    env reaches its label, GAIA's logs (debug on), an error, or last_error.
 
-    The stub echoes its whole command line and env to stderr and exits, the
-    way a server that rejects its options does.
+    The stub echoes its whole command line and env back the way a server that
+    rejects its options does: on stderr as it dies, as a stray stdout line,
+    or in its error reply to initialize.
     """
     import logging
 
-    script = tmp_path / "echo_and_die.py"
-    script.write_text(
-        "import os, sys\n"
-        "sys.stderr.write(' '.join(sys.argv) + ' ' + os.environ.get('TOKEN', ''))\n"
-        "sys.exit(2)\n"
-    )
+    from gaia.mcp.client.mcp_client import MCPClient
+
+    script = tmp_path / "echo.py"
+    script.write_text(_ECHO_STUB)
     exe = sys.executable.replace("\\", "/")
     caplog.set_level(logging.DEBUG)
     checked = 0
     for secret in _SECRETS:
         for config in _configs(secret, exe, str(script).replace("\\", "/")):
+            config = dict(config)
+            if config["args"] is not None and config["command"] == exe:
+                config["args"] = [*config["args"], "--mode", mode]
+            elif config["args"] is None and config["command"].endswith(
+                str(script).replace("\\", "/")
+            ):
+                config["command"] += f" --mode {mode}"
             caplog.clear()
             seen = []
             try:
-                t = StdioTransport(
-                    config["command"], args=config["args"], env=config.get("env")
+                client = MCPClient.from_config(
+                    "leaky",
+                    {k: v for k, v in config.items() if v is not None},
+                    timeout=5,
+                    debug=True,
                 )
-                seen.append(t.label)
+                seen.append(client.transport.label)
                 try:
-                    if t.connect():
-                        t.send_request("tools/list", timeout=5)
-                except Exception as e:  # noqa: BLE001 — the text is under test
-                    seen.append(str(e))
+                    client.connect()
+                    seen.append(str(client.last_error))
                 finally:
-                    t.disconnect()
+                    client.disconnect()
             except ValueError as e:  # an unparseable command line
                 seen.append(str(e))
             seen.extend(r.getMessage() for r in caplog.records)
             text = "\n".join(seen)
             leaked = [g for g in _grams(secret) if g in text]
-            assert not leaked, (config, leaked, text[:500])
+            assert not leaked, (config, leaked, text[:800])
             checked += 1
-    assert checked == len(_SECRETS) * 9
+    assert checked == len(_SECRETS) * 11
+
+
+def test_a_missing_program_named_in_the_os_error_is_not_logged(monkeypatch, caplog):
+    import logging
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "/opt/Zq9vKe7wP2/srv")
+
+    monkeypatch.setattr(stdio_module.subprocess, "Popen", missing)
+    caplog.set_level(logging.DEBUG)
+
+    assert StdioTransport("/opt/Zq9vKe7wP2/srv", args=["x"]).connect() is False
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "FileNotFoundError" in logged
+    assert "Zq9v" not in logged
 
 
 def test_a_server_that_stops_reading_cannot_block_the_write(tmp_path):
@@ -745,3 +811,60 @@ def test_a_server_can_ask_for_a_longer_handshake(monkeypatch):
     )
     mgr_mod.MCPClientManager(config=_Config()).load_from_config()
     assert waited["timeout"] == 120
+
+
+def test_a_launcher_that_dies_during_the_startup_check_has_its_child_stopped(
+    tmp_path, monkeypatch
+):
+    psutil = pytest.importorskip("psutil")
+    # A wide window, so a loaded machine's slow interpreter start still dies in it.
+    monkeypatch.setattr(stdio_module, "_STARTUP_CHECK_S", 5.0)
+    monkeypatch.setattr(stdio_module, "_STARTUP_CHECK_SLICES", 100)
+    child_pid_file = tmp_path / "child.pid"
+    script = tmp_path / "dies_fast.py"
+    script.write_text(textwrap.dedent(f"""
+            import subprocess, sys, time
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"])
+            open({str(child_pid_file)!r}, "w").write(str(child.pid))
+            time.sleep(0.5)  # recorded by the startup check, then gone
+            sys.exit(1)
+            """))
+    transport = StdioTransport(sys.executable, args=["-u", str(script)])
+    with pytest.raises(RuntimeError, match="died"):
+        transport.connect()
+    deadline = time.monotonic() + 10
+    while not _written(child_pid_file) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    child_pid = int(child_pid_file.read_text())
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(child_pid), "the dead launcher's child kept running"
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), 1e9, 601])
+def test_a_timeout_that_could_never_end_is_refused(bad):
+    from gaia.mcp.client.mcp_client import server_timeout
+
+    with pytest.raises(ValueError, match="at most 600"):
+        server_timeout("s", {"timeout": bad}, 30)
+
+
+def test_one_bad_timeout_fails_only_its_own_server(monkeypatch):
+    from gaia.mcp.client import mcp_client_manager as mgr_mod
+
+    class _Config:
+        def get_servers(self):
+            return {
+                "bad": {"command": "unused", "timeout": float("inf")},
+                "good": {"command": "unused"},
+            }
+
+    monkeypatch.setattr(
+        mgr_mod.MCPClient, "from_config", lambda name, *a, **k: _FakeClient(name)
+    )
+    manager = mgr_mod.MCPClientManager(config=_Config())
+    manager.load_from_config()
+
+    assert "good" in manager._clients
+    assert "at most 600" in manager._failed["bad"]

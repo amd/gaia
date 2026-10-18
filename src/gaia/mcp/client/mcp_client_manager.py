@@ -298,14 +298,19 @@ class MCPClientManager:
             except Exception as e:
                 return name, None, str(e)
 
-        # A server that asks for a longer handshake (a cold npx download) gets it.
-        deadline_s = max(
-            [_CONNECT_TIMEOUT_S]
-            + [
-                server_timeout(name, cfg, _CONNECT_TIMEOUT_S)
-                for name, cfg in to_connect.items()
-            ]
-        )
+        # A server that asks for a longer handshake (a cold npx download) gets
+        # it; the shared deadline is the longest any server asks for. A server
+        # whose timeout is invalid fails on its own, not the whole load.
+        deadline_s = _CONNECT_TIMEOUT_S
+        for name, cfg in list(to_connect.items()):
+            try:
+                deadline_s = max(deadline_s, server_timeout(name, cfg, deadline_s))
+            except ValueError as e:
+                self._failed[name] = str(e)
+                logger.warning("Skipping MCP server '%s': %s", name, e)
+                del to_connect[name]
+        if not to_connect:
+            return
         pool = ThreadPoolExecutor(max_workers=len(to_connect))
         futures = {
             pool.submit(_connect_one, name, cfg): name
