@@ -1050,6 +1050,8 @@ def _hide_subcommands(subparsers, names) -> None:
 
     ``add_parser(help=argparse.SUPPRESS)`` is not enough before Python 3.14:
     the name stays in the ``{a,b,c}`` metavar and prints ``==SUPPRESS==``.
+    argparse's "invalid choice" error still lists hidden names; dropping them
+    from ``choices`` would stop them dispatching.
     """
     hidden = set(names)
     unknown = hidden - set(subparsers.choices)

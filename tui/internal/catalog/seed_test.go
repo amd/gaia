@@ -179,4 +179,8 @@ func TestInstallCommandNamesInitOnlyForTheFlagship(t *testing.T) {
 			t.Errorf("InstallCommand(%q) = %q, want %q", id, got, want)
 		}
 	}
+	// An update never routes through `gaia init`: it skips an installed agent.
+	if got := UpdateCommand(FlagshipID); got != "gaia hub install gaia" {
+		t.Errorf("UpdateCommand(%q) = %q, want the agent-scoped reinstall", FlagshipID, got)
+	}
 }

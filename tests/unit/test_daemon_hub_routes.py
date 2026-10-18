@@ -1479,3 +1479,34 @@ def test_install_of_a_version_needing_a_newer_core_is_409_before_any_stop(
     # The running sidecar was never stopped and nothing was downloaded.
     assert registry.stop_calls == []
     assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
+
+
+def test_cold_fetch_of_the_flagship_names_gaia_init(monkeypatch, install_root):
+    """The flagship installs with `gaia init`, which installs it whenever no
+    sentinel is on disk; the daemon reads that install on the next start."""
+    from gaia.daemon.sidecars import fetch as fetchmod
+    from gaia.daemon.sidecars.errors import BinaryNotFoundError
+
+    monkeypatch.setattr(
+        "gaia.daemon.sidecars.platform.default_lock_path",
+        lambda: install_root / "missing" / "binaries.lock.json",
+    )
+    with pytest.raises(BinaryNotFoundError) as exc_info:
+        fetchmod.fetch_binary(
+            out_dir=install_root / "gaia",
+            platform_key=PLATFORM_KEY,
+            agent_dir_name="gaia",
+        )
+    msg = str(exc_info.value)
+    assert "`gaia init`" in msg
+    assert "gaia hub install gaia" not in msg
+
+
+@pytest.mark.parametrize(
+    "agent_id, expected",
+    [("gaia", "gaia init"), ("email", "gaia hub install email")],
+)
+def test_install_command_names_init_only_for_the_flagship(agent_id, expected):
+    from gaia.daemon.sidecars.fetch import install_command
+
+    assert install_command(agent_id) == expected

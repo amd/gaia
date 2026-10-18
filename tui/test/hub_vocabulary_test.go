@@ -121,7 +121,8 @@ func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
 // the download service the installer talks to.
 //
 // The flagship installs with `gaia init`, so `gaia hub install` may only be
-// spelled inside catalog.InstallCommand, which maps every other agent id to it.
+// spelled inside catalog.InstallCommand, which maps every other agent id to it,
+// and catalog.UpdateCommand, since `gaia init` never upgrades an installed agent.
 // A literal elsewhere is how a remedy ends up telling a user to run
 // `gaia hub install gaia`.
 func TestNoStringSendsUsersToTheAgentHub(t *testing.T) {
@@ -144,8 +145,8 @@ func TestNoStringSendsUsersToTheAgentHub(t *testing.T) {
 
 		for _, decl := range file.Decls {
 			fn, isFunc := decl.(*ast.FuncDecl)
-			inInstallCommand := isFunc && fn.Recv == nil && fn.Name.Name == "InstallCommand" &&
-				rel == "catalog/catalog.go"
+			inInstallCommand := isFunc && fn.Recv == nil && rel == "catalog/catalog.go" &&
+				(fn.Name.Name == "InstallCommand" || fn.Name.Name == "UpdateCommand")
 			ast.Inspect(decl, func(n ast.Node) bool {
 				lit, ok := n.(*ast.BasicLit)
 				if !ok || lit.Kind != token.STRING {
@@ -161,7 +162,8 @@ func TestNoStringSendsUsersToTheAgentHub(t *testing.T) {
 				}
 				if strings.Contains(text, "gaia hub install") && !inInstallCommand {
 					t.Errorf("internal/%s:%d spells `gaia hub install` itself; use "+
-						"catalog.InstallCommand so the flagship gets `gaia init`: %q", rel, line, text)
+						"catalog.InstallCommand (or UpdateCommand) so the flagship gets `gaia init`: %q",
+						rel, line, text)
 				}
 				return true
 			})

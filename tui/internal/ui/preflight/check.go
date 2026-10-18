@@ -1361,7 +1361,7 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 				cfg.AgentName, detailSuffix(detail)),
 			remedy: Remedy{
 				Action:  "Update the agent if you want this verified before launch.",
-				Command: catalog.InstallCommand(cfg.AgentID),
+				Command: catalog.UpdateCommand(cfg.AgentID),
 				Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 			},
 			trace: trace(outcome),

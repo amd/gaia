@@ -555,6 +555,13 @@ func InstallCommand(agentID string) string {
 	return "gaia hub install " + agentID
 }
 
+// UpdateCommand is the command that replaces an installed agent with the newest
+// published build. `gaia init` cannot stand in here, even for the flagship: it
+// leaves an agent that is already installed alone.
+func UpdateCommand(agentID string) string {
+	return "gaia hub install " + agentID
+}
+
 func seedAgents() []Agent {
 	return []Agent{
 		{
