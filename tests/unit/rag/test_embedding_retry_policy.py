@@ -148,12 +148,12 @@ def test_index_job_shows_the_wait_to_the_user():
 
     result = rag_tools._indexing_in_progress(job)
 
-    assert "busy" in result["message"]
+    assert "sharing the GPU or CPU" in result["message"]
     assert "95s" in result["message"]
     assert result["embedder_wait_seconds"] == 95
 
     job.waiting(0)
-    assert "busy" not in rag_tools._indexing_in_progress(job)["message"]
+    assert "sharing" not in rag_tools._indexing_in_progress(job)["message"]
 
 
 def test_a_busy_embedder_gets_a_wait_and_retry_next_step():
@@ -175,3 +175,31 @@ def test_wait_reporting_thread_stops_when_the_batch_fails(sdk, monkeypatch):
 
     _REAL_SLEEP(0.2)
     assert threading.active_count() <= before
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        ["not", "a", "dict"],
+        {"data": "nope"},
+        {"data": [["not", "a", "dict"]]},
+        {"data": [{"embedding": 7}]},
+    ],
+)
+def test_a_malformed_reply_is_an_embedding_error_not_a_crash(sdk, response):
+    sdk.embedder.embeddings.return_value = response
+
+    with pytest.raises(EmbeddingUnavailableError, match="malformed|no 'data'"):
+        sdk._encode_texts(["chunk"])
+
+    assert sdk.embedder.embeddings.call_count == 1
+
+
+def test_an_error_envelope_is_reported_not_waited_out_as_warm_up(sdk):
+    sdk.embedder.embeddings.return_value = {"error": {"message": "bad input"}}
+
+    with pytest.raises(EmbeddingUnavailableError, match="bad input"):
+        sdk._encode_texts(["chunk"])
+
+    assert sdk.embedder.embeddings.call_count == 1

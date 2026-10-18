@@ -158,8 +158,9 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     remaining = job.seconds_remaining()
     eta = f", about {max(1, round(remaining / 60))} min left" if remaining else ""
     waiting = (
-        f" The embedding model has been waiting {job.embedder_wait}s for its "
-        "current batch: the GPU is busy with other work, so indexing is queued."
+        f" The embedding model has taken {job.embedder_wait}s on its current "
+        "batch, longer than usual: it is likely sharing the GPU or CPU with "
+        "other work, so indexing is slowed, not stuck."
         if job.embedder_wait
         else ""
     )
@@ -193,8 +194,8 @@ def _rag_not_available() -> str:
 def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
     if busy:
         return (
-            "The GPU is busy with another model or app. Wait for that work to "
-            f"finish, then {retry}."
+            "The embedding model's GPU or CPU is busy with another model or app. "
+            f"Wait for that work to finish, then {retry}."
         )
     if unreachable:
         from gaia.llm.lemonade_launcher import describe_start_hint

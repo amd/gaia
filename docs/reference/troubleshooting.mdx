@@ -539,7 +539,7 @@ error. To run the chat model in the cloud instead, see
     - Larger documents take more time
     - Consider chunking very large documents
 
-    When another model or app is using the GPU, indexing waits for it. A document still indexing says how long the embedding model has waited on its current batch. Each batch of 25 chunks gets one 300-second wait and is never resent, so a busy GPU doesn't get the same work queued again. A batch still unanswered after that fails with `did not answer within 300s; the GPU is likely busy`. Index the document again once the other work finishes.
+    When another model or app is using the GPU or CPU the embedding model runs on, indexing waits for it. A document still indexing says how long the embedding model has taken on its current batch. Each batch of 25 chunks gets one 300-second wait and is never resent, so busy hardware doesn't get the same work queued again. A batch still unanswered after that fails with `did not answer within 300s; the GPU or CPU it runs on is likely busy`. Index the document again once the other work finishes.
   </Accordion>
 
   <Accordion title="Context not being used" icon="brain">

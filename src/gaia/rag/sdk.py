@@ -139,8 +139,8 @@ class EmbeddingUnavailableError(RuntimeError):
 
     ``unreachable`` is True when Lemonade Server itself could not be reached,
     as opposed to the server answering with an error. ``busy`` is True when
-    the server was reached but did not answer in time — the GPU is shared
-    with other work.
+    the server was reached but did not answer in time — the hardware it runs
+    on is shared with other work.
     """
 
     def __init__(self, model: str, cause: BaseException):
@@ -155,8 +155,8 @@ class EmbeddingUnavailableError(RuntimeError):
         elif self.busy:
             what = (
                 f"The embedding model {model} did not answer within "
-                f"{EMBED_BATCH_TIMEOUT_S}s; the GPU is likely busy with another "
-                "model or app"
+                f"{EMBED_BATCH_TIMEOUT_S}s; the GPU or CPU it runs on is likely "
+                "busy with another model or app"
             )
         else:
             what = f"The embedding model {model} failed"
@@ -188,7 +188,7 @@ PROGRESS_SLICE_CHUNKS = 250
 #: Chunks sent in one ``/embeddings`` request.
 EMBED_BATCH_SIZE = 25
 #: How long one batch may wait for the embedder. It is sent once: resending a
-#: timed-out batch queues the same work again on a GPU too busy to finish it.
+#: timed-out batch queues the same work again on hardware too busy to finish it.
 EMBED_BATCH_TIMEOUT_S = 300
 #: Seconds between "still waiting" reports while a batch is outstanding.
 EMBED_WAIT_REPORT_S = 15
@@ -900,7 +900,22 @@ class RAGSDK:
             _EmbedderWarmingUp: no vectors at all — the model is still loading.
             RuntimeError: a malformed response; sending it again won't help.
         """
-        data = response.get("data", [])
+        if not isinstance(response, dict) or "data" not in response:
+            detail = response.get("error") if isinstance(response, dict) else None
+            raise RuntimeError(
+                f"Embedding backend sent no 'data' for batch {batch_num}"
+                f"{f': {detail}' if detail else ''}. Check Lemonade Server's log, "
+                "then retry indexing."
+            )
+        data = response["data"]
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("embedding", []), list)
+            for item in data
+        ):
+            raise RuntimeError(
+                f"Embedding backend sent a malformed reply for batch {batch_num}; "
+                "verify the backend and retry indexing."
+            )
         if not any(item.get("embedding") for item in data):
             raise _EmbedderWarmingUp()
         if any("index" in item for item in data):
