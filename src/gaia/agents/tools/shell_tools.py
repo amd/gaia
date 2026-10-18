@@ -4275,7 +4275,7 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 600s scripts (python x.py, node, bash), 30s everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
             Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
             'cd <dir> && b'. One approval covers the line; every part is
