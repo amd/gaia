@@ -5,8 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +27,33 @@ const (
 	defaultReadTimeout    = 300 * time.Second
 	// A cancel POST must never wait out a stream read timeout.
 	cancelTimeout = 10 * time.Second
+	// The relay gives the sidecar the read budget to start answering, then
+	// reports why it did not; waiting this much longer lets that report through.
+	relayHeaderGrace = 30 * time.Second
+	// agentToolTimeoutEnv and agentToolTimeoutGrace mirror src/gaia/daemon/timeouts.py.
+	agentToolTimeoutEnv   = "GAIA_AGENT_TOOL_TIMEOUT"
+	agentToolTimeoutGrace = 60 * time.Second
 )
+
+// agentReadTimeout is the relay's idle-read budget, read the way
+// timeouts.py's agent_read_timeout() reads it, so both ends give up together.
+func agentReadTimeout() (time.Duration, error) {
+	raw := os.Getenv(agentToolTimeoutEnv)
+	if raw == "" {
+		return defaultReadTimeout, nil
+	}
+	secs, err := strconv.ParseFloat(raw, 64)
+	if err == nil && math.IsInf(secs, 1) {
+		// timeouts.py turns "inf" into no idle limit; a century is the same in practice.
+		return 100 * 365 * 24 * time.Hour, nil
+	}
+	if err != nil || secs <= 0 || math.IsNaN(secs) {
+		return 0, fmt.Errorf("%s must be a positive number of seconds, got %q. "+
+			"Unset it to use the default relay read budget (%s)",
+			agentToolTimeoutEnv, raw, defaultReadTimeout)
+	}
+	return max(defaultReadTimeout, time.Duration(secs*float64(time.Second))+agentToolTimeoutGrace), nil
+}
 
 // Turn is one entry of the host-owned transcript.
 //
@@ -44,10 +73,16 @@ type SSEOptions struct {
 	Model string
 	// MaxSteps overrides the agent-loop step ceiling. Zero means "sidecar default".
 	MaxSteps int
-	// ConnectTimeout / ReadTimeout default to 10s / 300s. ReadTimeout is an
-	// idle timeout: it fires only if no byte of the stream arrives within it.
+	// ConnectTimeout / ReadTimeout default to 10s / the relay's read budget
+	// (300s unless GAIA_AGENT_TOOL_TIMEOUT raises it). ReadTimeout is an idle
+	// timeout: it fires only if no byte of the stream arrives within it.
 	ConnectTimeout time.Duration
 	ReadTimeout    time.Duration
+	// HeaderTimeout bounds the wait for the relay's response headers.
+	// Defaults to ReadTimeout plus a grace period: the relay waits ReadTimeout
+	// for the sidecar, so a model switch queued behind another app's lease is
+	// reported by the relay rather than cut short here.
+	HeaderTimeout time.Duration
 	// Interactive declares that a human is watching and this client will render
 	// a `needs_input` question and POST the answer. Default false: an agent that
 	// asks a question nobody can answer parks the run until it times out, which
@@ -74,6 +109,8 @@ type SSEClient struct {
 	stream *http.Client
 	// cancelHTTP is the short-timeout client for the cancel POST.
 	cancelHTTP *http.Client
+	// configErr is a bad timeout setting, reported by every Send.
+	configErr error
 
 	// done is closed by Close(). It is the only way to unblock a consume()
 	// goroutine whose consumer has stopped reading and whose buffer is full —
@@ -124,8 +161,15 @@ func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient
 	if opts.ConnectTimeout <= 0 {
 		opts.ConnectTimeout = defaultConnectTimeout
 	}
+	var configErr error
 	if opts.ReadTimeout <= 0 {
-		opts.ReadTimeout = defaultReadTimeout
+		opts.ReadTimeout, configErr = agentReadTimeout()
+		if configErr != nil {
+			opts.ReadTimeout = defaultReadTimeout
+		}
+	}
+	if opts.HeaderTimeout <= 0 {
+		opts.HeaderTimeout = opts.ReadTimeout + relayHeaderGrace
 	}
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
@@ -134,9 +178,10 @@ func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient
 		agentID:    agentID,
 		daemon:     dc,
 		opts:       opts,
+		configErr:  configErr,
 		model:      opts.Model,
 		done:       make(chan struct{}),
-		stream:     daemon.StreamHTTPClient(opts.ConnectTimeout, opts.ReadTimeout),
+		stream:     daemon.StreamHTTPClient(opts.ConnectTimeout, opts.HeaderTimeout),
 		cancelHTTP: &http.Client{Timeout: cancelTimeout},
 	}
 }
@@ -172,6 +217,9 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	s.mu.Unlock()
 	if closed {
 		return nil, fmt.Errorf("the %s agent connection is closed; relaunch the agent from the hub", s.agentID)
+	}
+	if s.configErr != nil {
+		return nil, s.configErr
 	}
 
 	runID, err := newRunID()

@@ -74,8 +74,8 @@ type cancelRequestFailedMsg struct{ err error }
 // Ctrl+C escape hatch every other turn already has.
 const queuedSendTimeout = 180 * time.Second
 
-// queuedSendStalledMsg fires when a follow-up drained from the queue has been
-// running, as its own turn, for queuedSendTimeout with no terminal signal.
+// queuedSendStalledMsg fires when a follow-up drained from the queue, running
+// as its own turn, has gone queuedSendTimeout without any event.
 // Unlike a turn the user just pressed Enter to start and is watching, a
 // queued follow-up fired itself while the user had moved on — a hang here is
 // easy to miss until it has been silent a while, so this names it instead of
@@ -439,6 +439,7 @@ type ChatModel struct {
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
+	lastEventAt  time.Time // when the running turn last heard from the agent
 	// userWait is how long this turn sat on a question or permission prompt;
 	// the answer's timing excludes it so the user's pause isn't read as slowness.
 	userWait      time.Duration
@@ -869,7 +870,11 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // turnSeq. Delivered late (the turn already settled, or a newer one started),
 // it is a no-op — see the queuedSendStalledMsg handling in update().
 func queuedSendWatchdog(turnSeq int) tea.Cmd {
-	return tea.Tick(queuedSendTimeout, func(time.Time) tea.Msg {
+	return queuedSendWatchdogAfter(turnSeq, queuedSendTimeout)
+}
+
+func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
 		return queuedSendStalledMsg{turnSeq: turnSeq}
 	})
 }
@@ -1048,6 +1053,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.supersededTurn(msg.ch) {
 			return m, nil
 		}
+		m.lastEventAt = time.Now()
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
@@ -1112,12 +1118,19 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Already resolved, or superseded by a newer turn — nothing to say.
 			return m, nil
 		}
+		// A turn parked on a prompt is waiting on the user, and one still sending updates is working.
+		if m.awaitingUser() {
+			return m, queuedSendWatchdog(msg.turnSeq)
+		}
+		if quiet := time.Since(m.lastEventAt); quiet < queuedSendTimeout {
+			return m, queuedSendWatchdogAfter(msg.turnSeq, queuedSendTimeout-quiet)
+		}
 		m.messages = append(m.messages, Message{
 			Role: RoleStatus,
 			Content: fmt.Sprintf(
-				"[!] the queued follow-up has been running for over %s with no "+
-					"response. Press Esc (or Ctrl+C) to stop waiting, or check "+
-					"`gaia daemon status` if this keeps happening.",
+				"[!] the queued follow-up has had no update for %s. It is most likely "+
+					"waiting its turn for the model while another chat or app uses it. "+
+					"Press Esc (or Ctrl+C) to stop waiting.",
 				queuedSendTimeout),
 		})
 		m.updateViewport()
@@ -1960,6 +1973,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// scroll happened to be left.
 	m.followTail = true
 	m.queryStart = time.Now()
+	m.lastEventAt = m.queryStart
 	m.userWait, m.userWaitStart = 0, time.Time{}
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.

@@ -38,6 +38,8 @@ type fakeRelay struct {
 	// queryBody when that is set.
 	queryStatus int
 	queryBody   string
+	// queryDelay holds the /query response, headers included, this long.
+	queryDelay time.Duration
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
@@ -429,6 +431,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		time.Sleep(f.queryDelay)
 		if f.queryStatus != 0 {
 			w.WriteHeader(f.queryStatus)
 			body := f.queryBody
