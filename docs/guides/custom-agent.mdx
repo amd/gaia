@@ -92,6 +92,7 @@ GAIA ships with ready-to-use tool mixins. To enable most of them, inherit the mi
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | `self.register_screenshot_tools()` |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `self.register_wait_tools()` |
+| `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `self.register_reasoning_effort_tools()` (registers only on a model that grades reasoning, such as gpt-oss) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.init_sd()` |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.init_vlm()` |
 

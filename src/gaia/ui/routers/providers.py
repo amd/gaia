@@ -241,12 +241,15 @@ def _is_chat_model(model: Dict[str, Any]) -> bool:
 
 
 def _list_models(provider: str) -> List[Dict[str, Any]]:
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
     from gaia.llm.recommended_models import rank
 
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    offered = (
+        [DEFAULT_MODEL_NAME, *_optional_models_that_fit()] if provider == LOCAL else []
+    )
     out: List[Dict[str, Any]] = []
     for m in body.get("data") or []:
         model_id = str(m.get("id") or "")
@@ -254,7 +257,10 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
             continue
         is_cloud = m.get("recipe") == "cloud" or bool(m.get("cloud_provider"))
         if provider == LOCAL:
-            if is_cloud or not (m.get("downloaded") or model_id == DEFAULT_MODEL_NAME):
+            if is_cloud or not (
+                m.get("downloaded")
+                or any(_model_ids_match(model_id, o) for o in offered)
+            ):
                 continue
         elif not model_id.startswith(f"{provider}."):
             continue
@@ -270,10 +276,41 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
                 "evidence": ranked[1].evidence if ranked else None,
             }
         )
+    # A custom model Lemonade has not registered yet is not in its list.
+    for model_id in offered:
+        if not any(_model_ids_match(model_id, m["id"]) for m in out):
+            out.append(
+                {
+                    "id": model_id,
+                    "context_length": None,
+                    "downloaded": False,
+                    "labels": [],
+                    "rank": None,
+                    "note": None,
+                    "evidence": None,
+                }
+            )
     if provider == AMD:
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _optional_models_that_fit() -> List[str]:
+    """Optional local models to offer for download: only those this PC holds."""
+    from gaia.llm.lemonade_client import optional_chat_models_that_fit
+    from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
+
+    status, info = _lemonade("GET", "system-info")
+    try:
+        if status >= 400:
+            raise ModelFitError(f"Lemonade answered /system-info with HTTP {status}")
+        capacity = capacity_from_system_info(info)
+    except ModelFitError as e:
+        # Not offering what may not fit; downloaded models still list.
+        logger.warning("Not offering optional local models: %s", e)
+        return []
+    return optional_chat_models_that_fit(capacity)
 
 
 def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:

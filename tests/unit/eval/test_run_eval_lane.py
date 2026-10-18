@@ -85,6 +85,31 @@ def test_each_category_gets_an_empty_home_with_the_staged_skills(tmp_path):
     assert not (home / "memory.db").exists()
 
 
+def test_agent_model_is_the_default_model_the_backend_resolves(tmp_path):
+    import subprocess
+
+    env = run_eval_lane.category_home(tmp_path / "gaia_core", tmp_path / "_staged")
+    run_eval_lane.write_agent_model(tmp_path / "gaia_core", "gpt-oss-20b-mxfp4-GGUF")
+
+    resolved = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from gaia.llm.lemonade_client import resolve_default_chat_model as r;"
+            "print(r())",
+        ],
+        env={
+            **{k: v for k, v in os.environ.items() if k != "GAIA_CONFIG_FILE"},
+            **env,
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert resolved == "gpt-oss-20b-mxfp4-GGUF"
+
+
 def test_a_category_home_that_already_exists_is_refused(tmp_path):
     # A reused home is exactly how one run's memory reaches the next.
     (tmp_path / "gaia_rag").mkdir()

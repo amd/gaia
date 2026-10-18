@@ -137,6 +137,11 @@ def main() -> int:
     parser.add_argument(
         "--judge-model", default="claude-sonnet-4-6", help="Judge (CI's default)"
     )
+    parser.add_argument(
+        "--agent-model",
+        help="Local model the agent runs (written as default_model in each "
+        "category's GAIA home). Default: what a fresh home resolves, as in CI.",
+    )
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "eval-out")
     args = parser.parse_args()
 
@@ -192,6 +197,8 @@ def main() -> int:
         failed = []
         for category in categories:
             cat_env = {**env, **category_home(homes / category, staged_home)}
+            if args.agent_model:
+                write_agent_model(Path(cat_env["GAIA_HOME"]), args.agent_model)
             code = _run_category(category, cat_env, p, args)
             if code != 0:
                 failed.append(category)
@@ -216,6 +223,13 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
     if (staged_home / "skills").is_dir():
         shutil.copytree(staged_home / "skills", cat_home / "skills")
     return env_for(cat_home)
+
+
+def write_agent_model(cat_home: Path, model: str) -> None:
+    """Make *model* the agent's model in *cat_home*, as `gaia config set` would."""
+    (cat_home / "config.json").write_text(
+        json.dumps({"default_model": model}), encoding="utf-8"
+    )
 
 
 def _without_judge(env: dict) -> dict:

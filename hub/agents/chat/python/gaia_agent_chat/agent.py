@@ -82,6 +82,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
     WaitToolsMixin,
 )
+from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.env import child_env
@@ -358,6 +359,7 @@ class ChatAgent(
     SDToolsMixin,
     AudioToolsMixin,
     WaitToolsMixin,
+    ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -1642,6 +1644,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         self._register_external_tools_conditional()
         self._register_loop_control_tools()  # set_loop_state, request_user_input
+        self.register_reasoning_effort_tools()  # only for models that grade reasoning
 
         # load_tools escape hatch (#1450, Part 2) — registered ONLY when the
         # dynamic loader is active, so the loader-off path stays byte-identical.

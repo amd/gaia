@@ -231,6 +231,8 @@ FULL_CORE_TOOLS = frozenset(
         "set_loop_state",
         "request_user_input",
         "sleep",
+        # registered only for models that grade reasoning (gpt-oss)
+        "set_reasoning_effort",
         # escape hatch (#1450)
         "load_tools",
         "read_tool_output",

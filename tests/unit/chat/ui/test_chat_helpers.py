@@ -1100,7 +1100,18 @@ class TestSessionTitleRequest:
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
     def test_other_models_get_no_template_switch(self):
-        assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
+        body = self._sent_body("Gemma-4-E4B-it-GGUF")
+        assert "chat_template_kwargs" not in body
+        assert body["max_tokens"] == 24
+
+    def test_a_model_that_always_reasons_gets_room_for_it(self):
+        """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
+        and the title was cut mid-word ("Step-by-Step Bread-", measured)."""
+        from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+
+        body = self._sent_body(GPT_OSS_20B_MODEL_NAME)
+        assert body["chat_template_kwargs"] == {"reasoning_effort": "low"}
+        assert body["max_tokens"] > 24
 
 
 class TestGuardModelTitles:

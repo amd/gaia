@@ -405,6 +405,7 @@ async def _generate_session_title(
     from gaia.llm.lemonade_client import (
         find_model_requirement,
         lemonade_auth_headers,
+        no_thinking_kwargs,
         resolve_lemonade_api_key,
     )
 
@@ -424,10 +425,12 @@ async def _generate_session_title(
         # for the same conversation.
         "temperature": 0.3,
     }
+    # A thinking model would spend all 24 tokens reasoning and title nothing.
+    body.update(no_thinking_kwargs(model_id))
     mr = find_model_requirement(model_id)
-    if mr is not None and mr.thinking is not None:
-        # A thinking model would spend all 24 tokens reasoning and title nothing.
-        body["chat_template_kwargs"] = {"enable_thinking": False}
+    if mr is not None and mr.reasoning_effort:
+        # It reasons even at "low"; leave room for the title after that.
+        body["max_tokens"] = 96
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(

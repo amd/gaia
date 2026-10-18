@@ -324,6 +324,14 @@ own PC, speed, tool calling and (with `--tasks core`) agent quality, run
 </Note>
 
 <Note>
+gpt-oss 20B (`user.ggml-gpt-oss-20b-MXFP4-GGUF`, a 12 GB download, ~15 GB for models)
+and gpt-oss 120B (`gpt-oss-120b-mxfp-GGUF`, 63 GB, ~70 GB for models, a 128 GB Strix
+Halo) are supported and never auto-selected. Choose one with
+`gaia config set default_model <id>`; see
+[gpt-oss 20B and 120B](/guides/ai-providers#gpt-oss-20b-and-120b).
+</Note>
+
+<Note>
 `gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 
