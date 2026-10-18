@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import platform
+import re
 import signal
 import socket
 import subprocess
@@ -1501,6 +1502,51 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     if requested_thinking(model_id) is None:
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+# A gpt-oss control token (``<|channel|>``, ``<|message|>``, ``<|call|>`` ...).
+_HARMONY_TOKEN_RE = re.compile(r"<\|(?=[A-Za-z0-9_]{1,40}\|>)")
+
+
+def uses_harmony_format(model_id: Optional[str]) -> bool:
+    """Whether *model_id* is a gpt-oss model, which reads text in its channel format."""
+    return "gpt-oss" in (model_id or "").lower()
+
+
+def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*messages* with every gpt-oss control token in their text broken up.
+
+    A tool result holding ``<|channel|>final<|message|>`` (a file, a web page)
+    is read as real channel markup: the reply comes back empty, or llama.cpp
+    500s on output it cannot parse. ``< |`` reads the same and is plain text.
+    """
+
+    def defang(text: Any) -> Any:
+        return _HARMONY_TOKEN_RE.sub("< |", text) if isinstance(text, str) else text
+
+    out = []
+    for message in messages:
+        if not isinstance(message, dict):
+            out.append(message)
+            continue
+        fixed = dict(message)
+        for key in ("content", "reasoning_content"):
+            if key not in fixed:
+                continue
+            content = fixed[key]
+            if isinstance(content, list):
+                fixed[key] = [
+                    (
+                        {**part, "text": defang(part.get("text"))}
+                        if isinstance(part, dict) and "text" in part
+                        else part
+                    )
+                    for part in content
+                ]
+            else:
+                fixed[key] = defang(content)
+        out.append(fixed)
+    return out
 
 
 # Define agent profiles with their model requirements
@@ -3921,6 +3967,8 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        if uses_harmony_format(model):
+            messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
             # llama.cpp-only fields; a cloud provider rejects the request (HTTP 400).
             kwargs.pop("repeat_penalty", None)
