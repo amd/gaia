@@ -5578,15 +5578,45 @@ class LemonadeClient:
                 f"Download of {model_name} stopped at your request."
             )
 
-        try:
-            response = requests.post(
+        def send() -> "requests.Response":
+            return requests.post(
                 url,
                 json=request_data,
                 headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=(connect_timeout, read_timeout),
                 stream=True,
             )
-            if is_cancelled is not None:
+
+        def send_unless_stopped() -> "requests.Response":
+            # Lemonade can sit on the request before sending any headers; the
+            # POST runs on a worker so Stop is not held up by it.
+            outcome: Dict[str, Any] = {}
+            answered = threading.Event()
+
+            def run() -> None:
+                try:
+                    outcome["response"] = send()
+                    if stopped.is_set():
+                        outcome["response"].close()
+                except BaseException as e:  # pylint: disable=broad-except
+                    outcome["error"] = e  # re-raised on the caller's thread
+                finally:
+                    answered.set()
+
+            threading.Thread(target=run, name="gaia-pull-send", daemon=True).start()
+            while not answered.wait(_STOP_CHECK_SECONDS):
+                if is_cancelled():
+                    stopped.set()
+                    raise cancelled()
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome["response"]
+
+        try:
+            if is_cancelled is None:
+                response = send()
+            else:
+                response = send_unless_stopped()
                 threading.Thread(
                     target=stop_watch, name="gaia-pull-stop", daemon=True
                 ).start()

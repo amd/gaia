@@ -641,7 +641,7 @@ class TestStopNeverDeletes:
 
 
 @pytest.mark.allow_network
-def test_stop_interrupts_a_pull_that_has_gone_silent():
+def test_stop_interrupts_a_pull_that_has_gone_silent(monkeypatch):
     """Lemonade sends one progress event, then nothing (hashing, or stuck).
     Stop must not wait out the 30-minute idle limit."""
     import socket
@@ -666,6 +666,8 @@ def test_stop_interrupts_a_pull_that_has_gone_silent():
         )
 
     threading.Thread(target=serve, daemon=True).start()
+    # A regression fails in seconds instead of waiting out the 30-minute limit.
+    monkeypatch.setattr("gaia.llm.lemonade_client.PULL_IDLE_TIMEOUT_S", 10)
     client = LemonadeClient(base_url=f"http://127.0.0.1:{port}/api/v1", verbose=False)
     deadline = time.monotonic() + 1.5
     started = time.monotonic()
@@ -681,3 +683,69 @@ def test_stop_interrupts_a_pull_that_has_gone_silent():
         for conn in held:
             conn.close()
         listener.close()
+
+
+@pytest.mark.allow_network
+def test_stop_interrupts_a_pull_before_lemonade_answers(monkeypatch):
+    """Lemonade accepts the pull and sends nothing, not even headers. Stop
+    must not wait for them, and must not be reported as a failed download."""
+    import socket
+    import threading
+    import time
+
+    from gaia.llm.retry import model_retry_notices
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    held = []
+
+    def serve():
+        conn, _ = listener.accept()
+        held.append(conn)
+        conn.recv(65536)
+
+    threading.Thread(target=serve, daemon=True).start()
+    monkeypatch.setattr("gaia.llm.lemonade_client.PULL_IDLE_TIMEOUT_S", 10)
+    client = LemonadeClient(base_url=f"http://127.0.0.1:{port}/api/v1", verbose=False)
+    deadline = time.monotonic() + 1.5
+    started = time.monotonic()
+    try:
+        with model_retry_notices(
+            lambda _n: None, is_cancelled=lambda: time.monotonic() >= deadline
+        ):
+            with pytest.raises(ModelDownloadCancelledError):
+                for _event in client.pull_model_stream(model_name="Qwen3-0.6B-GGUF"):
+                    pass
+        assert time.monotonic() - started < 4
+    finally:
+        for conn in held:
+            conn.close()
+        listener.close()
+
+
+@patch.object(LemonadeClient, "_model_storage_free_bytes", return_value=(10**13, "/"))
+@patch.object(
+    LemonadeClient,
+    "get_model_info",
+    return_value={"id": "Qwen3-0.6B-GGUF", "downloaded": False, "size_gb": 0.5},
+)
+@patch.object(LemonadeClient, "pull_model_stream")
+@patch.object(LemonadeClient, "_send_request")
+def test_stop_during_an_auto_download_is_a_cancellation(
+    mock_send, mock_pull, _info, _free
+):
+    """The auto-download loop gets Stop from pull_model_stream: it surfaces as
+    a cancellation, never as "Failed to auto-download", and nothing loads."""
+    mock_send.side_effect = [Exception("model not found: Qwen3-0.6B-GGUF")]
+
+    def stopped(**_kwargs):
+        yield {"event": "progress", "percent": 5}
+        raise ModelDownloadCancelledError("Download stopped at your request.")
+
+    mock_pull.side_effect = stopped
+    client = _make_client()
+    with pytest.raises(ModelDownloadCancelledError):
+        client.load_model("Qwen3-0.6B-GGUF", prompt=False, auto_download=True)
+    assert mock_send.call_count == 1
