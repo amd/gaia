@@ -116,6 +116,14 @@ def _is_connection_failure(exc: BaseException) -> bool:
     return False
 
 
+class IndexingStopped(Exception):
+    """Raised from an ``index_document`` progress callback to stop indexing.
+
+    It leaves ``index_document`` as raised: the document is not indexed, and
+    any cache it had is kept.
+    """
+
+
 class EmbeddingUnavailableError(RuntimeError):
     """The embedding model could not run, so nothing was embedded or searched.
 
@@ -2964,6 +2972,8 @@ These positions indicate where to split the text."""
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
+            except IndexingStopped:
+                raise
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
@@ -3169,6 +3179,8 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
+        except IndexingStopped:
+            raise
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
         except Exception as e:

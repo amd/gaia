@@ -3658,17 +3658,15 @@ def _index_timeout_from_env() -> float:
 _INDEX_TIMEOUT_S = _index_timeout_from_env()
 
 
-class _IndexingStopped(Exception):
-    """Raised inside the embedding loop to stop a cancelled or timed-out index."""
-
-
 async def _index_document(filepath: Path) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
     Runs on the indexing pool (``_INDEX_MAX_PARALLEL`` at once; more wait
-    their turn). Cancelling the awaiting task stops the embedding at its next
-    progress step, and an index that runs past ``GAIA_INDEX_TIMEOUT`` is
-    stopped the same way and fails.
+    their turn, and the wait doesn't count against the limit). Cancelling the
+    awaiting task stops the embedding at its next progress step, and an index
+    that runs past ``GAIA_INDEX_TIMEOUT`` is stopped the same way and fails.
+    Text extraction has no such step, so a hang there holds its worker until
+    it returns.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
@@ -3677,17 +3675,22 @@ async def _index_document(filepath: Path) -> int:
         RuntimeError: If indexing fails or times out.
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
+    from gaia.rag.sdk import IndexingStopped
+
+    loop = asyncio.get_running_loop()
     stop = threading.Event()
+    started = asyncio.Event()
 
     def _check_stop(_done: int, _total: int) -> None:
         if stop.is_set():
-            raise _IndexingStopped(filepath.name)
+            raise IndexingStopped(filepath.name)
 
     def _do_index():
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
+        loop.call_soon_threadsafe(started.set)
         if stop.is_set():
-            raise _IndexingStopped(filepath.name)
+            raise IndexingStopped(filepath.name)
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
@@ -3713,8 +3716,11 @@ async def _index_document(filepath: Path) -> int:
         logger.info("Indexed %s: %d chunks", filepath, chunks)
         return chunks
 
-    future = asyncio.get_running_loop().run_in_executor(_INDEX_EXECUTOR, _do_index)
+    future = loop.run_in_executor(_INDEX_EXECUTOR, _do_index)
+    picked_up = asyncio.ensure_future(started.wait())
     try:
+        # The limit starts when a worker picks the document up.
+        await asyncio.wait({future, picked_up}, return_when=asyncio.FIRST_COMPLETED)
         return await asyncio.wait_for(asyncio.shield(future), _INDEX_TIMEOUT_S)
     except asyncio.TimeoutError as e:
         stop.set()
@@ -3729,3 +3735,5 @@ async def _index_document(filepath: Path) -> int:
         raise
     except Exception as e:
         raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e
+    finally:
+        picked_up.cancel()

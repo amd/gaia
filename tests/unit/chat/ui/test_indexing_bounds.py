@@ -104,3 +104,11 @@ async def test_a_stuck_index_ends_with_an_error(slow_rag):
             break
         await asyncio.sleep(0.05)
     assert rag.running == 0
+
+
+async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
+    rag, doc = slow_rag
+    rag.steps = 6  # 0.3 s each
+    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.6):
+        counts = await asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
+    assert counts == [6] * 4
