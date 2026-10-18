@@ -1454,19 +1454,28 @@ class MemoryStore:
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_category_contexts(
-        self, category: str, context: str | None, limit: int = 10
+        self,
+        category: str,
+        context: str | None,
+        limit: int = 10,
+        newest_first: bool = False,
     ) -> List[Dict]:
         """Get non-sensitive knowledge by category for a specific context AND global.
 
         ``context=None`` reads every context. Single query that replaces two
         sequential get_by_category() calls in _get_context_items() — avoids the
         2-round-trips-per-category overhead during system prompt construction.
+        ``newest_first`` orders by when a row was last confirmed instead of by
+        confidence.
         """
+        order = (
+            "updated_at DESC" if newest_first else "confidence DESC, updated_at DESC"
+        )
         if context is None:
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND sensitive = 0 AND superseded_by IS NULL
-                ORDER BY confidence DESC, updated_at DESC
+                ORDER BY {order}
                 LIMIT ?
             """
             params = (category, limit)
@@ -1475,7 +1484,7 @@ class MemoryStore:
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context = ? AND sensitive = 0
                       AND superseded_by IS NULL
-                ORDER BY confidence DESC, updated_at DESC
+                ORDER BY {order}
                 LIMIT ?
             """
             params = (category, "global", limit)
@@ -1484,7 +1493,7 @@ class MemoryStore:
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context IN (?, 'global') AND sensitive = 0
                       AND superseded_by IS NULL
-                ORDER BY confidence DESC, updated_at DESC
+                ORDER BY {order}
                 LIMIT ?
             """
             params = (category, context, limit)

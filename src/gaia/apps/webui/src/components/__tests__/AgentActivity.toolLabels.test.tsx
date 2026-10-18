@@ -80,3 +80,10 @@ it('names a running GAIA agent step in the present tense', () => {
 
     expect(screen.getByText('Asking you')).toBeInTheDocument();
 });
+
+it('counts only the steps it shows when memory steps are hidden', () => {
+    const steps = [step('remember'), { ...step('find_files'), id: 2 }];
+    render(<AgentActivity steps={steps} isActive={false} variant="summary" agentStepCount={2} />);
+
+    expect(screen.getByText(/^1 step\b/)).toBeInTheDocument();
+});

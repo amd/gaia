@@ -16,11 +16,13 @@ prompt, carries the absolute dates it was learned and last confirmed.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Dict
 
 import numpy as np
 import pytest
 
+from gaia.agents.base import memory as memory_module
 from gaia.agents.base.memory import (
     LESSON_DOMAIN,
     LESSON_SOURCE,
@@ -581,7 +583,7 @@ class TestStablePromptFillsItsBudget:
         store.store(
             category="reminder",
             content="Renew the passport",
-            due_at="2030-01-01T00:00:00+00:00",
+            due_at="2030-01-01T12:00:00+00:00",
             context="work",
         )
         store.store(
@@ -619,3 +621,51 @@ def test_saving_stays_silent(host):
     prompt = host.get_memory_system_prompt()
 
     assert "call the tool silently and respond naturally" in prompt
+
+
+class TestStablePromptOrderAndDueDates:
+    def test_newest_first_holds_past_the_fetch_limit(self, host, store, monkeypatch):
+        """The store is read newest first, not confidence-first then re-sorted."""
+        monkeypatch.setattr(memory_module, "STABLE_MEMORY_FETCH_LIMIT", 3)
+        for i, word in enumerate(["alpha", "bravo", "charlie"]):
+            kid = store.store(
+                category="fact",
+                content=f"Old {word} fact",
+                context="work",
+                confidence=0.9,
+            )
+            _backdate(
+                store,
+                kid,
+                f"2026-01-0{i + 1}T10:00:00+00:00",
+                "2026-01-05T10:00:00+00:00",
+            )
+        store.store(
+            category="fact", content="Moved to Toronto", context="work", confidence=0.4
+        )
+
+        assert "Moved to Toronto" in host.get_memory_system_prompt()
+
+    def test_a_due_date_is_read_as_a_local_day(self, host, store):
+        due = datetime.now().astimezone().replace(hour=23, minute=0, microsecond=0)
+        store.store(
+            category="reminder",
+            content="Call the plumber",
+            due_at=due.astimezone(timezone.utc).isoformat(),
+            context="work",
+        )
+
+        prompt = host.get_memory_system_prompt()
+
+        assert f"  - Call the plumber (due {due.date().isoformat()}, " in prompt
+
+    def test_a_malformed_due_date_names_the_memory(self, host, store):
+        kid = store.store(category="reminder", content="Renew it", context="work")
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET due_at = 'next tuesday' WHERE id = ?", (kid,)
+            )
+            store._conn.commit()
+
+        with pytest.raises(ValueError, match=kid):
+            host.get_memory_system_prompt()

@@ -216,8 +216,9 @@ TURN_RECALL_SURE_SIMILARITY = 0.5
 TURN_RECALL_MIN_SIMILARITY = 0.38
 TURN_RECALL_MIN_MARGIN = 0.08
 TURN_RECALL_MAX_GAP = 0.06
-#: Memories brought along beyond TURN_RECALL_TOP_K because they name someone a
-#: match names, and the floor they must clear.
+#: Memories brought along beyond TURN_RECALL_TOP_K because they share a
+#: capitalised mid-sentence word (usually a name) with a match, and the floor
+#: they must clear.
 TURN_RECALL_LINKED_MAX = 2
 TURN_RECALL_LINKED_MIN_SIMILARITY = 0.35
 #: The field needs this many memories for its median to mean anything; a
@@ -2875,20 +2876,19 @@ class MemoryMixin(ProceduralMemoryMixin):
         saying how many were left out so the model knows to ``recall`` them.
         """
         ctx = self._memory_context
-        today = datetime.now().astimezone().date().isoformat()
-        pools = {}
-        for category, _ in _STABLE_PERSONAL_SECTIONS:
-            pool = [
+        today = datetime.now().astimezone().date()
+        pools = {
+            category: [
                 item
                 for item in self._get_context_items(
-                    category, ctx, limit=STABLE_MEMORY_FETCH_LIMIT
+                    category, ctx, limit=STABLE_MEMORY_FETCH_LIMIT, newest_first=True
                 )
                 if not _is_lesson(item)
                 # A reminder whose day has passed is the due-date path's job.
-                and str(item.get("due_at") or today)[:10] >= today
+                and (self._due_day(item) or today) >= today
             ]
-            pool.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
-            pools[category] = pool
+            for category, _ in _STABLE_PERSONAL_SECTIONS
+        }
         chosen: Dict[str, List[str]] = {category: [] for category in pools}
         ids: set = set()
         used = 0
@@ -2902,8 +2902,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 if len(pool) <= position:
                     continue
                 item = pool[position]
-                due = str(item.get("due_at") or "")[:10]
-                when = f"due {due}, " if due else ""
+                due = self._due_day(item)
+                when = f"due {due.isoformat()}, " if due else ""
                 line = f"  - {item['content']} ({when}{self._memory_age(item)})"
                 cost = len(line) + 1
                 if not chosen[category]:
@@ -2944,8 +2944,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         """The few stored memories most relevant to *query*, for this turn only.
 
         A match must clear a sure score, or stand out from how the query scores
-        against the whole store. A memory naming someone a match names comes
-        along too, so "children named Ada and Leo" brings "Leo is allergic to
+        against the whole store. A memory sharing a capitalised word (usually
+        a name) with a match comes along too, so "children named Ada and Leo" brings "Leo is allergic to
         peanuts". Skips what the stable prompt already shows, and doesn't count
         as a use (no confidence bump), because the model didn't ask for it.
         """
@@ -3152,7 +3152,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         return None if ctx == "global" else ctx
 
     def _get_context_items(
-        self, category: str, context: str, limit: int = 10
+        self, category: str, context: str, limit: int = 10, newest_first: bool = False
     ) -> List[Dict]:
         """Get non-sensitive knowledge items for active context + global.
 
@@ -3161,8 +3161,27 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         scope = context if context != "global" else None
         return self._redact_credentials(
-            self._memory_store.get_by_category_contexts(category, scope, limit=limit)
+            self._memory_store.get_by_category_contexts(
+                category, scope, limit=limit, newest_first=newest_first
+            )
         )
+
+    @staticmethod
+    def _due_day(item: Dict):
+        """The local calendar day *item* is due, or None if it has no due date."""
+        due_at = item.get("due_at")
+        if not due_at:
+            return None
+        try:
+            due = datetime.fromisoformat(due_at)
+        except ValueError as e:
+            raise ValueError(
+                f"memory {item.get('id')} has an invalid due_at {due_at!r}; "
+                "correct or delete it on the memory page (/memory)"
+            ) from e
+        if due.tzinfo is None:
+            due = due.astimezone()
+        return due.astimezone().date()
 
     @classmethod
     def _redact_credentials(cls, items: List[Dict]) -> List[Dict]:
