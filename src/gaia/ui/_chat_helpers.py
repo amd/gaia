@@ -1917,23 +1917,28 @@ def _turn_inference_stats(
 _DEVICE_NAMES = (("npu", "NPU"), ("gpu", "GPU"), ("cpu", "CPU"))
 
 
-async def _turn_place(model_id: str, client, base_url: str, headers: dict) -> str:
-    """Where a turn was answered, as the footer says it.
-
-    "via Fireworks AI" for a cloud model; for a local one, the device Lemonade
-    reports for that model ("on your GPU"), or "on this PC" when it names none.
-    """
+def _turn_location(model_id: str) -> InferenceLocation:
+    """Where a turn with *model_id* was answered; needs no Lemonade."""
     provider_kwargs = _eval_provider_kwargs()
     if provider_kwargs.get("use_claude"):
-        loc = resolve_inference_location(
+        return resolve_inference_location(
             provider_kwargs["claude_model"], use_claude=True
         )
-    else:
-        loc = resolve_inference_location(
-            model_id, cloud_provider_lookup=_ui_cloud_provider
-        )
-    if loc.remote:
-        return f"via {loc.display}"
+    return resolve_inference_location(
+        model_id, cloud_provider_lookup=_ui_cloud_provider
+    )
+
+
+def _cloud_place(loc: InferenceLocation) -> Optional[str]:
+    """A cloud turn's place, e.g. "via Fireworks AI"; None for a local one."""
+    return f"via {loc.display}" if loc.remote else None
+
+
+async def _local_place(model_id: str, client, base_url: str, headers: dict) -> str:
+    """Where a local turn ran: the device Lemonade reports for the model.
+
+    "on your GPU", or "on this PC" when Lemonade names no device for it.
+    """
     from .routers.system import _norm_model_id
 
     device = ""
@@ -3444,7 +3449,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # cases where Lemonade is on a non-default port and the env var
             # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
-            turn_place = None
+            # Named before any Lemonade call: a cloud turn may run with it stopped.
+            turn_location = _turn_location(model_id)
+            turn_place = _cloud_place(turn_location)
             try:
                 import httpx
 
@@ -3482,9 +3489,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             stats_resp.status_code,
                             base_url,
                         )
-                    turn_place = await _turn_place(
-                        model_id, stats_client, base_url, _auth
-                    )
+                    if not turn_location.remote:
+                        turn_place = await _local_place(
+                            model_id, stats_client, base_url, _auth
+                        )
             except Exception as exc:  # pylint: disable=broad-except
                 # Don't fail the user's response if stats fetching breaks; log
                 # at debug so eval-time gaps are diagnosable without spamming
