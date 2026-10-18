@@ -663,7 +663,8 @@ def _forget_fitted_ctx(url: str, model_id: str) -> None:
 
 #: (base_url, model) -> (ctx_size, monotonic time) when a /health probe last
 #: showed the model resident. Only a probe counts: an answered request may have
-#: been served by a reload at Lemonade's own default window.
+#: been served by a reload at Lemonade's own default window. An eviction by
+#: another app inside the recheck window goes unseen until it ends; accepted.
 _RESIDENT: Dict[Tuple[str, str], Tuple[int, float]] = {}
 _RESIDENT_LOCK = threading.Lock()
 
@@ -3779,10 +3780,6 @@ class LemonadeClient:
         self.log.warning(message)
         print(f"⏳ {message}", file=sys.stderr, flush=True)
         while True:
-            sleep(_BUSY_POLL_SECONDS)
-            status = self.get_status(include_catalog=False)
-            if not status.busy:
-                return status
             waited = clock() - started
             if waited >= limit:
                 raise LemonadeUnresponsiveError(
@@ -3791,6 +3788,10 @@ class LemonadeClient:
                     "stuck: check the Lemonade server log, or set "
                     f"{LOAD_WAIT_ENV} (seconds) to wait longer for a slow load."
                 )
+            sleep(min(_BUSY_POLL_SECONDS, limit - waited))
+            status = self.get_status(include_catalog=False)
+            if not status.busy:
+                return status
 
     def _record_retries(self, state: RetryState) -> None:
         self.last_request_retries = state.retries
@@ -7716,9 +7717,9 @@ class LemonadeClient:
             read = timeout[1] if isinstance(timeout, tuple) else timeout
             raise LemonadeUnresponsiveError(
                 f"Request failed: {e}. Lemonade at {self.base_url} accepted the "
-                f"connection but did not answer within {read:g}s — it is busy "
-                "(usually loading a model for another app) or stuck. If it "
-                "persists, check the Lemonade server log."
+                f"connection but did not answer within {read:g}s: it is busy (for "
+                "example loading a model) or stuck. If it persists, check the "
+                "Lemonade server log."
             ) from e
         except requests.exceptions.RequestException as e:
             raise LemonadeClientError(f"Request failed: {str(e)}") from e
