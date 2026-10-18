@@ -1060,6 +1060,21 @@ def send_request(
     cancelled on the server with `notifications/cancelled`, and a server's
     `ping` gets an empty result. Errors name the server by its configured name
     and executable.
+
+    Secrets: GAIA's own messages never include a server's command, arguments
+    or env. Text the server sends back (stderr, error replies, results in
+    debug logs) is cleaned of the known secret values in its launch config,
+    and of nothing else:
+    - env values whose name looks secret (`*KEY*`, `*TOKEN*`, `*SECRET*`,
+      `*PASSWORD*`, `*CREDENTIAL*`, `*AUTH*` but not `AUTHOR`);
+    - the value after a secret flag (`--api-key v`, `--token=v`), judged by
+      whole words, so `--max-tokens 4096` is left alone;
+    - `KEY=VALUE` where `KEY` looks secret by the same rule;
+    - the user and password of a `user:pass@` URL, and an Authorization or
+      Bearer header value inside an argument.
+    Each is matched raw, JSON-escaped, and as a code-page-mangled decode.
+    Debug logs of raw traffic (`debug=True`) can still hold other server
+    output.
     Writes are bounded too: a server that stops reading its input is stopped
     rather than left blocking the request, and waiting behind another request
     ends on Stop.

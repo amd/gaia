@@ -367,13 +367,16 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": echo, "result": {}})
         send({"jsonrpc": "2.0", "id": req["id"],
               "result": {"serverInfo": {"name": echo}, "note": echo}})
+    elif mode == "result":  # a successful result, echoing as value and key
+        send({"jsonrpc": "2.0", "id": req["id"],
+              "result": {"content": [{"type": "text", "text": echo}], echo: echo}})
     else:  # tools/list or tools/call: a structured, non-string error
         send({"jsonrpc": "2.0", "id": req["id"],
               "error": {"code": -32603, "message": {"detail": echo}}})
 """
 
 
-@pytest.mark.parametrize("mode", ["die", "stdout", "reject", "list", "call"])
+@pytest.mark.parametrize("mode", ["die", "stdout", "reject", "list", "call", "result"])
 def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog, mode):
     """Property: no 4-character run of a secret ever reaches the server's
     label, GAIA's logs (at DEBUG, with debug on), an error, last_error, or a
@@ -419,8 +422,11 @@ def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog, mode
                     if client.connect():
                         if mode == "list":
                             seen.append(repr(client.list_tools()))
-                        elif mode == "call":
-                            seen.append(repr(client.call_tool("x", {})))
+                        elif mode in ("call", "result"):
+                            # The result itself is the tool's; its debug log is GAIA's.
+                            result = client.call_tool("x", {})
+                            if mode == "call":
+                                seen.append(repr(result))
                     seen.append(str(client.last_error))
                 finally:
                     client.disconnect()
@@ -882,6 +888,10 @@ def test_a_launcher_that_dies_during_the_startup_check_has_its_child_stopped(
     # A wide window, so a loaded machine's slow interpreter start still dies in it.
     monkeypatch.setattr(stdio_module, "_STARTUP_CHECK_S", 5.0)
     monkeypatch.setattr(stdio_module, "_STARTUP_CHECK_SLICES", 100)
+    # Only the startup check may record the child; the watcher must not.
+    monkeypatch.setattr(
+        stdio_module.StdioTransport, "_watch_children", lambda self, proc: None
+    )
     child_pid_file = tmp_path / "child.pid"
     script = tmp_path / "dies_fast.py"
     script.write_text(textwrap.dedent(f"""
@@ -932,3 +942,97 @@ def test_one_bad_timeout_fails_only_its_own_server(monkeypatch):
     assert "good" in manager._clients
     assert "at most 600" in manager._failed["bad"]
     assert "at most 600" in manager._failed["huge"]
+
+
+def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
+    long_path = str(tmp_path / ("deep" * 10) / "server_data")
+    t = StdioTransport(
+        sys.executable,
+        args=[
+            "-u",
+            "srv.py",
+            "--max-tokens",
+            "4096",
+            "-p",
+            "3000",
+            "--port=8080",
+            "--transport=stdio",
+            "LOG_LEVEL=info",
+            "--author",
+            "Alice",
+            "--no-auth",
+            "--monkey-patch",
+            "true",
+            "--data",
+            long_path,
+        ],
+        env={"NODE_ENV": "production", "LOG_LEVEL": "debug", "AUTHOR": "Alice"},
+    )
+    text = (
+        f"max tokens 4096 on port 3000 and 8080 via stdio at info by Alice; "
+        f"production debug true {long_path}"
+    )
+    assert t.redact(text) == text
+
+
+@pytest.mark.parametrize(
+    "args,env,secret",
+    [
+        (["--url", "https://bob:hunter2222@db.example/x"], {}, "hunter2222"),
+        (["--header", "Authorization: Bearer Zq9vKe7wP2.tok"], {}, "Zq9vKe7wP2.tok"),
+        ([], {"GITHUB_TOKEN": 'Zq9v\\"Ke7w\u00e9P2'}, 'Zq9v\\"Ke7w\u00e9P2'),
+        ([], {"API_KEY": "p\u00e4ssw\u00f6rd1234"}, "p\u00e4ssw\u00f6rd1234"),
+    ],
+    ids=["url-userinfo", "bearer-header", "json-escapes", "cp1252-env"],
+)
+def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
+    tmp_path, args, env, secret
+):
+    """Raw, JSON-escaped in a non-object line, as a dict key, and cp1252-mangled."""
+    from gaia.mcp.client.mcp_client import MCPClient
+
+    script = tmp_path / "echo_forms.py"
+    script.write_text(textwrap.dedent("""
+        import json, os, sys
+        secret = sys.argv[-1]
+        for line in sys.stdin:
+            req = json.loads(line)
+            if req["method"] == "initialize":
+                sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
+                                             "result": {}}) + "\\n")
+            elif req["method"] == "tools/list":  # a non-object JSON line
+                sys.stdout.write(json.dumps("leaked " + secret) + "\\n")
+            else:  # a dict-key echo in an error, then cp1252 bytes on stderr
+                sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
+                    "error": {"code": 1, "message": {secret: secret}}}) + "\\n")
+                sys.stdout.flush()
+                sys.stderr.buffer.write(secret.encode("cp1252", "replace"))
+                sys.stderr.flush()
+                sys.exit(3)
+            sys.stdout.flush()
+        """))
+    client = MCPClient.from_config(
+        "forms",
+        {
+            "command": sys.executable,
+            "args": ["-u", str(script), *args, secret],
+            "env": env,
+        },
+    )
+    seen = []
+    try:
+        assert client.connect(), client.last_error
+        try:
+            client.list_tools()
+        except ValueError as e:
+            seen.append(str(e))
+        seen.append(repr(client.call_tool("x", {})))
+        time.sleep(0.5)
+        seen.append(client.transport._read_stderr())
+    finally:
+        client.disconnect()
+
+    text = "\n".join(seen)
+    assert "<redacted>" in text
+    for form in stdio_module._encodings(secret):
+        assert form not in text, (form, text)

@@ -34,26 +34,63 @@ _SHELL_OPERATOR_CHARS = frozenset(";|&<>()")
 # How often a blocked read wakes to check for cancellation.
 _POLL_INTERVAL_S = 0.25
 
-# A flag whose value is a credential: --api-key, --token, --client-secret, -k ...
-_SECRET_FLAG = re.compile(
-    r"-{1,2}(?:[\w-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|bearer)"
-    r"[\w-]*|k|p)",
+# What counts as a known secret in a server's launch config. Server output
+# is cleaned of exactly these values; nothing else is guessed at.
+#
+# A name that holds a secret, for an env var or KEY=VALUE: API_KEY,
+# GITHUB_TOKEN, CLIENT_SECRET, DB_PASSWORD, OAUTH_CREDENTIALS. Not AUTHOR.
+_SECRET_NAME = re.compile(
+    r"key|token|secret|passw(?:or)?d|credential|auth(?!or)", re.IGNORECASE
+)
+# Words that make a flag's value a secret, matched whole: --api-key,
+# --access-token, --password. Not --max-tokens, --no-auth or --monkey-patch.
+_SECRET_FLAG_WORDS = frozenset(
+    {
+        "key",
+        "apikey",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "credential",
+        "credentials",
+    }
+)
+# user:pass@ in a URL; the value of an Authorization or Bearer header.
+_URL_USERINFO = re.compile(r"[a-zA-Z][\w+.-]*://([^/@\s:]+):([^/@\s]+)@")
+_AUTH_HEADER = re.compile(
+    r"(?:authorization\s*[:=]\s*(?:bearer|basic|token)?\s*|\bbearer\s+)([^\s\"',;]+)",
     re.IGNORECASE,
 )
 
 
-def _looks_like_a_key(token: str) -> bool:
-    """A long, mixed-case-and-digit token that isn't a file: an API key's shape."""
-    if len(token) < 20 or os.path.exists(token):
+def _is_secret_flag(flag: str) -> bool:
+    """``--api-key`` or ``--access-token``, judged by whole words of the name."""
+    if not flag.startswith("-"):
         return False
-    classes = sum(
-        (
-            any(c.islower() for c in token),
-            any(c.isupper() for c in token),
-            any(c.isdigit() for c in token),
-        )
-    )
-    return classes == 3 or bool(re.fullmatch(r"[0-9a-fA-F]{32,}", token))
+    words = re.split(r"[-_.]+", flag.lstrip("-").lower())
+    return any(word in _SECRET_FLAG_WORDS for word in words)
+
+
+def _encodings(secret: str) -> List[str]:
+    """*secret* in every form it can reach GAIA's text in.
+
+    Raw; JSON-escaped (inside a serialized reply or a non-object JSON line),
+    with and without ASCII escapes; and as GAIA's UTF-8 pipe decodes it with
+    ``errors="replace"`` when the server wrote it in a Windows code page.
+    """
+    forms = {
+        secret,
+        json.dumps(secret)[1:-1],
+        json.dumps(secret, ensure_ascii=False)[1:-1],
+    }
+    for codepage in ("cp1252", "latin-1"):
+        try:
+            mangled = secret.encode(codepage).decode("utf-8", errors="replace")
+        except UnicodeEncodeError:
+            continue
+        forms.add(mangled)
+    return [form for form in forms if form]
 
 
 # How long connect() watches for an immediate crash, and in how many steps.
@@ -229,55 +266,71 @@ class StdioTransport(MCPTransport):
         return self._label
 
     def _secrets(self) -> List[str]:
-        """The secret values in this server's launch config, longest first.
+        """The known secret values in this server's launch config, longest first.
 
-        Only values that are secrets by position or shape: env values, the
-        value of a ``KEY=VALUE`` argument or prefix, the value after a flag
-        named like a credential (``--api-key v``, ``--token=v``), and long
-        high-entropy tokens. Ordinary words such as ``python`` or ``--stdio``
-        stay readable in a server's errors.
+        Exactly these, and nothing guessed from a value's shape:
+
+        - the value of an env var whose name looks secret (``*KEY*``,
+          ``*TOKEN*``, ``*SECRET*``, ``*PASSWORD*``, ``*CREDENTIAL*``,
+          ``*AUTH*`` but not ``AUTHOR``);
+        - the value after a secret flag, in ``--api-key v`` and
+          ``--api-key=v`` forms (whole words: ``key``, ``token``, ``secret``,
+          ``password``, ``credential``; so not ``--max-tokens``);
+        - ``KEY=VALUE`` where ``KEY`` looks secret by the same name rule;
+        - the user and password of a ``user:pass@`` URL;
+        - an Authorization or Bearer header value inside an argument.
         """
         try:
             tokens = _split_command_string(self.command)
         except ValueError:
             tokens = self.command.split()
         tokens = [*tokens, *(self.args or [])]
-        found = {str(v) for v in (self.env or {}).values()}
+        found = {
+            str(value)
+            for name, value in (self.env or {}).items()
+            if _SECRET_NAME.search(str(name))
+        }
         for i, token in enumerate(tokens):
             name, eq, value = token.partition("=")
-            if eq and value:
-                found.add(value)  # KEY=VALUE, --token=VALUE
-            if (
-                _SECRET_FLAG.fullmatch(name)
-                and not eq
-                and i + 1 < len(tokens)
-                and not tokens[i + 1].startswith("-")
-            ):
+            if eq and value and (_is_secret_flag(name) or _SECRET_NAME.search(name)):
+                found.add(value)  # --token=VALUE, API_KEY=VALUE
+            if not eq and _is_secret_flag(token) and i + 1 < len(tokens):
                 found.add(tokens[i + 1])  # --api-key VALUE
-            if _looks_like_a_key(token):
-                found.add(token)
-        return sorted((v for v in found if len(v) >= 4), key=len, reverse=True)
+        for text in [*tokens, *(str(v) for v in (self.env or {}).values())]:
+            for match in _URL_USERINFO.finditer(text):
+                found.update(match.groups())
+            found.update(match.group(1) for match in _AUTH_HEADER.finditer(text))
+        forms = {
+            form for secret in found if len(secret) >= 4 for form in _encodings(secret)
+        }
+        return sorted(forms, key=len, reverse=True)
 
     def redact(self, text: str) -> str:
-        """*text* from the server with this server's secret values removed.
+        """*text* from the server with this server's known secrets removed.
 
-        A server that echoes its own command line in an error would otherwise
-        carry tokens or keys passed to it into GAIA's logs.
+        The contract: GAIA's own messages never include a server's command,
+        arguments or env; text a server sends back is cleaned of exactly the
+        known secret values ``_secrets`` lists, in every form they can arrive
+        in, and of nothing else. Debug logs of raw traffic (``debug=True``)
+        can still hold other server output.
         """
         for secret in self._secrets():
             text = text.replace(secret, "<redacted>")
         return text
 
     def redact_value(self, value: Any) -> Any:
-        """*value* (a decoded reply) with every string in it redacted.
+        """*value* (a decoded reply) with every string in it redacted, keys too.
 
-        Cleaned before it is serialized: JSON escaping would hide a secret
-        containing a backslash from a search of the serialized text.
+        Cleaned before it is serialized, so a secret is matched as decoded
+        text rather than through JSON escaping.
         """
         if isinstance(value, str):
             return self.redact(value)
         if isinstance(value, dict):
-            return {k: self.redact_value(v) for k, v in value.items()}
+            return {
+                (self.redact(k) if isinstance(k, str) else k): self.redact_value(v)
+                for k, v in value.items()
+            }
         if isinstance(value, (list, tuple)):
             return [self.redact_value(v) for v in value]
         return value
