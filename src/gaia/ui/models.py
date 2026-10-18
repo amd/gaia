@@ -161,6 +161,8 @@ class ModelServerInfo(BaseModel):
     version: Optional[str] = None
     chat_model: Optional[LoadedModelInfo] = None
     embedding_model: Optional[LoadedModelInfo] = None
+    # One plain sentence when GAIA chose the embedder's backend for a reason.
+    embedding_note: Optional[str] = None
     default_backend: Optional[str] = None
     available_backends: List[BackendOption] = Field(default_factory=list)
     # The saved choice; None means Auto (Lemonade decides).

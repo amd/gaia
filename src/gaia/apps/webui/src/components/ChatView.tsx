@@ -925,8 +925,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     addAgentStep(step);
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
-                        // The model's phase ended with the call; the tool card says what runs now.
-                        useChatStore.getState().setLiveStatus(null);
+                        // The model's phase ended with the call; say a tool runs, not the model.
+                        useChatStore.getState().setLiveStatus(event.tool ? `Running ${event.tool}` : 'Running a tool');
                     }
                 }
             },

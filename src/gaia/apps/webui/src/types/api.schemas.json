@@ -2286,6 +2286,17 @@
           }
         ]
       },
+      "embedding_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Embedding Note"
+      },
       "error": {
         "anyOf": [
           {
