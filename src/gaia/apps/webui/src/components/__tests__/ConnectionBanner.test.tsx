@@ -29,10 +29,16 @@ describe('the model server is down', () => {
         expect(container).not.toHaveTextContent('lemonade-server serve');
     });
 
-    it('says why the status could not be read', () => {
-        useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_error: 'connection refused' } as SystemStatus });
-        render(<ConnectionBanner />);
-        expect(screen.getByText(/Could not read the model server's status: connection refused/)).toBeInTheDocument();
+    it('calls a model server whose health check failed busy, not stopped, and keeps the reason and remedy', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: false, lemonade_error: 'Lemonade health query failed', start_command: '/usr/bin/lemond',
+        } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent('The model server is not answering (Lemonade health query failed)');
+        expect(container).toHaveTextContent('may be busy');
+        expect(container).not.toHaveTextContent('stopped responding');
+        expect(container).toHaveTextContent('If it stays this way, restart it:');
+        expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });
 });
 

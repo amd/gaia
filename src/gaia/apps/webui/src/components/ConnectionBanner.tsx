@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
+import { modelServerHealth } from '../services/statusPoll';
 import './ConnectionBanner.css';
 
 /**
@@ -238,19 +239,21 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
 
     // Case 2: Backend is up but Lemonade Server is not running
     if (systemStatus && !systemStatus.lemonade_running) {
-        const queryFailed = Boolean(systemStatus.lemonade_error);
+        // Listening but failing its health check is often just busy; the backend can't yet say which.
+        const unresponsive = modelServerHealth(systemStatus) === 'unresponsive';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    {queryFailed
-                        ? `Could not read the model server's status: ${systemStatus.lemonade_error}`
+                    {unresponsive
+                        ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
                         : 'The model server stopped responding.'}{' '}
                     {systemStatus.start_command ? (
                         <span className="connection-banner__hint">
-                            To start it by hand, run <code>{systemStatus.start_command}</code>
+                            {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
+                            <code>{systemStatus.start_command}</code>
                         </span>
                     ) : systemStatus.start_instruction && (
                         <span className="connection-banner__hint">{systemStatus.start_instruction}</span>

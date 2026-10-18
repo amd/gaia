@@ -15,6 +15,7 @@ import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
+import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
 import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
@@ -114,32 +115,43 @@ function App() {
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
-    const checkSystemStatus = useCallback(async () => {
-        try {
-            const status = await api.getSystemStatus();
-            setBackendConnected(true);
-            if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
-            // One slow health probe under load is not an outage.
-            failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
-            const prev = useChatStore.getState().systemStatus;
-            if (status.lemonade_running || failCount.current >= LEMONADE_FAIL_THRESHOLD || !prev?.lemonade_running) {
-                setSystemStatus(status);
-            } else {
-                setSystemStatus({ ...prev, download_progress: status.download_progress });
-            }
-        } catch (err) {
-            log.system.warn('System status check failed', err);
+    const slowCount = useRef(0);
+    const applyStatus = useCallback((outcome: StatusOutcome) => {
+        if (outcome.kind === 'unreachable') {
+            log.system.warn('System status check failed', outcome.error);
             setBackendConnected(false);
             setSystemStatus(null);
+            return;
+        }
+        if (outcome.kind === 'slow') {
+            // A backend busy behind a slow model server is not gone; three missed answers in a row are.
+            slowCount.current += 1;
+            log.system.warn(`System status did not answer in time (${slowCount.current} in a row)`);
+            if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) {
+                setBackendConnected(false);
+                setSystemStatus(null);
+            }
+            return;
+        }
+        const { status } = outcome;
+        slowCount.current = 0;
+        setBackendConnected(true);
+        if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
+        // One slow health probe under load is not an outage.
+        failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
+        const prev = useChatStore.getState().systemStatus;
+        if (status.lemonade_running || failCount.current >= LEMONADE_FAIL_THRESHOLD || !prev?.lemonade_running) {
+            setSystemStatus(status);
+        } else {
+            setSystemStatus({ ...prev, download_progress: status.download_progress });
         }
     }, [setBackendConnected, setSystemStatus]);
+    const applyStatusRef = useRef(applyStatus);
+    applyStatusRef.current = applyStatus;
+    const [statusPoller] = useState(() => createStatusPoller((outcome) => applyStatusRef.current(outcome)));
+    const checkSystemStatus = statusPoller.check;
 
-    useEffect(() => {
-        void checkSystemStatus();
-        const fast = useChatStore.getState().systemStatus?.download_progress ? 2_000 : 5_000;
-        const t = setInterval(checkSystemStatus, fast);
-        return () => clearInterval(t);
-    }, [checkSystemStatus]);
+    useEffect(() => statusPoller.start(), [statusPoller]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');

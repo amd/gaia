@@ -103,6 +103,7 @@ async function apiFetch<T>(
     path: string,
     body?: unknown,
     extraHeaders?: Record<string, string>,
+    signal?: AbortSignal,
 ): Promise<T> {
     const url = `${API_BASE}${path}`;
     const t = log.api.time();
@@ -118,6 +119,7 @@ async function apiFetch<T>(
         // Content-Type cannot be accidentally overridden for body requests.
         headers: { ...UI_HEADER, ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
     };
 
     let res: Response;
@@ -166,8 +168,8 @@ async function apiFetch<T>(
 
 // -- System --------------------------------------------------------------------
 
-export async function getSystemStatus(): Promise<SystemStatus> {
-    return apiFetch<SystemStatus>('GET', '/system/status');
+export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
+    return apiFetch<SystemStatus>('GET', '/system/status', undefined, undefined, signal);
 }
 
 /** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
