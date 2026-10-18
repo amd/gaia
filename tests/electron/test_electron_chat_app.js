@@ -656,10 +656,10 @@ describe('Chat App Integration', () => {
       expect(storeContent).toContain('currentSessionId === id ? []');
     });
 
-    it('should have dark theme as default', () => {
+    it('should follow the OS theme by default', () => {
       // Pinned to the fallback argument itself -- a looser line-level match
       // also hits the `'light' | 'dark'` annotation and passes on any default.
-      expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]dark['"]/);
+      expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]system['"]/);
     });
 
     it('should have setShowDocLibrary and open/close settings actions', () => {
