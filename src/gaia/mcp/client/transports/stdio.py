@@ -37,14 +37,11 @@ _POLL_INTERVAL_S = 0.25
 # What counts as a known secret in a server's launch config. Server output
 # is cleaned of exactly these values; nothing else is guessed at.
 #
-# A name that holds a secret, for an env var or KEY=VALUE: API_KEY,
-# GITHUB_TOKEN, CLIENT_SECRET, DB_PASSWORD, OAUTH_CREDENTIALS. Not AUTHOR.
-_SECRET_NAME_PART = re.compile(r"key|token|secret|passw(?:or)?d|credential|auth")
-# The one word that matches "auth" without being a credential.
-_NOT_SECRET_WORDS = frozenset({"author", "authors"})
-# Words that make a flag's value a secret, matched whole: --api-key,
-# --access-token, --password. Not --max-tokens, --no-auth or --monkey-patch.
-_SECRET_FLAG_WORDS = frozenset(
+# A name holds a secret when its LAST word is one of these, matched whole:
+# API_KEY, GITHUB_TOKEN, CLIENT_SECRET, PROXY_AUTHORIZATION, --accessToken.
+# Not MAX_TOKENS, TOKENIZERS_PARALLELISM, AUTH_MODE, --token-limit,
+# --primary-key-id or AUTHOR.
+_SECRET_WORDS = frozenset(
     {
         "key",
         "apikey",
@@ -52,8 +49,12 @@ _SECRET_FLAG_WORDS = frozenset(
         "secret",
         "password",
         "passwd",
+        "pwd",
+        "passphrase",
         "credential",
         "credentials",
+        "auth",
+        "authorization",
     }
 )
 # user:pass@ or TOKEN@ in a URL; the value of an Authorization or Bearer header.
@@ -70,44 +71,47 @@ def _words(name: str) -> List[str]:
     return [word for word in re.split(r"[-_.]+", spaced.lower()) if word]
 
 
+def _names_a_secret(name: str) -> bool:
+    words = _words(name)
+    # --no-auth switches something off; it takes no value.
+    return bool(words) and words[-1] in _SECRET_WORDS and words[0] != "no"
+
+
 def _is_secret_flag(flag: str) -> bool:
-    """``--api-key``, ``--accessToken``: judged by whole words of the name."""
-    if not flag.startswith("-"):
-        return False
-    return any(word in _SECRET_FLAG_WORDS for word in _words(flag))
+    """``--api-key``, ``--accessToken``: the flag's last word names a secret."""
+    return flag.startswith("-") and _names_a_secret(flag)
 
 
 def _is_secret_name(name: str) -> bool:
-    """An env or KEY=VALUE name holding a secret: API_KEY, AUTHORIZATION.
-
-    Any word containing key, token, secret, password, credential or auth, so
-    GITHUB_TOKEN and PROXY_AUTHORIZATION count; AUTHOR and AUTHORS don't.
-    """
-    return any(
-        _SECRET_NAME_PART.search(word)
-        for word in _words(name)
-        if word not in _NOT_SECRET_WORDS
-    )
+    """An env or KEY=VALUE name holding a secret: API_KEY, AUTHORIZATION."""
+    return _names_a_secret(name)
 
 
 def _encodings(secret: str) -> List[str]:
     """*secret* in every form it can reach GAIA's text in.
 
-    Raw; JSON-escaped (inside a serialized reply or a non-object JSON line),
-    with and without ASCII escapes; and as GAIA's UTF-8 pipe decodes it with
-    ``errors="replace"`` when the server wrote it in a Windows code page.
+    Raw; JSON-escaped, ASCII-only (Python's json) and not (Node's
+    JSON.stringify); Python's backslash escapes (``\\xe9``, ``\\U0001f600``);
+    and as GAIA's UTF-8 pipe decodes what a server wrote in a Windows code
+    page, whether it encoded strictly, replaced what wouldn't fit with ``?``,
+    or wrote backslash escapes for it.
     """
-    forms = {
+    escaped = {
         secret,
         json.dumps(secret)[1:-1],
         json.dumps(secret, ensure_ascii=False)[1:-1],
+        secret.encode("ascii", "backslashreplace").decode("ascii"),
     }
-    for codepage in ("cp1252", "latin-1"):
-        try:
-            mangled = secret.encode(codepage).decode("utf-8", errors="replace")
-        except UnicodeEncodeError:
-            continue
-        forms.add(mangled)
+    forms = set(escaped)
+    # Any of those, written in a code page (a Windows server's default).
+    for form in escaped:
+        for codepage in ("cp1252", "latin-1"):
+            for errors in ("strict", "replace", "backslashreplace"):
+                try:
+                    written = form.encode(codepage, errors)
+                except UnicodeEncodeError:
+                    continue
+                forms.add(written.decode("utf-8", errors="replace"))
     return [form for form in forms if form]
 
 
@@ -288,13 +292,15 @@ class StdioTransport(MCPTransport):
 
         Exactly these, and nothing guessed from a value's shape:
 
-        - the value of an env var whose name looks secret (``*KEY*``,
-          ``*TOKEN*``, ``*SECRET*``, ``*PASSWORD*``, ``*CREDENTIAL*``,
-          ``*AUTH*`` but not ``AUTHOR``);
-        - the value after a secret flag, in ``--api-key v`` and
-          ``--api-key=v`` forms (whole words: ``key``, ``token``, ``secret``,
-          ``password``, ``credential``; so not ``--max-tokens``);
-        - ``KEY=VALUE`` where ``KEY`` looks secret by the same name rule;
+        - the value of an env var whose name ends in a secret word
+          (``API_KEY``, ``GITHUB_TOKEN``, ``PROXY_AUTHORIZATION``; the words
+          are ``_SECRET_WORDS``, matched whole after splitting on ``_``,
+          ``-``, ``.`` and camelCase, so ``MAX_TOKENS`` and ``AUTH_MODE``
+          are not);
+        - the value after a flag named the same way, in ``--api-key v`` and
+          ``--api-key=v`` forms (``--accessToken`` too; not ``--max-tokens``,
+          ``--token-limit`` or ``--no-auth``);
+        - ``KEY=VALUE`` where ``KEY`` is named the same way;
         - the userinfo of a URL (``user:pass@`` or ``TOKEN@``);
         - an Authorization or Bearer header value inside an argument.
 

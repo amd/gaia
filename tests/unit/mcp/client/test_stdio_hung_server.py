@@ -971,17 +971,25 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
             "--keyboard=dvorak",
             "--monkey-patch=true",
             "--author=Alice",
+            "max_tokens=4096",
+            "--token-limit=8000",
+            "--primary-key-id",
+            "42",
         ],
         env={
             "NODE_ENV": "production",
             "LOG_LEVEL": "debug",
             "AUTHOR": "Alice",
             "GIT_AUTHOR_NAME": "Alice Smith",
+            "TOKENIZERS_PARALLELISM": "false",
+            "MAX_TOKENS": "4096",
+            "AUTH_MODE": "oauth2",
         },
     )
     text = (
         f"max tokens 4096 on port 3000 and 8080 via stdio at info by Alice; "
-        f"production debug true {long_path} gpt2-xl dvorak Alice Smith"
+        f"production debug true {long_path} gpt2-xl dvorak Alice Smith "
+        "8000 false oauth2"
     )
     assert t.redact(text) == text
 
@@ -1001,45 +1009,80 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
             "Zq9vKe7wP2.tok",
             ["Zq9vKe7wP2.tok"],
         ),
-        # Raw, and as json.dumps writes it (ASCII-escaped, and not).
+        # A non-object line written as Python's json writes it (ASCII-escaped).
         (
             [],
-            {"GITHUB_TOKEN": 'Zq9v\\"Ke7wéP2'},
+            {"GITHUB_TOKEN": 'Zq9v\\"Ke7wéP2', "STUB_ASCII": "1"},
             'Zq9v\\"Ke7wéP2',
-            ['Zq9v\\"Ke7wéP2', 'Zq9v\\\\\\"Ke7w\\u00e9P2', 'Zq9v\\\\\\"Ke7wéP2'],
+            ['Zq9v\\"Ke7wéP2', 'Zq9v\\\\\\"Ke7w\\u00e9P2'],
         ),
-        # Raw, and as a cp1252 write decodes through a UTF-8 pipe.
+        # ... and as Node's JSON.stringify does (no ASCII escapes).
         (
             [],
-            {"API_KEY": "pässwörd1234"},
-            "pässwörd1234",
-            ["pässwörd1234", "p�ssw�rd1234"],
+            {"GITHUB_TOKEN": 'Zq9v\\"Ke7wéP2', "STUB_ASCII": "0"},
+            'Zq9v\\"Ke7wéP2',
+            ['Zq9v\\"Ke7wéP2', 'Zq9v\\\\\\"Ke7wéP2'],
+        ),
+        # stderr in cp1252, which has a euro sign; latin-1 has none.
+        (
+            [],
+            {"API_KEY": "p€ss1234", "STUB_ERRORS": "strict"},
+            "p€ss1234",
+            ["p€ss1234", "p�ss1234"],
+        ),
+        # A euro sign cp1252 holds, then an emoji it can't, written as an escape ...
+        (
+            [],
+            {"API_KEY": "Zq9v€😀Ke7w", "STUB_ERRORS": "backslashreplace"},
+            "Zq9v€😀Ke7w",
+            ["Zq9v€😀Ke7w", "Zq9v�\\U0001f600Ke7w"],
+        ),
+        # ... or replaced with "?".
+        (
+            [],
+            {"API_KEY": "Zq9v☃Ke7w", "STUB_ERRORS": "replace"},
+            "Zq9v☃Ke7w",
+            ["Zq9v☃Ke7w", "Zq9v?Ke7w"],
         ),
     ],
-    ids=["url-userinfo", "bearer-header", "json-escapes", "cp1252-env"],
+    ids=[
+        "url-userinfo",
+        "bearer-header",
+        "json-ascii",
+        "json-utf8",
+        "cp1252-euro",
+        "emoji-backslash",
+        "snowman-replace",
+    ],
 )
 def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
     tmp_path, args, env, secret, forms
 ):
-    """Raw, JSON-escaped in a non-object line, as a dict key, and cp1252-mangled."""
+    """Raw, JSON-escaped in a non-object line, as a dict key, and as a code
+    page writes it on stderr."""
     from gaia.mcp.client.mcp_client import MCPClient
 
     script = tmp_path / "echo_forms.py"
     script.write_text(textwrap.dedent("""
         import json, os, sys
         secret = sys.argv[-1]
+        ascii_only = os.environ.get("STUB_ASCII", "1") == "1"
+        errors = os.environ.get("STUB_ERRORS", "replace")
         for line in sys.stdin:
             req = json.loads(line)
             if req["method"] == "initialize":
                 sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
                                              "result": {}}) + "\\n")
             elif req["method"] == "tools/list":  # a non-object JSON line
-                sys.stdout.write(json.dumps("leaked " + secret) + "\\n")
+                # UTF-8 bytes, as Node writes them whatever the console code page.
+                line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
+                sys.stdout.flush()
+                sys.stdout.buffer.write((line + "\\n").encode("utf-8"))
             else:  # a dict-key echo in an error, then cp1252 bytes on stderr
                 sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
                     "error": {"code": 1, "message": {secret: secret}}}) + "\\n")
                 sys.stdout.flush()
-                sys.stderr.buffer.write(secret.encode("cp1252", "replace"))
+                sys.stderr.buffer.write(secret.encode("cp1252", errors))
                 sys.stderr.flush()
                 sys.exit(3)
             sys.stdout.flush()
@@ -1163,3 +1206,32 @@ def test_values_under_four_characters_are_not_matched():
     assert t.redact("abc stays: a short value would erase ordinary words") == (
         "abc stays: a short value would erase ordinary words"
     )
+
+
+def test_a_null_id_error_reply_is_cleaned(tmp_path):
+    """A parse-error reply carries no id; its message is the server's text."""
+    from gaia.mcp.client.mcp_client import MCPClient
+
+    secret = "Zq9vKe7wP2nullid"
+    script = tmp_path / "null_id.py"
+    script.write_text(
+        _PRELUDE
+        + textwrap.indent(
+            textwrap.dedent("""
+        send({"jsonrpc": "2.0", "id": None,
+              "error": {"code": -32700, "message": " ".join(sys.argv)}})
+        """),
+            "    ",
+        )
+    )
+    client = MCPClient.from_config(
+        "nullid",
+        {"command": sys.executable, "args": ["-u", str(script), "--api-key", secret]},
+    )
+    try:
+        assert client.connect() is False
+    finally:
+        client.disconnect()
+
+    assert "rejected 'initialize'" in client.last_error
+    assert secret not in client.last_error

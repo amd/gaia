@@ -1065,16 +1065,16 @@ def send_request(
     or env. Text the server sends back (stderr, errors, a validation error's
     schema, results in debug logs) is cleaned of the known secret values in
     its launch config, and of nothing else:
-    - env values whose name has a word containing key, token, secret,
-      password, credential or auth (`GITHUB_TOKEN`, `PROXY_AUTHORIZATION`),
-      except `AUTHOR` and `AUTHORS`;
-    - the value after a secret flag (`--api-key v`, `--token=v`,
-      `--accessToken v`), judged by whole words, so `--max-tokens=4096` is
-      left alone;
-    - `KEY=VALUE` where `KEY` looks secret by the name rule;
+    - env values whose name ends in a secret word, matched whole (key, token,
+      secret, password, credential, auth, authorization: `GITHUB_TOKEN`,
+      `PROXY_AUTHORIZATION`), so `MAX_TOKENS` and `AUTH_MODE` are left alone;
+    - the value after a flag named the same way (`--api-key v`, `--token=v`,
+      `--accessToken v`), so `--max-tokens=4096` and `--token-limit` are not;
+    - `KEY=VALUE` where `KEY` is named the same way;
     - a URL's userinfo (`user:pass@` or `TOKEN@`), and an Authorization or
       Bearer header value inside an argument.
-    Each is matched raw, JSON-escaped, and as a code-page-mangled decode;
+    Each is matched raw, JSON-escaped (ASCII-only and not), backslash-escaped,
+    and as a code page writes it (strict, `?` replacement or escapes);
     overlapping matches are removed together. Values under 4 characters are
     not matched, and a secret echoed as a JSON number is out of scope. A
     successful tool result is returned to the agent as the server sent it;
