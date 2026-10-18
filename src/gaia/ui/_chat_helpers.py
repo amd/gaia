@@ -1574,8 +1574,7 @@ def _dispatch_sidecar_query(
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
-    a sidecar connection error as a retryable Lemonade error and trigger a
-    bogus model reload.
+    a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError

@@ -152,10 +152,10 @@ class LemonadeContextOverflowError(LemonadeError):
     ``retryable`` is dynamic — set in ``_classify_lemonade_response`` based
     on the reported ``n_ctx``. When n_ctx is smaller than the active device
     profile's window (``active_profile_ctx_size``), the model was loaded with
-    the wrong ctx_size; reloading via the pre-flight helper will fix it, so we
-    mark retryable so the chat layer auto-recovers. When n_ctx is already at
-    the profile's full size, this is a genuine "conversation too big"
-    situation and retry won't help.
+    the wrong ctx_size; the next turn's pre-flight reloads it at the right
+    size, so sending the message again works (``reloadable``). When n_ctx is
+    already at the profile's full size, this is a genuine "conversation too
+    big" situation and sending it again won't help.
     """
 
     retryable = False  # set True dynamically below the profile's window
@@ -163,6 +163,15 @@ class LemonadeContextOverflowError(LemonadeError):
         "This conversation got too long for the model's context window. "
         "Start a fresh task to keep going."
     )
+
+    def mark_reloadable(self) -> "LemonadeContextOverflowError":
+        """The model was loaded with too small a window: say to send it again."""
+        self.retryable = True
+        self.user_message = (
+            "The model was loaded with a smaller context window than GAIA uses. "
+            "Send your message again: GAIA reloads it at the right size first."
+        )
+        return self
 
 
 def _loaded_below_profile(n_ctx: int, model: Optional[str] = None) -> bool:
@@ -216,9 +225,8 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
       and the first inference cold-start exceeds Lemonade's internal
       upstream timeout.
 
-    We mark this *non-retryable* because the chat layer's blind retry
-    will hit the same hung backend; surface a useful remediation
-    instead.
+    We mark this *non-retryable* because sending it again hits the same
+    hung backend; surface a useful remediation instead.
     """
 
     retryable = False
@@ -393,8 +401,8 @@ def _classify_lemonade_response(
         # Mark retryable when the model was loaded with an unexpectedly
         # small ctx (typical: 4096 from a pre-restart leftover, or 32K
         # from a Lemonade `lemonade load Gemma-4-E4B-it-GGUF` without
-        # ``--ctx-size``). The chat layer's auto-reload at the expected
-        # ctx will fix it, so let it try. The threshold is the ACTIVE
+        # ``--ctx-size``). The next turn's pre-flight reloads at the
+        # expected ctx, so sending it again works. The threshold is the ACTIVE
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
@@ -409,7 +417,7 @@ def _classify_lemonade_response(
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
         if _loaded_below_profile(n_ctx_reported, model):
-            err_instance.retryable = True
+            err_instance.mark_reloadable()
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,
     # hung llama-server child) from "Lemonade unreachable" (true network
@@ -523,7 +531,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         # Same threshold as ``_classify_lemonade_response``: below the active
         # profile's window the model was loaded wrong and a reload fixes it.
         if m and _loaded_below_profile(int(m.group(1))):
-            err.retryable = True
+            err.mark_reloadable()
         return err
     # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
     # hung) from real connectivity failures (#1030). The user-facing remediation

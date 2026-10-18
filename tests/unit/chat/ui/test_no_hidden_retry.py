@@ -95,3 +95,13 @@ async def test_non_streamed_turn_is_not_replayed_after_a_model_error(runtime):
 
     assert agent.tool_runs == 1, "the turn's tools ran again on a hidden retry"
     assert answer == LemonadeModelNotLoadedError.user_message
+
+
+def test_a_too_small_window_says_to_send_it_again():
+    """The one overflow a resend fixes must not say to start a fresh task."""
+    from gaia.llm.providers.lemonade import LemonadeContextOverflowError
+
+    err = LemonadeContextOverflowError().mark_reloadable()
+    assert err.retryable
+    assert "send your message again" in err.user_message.lower()
+    assert "fresh task" not in err.user_message.lower()
