@@ -185,6 +185,7 @@ export interface AgentStepResponse {
   label: string;
   latencyMs?: number | null;
   mcpServer?: string | null;
+  notice?: boolean | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;

@@ -352,6 +352,17 @@
         ],
         "title": "Mcpserver"
       },
+      "notice": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Notice"
+      },
       "planSteps": {
         "anyOf": [
           {

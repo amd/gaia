@@ -57,6 +57,16 @@ If the current prompt leaves no history budget, GAIA warns and sends no older
 turns; saved evidence remains intact. Switching to a model without native tool
 calling replays recorded calls and results as text.
 
+With context eviction turned on (`GAIA_CONTEXT_EVICTION=on`; off by default for
+now), a long, tool-heavy request (reading many documents, say) moves tool
+results GAIA has already read out of the prompt before they fill the model's
+context window. The agent's activity shows a line each time: "Moved 3 older
+tool results out of the prompt (~12.4K tokens); still readable." The TUI shows
+the same line in its transcript. Nothing is lost: each result is kept whole, and
+GAIA reads it again when a later step needs it. Your messages and its replies are
+sent as they are. See
+[Moving read tool results out of the prompt](/sdk/core/agent-system#moving-read-tool-results-out-of-the-prompt).
+
 For Fireworks, AMD gateway, and catalog-discovered cloud models, history admission uses a conservative 64K
 budget, independent of local device settings and `GAIA_CTX_SIZE`; this is not
 a claim about the remote model’s actual context capacity. Claude uses its provider

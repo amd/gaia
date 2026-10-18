@@ -882,6 +882,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
+                    if (status === 'context_reduced') {
+                        const step = agentEventToStep(event, stepIdRef);
+                        if (step) addAgentStep({ ...step, active: false, notice: true });
+                        return;
+                    }
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;

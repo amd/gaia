@@ -592,6 +592,8 @@ export interface AgentStep {
     success?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
+    /** A lasting notice (a context eviction); later status rows never merge into it. */
+    notice?: boolean;
     /** Plan steps (for type='plan'). */
     planSteps?: string[];
     /** Timestamp when this step started. */

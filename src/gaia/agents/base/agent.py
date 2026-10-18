@@ -55,15 +55,18 @@ from gaia.agents.base.console import (
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
+    DEFAULT_CONTEXT_EVICTION,
+    DEFAULT_EVICT_HEADROOM_TOKENS,
     DEFAULT_EVICT_KEEP_STEPS,
-    DEFAULT_EVICT_MIN_BATCH_TOKENS,
-    DEFAULT_EVICT_THRESHOLD_TOKENS,
     ContextEvictor,
     context_eviction_from_env,
+    evict_headroom_from_env,
     evict_keep_from_env,
     evict_min_batch_from_env,
     evict_threshold_from_env,
+    overflow_numbers,
     resolve_context_eviction,
+    shrink_for_overflow,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -2175,10 +2178,11 @@ Do NOT wrap conversational replies in JSON.
         skill_set: Optional[str] = None,
         resend_reasoning_across_requests: bool = False,
         max_output_tokens: Optional[int] = None,
-        context_eviction: str = "off",
-        context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
+        context_eviction: str = DEFAULT_CONTEXT_EVICTION,
+        context_eviction_threshold_tokens: Optional[int] = None,
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
-        context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
+        context_eviction_min_batch_tokens: Optional[int] = None,
+        context_eviction_headroom_tokens: int = DEFAULT_EVICT_HEADROOM_TOKENS,
     ):
         """
         Initialize the Agent with LLM client.
@@ -2227,20 +2231,21 @@ Do NOT wrap conversational replies in JSON.
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
                           LOCAL_MAX_OUTPUT_TOKENS otherwise.
-            context_eviction: "off" (default), "on" or "auto": evict tool
-                          results older than ``context_eviction_keep_steps``
-                          from the context sent to the model once the last
-                          measured prompt exceeds
-                          ``context_eviction_threshold_tokens`` and the
-                          evictable results add up to
-                          ``context_eviction_min_batch_tokens``. Each evicted
-                          result is archived whole and readable through
-                          ``read_tool_output``; the conversation log is not
-                          touched. "auto" is on only for a cloud model whose
-                          cached/uncached input price ratio is known and high
-                          enough (gaia.llm.cache_pricing). GAIA_CONTEXT_EVICTION,
-                          GAIA_EVICT_THRESHOLD, GAIA_EVICT_KEEP and
-                          GAIA_EVICT_MIN_BATCH override the four settings.
+            context_eviction: "off" (default), or "on" / "auto" to move tool results the
+                          model has already read out of the prompt, oldest
+                          first, when the next call plus one more capped result
+                          (``context_eviction_headroom_tokens``, 5000) would not
+                          fit the window less the reply's reserve and a margin;
+                          it stops once two would fit. Results seen by fewer
+                          than ``context_eviction_keep_steps`` model calls stay.
+                          Each is archived whole and re-readable through
+                          ``read_tool_output``; the conversation log and every
+                          user and assistant turn are untouched. Off, only the
+                          overflow retry runs. ``context_eviction_threshold_tokens``
+                          and ``context_eviction_min_batch_tokens`` pin an
+                          absolute trigger and batch size. GAIA_CONTEXT_EVICTION,
+                          GAIA_EVICT_HEADROOM, GAIA_EVICT_THRESHOLD,
+                          GAIA_EVICT_KEEP and GAIA_EVICT_MIN_BATCH override them.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
@@ -2430,8 +2435,13 @@ Do NOT wrap conversational replies in JSON.
         self._register_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
+        from gaia.config import gaia_home
 
-        self._output_artifacts = ArtifactStore()
+        # Put-away results go to disk under this run, so their handles outlive the TTL.
+        self.run_id = uuid.uuid4().hex
+        self._output_artifacts = ArtifactStore(
+            archive_dir=gaia_home() / "runs" / self.run_id / "results"
+        )
         if any(name != "read_tool_output" for name in self._tools_registry):
             self._register_output_reader()
 
@@ -2458,22 +2468,37 @@ Do NOT wrap conversational replies in JSON.
         # and cold-reloads the resident model.
         from gaia.llm.lemonade_client import cloud_model_provider
 
-        for name, value in (
-            ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
-            ("context_eviction_keep_steps", context_eviction_keep_steps),
-            ("context_eviction_min_batch_tokens", context_eviction_min_batch_tokens),
+        for name, value, optional in (
+            (
+                "context_eviction_headroom_tokens",
+                context_eviction_headroom_tokens,
+                False,
+            ),
+            (
+                "context_eviction_threshold_tokens",
+                context_eviction_threshold_tokens,
+                True,
+            ),
+            ("context_eviction_keep_steps", context_eviction_keep_steps, False),
+            (
+                "context_eviction_min_batch_tokens",
+                context_eviction_min_batch_tokens,
+                True,
+            ),
         ):
+            if optional and value is None:
+                continue
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer, got {value!r}.")
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
-        self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
-        )
+        self.context_eviction_enabled = resolve_context_eviction(mode)
         evictor = ContextEvictor(
+            headroom_tokens=evict_headroom_from_env()
+            or context_eviction_headroom_tokens,
+            keep_steps=evict_keep_from_env() or context_eviction_keep_steps,
             threshold_tokens=evict_threshold_from_env()
             or context_eviction_threshold_tokens,
-            keep_steps=evict_keep_from_env() or context_eviction_keep_steps,
             min_batch_tokens=evict_min_batch_from_env()
             or context_eviction_min_batch_tokens,
         )
@@ -2481,7 +2506,9 @@ Do NOT wrap conversational replies in JSON.
             evictor if self.context_eviction_enabled else None
         )
         # Set by the step head when a batch fires; the step's stats record takes it.
-        self._pending_eviction: Optional[Dict[str, int]] = None
+        self._pending_eviction: Optional[Dict[str, Any]] = None
+        # What the last overflow shrink put away, for its notice.
+        self._last_overflow_items: List[Dict[str, Any]] = []
 
         chat_config = AgentConfig(
             model=model_id or resolve_default_chat_model(),
@@ -6736,6 +6763,7 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             return None
 
+        self._evict_before_model_call(messages)
         request = (
             messages
             + self._unanswered_tool_call_messages(messages)
@@ -7558,63 +7586,184 @@ Do NOT wrap conversational replies in JSON.
             'Say "continue" once the service is back and I\'ll pick up from here.'
         )
 
+    def _context_window_tokens(self) -> int:
+        """The loaded window this agent's requests must fit in."""
+        from gaia.agents.base.history import context_window
+
+        return context_window(self)
+
+    def _evict_before_model_call(self, messages: List[Dict[str, Any]]) -> None:
+        """Put already-read tool results away if this request would crowd the window.
+
+        Only the sent list changes; ``conversation`` keeps every result.
+        """
+        if self._context_evictor is None:
+            return
+        from gaia.agents.base.artifacts import store_for
+
+        event = self._context_evictor.before_call(
+            messages,
+            store_for(self),
+            system_prompt=self.system_prompt,
+            tools=self._openai_tools,
+        )
+        if event is None:
+            return
+        pending = self._pending_eviction
+        if pending is not None:
+            # A step that ended before its stats record: count its batch too.
+            event = {
+                **event,
+                "evicted_results": pending["evicted_results"]
+                + event["evicted_results"],
+                "evicted_tokens_est": pending["evicted_tokens_est"]
+                + event["evicted_tokens_est"],
+            }
+        self._pending_eviction = event
+        self._publish_context_eviction(event)
+
+    def context_state(self) -> Dict[str, Any]:
+        """What the context panel shows: results the last request carried as stubs.
+
+        ``summarized`` is always ``None``: no conversation turn is ever folded.
+        """
+        if self._context_evictor is None:
+            return {"put_away": None, "summarized": None}
+        return self._context_evictor.context_state()
+
+    def _publish_context_eviction(self, event: Dict[str, Any]) -> None:
+        """Tell the console, so the user sees what was put away."""
+        hook = getattr(self.console, "print_context_eviction", None)
+        if hook is None:
+            return
+        try:
+            hook(event)
+        except Exception as e:  # noqa: BLE001 - a display hook must not fail a turn
+            logger.warning("console rejected the context eviction notice: %s", e)
+
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Aggressively shrink the messages array after a context-overflow.
+        """The sent list after the backend refused it as too long.
 
-        Strategy: keep the original user query, keep recent assistant tool_calls
-        and the LATEST tool result intact, but replace older tool-result
-        contents with a short stub. This preserves the structural shape of
-        the conversation (so the model can still reason about what tools have
-        been called) while dropping the bulk of the bytes.
-
-        Used by ``process_query``'s LLM-call retry loop when the model
-        reports ``exceed_context_size``. Returns a new list — the caller
-        must rebind ``messages``.
+        Every older tool result is put away (archived whole, re-readable via
+        ``read_tool_output``); a large result from the latest step keeps a
+        head preview and a handle to the rest, since it is often the one that
+        overflowed (#2780). Refusals, user and assistant turns stay; verbose
+        assistant text is clipped. Returns a new list — the caller must rebind
+        ``messages``.
         """
         if not messages:
             return messages
-        first = messages[0]  # user query
-        rest = messages[1:]
-        # Find indices of tool-result entries
-        tool_indices = [i for i, m in enumerate(rest) if m.get("role") == "tool"]
-        keep_intact = set(tool_indices[-1:]) if tool_indices else set()
-        shrunk_rest: List[Dict[str, Any]] = []
-        for i, m in enumerate(rest):
-            if m.get("role") == "tool" and i not in keep_intact:
-                # Replace bulky tool result with a stub — the model only
-                # needs to know SOMETHING was returned at this point.
-                shrunk_rest.append(
-                    {
-                        "role": "tool",
-                        "name": m.get("name", "unknown"),
-                        "tool_call_id": m.get("tool_call_id", "stub"),
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "[tool result omitted — context "
-                                    "overflow recovery; see latest result]"
-                                ),
-                            }
-                        ],
-                    }
-                )
-            elif (
+        from gaia.agents.base.artifacts import store_for
+
+        shrunk, self._last_overflow_items = shrink_for_overflow(
+            messages, store_for(self)
+        )
+        clipped: List[Dict[str, Any]] = []
+        for m in shrunk:
+            if (
                 m.get("role") == "assistant"
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought, but keep the
-                # rest of the turn — dropping ``tool_calls`` here orphans the
-                # tool results that follow it.
-                shrunk = dict(m)
-                shrunk["content"] = m["content"][:800] + "... (truncated)"
-                shrunk_rest.append(shrunk)
+                # Keep ``tool_calls``: dropping them orphans the results after.
+                clipped.append({**m, "content": m["content"][:800] + "... (truncated)"})
             else:
-                shrunk_rest.append(m)
-        return self._with_overflow_note([first] + shrunk_rest)
+                clipped.append(m)
+        return self._with_overflow_note(clipped)
+
+    def _shrink_for_overflow_retry(
+        self, messages: List[Dict[str, Any]], error_text: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """``(shrunk messages, report)``; the report says whether a retry fits.
+
+        A retry is worth it only when the shrink freed more than the request
+        was over by, or, with no numbers in the error, a tenth of the prompt.
+        Retrying a request that cannot fit only repeats the refusal (#2780).
+        """
+        counter = self._context_evictor or ContextEvictor()
+        system_prompt, tools = self.system_prompt, self._openai_tools
+        before = counter.raw_tokens(messages, system_prompt, tools)
+        shrunk = self._shrink_messages_for_overflow(messages)
+        after = counter.raw_tokens(shrunk, system_prompt, tools)
+        freed = max(0, before - after)
+        report: Dict[str, Any] = {
+            "freed_tokens_est": freed,
+            "evicted_results": len(getattr(self, "_last_overflow_items", [])),
+        }
+        numbers = overflow_numbers(error_text)
+        if numbers is not None:
+            requested, available = numbers
+            # Freed is in cl100k tokens; the backend counted in its own.
+            projected = (
+                requested - int(freed * requested / before) if before else requested
+            )
+            report.update(
+                requested_tokens=requested,
+                available_tokens=available,
+                projected_tokens=projected,
+                fits=projected <= int(available * 0.95),
+            )
+        else:
+            report["fits"] = before > 0 and freed >= before * 0.1
+        if report["fits"] and report["evicted_results"]:
+            self._publish_context_eviction(
+                {
+                    "reason": "overflow",
+                    "evicted_results": report["evicted_results"],
+                    "evicted_tokens_est": freed,
+                    "prompt_tokens_before": report.get("requested_tokens", before),
+                    "prompt_tokens_after": report.get("projected_tokens", after),
+                    "context_window": report.get("available_tokens"),
+                    "items": self._last_overflow_items,
+                }
+            )
+        return shrunk, report
+
+    def _retry_after_overflow_shrink(
+        self, messages: List[Dict[str, Any]], error: BaseException, step: int
+    ) -> bool:
+        """Shrink *messages* in place for one retry; False when it still cannot fit."""
+        shrunk, report = self._shrink_for_overflow_retry(messages, str(error))
+        if not report["fits"]:
+            self.error_history.append(
+                {
+                    "step": step,
+                    "error": str(error),
+                    "type": "llm_context_overflow_unrecoverable",
+                    **report,
+                }
+            )
+            logger.warning(
+                "Context overflow: putting older results away frees ~%d tokens, "
+                "not enough for the request to fit (%s); not retrying",
+                report["freed_tokens_est"],
+                report,
+            )
+            return False
+        messages[:] = shrunk
+        if self._context_evictor is not None:
+            for item in self._last_overflow_items:
+                self._context_evictor.remember_stub(item["artifact"], item["tokens"])
+            self._context_evictor.resync(
+                messages, self.system_prompt, self._openai_tools
+            )
+            self._context_evictor.note_sent(messages)
+        self.error_history.append(
+            {
+                "step": step,
+                "error": str(error),
+                "type": "llm_context_overflow_trimmed",
+                **report,
+            }
+        )
+        logger.warning(
+            "Context overflow: put %d results away (~%d tokens freed); retrying once",
+            report["evicted_results"],
+            report["freed_tokens_est"],
+        )
+        return True
 
     def _with_overflow_note(
         self, messages: List[Dict[str, Any]]
@@ -8823,7 +8972,9 @@ Do NOT wrap conversational replies in JSON.
             "unreachable": False,
         }
         if self._context_evictor is not None:
-            self._context_evictor.begin_turn()
+            self._context_evictor.begin_turn(
+                self._context_window_tokens(), self._max_output_tokens()
+            )
         self._pending_eviction = None
 
         # Add user query to the conversation history
@@ -8893,13 +9044,6 @@ Do NOT wrap conversational replies in JSON.
             steps_taken += 1
             step_timer.begin_step(steps_taken)
             logger.debug(f"Step {steps_taken}/{steps_limit}")
-            if self._context_evictor is not None:
-                from gaia.agents.base.artifacts import store_for
-
-                # Only the sent list changes; ``conversation`` keeps every result.
-                self._pending_eviction = self._context_evictor.evict(
-                    messages, steps_taken, store_for(self)
-                )
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -9288,6 +9432,7 @@ Do NOT wrap conversational replies in JSON.
             response_stats = None
             response_finish_reason = None
             response_reasoning = None
+            self._evict_before_model_call(messages)
 
             if self.streaming:
                 # Streaming mode - raw response will be streamed
@@ -9461,21 +9606,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop (streaming) — "
-                                "shrunk messages to %d entries and retrying",
-                                len(messages),
-                            )
                             _retried_after_trim_stream = True
-                            continue
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9661,25 +9796,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim:
-                            # Aggressive shrink: keep all message slots so the
-                            # model still sees its tool-call history, but cap
-                            # any single tool-result content to 500 chars and
-                            # drop all-but-last-2 tool results entirely.
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop — shrunk messages "
-                                "to %d entries and retrying once",
-                                len(messages),
-                            )
                             _retried_after_trim = True
-                            continue  # retry with smaller payload
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue  # retry with smaller payload
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9951,6 +10072,7 @@ Do NOT wrap conversational replies in JSON.
                     plan_reasoning = None
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
+                    self._evict_before_model_call(messages)
 
                     # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
@@ -9995,6 +10117,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
+                    self._evict_before_model_call(messages)
 
                     # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
@@ -10689,7 +10812,13 @@ Do NOT wrap conversational replies in JSON.
                 }
                 step_timer.attach(stats_record)
                 if self._pending_eviction is not None:
-                    stats_record.update(self._pending_eviction)
+                    stats_record.update(
+                        {
+                            k: v
+                            for k, v in self._pending_eviction.items()
+                            if k != "items"
+                        }
+                    )
                     self._pending_eviction = None
                 if self._context_evictor is not None:
                     self._context_evictor.note_prompt_tokens(perf_stats)

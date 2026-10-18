@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Session-scoped exact tool output with bounded, explicit continuation reads."""
 
+import hashlib
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Tuple
 from uuid import uuid4
 
@@ -14,12 +17,18 @@ PAGE_CHARS = 8000
 class ArtifactStore:
     """Retain exact text for one agent; never resolve another session's handle."""
 
-    def __init__(self, max_bytes=64 * 1024 * 1024, ttl=3600):
+    def __init__(
+        self, max_bytes=64 * 1024 * 1024, ttl=3600, archive_dir: Optional[Path] = None
+    ):
         self.max_bytes = max_bytes
         self.ttl = ttl
+        #: Where ``put_result`` keeps whole results on disk; ``None`` keeps them in memory.
+        self.archive_dir = Path(archive_dir) if archive_dir is not None else None
         self._items = {}
         #: handle -> [(offset, length), ...] for index entries 1..n.
         self._indexes = {}
+        #: Handles holding one whole tool result, which a bare ``read`` pages from 0.
+        self._whole = set()
         self._lock = threading.Lock()
 
     def put(self, text: str) -> str:
@@ -38,6 +47,66 @@ class ArtifactStore:
             self._items[handle] = (now, text, size)
             return handle
 
+    def put_result(self, text: str) -> str:
+        """Archive a whole tool result put away from the context.
+
+        The handle is a hash of the text, so the same result always gets the
+        same handle and a byte-identical stub, in any process; that keeps the
+        prompt cache. With ``archive_dir`` the text is also written there, so
+        the handle outlives ``ttl`` and the process.
+        """
+        data = text.encode("utf-8")
+        handle = "output_" + hashlib.sha256(data).hexdigest()[:32]
+        if self.archive_dir is not None:
+            path = self.archive_dir / f"{handle}.txt"
+            if not path.exists():
+                self.archive_dir.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(f".{uuid4().hex}.tmp")
+                tmp.write_bytes(data)
+                os.replace(tmp, path)
+        with self._lock:
+            now = time.monotonic()
+            item = self._items.get(handle)
+            if item is None:
+                self._items = {
+                    k: v for k, v in self._items.items() if now - v[0] < self.ttl
+                }
+                used = sum(v[2] for v in self._items.values())
+                if self.archive_dir is None and len(data) + used > self.max_bytes:
+                    raise ValueError(
+                        "Tool output archive is full (64 MiB default); request smaller output or start a new session."
+                    )
+            self._items[handle] = (now, text, len(data))
+            self._indexes[handle] = [(0, len(text))]
+            self._whole.add(handle)
+        return handle
+
+    def _revive(self, handle) -> None:
+        """Reload a whole result from ``archive_dir`` when memory has let it go. Lock held."""
+        if self.archive_dir is None or not isinstance(handle, str):
+            return
+        item = self._items.get(handle)
+        if item is not None and time.monotonic() - item[0] < self.ttl:
+            return
+        if not handle.startswith("output_") or not handle[7:].isalnum():
+            return
+        path = self.archive_dir / f"{handle}.txt"
+        if not path.is_file():
+            return
+        text = path.read_bytes().decode("utf-8")
+        self._items[handle] = (time.monotonic(), text, len(text.encode("utf-8")))
+        self._indexes[handle] = [(0, len(text))]
+        self._whole.add(handle)
+
+    def touch(self, handle: str) -> None:
+        """Restart a live handle's clock: a new stub now depends on it."""
+        with self._lock:
+            self._revive(handle)
+            item = self._items.get(handle)
+            if item is None or time.monotonic() - item[0] >= self.ttl:
+                raise ValueError(f"Unknown or expired output handle {handle}.")
+            self._items[handle] = (time.monotonic(), item[1], item[2])
+
     def set_index(self, handle: str, entries) -> None:
         """Record a handle's index so ``read(entry=n)`` returns entry ``n``."""
         with self._lock:
@@ -48,12 +117,14 @@ class ArtifactStore:
     def has(self, handle) -> bool:
         """Whether ``handle`` names live output in this store."""
         with self._lock:
+            self._revive(handle)
             item = self._items.get(handle) if isinstance(handle, str) else None
             return item is not None and time.monotonic() - item[0] < self.ttl
 
     def text(self, handle: str) -> str:
         """The whole archived text, for indexing it; the model pages via ``read``."""
         with self._lock:
+            self._revive(handle)
             item = self._items.get(handle)
             if item is None or time.monotonic() - item[0] >= self.ttl:
                 raise ValueError(f"Unknown or expired output handle {handle}.")
@@ -72,6 +143,11 @@ class ArtifactStore:
         page holds at most ``PAGE_CHARS``; ``remaining`` and ``next_offset``
         say where the rest of the requested span continues.
         """
+        with self._lock:
+            self._revive(handle)
+        if entry is None and not offset and limit is None and handle in self._whole:
+            # Small models drop the stub's entry=1; a whole result still comes back.
+            entry = 1
         if entry is not None:
             if offset:
                 raise ValueError("Pass entry or offset, not both.")
@@ -124,6 +200,7 @@ class ArtifactStore:
         if not isinstance(entry, int) or isinstance(entry, bool):
             raise ValueError(f"entry must be an index entry number, got {entry!r}.")
         with self._lock:
+            self._revive(handle)
             if handle not in self._items:
                 raise ValueError(
                     f"Unknown output handle {handle}; handles belong to the producing agent session."

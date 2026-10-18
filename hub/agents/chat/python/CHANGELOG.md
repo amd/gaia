@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `ChatAgentConfig.context_eviction` (still `"off"` by default) works on
+  headroom when turned on: tool results the model has already read move out of
+  the request when the next call
+  plus one more capped result (`context_eviction_headroom_tokens`, new, 5000)
+  would not fit the window less the reply's reserve; each stays re-readable via
+  `read_tool_output`. `context_eviction_threshold_tokens` and
+  `context_eviction_min_batch_tokens` now default to `None` and
+  `context_eviction_keep_steps` to 2 (was 8). `"auto"` no longer depends on a
+  cloud model's cached-input price. Requires the matching `amd-gaia` core.
+
 ## 0.2.0
 
 - When `generate_image` fails, the prompt asks for its error in a sentence or two

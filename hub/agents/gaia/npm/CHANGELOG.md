@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A context overflow no longer throws away the evidence.** A task that read
+  many documents used to fill a 32K–64K window, after which the overflow retry
+  dropped every older result and the answer was built on whatever was left.
+  The retry now keeps each result whole behind a handle the model can re-read,
+  says so in the activity and TUI transcript, and retries only when the request
+  will then fit. Opt-in with `GAIA_CONTEXT_EVICTION=on`: older tool results
+  move out of the prompt *before* the window fills, so the overflow never
+  happens. Conversation turns are never touched.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

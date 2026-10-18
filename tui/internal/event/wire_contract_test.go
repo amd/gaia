@@ -20,6 +20,7 @@ type canonicalEventsFixture struct {
 		StdioExtension []string `json:"stdio_extension"`
 		PhaseExtension []string `json:"phase_extension"`
 		HistoryCut     []string `json:"history_cut_extension"`
+		ContextReduced []string `json:"context_reduced_extension"`
 	} `json:"events"`
 }
 
@@ -75,6 +76,7 @@ func TestCanonicalEventStructsMatchTheSharedFixture(t *testing.T) {
 		}
 		want := append(append(append([]string(nil), spec.Fields...), spec.StdioExtension...), spec.PhaseExtension...)
 		want = append(want, spec.HistoryCut...)
+		want = append(want, spec.ContextReduced...)
 		sort.Strings(want)
 		if got := jsonFields(v); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s decodes %v, fixture says %v", etype, got, want)

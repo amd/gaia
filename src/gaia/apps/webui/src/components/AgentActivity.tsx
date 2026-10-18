@@ -144,6 +144,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
         const result: AgentStep[] = [];
         for (const step of steps) {
             const prev = result[result.length - 1];
+            if (step.notice || prev?.notice) {
+                result.push(step);
+                continue;
+            }
             // Merge consecutive thinking steps — concatenate details
             if (step.type === 'thinking' && prev && prev.type === 'thinking') {
                 const merged = (prev.detail || '') + (step.detail || '');
@@ -360,7 +364,7 @@ function FlowStatus({ step }: { step: AgentStep }) {
     const text = step.detail || step.label || '';
     if (!text) return null;
     return (
-        <div className={`flow-thought ${step.active ? 'active' : ''}`}>
+        <div className={`flow-thought ${step.active ? 'active' : ''} ${step.notice ? 'flow-notice' : ''}`}>
             <span className="flow-thought-text">{text}</span>
         </div>
     );

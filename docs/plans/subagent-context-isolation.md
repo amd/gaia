@@ -24,7 +24,7 @@ The problem is real and measured: a retrieval-heavy turn runs out of context aft
 Order of work:
 
 1. **Ship #1973 (artifact store) regardless.** It caps a single oversized payload. Orthogonal to everything below, already scoped, already has a design PR.
-2. **Make the existing overflow shrink proactive** — a few days, reuses shipped code, captures most of the benefit. Details in [Alternative C](#alternative-c--proactive-result-eviction).
+2. **Make the existing overflow shrink proactive** — a few days, reuses shipped code, captures most of the benefit. Details in [Alternative C](#alternative-c--proactive-result-eviction). **Built:** on by default; see the decided open question below.
 3. **Time-box a `delegate` prototype and run the cold-start-prompt eval.** If Gemma-4-E4B writes usable child prompts, the design in [If we build it](#if-we-build-it) is sound and the plumbing already exists. If it doesn't, close this and keep the shrink.
 
 Sub-agents should never become an architecture here — only an opt-in tool the flagship may call. That distinction is the whole reason this isn't #674.
@@ -167,6 +167,6 @@ The ideas borrowed above (deny-only inheritance, final-text-only return, depth c
 
 ## Open questions
 
-- Does the compaction ban extend to Alternative C, or was it aimed only at summarizing *conversation* turns? This blocks the cheapest fix and is a one-line decision.
+- ~~Does the compaction ban extend to Alternative C, or was it aimed only at summarizing *conversation* turns?~~ **Answered by the context efficiency plan (`context-efficiency.md`, #5263): it doesn't extend to C.** Already-read tool results may move behind retrievable handles before the window fills, and every move is announced; summarizing conversation turns stays out unless an experiment shows it wins. That plan carries the `CLAUDE.md` wording. C is built as its headroom-triggered reducer (`src/gaia/agents/base/context_eviction.py`, [SDK docs](../sdk/core/agent-system.mdx)).
 - Should `delegate` be exposed to skills, or reserved for the flagship's own turn planning?
 - Is there production telemetry appetite? `GAIA_TURN_LOG` already records per-turn prefill and history size (`turn_metrics.py:162-172`) but is dev-only and off by default — so nobody knows how often overflow actually fires. That number would settle this argument better than any of the reasoning above.

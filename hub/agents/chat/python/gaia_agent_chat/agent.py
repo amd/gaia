@@ -51,9 +51,9 @@ from gaia.agents.base.checks import (
 )
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
+    DEFAULT_CONTEXT_EVICTION,
+    DEFAULT_EVICT_HEADROOM_TOKENS,
     DEFAULT_EVICT_KEEP_STEPS,
-    DEFAULT_EVICT_MIN_BATCH_TOKENS,
-    DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.memory import MemoryMixin
@@ -232,16 +232,15 @@ class ChatAgentConfig:
     # None = per-model default (larger for Lemonade cloud models).
     max_output_tokens: Optional[int] = None
 
-    # Evict tool results older than ``keep_steps`` from the context sent to
-    # the model (never from the log) once the measured prompt is over the
-    # threshold and the batch is worth a cache break; each stays readable via
-    # read_tool_output. "auto" is on only for a cloud model whose cached-input
-    # price ratio (gaia.llm.cache_pricing) makes it pay. GAIA_CONTEXT_EVICTION,
-    # GAIA_EVICT_THRESHOLD, GAIA_EVICT_KEEP and GAIA_EVICT_MIN_BATCH win.
-    context_eviction: str = "off"
-    context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS
+    # Move tool results the model has already read out of the prompt (never out
+    # of the log) when the next call plus one more capped result would not fit;
+    # each stays re-readable via read_tool_output. See Agent.__init__ for the
+    # settings and the GAIA_EVICT_* overrides.
+    context_eviction: str = DEFAULT_CONTEXT_EVICTION
+    context_eviction_headroom_tokens: int = DEFAULT_EVICT_HEADROOM_TOKENS
     context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS
-    context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS
+    context_eviction_threshold_tokens: Optional[int] = None
+    context_eviction_min_batch_tokens: Optional[int] = None
 
     # Debug/output settings
     debug: bool = False
@@ -615,6 +614,7 @@ class ChatAgent(
             context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
             context_eviction_keep_steps=config.context_eviction_keep_steps,
             context_eviction_min_batch_tokens=config.context_eviction_min_batch_tokens,
+            context_eviction_headroom_tokens=config.context_eviction_headroom_tokens,
         )
 
         # Without this, throwaway scripts land in the user's project. One path

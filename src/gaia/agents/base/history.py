@@ -252,8 +252,8 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
     return result
 
 
-def history_budget(agent: Any, query: str) -> int:
-    """Reserve prompt, tools, output and safety margin for any transport."""
+def context_window(agent: Any) -> int:
+    """The window, in tokens, the agent's requests must fit in."""
     from gaia.llm.lemonade_client import (
         GPU_CTX_SIZE,
         LemonadeClient,
@@ -281,6 +281,12 @@ def history_budget(agent: Any, query: str) -> int:
             model=getattr(agent, "model_id", None),
             device=getattr(agent, "device", None),
         )
+    return ctx
+
+
+def history_budget(agent: Any, query: str) -> int:
+    """Reserve prompt, tools, output and safety margin for any transport."""
+    ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))

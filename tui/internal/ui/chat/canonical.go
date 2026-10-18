@@ -96,7 +96,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 
 		// Kept in the transcript, not the live line: it explains later answers.
-		if e.HistoryCut != nil {
+		if e.HistoryCut != nil || e.ContextReduced != nil {
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: truncateRunes(clean(e.Message), narrationMax),
