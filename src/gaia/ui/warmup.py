@@ -301,6 +301,10 @@ def wait_for_warm_up(timeout: float = 300.0, *, handler=None) -> None:
     With an SSE *handler*, the turn shows what the warm-up is doing, and a
     Stop (``handler.cancelled``) ends the wait at once; the caller checks
     ``cancelled`` afterwards.
+
+    Raises:
+        TimeoutError: the warm-up is still running after *timeout* seconds;
+            the turn does not race it for the model.
     """
     warmer = _warmer
     if warmer is None or warmer.wait(0):
@@ -325,12 +329,12 @@ def wait_for_warm_up(timeout: float = 300.0, *, handler=None) -> None:
                 )
                 shown = message
         if time.monotonic() >= deadline:
-            logger.warning(
-                "Warm-up still running after %ss (%s); sending the turn anyway",
-                timeout,
-                warmer.phase() or "starting",
+            raise TimeoutError(
+                f"The start-up warm-up was still {warmer.phase() or 'starting'} "
+                f"after {timeout:g} s, so this turn did not start. Check that "
+                "Lemonade is running (`gaia init --check`), then send the "
+                "message again."
             )
-            return
 
 
 def warm_up_status() -> Dict[str, Any]:

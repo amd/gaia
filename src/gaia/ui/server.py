@@ -269,6 +269,11 @@ def _run_scheduled_prompt(
         agent = GaiaAgent(config)
     agent._incognito_reason = "memory_off"
     agent._cancel_event = cancel_event
+    console = getattr(agent, "console", None)
+    if cancel_event is not None and console is not None:
+        # The agent stops a streaming model reply when its console is cancelled.
+        if getattr(console, "cancelled", None) is None:
+            console.cancelled = cancel_event
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
@@ -276,56 +281,52 @@ def _run_scheduled_prompt(
     return str(result) if result else ""
 
 
-# How long a timed-out scheduled run's thread gets to stop before the model is freed.
-_SCHEDULE_STOP_GRACE_SECONDS = 10.0
+# How often a scheduled run that is still stopping says so in the log.
+_SCHEDULE_STOP_LOG_SECONDS = 60.0
 
 
 class _ScheduledRuns:
     """Runs scheduled prompts one at a time, in line with chat turns.
 
     A run waits in the turn queue (it builds and drives an agent on the same
-    model), gets *timeout* seconds once it reaches the model, and on timeout
-    is told to stop. A run whose thread ignores that keeps the next run from
-    starting, so stuck threads never pile up.
+    model) and gets *timeout* seconds once it reaches the model. On timeout
+    its agent is told to stop, a model reply in progress included, and the
+    run keeps its place on the model until its thread has actually stopped:
+    chats wait in line meanwhile and see that they are waiting.
     """
 
     def __init__(self, db: ChatDatabase, timeout: float):
         self._db = db
         self._timeout = timeout
-        self._stuck: Optional[threading.Thread] = None
 
     async def run(self, prompt: str) -> str:
         from gaia.ui.agent_threads import run_in_own_thread
         from gaia.ui.turn_queue import turn_queue
 
-        if self._stuck is not None and self._stuck.is_alive():
-            raise RuntimeError(
-                "Scheduled run not started: the previous one is still stopping "
-                f"after its {self._timeout:g}s timeout (a tool it called has not "
-                "returned). It will run at its next time; raise "
-                "GAIA_SCHEDULE_TIMEOUT if the task needs longer."
-            )
         await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
         try:
             cancel = threading.Event()
-            thread_box: dict = {}
-
-            def work() -> str:
-                thread_box["thread"] = threading.current_thread()
-                return _run_scheduled_prompt(self._db, prompt, cancel_event=cancel)
-
-            worker = run_in_own_thread(work, name="gaia-scheduled-run")
+            worker = run_in_own_thread(
+                lambda: _run_scheduled_prompt(self._db, prompt, cancel_event=cancel),
+                name="gaia-scheduled-run",
+            )
             done, _ = await asyncio.wait({worker}, timeout=self._timeout)
             if done:
                 return worker.result()
             cancel.set()
-            done, _ = await asyncio.wait({worker}, timeout=_SCHEDULE_STOP_GRACE_SECONDS)
-            if not done:
-                self._stuck = thread_box.get("thread")
+            waited = 0.0
+            while True:
+                done, _ = await asyncio.wait(
+                    {worker}, timeout=_SCHEDULE_STOP_LOG_SECONDS
+                )
+                if done:
+                    break
+                waited += _SCHEDULE_STOP_LOG_SECONDS
                 logger.error(
-                    "Scheduled run still running %.0fs after its %gs timeout; "
-                    "freeing the model, and the next run waits for it to exit",
-                    _SCHEDULE_STOP_GRACE_SECONDS,
+                    "Scheduled run still stopping %.0fs after its %gs timeout; "
+                    "it keeps the model until it does (a tool it called has not "
+                    "returned)",
+                    waited,
                     self._timeout,
                 )
             raise asyncio.TimeoutError(

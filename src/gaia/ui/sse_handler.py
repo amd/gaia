@@ -555,6 +555,9 @@ class SSEOutputHandler(OutputHandler):
         # The turn's place on the model (``turn_queue.TurnSlot``); given up
         # while a prompt or question waits on the user. None outside a chat run.
         self.turn_slot = None
+        # Re-checks the model once the turn has its place back: another chat
+        # may have unloaded or reloaded it meanwhile. Raises when it can't.
+        self.on_model_regained = None
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
         self.background_mode: bool = background_mode
@@ -1859,6 +1862,15 @@ class SSEOutputHandler(OutputHandler):
             if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
                 # Withdrawn from the line: the turn must not use the model.
                 self.cancelled.set()
+            elif not self.cancelled.is_set() and self.on_model_regained is not None:
+                try:
+                    self.on_model_regained()
+                except Exception as exc:  # pylint: disable=broad-except
+                    # The model the turn needs is gone and can't be loaded:
+                    # end the turn before the approved tool runs, and say why.
+                    logger.error("Model check after the user answered failed: %s", exc)
+                    self._emit({"type": "agent_error", "content": str(exc)})
+                    self.cancelled.set()
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""

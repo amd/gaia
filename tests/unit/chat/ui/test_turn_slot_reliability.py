@@ -420,7 +420,7 @@ async def test_a_turn_waiting_in_line_keeps_its_stream_alive(runtime):
     sid = rt.db.create_session()["id"]
     await rt.queue.acquire("another-chat")
     try:
-        with patch.object(helpers, "_QUEUED_KEEPALIVE_SECONDS", 0.05):
+        with patch.object(helpers, "_QUEUED_KEEPALIVE_SECONDS", 0.05, create=True):
             await _start_detached(await _send(rt, sid, "queued"))
             run = rt.manager.get(sid)
             q = run.subscribe()
@@ -433,3 +433,46 @@ async def test_a_turn_waiting_in_line_keeps_its_stream_alive(runtime):
     finally:
         rt.queue.release()
         await _cleanup(rt, sid)
+
+
+@pytest.mark.parametrize("model_still_loads", [True, False])
+async def test_the_model_is_checked_again_before_an_approved_tool_runs(
+    runtime, model_still_loads
+):
+    rt = runtime
+    ran = []
+
+    def a_turn(agent):
+        allowed = agent.console.confirm_tool_execution("run_shell_command", {"c": 1})
+        if allowed:
+            ran.append("tool")
+        return f"allowed={allowed}"
+
+    a, _ = _seed(rt.db, a_turn)
+    preflight = helpers._maybe_load_expected_model  # the fixture's mock
+    try:
+        await _start_detached(await _send(rt, a, "do it"))
+        run_a = rt.manager.get(a)
+        await _until(lambda: run_a.handler is not None and run_a.handler.waiting_on())
+        assert preflight.call_count == 1
+        if not model_still_loads:
+            # Another chat unloaded it, and it no longer fits.
+            preflight.side_effect = RuntimeError("Not enough free memory to load M")
+
+        _answer_permission(run_a.handler)
+        await asyncio.wait_for(run_a.task, 5)
+
+        assert preflight.call_count == 2, "the model was not checked after the wait"
+        events = _events(run_a)
+        if model_still_loads:
+            assert ran == ["tool"]
+        else:
+            assert ran == [], "the approved tool ran without its model"
+            assert any(
+                e["type"] == "agent_error" and "free memory" in e["content"]
+                for e in events
+            )
+            assert events[-1].get("cancelled") is True
+    finally:
+        preflight.side_effect = None
+        await _cleanup(rt, a)

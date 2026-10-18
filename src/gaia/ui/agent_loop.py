@@ -507,6 +507,8 @@ class AgentLoop:
         except asyncio.CancelledError:
             cancel_event.set()
             sse_handler.cancelled.set()
+            # The session stays held until the thread has stopped.
+            self._lingering_ticks[session_id] = worker
             raise
         if not done:
             logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)

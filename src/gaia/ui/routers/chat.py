@@ -265,8 +265,17 @@ async def send_message(
 async def _release_after(thread: threading.Thread, session_lock: asyncio.Lock):
     """Free a chat once the agent thread of its stopped turn has exited."""
     # Polled, not joined: a join would hold a worker of the shared executor.
+    # No limit: the thread still drives this chat's agent until it exits.
+    waited = 0.0
     while thread.is_alive():
         await asyncio.sleep(0.5)
+        waited += 0.5
+        if waited % 300 == 0:
+            logger.warning(
+                "A stopped chat's agent thread is still running after %.0f s; "
+                "the chat stays busy until it returns",
+                waited,
+            )
     session_lock.release()
 
 

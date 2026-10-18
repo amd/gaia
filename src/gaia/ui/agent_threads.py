@@ -13,11 +13,12 @@ nothing to the pool and can be left to finish on its own.
 from __future__ import annotations
 
 import asyncio
-import logging
 import threading
 from typing import Any, Callable
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def run_in_own_thread(fn: Callable[[], Any], *, name: str) -> asyncio.Future:

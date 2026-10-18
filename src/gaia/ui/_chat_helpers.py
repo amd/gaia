@@ -3052,6 +3052,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # Let the agent loop observe stream-timeout/disconnect so a hung
                 # turn is torn down instead of leaking this producer thread.
                 agent._cancel_event = cancel_event
+                # Another chat may change the loaded model while this turn
+                # waits on the user; check it again before continuing.
+                sse_handler.on_model_regained = lambda: _maybe_load_expected_model(
+                    _effective_model(agent, model_id), sse_handler
+                )
 
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
                 # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value

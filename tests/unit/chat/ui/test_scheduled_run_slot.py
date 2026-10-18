@@ -56,9 +56,12 @@ def test_scheduled_run_waits_for_the_chat_holding_the_model(monkeypatch, queue):
         client.portal.call(scenario)
 
 
-def test_timed_out_scheduled_run_stops_and_does_not_pile_up(monkeypatch, queue):
+def test_timed_out_scheduled_run_stops_and_keeps_the_model_until_it_has(
+    monkeypatch, queue
+):
     monkeypatch.setenv("GAIA_SCHEDULE_TIMEOUT", "0.2")
-    monkeypatch.setattr(server, "_SCHEDULE_STOP_GRACE_SECONDS", 0.2, raising=False)
+    # An older build freed the model after this grace even if still running.
+    monkeypatch.setattr(server, "_SCHEDULE_STOP_GRACE_SECONDS", 0.1, raising=False)
     unstick = threading.Event()
     calls = []
 
@@ -73,14 +76,20 @@ def test_timed_out_scheduled_run_stops_and_does_not_pile_up(monkeypatch, queue):
             executor = client.app.state.scheduler._executor
 
             async def scenario():
-                with pytest.raises(asyncio.TimeoutError):
-                    await asyncio.wait_for(executor("first"), 5)
-                assert calls[0] is not None and calls[0].is_set()
-                assert not queue.locked(), "a timed-out run must free the model"
-
-                with pytest.raises(RuntimeError, match="still"):
-                    await asyncio.wait_for(executor("second"), 5)
+                first = asyncio.create_task(executor("first"))
+                await asyncio.sleep(0.6)
+                assert calls[0] is not None and calls[0].is_set(), "not told to stop"
+                # Still running: it keeps the model, so others wait in line.
+                assert queue.locked() and not first.done()
+                second = asyncio.create_task(executor("second"))
+                await asyncio.sleep(0.2)
                 assert len(calls) == 1, "a second run started on top of the stuck one"
+
+                unstick.set()
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(first, 5)
+                assert await asyncio.wait_for(second, 5) == "late"
+                assert not queue.locked()
 
             client.portal.call(scenario)
     finally:
