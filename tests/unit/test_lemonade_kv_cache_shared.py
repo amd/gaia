@@ -17,7 +17,13 @@ from gaia.llm.providers.lemonade import (
     _classify_lemonade_response,
     classify_lemonade_exception,
 )
-from gaia.llm.retry import KV_CACHE_SHARED_REASON, classify_http_failure
+from gaia.llm.retry import (
+    KV_CACHE_SHARED_REASON,
+    ModelCallRetrier,
+    RetryPolicy,
+    RetryState,
+    classify_http_failure,
+)
 
 MODEL = "Gemma-4-E4B-it-GGUF"
 
@@ -151,3 +157,23 @@ def test_text_completions_take_the_model_lease(stream):
         if stream:
             list(result)
     assert leased == [MODEL]
+
+
+def test_a_collision_after_output_is_not_replayed():
+    """Mid-stream, a retry would repeat what the user already saw: the
+    collision is surfaced (and marked transient) instead."""
+    import openai
+
+    def open_stream():
+        yield "partial answer"
+        raise openai.APIError(SHARED_BODY, request=MagicMock(), body=None)
+
+    state = RetryState()
+    retrier = ModelCallRetrier(RetryPolicy(), sleep=lambda _s: None)
+    seen = []
+    with pytest.raises(openai.APIError):
+        for item in retrier.stream(open_stream, is_output=bool, state=state):
+            seen.append(item)
+    assert seen == ["partial answer"]
+    assert state.attempts == 1 and state.output_delivered
+    assert state.last_reason == KV_CACHE_SHARED_REASON
