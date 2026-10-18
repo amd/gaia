@@ -38,9 +38,6 @@ type fakeRelay struct {
 	// queryBody when that is set.
 	queryStatus int
 	queryBody   string
-	// sidecarGone models a daemon that restarted: it has no sidecar, so every
-	// relay route answers 503 until the agent is ensured again.
-	sidecarGone bool
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
@@ -112,6 +109,9 @@ type fakeRelay struct {
 	bypassStatus   int
 	auths          []string
 	versionHits    int
+	// sidecarGone models a daemon that restarted: it has no sidecar, so every
+	// relay route answers 503 until the agent is ensured again.
+	sidecarGone bool
 }
 
 // confirmCall is one recorded POST .../query/{run_id}/confirm.
