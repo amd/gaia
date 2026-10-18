@@ -799,6 +799,12 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         logger.warning("system status: %s", exc)
         status.config_error = str(exc)
 
+    # The last Settings or post-download load, if it failed.
+    if _last_load_failure:
+        _probe_failed(status, "load", _last_load_failure)
+    else:
+        _probe_ok("load")
+
     # Disk space
     # Access shutil through gaia.ui.server so test patches on
     # "gaia.ui.server.shutil.disk_usage" take effect correctly.
@@ -1218,6 +1224,10 @@ class LoadModelRequest(BaseModel):
     force: bool = False
 
 
+# The last background model load's failure, until a load succeeds.
+_last_load_failure: Optional[str] = None
+
+
 def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> None:
     """Load a model the way a chat turn does: broker lease, then the load lock.
 
@@ -1236,10 +1246,19 @@ def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> 
                 model_name, ctx_size=ctx_size, prompt=False, timeout=600
             )
     except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
+        global _last_load_failure  # pylint: disable=global-statement
         logger.error("%s failed: %s", log_context, exc)
+        # Shown by /api/system/status until a load succeeds.
+        _last_load_failure = f"{log_context} failed: {exc}"
         return
+    _clear_load_failure()
     note_model_loaded(model_name)
     logger.info("%s succeeded", log_context)
+
+
+def _clear_load_failure() -> None:
+    global _last_load_failure  # pylint: disable=global-statement
+    _last_load_failure = None
 
 
 def _chats_answering() -> list:

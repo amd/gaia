@@ -73,8 +73,14 @@ def lemonade(monkeypatch):
     monkeypatch.setattr(LemonadeManager, "get_base_url", lambda: _URL)
     monkeypatch.setattr(httpx, "get", health_get)
     monkeypatch.setattr(lemonade_choice, "is_users_server", lambda _url: False)
-    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda _model: 65536)
-    monkeypatch.setattr(lemonade_client, "LemonadeClient", lambda **_kw: client)
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *_a, **_k: 65536)
+
+    class FakeClient:
+        # A class, not a lambda: code under test also isinstance-checks it.
+        def __new__(cls, **_kw):
+            return client
+
+    monkeypatch.setattr(lemonade_client, "LemonadeClient", FakeClient)
     monkeypatch.setattr(broker_client, "model_lease", lease)
     monkeypatch.setattr(helpers, "_models_loaded_here", set(), raising=False)
     state["client"] = client
@@ -205,6 +211,15 @@ def title_client(monkeypatch):
         return client
 
     monkeypatch.setattr(lemonade_client, "LemonadeClient", make)
+    leases = []
+
+    @contextmanager
+    def lease(model, **kwargs):
+        leases.append((model, kwargs.get("priority")))
+        yield None
+
+    monkeypatch.setattr(broker_client, "model_lease", lease)
+    client.leases = leases
     posts = []
 
     class NoRawPosts:
@@ -254,6 +269,8 @@ def test_title_runs_on_the_side_slot_under_the_lease(title_client):
     assert title == "Trip To Lisbon"
     assert posts == []
     assert made[-1]["model_lease_priority"] == "background"
+    # One lease spans the residency check and the call.
+    assert client.leases == [("Gemma-4-E4B-it-GGUF", "background")]
     kwargs = client.chat_completions.call_args.kwargs
     assert kwargs["id_slot"] == lemonade_client.SIDE_SLOT
     assert kwargs["auto_download"] is False
@@ -350,3 +367,117 @@ def test_names_are_matched_the_way_lemonade_reports_them(lemonade):
 
     unloaded = [c.args[0] for c in lemonade["client"].unload_model.call_args_list]
     assert unloaded == ["mine-old-gguf"]
+
+
+# ── A turn stopped during the pre-flight never sends its query ───────────────
+
+
+class _CountingAgent:
+    def __init__(self):
+        self.model_id = "Mine-GGUF"
+        self.conversation_history = []
+        self.indexed_files = set()
+        self._cancel_event = None
+        self.console = None
+        self.queries = 0
+
+    def _register_tools(self):
+        pass
+
+    def process_query(self, _message):
+        self.queries += 1
+        return {"result": "answered"}
+
+
+@pytest.mark.parametrize("wait_ends", ["returns", "raises"])
+def test_a_turn_stopped_while_waiting_for_the_model_never_queries(
+    lemonade, monkeypatch, wait_ends
+):
+    import json
+    from unittest.mock import AsyncMock
+
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.run_manager import RunManager
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="Mine-GGUF", agent_type="chat")
+    sid = session["id"]
+    agent = _CountingAgent()
+    helpers._agent_cache.clear()
+    helpers._store_agent(sid, "Mine-GGUF", [], agent, "chat")
+    monkeypatch.setattr("gaia.ui.run_manager.run_manager", RunManager())
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
+
+    def press_stop_while_waiting(_model, _kwargs):
+        helpers._active_sse_handlers[sid].cancelled.set()
+        if wait_ends == "raises":
+            # What a broker wait cancelled by the turn's Stop raises.
+            raise RuntimeError("stopped while waiting for the model slot")
+
+    lemonade["lease"] = press_stop_while_waiting
+
+    async def run_turn():
+        events = []
+        request = ChatRequest(session_id=sid, message="hi", stream=True)
+        async for chunk in helpers._stream_chat_response(db, session, request):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[len("data: ") :]))
+        return events
+
+    try:
+        events = asyncio.run(run_turn())
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+
+    assert agent.queries == 0, "the query went to a model nobody loaded"
+    lemonade["client"].load_model.assert_not_called()
+    done = [e for e in events if e.get("type") == "done"]
+    assert done and done[-1].get("cancelled") is True
+    assert not [e for e in events if e.get("type") == "error"]
+
+
+# ── A restart still knows which models are GAIA's own ────────────────────────
+
+
+@pytest.mark.parametrize("users_server,adopted", [(False, True), (True, False)])
+def test_models_resident_at_startup_on_gaias_server_count_as_its_own(
+    lemonade, monkeypatch, users_server, adopted
+):
+    from gaia.ui import server
+
+    lemonade["resident"] = [_model("Mine-Old-GGUF")]
+    monkeypatch.setattr(lemonade_choice, "is_users_server", lambda _u: users_server)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"all_models_loaded": list(lemonade["resident"])}
+    resp.raise_for_status = lambda: None
+    monkeypatch.setattr(httpx, "get", lambda *_a, **_k: resp)
+
+    server._adopt_resident_chat_models(_URL, {})
+
+    assert helpers._loaded_here("Mine-Old-GGUF") is adopted
+
+
+@pytest.mark.allow_network
+def test_a_failed_settings_load_shows_in_the_status(ui, monkeypatch):
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.ui.routers import system as system_mod
+
+    client, loads, _held, _order = ui
+    failing = MagicMock()
+    failing.load_model.side_effect = LemonadeClientError("backend rocm is missing")
+
+    class FailingClient:
+        def __new__(cls, **_kw):
+            return failing
+
+    monkeypatch.setattr(lemonade_client, "LemonadeClient", FailingClient)
+    monkeypatch.setattr(system_mod, "_last_load_failure", None)
+
+    system_mod._load_through_the_slot("Mine-GGUF", 65536, "Load Mine-GGUF")
+
+    warnings = client.get("/api/system/status").json()["probe_warnings"]
+    assert any("backend rocm is missing" in w for w in warnings)

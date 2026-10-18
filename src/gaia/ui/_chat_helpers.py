@@ -2043,7 +2043,7 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -2170,19 +2170,9 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         from gaia.daemon.broker_client import model_lease
         from gaia.llm.lemonade_client import LemonadeClient
 
-        def _slot_busy(reason: str) -> None:
+        def _slot_was_busy(reason: str) -> None:
+            # Called after the grant; the wait itself is the broker's to show.
             logger.info("Pre-flight for %s: %s", model_id, reason)
-            if sse_handler is not None:
-                sse_handler._emit(
-                    {
-                        "type": "status",
-                        "status": "working",
-                        "message": "Waiting for the model: another app is using it",
-                    }
-                )
-
-        def _stopped() -> bool:
-            return sse_handler is not None and sse_handler.cancelled.is_set()
 
         # Interactive priority: this pre-flight is on the user's turn, so it
         # must jump ahead of queued background loads (embedder warm-ups,
@@ -2195,11 +2185,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         # and this interactive request would then queue behind it on the lock —
         # where the broker's priority ordering has no say, silently defeating
         # the priority it just asked for.
-        with model_lease(model_id, priority="interactive", on_wait=_slot_busy):
-            if _stopped() or not _take_model_load_lock(sse_handler):
+        with model_lease(model_id, priority="interactive", on_wait=_slot_was_busy):
+            if stopped() or not _take_model_load_lock(sse_handler):
                 return
             try:
-                if _stopped():
+                if stopped():
                     return
                 # Re-check after acquiring the lock: another thread may have
                 # already loaded the expected model with sufficient context.
@@ -2267,6 +2257,26 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             "Lemonade is running (`gaia init --check`), then send the message "
             "again."
         ) from exc
+
+
+def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+    """Load *model_id* at the window a turn needs before it is queried.
+
+    See :func:`_preflight_load` for what is checked, loaded and raised. A
+    turn stopped while this waits (``sse_handler.cancelled``) loads nothing:
+    whatever the wait raised then, the Stop is why, so this returns and the
+    caller sees the turn as cancelled.
+    """
+
+    def stopped() -> bool:
+        return sse_handler is not None and sse_handler.cancelled.is_set()
+
+    try:
+        _preflight_load(model_id, sse_handler, stopped)
+    except Exception:
+        if not stopped():
+            raise
+        logger.info("Pre-flight for %s ended by Stop", model_id)
 
 
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
@@ -3087,6 +3097,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 _maybe_load_expected_model(
                     _effective_model(agent, model_id), sse_handler
                 )
+                # Stopped while waiting for the model: nothing was loaded,
+                # so the turn must not send its query either.
+                if sse_handler.cancelled.is_set():
+                    return
 
                 # -- Phase 5: Query processing.  One automatic retry on
                 # known-transient Lemonade errors (model evicted between
