@@ -220,7 +220,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    ```
    Confirm [src/gaia/apps/webui/package.json](../../../src/gaia/apps/webui/package.json) now reads the new version.
 
-6. **Bump the hub component manifests.** The terminal hub and Agent UI publish to
+6. **Bump the hub component manifests.** The Terminal UI (component id `terminal-hub`) and Agent UI publish to
    the Agent Hub R2 catalog on a version tag, and `release_components.yml` gates
    the tag against each manifest — R2 paths are immutable, so publishing under a
    stale version cannot be undone. A mismatch **fails the release**, by design.
@@ -231,7 +231,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    grep -H '^version:' hub/components/*/gaia-agent.yaml   # both must read <version>
    ```
 
-   Then bump the terminal hub's **`min_gaia_version`** to `<version>` too. It needs
+   Then bump the Terminal UI's **`min_gaia_version`** to `<version>` too. It needs
    daemon host API v1.1, which no release before this one ships — so the release it
    publishes alongside *is* its minimum, and `release_components.yml` refuses to
    publish it under an older core. Leave `agent-ui`'s alone: it talks to
@@ -378,9 +378,9 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    git fetch --tags origin
    python util/check_flagship_release.py --ref "$MERGED_SHA"
    ```
-   If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the terminal-hub version the lock pins is on the hub, and terminal-hub normally publishes only on the final tag, which this gate blocks.
+   If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
    1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python hub/agents/gaia/python/packaging/stamp_version.py`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry.
-   2. **Publish terminal-hub first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its agent-ui and Windows-setup legs fail because there is no GitHub release or new flagship yet; they publish nothing. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its agent-ui and Windows-setup legs fail because there is no GitHub release or new flagship yet; they publish nothing. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
    3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
    4. Land the `binaries.lock.json` it regenerated (its log prints it) and re-run Phase 3 on that commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 
