@@ -649,6 +649,7 @@ export interface ModelServerInfo {
   chat_model?: LoadedModelInfo | null;
   default_backend?: string | null;
   embedding_model?: LoadedModelInfo | null;
+  embedding_note?: string | null;
   error?: string | null;
   owner: string;
   port?: number | null;

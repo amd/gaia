@@ -79,3 +79,18 @@ it('opens the chat from the conversation detail', async () => {
     expect(useChatStore.getState().currentSessionId).toBe(TITLED_ID);
     expect(useChatStore.getState().showMemoryDashboard).toBe(false);
 });
+
+it('labels a conversation search hit by its chat title', async () => {
+    mockedApi.searchMemoryConversations.mockResolvedValue([
+        { id: 7, session_id: TITLED_ID, role: 'user', content: 'My favourite colour is teal', context: 'global', timestamp: '2026-10-16T00:00:00Z' },
+    ] as never);
+    render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
+    await screen.findByText('Remember teal and Calgary office');
+    fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'teal' } });
+
+    expect(await screen.findByText('My favourite colour is teal')).toBeInTheDocument();
+    expect(screen.getByText('Remember teal and Calgary office')).toBeInTheDocument();
+    expect(screen.queryByText(/c2639b15/)).not.toBeInTheDocument();
+});

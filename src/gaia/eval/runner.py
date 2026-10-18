@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -30,10 +31,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import requests
 import yaml
 
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import SKIPPED_STATUSES
 
 logger = logging.getLogger(__name__)
@@ -177,8 +180,6 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
     Raises on any transport or parse failure — a provenance check that guesses
     is worth nothing.
     """
-    import requests  # local import — only needed when a scenario actually runs
-
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
     response = requests.get(url, timeout=timeout)
     response.raise_for_status()
@@ -352,6 +353,12 @@ def validate_scenario(path: Path, data: dict) -> None:
                 f"setup.index_documents[{i}]: missing 'path' field "
                 "(required so the runner can verify the file exists before running)"
             )
+
+    approve_error = validate_approve_prompts(
+        (data.get("setup") or {}).get("approve_prompts")
+    )
+    if approve_error:
+        errors.append(approve_error)
 
     declined = (data.get("setup") or {}).get("decline_commands")
     if declined is not None and (
@@ -1559,10 +1566,15 @@ def run_scripted_scenario(
 ):
     """Run one scenario, scripting the user's denials around it when it asks.
 
+    Every scenario's permission prompts are answered at once under its
+    ``setup.approve_prompts``, and whatever it leaves running on the backend
+    is stopped before the next one starts (:class:`ScenarioBackend`).
+
     ``setup.decline_commands`` scripts a user who says no to those commands
     and answers no questions, then is cleared so it never leaks into the next
     scenario.
     """
+    kwargs.setdefault("scenario_backend", ScenarioBackend(backend_url, scenario_data))
     declined = _decline_commands(scenario_data)
     if not declined:
         return run_scenario_subprocess(
@@ -1599,6 +1611,71 @@ def run_scripted_scenario(
     return result
 
 
+#: After a timeout, how long the killed driver's pipes get to drain.
+_DRIVER_DRAIN_S = 30
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill *proc* and every process it started.
+
+    Killing only ``claude`` leaves its MCP server holding the output pipes, so
+    reading them blocks and the timeout fires minutes late.
+    """
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+    """Run the eval driver; on timeout kill its whole process tree, then raise.
+
+    Returns a ``CompletedProcess`` with text output, or raises
+    ``subprocess.TimeoutExpired`` once the tree is dead.
+    """
+    popen_kwargs = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
+    proc = subprocess.Popen(  # pylint: disable=consider-using-with
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+        **popen_kwargs,
+    )
+    try:
+        stdout, stderr = proc.communicate(input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=_DRIVER_DRAIN_S)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "Eval driver (pid %s) still held its output %ss after it was "
+                "killed; abandoning its pipes.",
+                proc.pid,
+                _DRIVER_DRAIN_S,
+            )
+        raise
+    except BaseException:
+        _kill_tree(proc)
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def run_scenario_subprocess(
     _scenario_path,
     scenario_data,
@@ -1611,8 +1688,13 @@ def run_scenario_subprocess(
     extra_corpus_dirs=None,
     agent_type=None,
     attempt=None,
+    scenario_backend=None,
 ):
-    """Invoke claude -p for one scenario. Returns parsed result dict."""
+    """Invoke claude -p for one scenario. Returns parsed result dict.
+
+    *scenario_backend*, when given, answers the scenario's permission prompts
+    while the driver runs and cleans the backend up after it.
+    """
     scenario_id = scenario_data["id"]
     mailbox_error = _apply_mailbox_fixture(backend_url, scenario_data)
     if mailbox_error:
@@ -1693,21 +1775,31 @@ def run_scenario_subprocess(
         ]
     )
 
+    if scenario_backend is not None:
+        try:
+            scenario_backend.start()
+        except requests.RequestException as e:
+            error = (
+                f"Could not watch {scenario_id}'s sessions on the backend at "
+                f"{backend_url}: {e}. Check the Agent UI backend is running."
+            )
+            print(f"[INFRA_ERROR] {scenario_id}: {error}", flush=True)
+            return {
+                "scenario_id": scenario_id,
+                "category": scenario_data.get("category", "unknown"),
+                "status": "INFRA_ERROR",
+                "overall_score": None,
+                "turns": [],
+                "error": error,
+                "elapsed_s": 0.0,
+                "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
+            }
+
     print(f"\n[RUN] {scenario_id} — invoking claude -p ...", flush=True)
     start = time.time()
 
     try:
-        proc = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            cwd=str(REPO_ROOT),
-            check=False,
-        )
+        proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
         elapsed = time.time() - start
 
         if proc.returncode != 0:
@@ -1835,6 +1927,13 @@ def run_scenario_subprocess(
             "elapsed_s": elapsed,
             "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
         }
+    except BaseException:
+        if scenario_backend is not None:
+            scenario_backend.abort()
+        raise
+
+    if scenario_backend is not None:
+        scenario_backend.finish(result)
 
     # Inject category from scenario YAML — eval agent doesn't include this field
     result.setdefault("category", scenario_data.get("category", "unknown"))
@@ -1879,10 +1978,12 @@ def run_scenario_subprocess(
     elif result.get("turns"):
         # Turns exist but all have null overall_score (dimension scores missing).
         # Nullify the scenario score rather than silently propagating the LLM's value.
-        print(
-            f"[WARN] {scenario_id} — all turn scores are null, setting overall_score=None",
-            file=sys.stderr,
-        )
+        # Turns read back after a timeout were never judged; no warning for those.
+        if any(t.get("judged") is not False for t in result["turns"]):
+            print(
+                f"[WARN] {scenario_id} — all turn scores are null, setting overall_score=None",
+                file=sys.stderr,
+            )
         result["overall_score"] = None
 
     # Deterministic status re-derivation: apply rubric rules to recomputed scores.
@@ -2739,6 +2840,8 @@ class AgentEvalRunner:
                         attempt=(attempt_idx if self.iterations > 1 else None),
                     )
                 )
+                if attempts[-1].get("backend_not_idle"):
+                    break
             result = summarize_attempts(attempts)
             if self.iterations > 1:
                 # The summarized result is what resume must reload — never one
@@ -2751,6 +2854,18 @@ class AgentEvalRunner:
 
             completed[sid] = result.get("status")
             progress_path.write_text(json.dumps(completed, indent=2), encoding="utf-8")
+
+            not_idle = next(
+                (a["backend_not_idle"] for a in attempts if a.get("backend_not_idle")),
+                None,
+            )
+            if not_idle:
+                remaining = len(scenarios) - len(results)
+                aborted = (
+                    f"Stopped after {sid}: {not_idle} {remaining} scenario(s) were "
+                    "not run."
+                )
+                break
 
             signature = _infra_error_signature(result)
             if signature is None or (infra_streak and infra_streak[0] != signature):
@@ -2862,6 +2977,11 @@ class AgentEvalRunner:
                     agent_type=self.agent_type,
                 )
                 rerun_results.append(result)
+                if result.get("backend_not_idle"):
+                    raise RuntimeError(
+                        f"Fix mode stopped after re-running {sid}: "
+                        f"{result['backend_not_idle']}"
+                    )
 
             # Merge: keep passing scenarios from current scorecard, replace with rerun results
             rerun_map = {r.get("scenario_id"): r for r in rerun_results}

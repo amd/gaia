@@ -22,6 +22,10 @@ def test_startup_then_eviction_preserves_requested_window(monkeypatch, window):
 
     monkeypatch.setenv("GAIA_CTX_SIZE", str(window))
     monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
+    # The fixture server is the model server; a real daemon would outlive the test.
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_service.ensure_daemon_owns_lemonade", lambda *a, **k: None
+    )
     loaded = []
     loads = []
 
