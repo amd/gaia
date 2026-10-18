@@ -6,8 +6,8 @@
    `components` layer and inline utilities still win over them.
 
    These primitives are the shared vocabulary every page composes from. They
-   live here, not as ad-hoc Tailwind chains per page, so the landing, hub and
-   agent-detail pages cannot drift from each other.
+   live here, not as ad-hoc Tailwind chains per page, so pages cannot drift
+   from each other.
 
    Type sizes use clamp() so the 1200px design collapses sanely on small
    screens: the design's stated value is always the upper bound. */
