@@ -5,10 +5,12 @@
 # The worker's test suite guards the shared catalog contract (POST /publish,
 # index.json shape) that every hub agent release and the website depend on —
 # previously it was local-only, so a contract regression could reach main
-# without any CI ever running the suite. This workflow only tests; the Worker
-# is deployed by release_components.yml's deploy-worker job, immediately
-# before it publishes to it (a Worker older than the manifests it validates
-# rejects valid releases).
+# without any CI ever running the suite. A release deploys the Worker from
+# release_components.yml's deploy-worker job, immediately before it publishes
+# to it (a Worker older than the manifests it validates rejects valid
+# releases). A dispatch with `deploy` checked deploys it on its own, so a
+# Worker fix can go live and a failed hub publish can be re-run without
+# cutting a release.
 
 name: Agent Hub Worker CI
 
@@ -22,13 +24,20 @@ on:
     paths:
       - 'workers/agent-hub/**'
       - '.github/workflows/agent_hub_worker_ci.yml'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the Worker to production after the tests pass'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: agent-hub-worker-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a dispatch: it may be mid-deploy.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   test:
@@ -54,3 +63,65 @@ jobs:
 
       - name: Unit tests (vitest)
         run: npm test
+
+  # Same steps as release_components.yml's deploy-worker. The worker-deploy
+  # environment holds the Cloudflare secrets and restricts deploys to main and
+  # release tags, so a dispatch from any other branch is refused.
+  deploy:
+    name: Deploy Agent Hub Worker
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    runs-on: ubuntu-latest
+    environment: worker-deploy
+    defaults:
+      run:
+        working-directory: workers/agent-hub
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: workers/agent-hub/package-lock.json
+
+      - run: npm ci
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ]  || missing="${missing} CLOUDFLARE_API_TOKEN"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "${missing}" ]; then
+            echo "::error::missing environment secret(s) on worker-deploy:${missing}. See workers/agent-hub/README.md."
+            exit 1
+          fi
+          npx wrangler deploy --var WORKER_BUILD:"${GITHUB_SHA}"
+          echo "deployed ${GITHUB_SHA}"
+
+      # The publish origin, not the custom domain: that is where CI uploads go.
+      - name: Verify the deployed build is live
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          base="${GAIA_HUB_PUBLISH_URL:-}"
+          if [ -z "${base}" ]; then
+            echo "::error::repository variable GAIA_HUB_PUBLISH_URL is empty, so there is no publish origin to verify. Set it at repository level. See workers/agent-hub/README.md."
+            exit 1
+          fi
+          for i in 1 2 3 4 5 6; do
+            live="$(curl -fsS --max-time 15 "${base}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
+            if [ "${live}" = "${GITHUB_SHA}" ]; then
+              echo "${base} is serving ${GITHUB_SHA}"
+              exit 0
+            fi
+            echo "attempt ${i}: ${base}/health reports build='${live:-<none>}', want '${GITHUB_SHA}'; retrying in 5s"
+            sleep 5
+          done
+          echo "::error::${base} is not serving the build just deployed (wanted ${GITHUB_SHA}). Check the Cloudflare dashboard."
+          exit 1
