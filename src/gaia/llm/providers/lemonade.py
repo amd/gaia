@@ -176,9 +176,9 @@ class LemonadeKVCacheSharedError(LemonadeError):
 
     retryable = True
     user_message = (
-        "Another request was using the model's memory at the same time, so "
-        "this one could not fit — your conversation is not too long. Send "
-        "your message again."
+        "The model ran out of working memory, most likely because another "
+        "request was using it at the same time. Send your message again; if "
+        "it keeps happening, the conversation may be too long for the model."
     )
 
 

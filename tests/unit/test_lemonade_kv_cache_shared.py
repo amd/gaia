@@ -94,7 +94,7 @@ def test_user_is_not_told_to_start_a_fresh_task():
     assert isinstance(classified, LemonadeKVCacheSharedError)
     assert classified.retryable
     assert "fresh task" not in classified.user_message
-    assert "not too long" in classified.user_message
+    assert "send your message again" in classified.user_message.lower()
 
 
 def test_response_envelope_classified_as_shared():

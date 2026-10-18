@@ -4772,7 +4772,6 @@ class LemonadeClient:
             try:
                 return _request_with_retry()
             except (requests.exceptions.RequestException, LemonadeClientError) as e:
-                _forget_resident(self.base_url)
                 # Use helper to handle auto-download and retry (#2513: only
                 # when *e* is actually the missing-model condition).
                 return self._execute_with_auto_download(
@@ -4785,11 +4784,7 @@ class LemonadeClient:
         """:meth:`_stream_completions_leased`, holding the model's lease for
         the whole stream, as chat streaming does."""
         with self._model_slot_lease(model):
-            try:
-                yield from self._stream_completions_leased(model=model, **kwargs)
-            except BaseException:
-                _forget_resident(self.base_url)
-                raise
+            yield from self._stream_completions_leased(model=model, **kwargs)
 
     def _stream_completions_leased(
         self,
