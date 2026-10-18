@@ -2715,9 +2715,9 @@ func (m *ChatModel) trackUserWait(now time.Time) {
 	}
 }
 
-// queuedStallNotice names a queued follow-up that went quiet. A turn waiting
-// for the model is never this quiet (queue updates come every few seconds), so
-// silence is not taken for a queue wait and the diagnostic step stays.
+// queuedStallNotice names a queued follow-up that went quiet. Silence is never
+// read as a wait for the model: no queue updates reach the TUI yet, and once a
+// sidecar forwards them they will count as events and reset the quiet clock.
 func (m ChatModel) queuedStallNotice() string {
 	return fmt.Sprintf(
 		"[!] the queued follow-up has had no update for %s. If no other chat or app is "+
