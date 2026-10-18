@@ -70,8 +70,7 @@ type CanonicalStatusEvent struct {
 	GaiaVersion  string `json:"gaia_version,omitempty"`
 	// Phase names what the model is doing while nothing else is on the wire:
 	// "loading_model", "downloading_model", "reading", "reasoning" or
-	// "tool_call", or "model_queue" while the turn waits for the shared model.
-	// Empty on narration and on agents that predate it. Words
+	// "tool_call". Empty on narration and on agents that predate it. Words
 	// (reasoning) and Chars (tool_call) count the progress so far.
 	Phase string `json:"phase,omitempty"`
 	Words int    `json:"words,omitempty"`

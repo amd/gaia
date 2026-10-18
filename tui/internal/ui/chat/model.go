@@ -440,9 +440,6 @@ type ChatModel struct {
 	err          error
 	queryStart   time.Time // tracks when the current query started
 	lastEventAt  time.Time // when the running turn last heard from the agent
-	// modelQueue is the agent's latest "waiting for the model" status this turn,
-	// "" once anything else arrives.
-	modelQueue string
 	// userWait is how long this turn sat on a question or permission prompt;
 	// the answer's timing excludes it so the user's pause isn't read as slowness.
 	userWait      time.Duration
@@ -1057,10 +1054,6 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.lastEventAt = time.Now()
-		m.modelQueue = ""
-		if st, ok := msg.event.(event.CanonicalStatusEvent); ok && st.Phase == "model_queue" {
-			m.modelQueue = st.Message
-		}
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
@@ -1128,15 +1121,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if stalled, recheck := m.queuedStallCheck(time.Now()); !stalled {
 			return m, queuedSendWatchdogAfter(msg.turnSeq, recheck)
 		}
-		notice := fmt.Sprintf(
-			"[!] the queued follow-up has had no update for %s. If no other chat or app is "+
-				"using the model, check `gaia daemon status`. Press Esc (or Ctrl+C) to stop waiting.",
-			queuedSendTimeout)
-		if m.modelQueue != "" {
-			notice = "[!] the queued follow-up is still waiting for the model: " + m.modelQueue +
-				". Press Esc (or Ctrl+C) to stop waiting."
-		}
-		m.messages = append(m.messages, Message{Role: RoleStatus, Content: notice})
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: m.queuedStallNotice()})
 		m.updateViewport()
 		return m, nil
 
@@ -2728,6 +2713,16 @@ func (m *ChatModel) trackUserWait(now time.Time) {
 		// The agent was silent because it waited on the user; its quiet starts now.
 		m.lastEventAt = now
 	}
+}
+
+// queuedStallNotice names a queued follow-up that went quiet. A turn waiting
+// for the model is never this quiet (queue updates come every few seconds), so
+// silence is not taken for a queue wait and the diagnostic step stays.
+func (m ChatModel) queuedStallNotice() string {
+	return fmt.Sprintf(
+		"[!] the queued follow-up has had no update for %s. If no other chat or app is "+
+			"using the model, check `gaia daemon status`. Press Esc (or Ctrl+C) to stop waiting.",
+		queuedSendTimeout)
 }
 
 // queuedStallCheck reports whether a queued follow-up has gone quiet long

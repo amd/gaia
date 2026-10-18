@@ -119,8 +119,9 @@ func TestQueuedSendStalledNoticeKeepsTheDiagnosticWithoutAQueueSignal(t *testing
 	}
 }
 
-// When the agent said it is queued for the model, the notice says that instead.
-func TestQueuedSendStalledNoticeNamesAReportedModelQueue(t *testing.T) {
+// A turn queued for the model hears an update every couple of seconds, so it
+// is never quiet long enough to be called stalled.
+func TestQueueUpdatesKeepAQueuedFollowUpFromBeingCalledStalled(t *testing.T) {
 	m := newTestChat(t)
 	m.turnSeq = 1
 	m.streaming = true
@@ -130,17 +131,34 @@ func TestQueuedSendStalledNoticeNamesAReportedModelQueue(t *testing.T) {
 		Message: "Waiting for the model — gaia-chat is using it, 2nd in line (40s)"}
 	updated, _ := m.Update(eventMsg{ch: ch, event: queued})
 	m = updated.(ChatModel)
-	m.lastEventAt = time.Now().Add(-4 * time.Minute)
 
-	updated, _ = m.Update(queuedSendStalledMsg{turnSeq: 1})
+	if stalled, _ := m.queuedStallCheck(time.Now().Add(2 * time.Second)); stalled {
+		t.Error("a follow-up that just heard a queue update was called stalled")
+	}
+}
+
+// Silence after the model was granted is not a queue wait: the notice keeps
+// the diagnostic step instead of reporting the last queue line.
+func TestASilenceAfterTheModelWasGrantedKeepsTheDiagnostic(t *testing.T) {
+	m := newTestChat(t)
+	m.turnSeq = 1
+	m.streaming = true
+	ch := make(chan interface{})
+	m.events = ch
+	granted := event.CanonicalStatusEvent{Type: "status", Phase: "model_queue", Message: "Got the model after waiting 12s"}
+	updated, _ := m.Update(eventMsg{ch: ch, event: granted})
 	m = updated.(ChatModel)
 
-	last := m.messages[len(m.messages)-1].Content
-	if !strings.Contains(last, "still waiting for the model") || !strings.Contains(last, "2nd in line") {
-		t.Errorf("the notice must name the queue the agent reported: %q", last)
+	later := time.Now().Add(queuedSendTimeout + time.Second)
+	if stalled, _ := m.queuedStallCheck(later); !stalled {
+		t.Fatal("three minutes of silence after the grant should be named")
 	}
-	if strings.Contains(last, "gaia daemon status") {
-		t.Errorf("a reported queue is not a daemon problem: %q", last)
+	notice := m.queuedStallNotice()
+	if !strings.Contains(notice, "gaia daemon status") {
+		t.Errorf("the notice must keep the diagnostic step: %q", notice)
+	}
+	if strings.Contains(notice, "Got the model") || strings.Contains(notice, "still waiting for the model") {
+		t.Errorf("the notice must not report a queue that is over: %q", notice)
 	}
 }
 
