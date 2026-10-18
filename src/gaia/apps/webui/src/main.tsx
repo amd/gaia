@@ -13,6 +13,9 @@ import './styles/motion.css';
 // persisted so a past tick cannot silently approve tools in this session.
 purgeLegacyAlwaysAllow();
 
+// The desktop app has no system title bar; the top rows stand in for it.
+if (window.gaiaWindow) document.documentElement.dataset.titlebar = window.gaiaWindow.titleBar;
+
 // Paint the saved theme before React mounts; with none saved, follow the OS.
 const savedTheme = localStorage.getItem('gaia-chat-theme');
 applyTheme(resolveTheme(savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'system'));
