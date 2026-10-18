@@ -502,7 +502,10 @@ def test_a_cloud_model_not_yet_resident_still_loads_nothing_locally():
 
 def test_a_reload_uses_the_agents_ctx_and_keeps_the_embedder():
     """Loading below the agent's window made it reload again on its first turn."""
+    from gaia.ui._chat_helpers import note_model_loaded
+
     expected = "Qwen3.6-35B-A3B-GGUF"
+    note_model_loaded(expected)  # This UI loaded it, at the smaller window.
     health = _health_ok(
         [
             _model("llm", expected, ctx_size=32768),

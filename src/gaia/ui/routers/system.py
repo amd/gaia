@@ -1235,6 +1235,7 @@ def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> 
     the chosen llama.cpp backend; ``model_load_lock`` keeps it from racing a
     chat's own pre-flight load in this process.
     """
+    from gaia.config import GaiaConfigError
     from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
     from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
     from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
@@ -1245,14 +1246,19 @@ def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> 
             LemonadeClient(verbose=False).load_model(
                 model_name, ctx_size=ctx_size, prompt=False, timeout=600
             )
-    except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
+            note_model_loaded(model_name)
+    except (
+        LemonadeClientError,
+        BrokerUnavailableError,
+        GaiaConfigError,
+        OSError,
+    ) as exc:
         global _last_load_failure  # pylint: disable=global-statement
         logger.error("%s failed: %s", log_context, exc)
         # Shown by /api/system/status until a load succeeds.
         _last_load_failure = f"{log_context} failed: {exc}"
         return
     _clear_load_failure()
-    note_model_loaded(model_name)
     logger.info("%s succeeded", log_context)
 
 

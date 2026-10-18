@@ -495,14 +495,26 @@ def test_after_a_restart_only_its_own_models_make_room(lemonade, record):
     assert helpers._loaded_here("Mine-New-GGUF")
 
 
-@pytest.mark.allow_network
-def test_a_failed_settings_load_shows_in_the_status(ui, monkeypatch):
+def _config_error(message):
+    from gaia.config import GaiaConfigError
+
+    return GaiaConfigError(message)
+
+
+def _client_error(message):
     from gaia.llm.lemonade_client import LemonadeClientError
+
+    return LemonadeClientError(message)
+
+
+@pytest.mark.allow_network
+@pytest.mark.parametrize("make_error", [_client_error, _config_error])
+def test_a_failed_settings_load_shows_in_the_status(ui, monkeypatch, make_error):
     from gaia.ui.routers import system as system_mod
 
     client, loads, _held, _order = ui
     failing = MagicMock()
-    failing.load_model.side_effect = LemonadeClientError("backend rocm is missing")
+    failing.load_model.side_effect = make_error("backend rocm is missing")
 
     class FailingClient:
         def __new__(cls, **_kw):
@@ -515,3 +527,93 @@ def test_a_failed_settings_load_shows_in_the_status(ui, monkeypatch):
 
     warnings = client.get("/api/system/status").json()["probe_warnings"]
     assert any("backend rocm is missing" in w for w in warnings)
+
+
+# ── A too-small copy is reloaded only when nobody else chose that window ─────
+
+
+def test_another_apps_smaller_window_is_not_reloaded_out_from_under_it(lemonade):
+    lemonade["resident"] = [_model("Mine-GGUF", ctx=32768)]  # Another app's load.
+
+    with pytest.raises(helpers.ModelInUseError, match="another app"):
+        helpers._maybe_load_expected_model("Mine-GGUF")
+
+    lemonade["client"].unload_model.assert_not_called()
+    lemonade["client"].load_model.assert_not_called()
+
+
+@pytest.mark.parametrize("ours", [True, False])
+def test_its_own_or_an_auto_loaded_small_copy_is_reloaded(lemonade, ours):
+    window = 32768 if ours else 4096  # 4096: Lemonade's own auto-load default.
+    if ours:
+        helpers.note_model_loaded("Mine-GGUF")
+    lemonade["resident"] = [_model("Mine-GGUF", ctx=window)]
+
+    helpers._maybe_load_expected_model("Mine-GGUF")
+
+    lemonade["client"].unload_model.assert_called_once()
+    lemonade["client"].load_model.assert_called_once()
+
+
+def test_a_model_that_left_lemonade_is_no_longer_counted_as_its_own(lemonade):
+    helpers.note_model_loaded("Mine-Old-GGUF")
+    lemonade["resident"] = [_model("Other-App-GGUF")]  # Mine-Old was evicted.
+
+    helpers._maybe_load_expected_model("Mine-GGUF")
+
+    assert not helpers._loaded_here("Mine-Old-GGUF")
+    assert helpers._loaded_here("Mine-GGUF")
+
+
+def test_a_stop_during_the_retry_reload_does_not_run_the_query_again(
+    lemonade, monkeypatch
+):
+    import json
+    from unittest.mock import AsyncMock
+
+    from gaia.llm.providers.lemonade import LemonadeModelNotLoadedError
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.run_manager import RunManager
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="Mine-GGUF", agent_type="chat")
+    sid = session["id"]
+    agent = _CountingAgent()
+
+    def evicted(_message):
+        agent.queries += 1
+        raise LemonadeModelNotLoadedError()
+
+    agent.process_query = evicted
+    helpers._agent_cache.clear()
+    helpers._store_agent(sid, "Mine-GGUF", [], agent, "chat")
+    monkeypatch.setattr("gaia.ui.run_manager.run_manager", RunManager())
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
+    preflights = []
+
+    def preflight(_model, handler=None, _cancel=None):
+        preflights.append(1)
+        if len(preflights) == 2:  # The retry's reload: the user presses Stop.
+            handler.cancelled.set()
+
+    monkeypatch.setattr(helpers, "_maybe_load_expected_model", preflight)
+
+    async def run_turn():
+        events = []
+        request = ChatRequest(session_id=sid, message="hi", stream=True)
+        async for chunk in helpers._stream_chat_response(db, session, request):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[len("data: ") :]))
+        return events
+
+    try:
+        events = asyncio.run(run_turn())
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+
+    assert agent.queries == 1, "the query ran again after the Stop"
+    assert not any("retrying" in (e.get("message") or "") for e in events)

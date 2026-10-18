@@ -332,11 +332,26 @@ def _owned_models() -> set:
     return _models_loaded_here
 
 
+# The window Lemonade loads a model at when a request auto-loads it.
+_LEMONADE_DEFAULT_CTX = 4096
+
+
+class ModelInUseError(RuntimeError):
+    """The model is loaded by another app in a way this turn can't use."""
+
+
+# Guards the record: the pre-flight and Settings loads run on different threads.
+_owned_models_lock = threading.Lock()
+
+
 def _save_owned_models() -> None:
+    """Write the record whole: a crash mid-write never leaves half a file."""
     path = _owned_models_path()
+    tmp = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(sorted(_owned_models())), encoding="utf-8")
+        tmp.write_text(json.dumps(sorted(_owned_models())), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError as exc:
         logger.warning("Could not record the Agent UI's loaded models: %s", exc)
 
@@ -344,28 +359,43 @@ def _save_owned_models() -> None:
 def note_model_loaded(model_id: str) -> None:
     """Record a chat model the Agent UI loaded (pre-flight, preload, Settings)."""
     key = _model_key(model_id)
-    if key not in _owned_models():
-        _owned_models().add(key)
-        _save_owned_models()
+    with _owned_models_lock:
+        if key not in _owned_models():
+            _owned_models().add(key)
+            _save_owned_models()
 
 
 def _forget_model(model_id: str) -> None:
-    _owned_models().discard(_model_key(model_id))
-    _save_owned_models()
+    with _owned_models_lock:
+        _owned_models().discard(_model_key(model_id))
+        _save_owned_models()
+
+
+def _forget_models_not_loaded(resident: list) -> None:
+    """Drop recorded models Lemonade no longer has loaded.
+
+    Once a model is gone, a later copy of it may be another app's load.
+    """
+    loaded = {_model_key(m["model_name"]) for m in resident if m.get("model_name")}
+    with _owned_models_lock:
+        gone = _owned_models() - loaded
+        if gone:
+            _owned_models().difference_update(gone)
+            _save_owned_models()
 
 
 def _loaded_here(model_id: str) -> bool:
     return _model_key(model_id) in _owned_models()
 
 
-def _take_model_load_lock(sse_handler=None) -> bool:
+def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
     """Take ``model_load_lock``; False when the turn is stopped while waiting."""
     shown = False
     while not model_load_lock.acquire(timeout=0.2):
+        if stopped is not None and stopped():
+            return False
         if sse_handler is None:
             continue
-        if sse_handler.cancelled.is_set():
-            return False
         if not shown:
             sse_handler._emit(
                 {
@@ -2233,7 +2263,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
         # where the broker's priority ordering has no say, silently defeating
         # the priority it just asked for.
         with model_lease(model_id, priority="interactive", on_wait=_slot_was_busy):
-            if stopped() or not _take_model_load_lock(sse_handler):
+            if stopped() or not _take_model_load_lock(sse_handler, stopped):
                 return
             try:
                 if stopped():
@@ -2249,6 +2279,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         if m.get("type") in ("llm", "vlm")
                         and m.get("recipe") != "cloud"
                     ]
+                    _forget_models_not_loaded(resident_chat_models)
                     if any(
                         (m.get("model_name") or "").lower() == expected_lower
                         and (m.get("recipe_options", {}).get("ctx_size") or 0)
@@ -2266,12 +2297,26 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                 may_unload = not is_users_server(base_url)
                 if may_unload:
                     # The same model at too small a window is reloaded, not
-                    # loaded twice. Other resident models stay.
+                    # loaded twice: a copy this UI loaded, or one Lemonade
+                    # auto-loaded at its default window (#1030), which no app
+                    # chose. Another app's chosen window may be answering, so
+                    # that copy stays. Other resident models stay.
                     for m in resident_chat_models:
-                        if (m.get("model_name") or "").lower() == expected_lower:
-                            client.unload_model(
-                                m["model_name"], ignore_if_not_loaded=True
+                        if (m.get("model_name") or "").lower() != expected_lower:
+                            continue
+                        window = (m.get("recipe_options") or {}).get("ctx_size") or 0
+                        nobody_chose = window <= _LEMONADE_DEFAULT_CTX
+                        if not (_loaded_here(m["model_name"]) or nobody_chose):
+                            raise ModelInUseError(
+                                f"{model_id} is loaded by another app with a "
+                                f"{window or 'smaller'}-token window, smaller "
+                                f"than the {required_ctx} tokens this chat "
+                                "needs; reloading it would cut that app off. "
+                                "Let it finish (or close it), then send the "
+                                "message again, or reload the model from "
+                                "Settings -> Load."
                             )
+                        client.unload_model(m["model_name"], ignore_if_not_loaded=True)
                 _load_making_room(
                     client,
                     model_id,
@@ -2284,6 +2329,9 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                 model_load_lock.release()
     except InsufficientMemoryError as exc:
         # The fix is closing apps, not checking Lemonade: pass the reason on.
+        logger.error("Pre-flight model load refused: %s", exc)
+        raise
+    except ModelInUseError as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
     except BrokerUnavailableError as exc:
