@@ -291,19 +291,30 @@ class MCPClientManager:
             pool.submit(_connect_one, name, cfg): name
             for name, cfg in to_connect.items()
         }
+        handled = set()
+
+        def _record(future) -> None:
+            name, client, error = future.result()
+            handled.add(name)
+            if client is not None:
+                self._clients[name] = client
+                self._failed.pop(name, None)
+                logger.debug(f"Loaded MCP server: {name}")
+            else:
+                self._failed[name] = error or "Unknown error"
+                logger.debug(f"Failed to connect to server '{name}': {error}")
+
         try:
             for future in as_completed(futures, timeout=_CONNECT_TIMEOUT_S):
-                name, client, error = future.result()
-                if client is not None:
-                    self._clients[name] = client
-                    self._failed.pop(name, None)
-                    logger.debug(f"Loaded MCP server: {name}")
-                else:
-                    self._failed[name] = error or "Unknown error"
-                    logger.debug(f"Failed to connect to server '{name}': {error}")
+                _record(future)
         except _FutureTimeoutError:
             for future, server_name in futures.items():
-                if not future.done():
+                if server_name in handled:
+                    continue
+                if future.done():
+                    # Finished between the deadline and this check.
+                    _record(future)
+                else:
                     self._failed[server_name] = (
                         f"Connection timed out after {_CONNECT_TIMEOUT_S:.0f}s"
                     )

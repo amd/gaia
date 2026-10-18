@@ -446,3 +446,66 @@ def test_a_server_that_refuses_to_initialise_is_stopped(tmp_path):
     assert client.connect() is False
     assert "bad config" in client.last_error
     assert not client.transport.is_connected(), "a refused server kept running"
+
+
+def test_disconnect_never_stops_a_process_it_did_not_see_the_server_start(
+    tmp_path, monkeypatch
+):
+    """A process whose parent PID matches the exited server's is not ours.
+
+    Windows reuses PIDs, so after the server exits that PID can belong to an
+    unrelated program, and so can its children.
+    """
+    psutil = pytest.importorskip("psutil")
+    script = tmp_path / "exits.py"
+    script.write_text("import sys\nsys.stdin.readline()\n")
+    transport = _transport(script)
+    server_pid = transport._process.pid
+    transport._process.stdin.write("bye\n")
+    transport._process.stdin.flush()
+    transport._process.wait(timeout=10)
+
+    bystander = psutil.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real_iter = psutil.process_iter
+
+    def iter_with_reused_ppid(*args, **kwargs):
+        for proc in real_iter(*args, **kwargs):
+            if proc.pid == bystander.pid:
+                proc.info = {"ppid": server_pid, "create_time": time.time()}
+            yield proc
+
+    monkeypatch.setattr(psutil, "process_iter", iter_with_reused_ppid)
+    try:
+        transport.disconnect()
+        assert bystander.is_running(), "disconnect stopped a stranger's process"
+    finally:
+        if bystander.is_running():
+            bystander.kill()
+            bystander.wait(5)
+
+
+def test_the_child_watcher_backs_off_once_the_tree_settles(tmp_path, monkeypatch):
+    script = _stub(tmp_path, "time.sleep(3600)")
+    sleeps = []
+    real_sleep = time.sleep
+    monkeypatch.setattr(
+        stdio_module.time,
+        "sleep",
+        lambda s: (
+            (
+                sleeps.append(s)
+                if threading.current_thread().name.startswith("mcp-children")
+                else None
+            ),
+            real_sleep(min(s, 0.05)),
+        ),
+    )
+    transport = _transport(script)
+    try:
+        real_sleep(1.5)  # many watcher rounds, each cut to 0.05 s
+    finally:
+        transport.disconnect()
+
+    assert sleeps, "the watcher never ran"
+    assert max(sleeps) > stdio_module._CHILD_SCAN_S
+    assert max(sleeps) <= stdio_module._CHILD_SCAN_MAX_S

@@ -36,6 +36,7 @@ _POLL_INTERVAL_S = 0.25
 # How often a running server's child processes are recorded. A launcher that
 # starts a child and exits sooner than this can leave that child behind.
 _CHILD_SCAN_S = 0.5
+_CHILD_SCAN_MAX_S = 8.0
 
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
@@ -228,10 +229,18 @@ class StdioTransport(MCPTransport):
     def _watch_children(self, proc: subprocess.Popen) -> None:
         # Once the parent exits, POSIX re-parents its children and they can no
         # longer be found from it, so they are recorded while it runs.
+        # A scan walks the whole process table, so it backs off once the
+        # server's tree has settled and speeds up again when it changes.
         server = self._ps_server
+        interval = _CHILD_SCAN_S
         while self._process is proc and server is not None and server.is_running():
+            known = len(self._children)
             self._track_children()
-            time.sleep(_CHILD_SCAN_S)
+            changed = len(self._children) != known
+            interval = (
+                _CHILD_SCAN_S if changed else min(interval * 2, _CHILD_SCAN_MAX_S)
+            )
+            time.sleep(interval)
 
     @staticmethod
     def _pump_stdout(stream, lines: queue.Queue) -> None:
@@ -411,10 +420,11 @@ class StdioTransport(MCPTransport):
 
     def _stop_children(self) -> None:
         """Stop every process the server started, before stopping the server."""
+        # Only processes seen as the server's own descendants: finding orphans
+        # by parent PID could hit another program once the OS reuses that PID.
         self._track_children()
-        orphans = self._orphans_of_dead_parent()
         survivors = []
-        for child in list(self._children.values()) + orphans:
+        for child in list(self._children.values()):
             try:
                 # is_running() also checks create time, so a reused PID is spared.
                 if child.is_running():
@@ -434,32 +444,6 @@ class StdioTransport(MCPTransport):
                     e,
                 )
         self._children.clear()
-
-    def _orphans_of_dead_parent(self) -> List["psutil.Process"]:
-        """Descendants left behind once the server, or one in between, exited.
-
-        Walks parent PIDs outward from the server's, through processes that
-        already exited (a launcher such as a venv's ``python.exe`` sits in
-        between). Only processes created after the server started count, so
-        an unrelated process that reused a PID is never touched.
-        """
-        server = self._ps_server
-        if server is None or server.is_running():
-            return []
-        roots = {server.pid} | set(self._children)
-        by_parent: Dict[int, List["psutil.Process"]] = {}
-        for candidate in psutil.process_iter(["ppid", "create_time"]):
-            info = candidate.info
-            if (info.get("create_time") or 0) >= self._started_at:
-                by_parent.setdefault(info.get("ppid"), []).append(candidate)
-        found: Dict[int, "psutil.Process"] = {}
-        frontier = list(roots)
-        while frontier:
-            for child in by_parent.get(frontier.pop(), []):
-                if child.pid not in found and child.pid not in roots:
-                    found[child.pid] = child
-                    frontier.append(child.pid)
-        return list(found.values())
 
     @staticmethod
     def _format_exit_code(exit_code: int) -> str:

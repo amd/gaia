@@ -1021,9 +1021,11 @@ def disconnect(self) -> None:
 
     Process cleanup sequence:
     0. Stop the server's children: `npx` and `uvx` run the real server as
-       a child. They are recorded every 0.5 s while the server runs, so
-       they are found even after it exits; a launcher that starts a child
-       and exits sooner than that can leave the child behind
+       a child. They are recorded while the server runs (every 0.5 s,
+       backing off to 8 s once its tree settles), so they are found even
+       after it exits. Only processes seen as its descendants are stopped,
+       never ones matched by parent PID, which the OS can reuse; a launcher
+       that starts a child and exits within 0.5 s can leave it behind
     1. Send SIGTERM
     2. Wait up to 5 seconds
     3. If still running, send SIGKILL
