@@ -2332,6 +2332,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn (#4447).
         self._denied_effects = DeniedEffects()
+        # (turn, path) for each access prompt declined or left unanswered.
+        self._refused_paths: List[Tuple[int, Path]] = []
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -2970,6 +2972,19 @@ Do NOT wrap conversational replies in JSON.
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
             return False
+        # One prompt per path per turn: a user who stepped away is not asked
+        # again, and made to wait out the timeout again, for what is inside it.
+        turn = self._turn_seq
+        refused = self._refused_paths
+        target = Path(path).resolve()
+        for seen_turn, denied in refused:
+            if seen_turn == turn and (target == denied or denied in target.parents):
+                logger.info(
+                    "Not asking again this turn about %s (%s was declined)",
+                    target,
+                    denied,
+                )
+                return False
         args = {"path": str(path)}
         # Lets the prompt say "file" or "folder" instead of a catch-all.
         if path.is_dir():
@@ -2981,10 +2996,13 @@ Do NOT wrap conversational replies in JSON.
         if clock is not None:
             clock.begin()
         try:
-            return (
+            granted = (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
+            if not granted:
+                refused.append((turn, target))
+            return granted
         finally:
             if clock is not None:
                 clock.end()
