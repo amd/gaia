@@ -242,15 +242,29 @@ def test_a_side_request_never_pins_a_slot_a_one_slot_model_lacks():
 
 
 # Side requests run on a background thread (memory extraction starts after the
-# answer returns), so they can overlap the user's next turn. Two active requests
-# on a unified KV pool can outgrow it, and llama.cpp then fails both with
-# "Context size has been exceeded" rather than evicting one.
+# answer returns), so they can overlap the user's next turn. Two sequences decode
+# together at nearly twice one's throughput, so a side request runs alongside the
+# conversation — but two active requests on a unified KV pool that outgrow it
+# both fail ("Context size has been exceeded"), so they overlap only when both
+# fit. A request with an empty prompt and the default 1000-token cap needs 1000.
 
 
-def _local_client():
+@pytest.fixture(autouse=True)
+def _fresh_gates(monkeypatch):
+    from gaia.llm import slot_gate
+
+    monkeypatch.setattr(slot_gate, "_GATES", {})
+
+
+def _local_client(capacity=65536, *, real_load_check=False):
     client = LemonadeClient(base_url=BASE, verbose=False)
-    client._ensure_model_loaded = lambda *a, **k: None
+    if real_load_check:
+        # The check itself runs; only its server round trip is stubbed.
+        client._ensure_model_loaded_locked = lambda *a, **k: None
+    else:
+        client._ensure_model_loaded = lambda *a, **k: None
     client._is_cloud_model = lambda model: False
+    client._kv_capacity = lambda model: capacity
     return client
 
 
@@ -273,11 +287,7 @@ def _held_post(release):
     return post, peak, entered
 
 
-def test_a_side_request_waits_for_the_conversation_request():
-    client = _local_client()
-    release = threading.Event()
-    post, peak, entered = _held_post(release)
-    model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+def _turn_and_side(client, release, post, entered, model):
     with patch("gaia.llm.lemonade_client.requests.post", side_effect=post):
         turn = threading.Thread(
             target=client.chat_completions,
@@ -290,14 +300,118 @@ def test_a_side_request_waits_for_the_conversation_request():
         turn.start()
         assert entered.acquire(timeout=5)
         side.start()
-        assert not entered.acquire(timeout=0.3)
+        side_started = entered.acquire(timeout=0.5)
         release.set()
         turn.join(5)
         side.join(5)
+    return side_started
+
+
+def test_a_side_request_runs_alongside_the_conversation_when_both_fit():
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    started = _turn_and_side(
+        _local_client(), release, post, entered, "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    )
+    assert started
+    assert peak[0] == 2
+
+
+def test_the_load_check_of_a_side_request_does_not_take_the_model():
+    """Each request's pre-flight check runs inside its own slot hold.
+
+    Taken exclusively, it made every side request wait for the conversation
+    (or fail), which is the serialization the slots exist to remove.
+    """
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    started = _turn_and_side(
+        _local_client(real_load_check=True),
+        release,
+        post,
+        entered,
+        "Qwen3-30B-A3B-Instruct-2507-GGUF",
+    )
+    assert started
+    assert peak[0] == 2
+
+
+def test_a_model_whose_loaded_window_is_unknown_is_held_exclusively():
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    started = _turn_and_side(
+        _local_client(capacity=None),
+        release,
+        post,
+        entered,
+        "Qwen3-30B-A3B-Instruct-2507-GGUF",
+    )
+    assert not started
     assert peak[0] == 1
 
 
-def test_a_side_request_waits_for_a_conversation_stream_to_close():
+def test_a_side_request_waits_when_the_pool_cannot_hold_both():
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    started = _turn_and_side(
+        _local_client(capacity=1500),
+        release,
+        post,
+        entered,
+        "Qwen3-30B-A3B-Instruct-2507-GGUF",
+    )
+    assert not started
+    assert peak[0] == 1
+
+
+def test_two_requests_on_the_conversation_slot_never_overlap():
+    client = _local_client()
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    with patch("gaia.llm.lemonade_client.requests.post", side_effect=post):
+        threads = [
+            threading.Thread(
+                target=client.chat_completions,
+                kwargs={"model": model, "messages": [], "id_slot": CONVERSATION_SLOT},
+            )
+            for _ in range(2)
+        ]
+        threads[0].start()
+        assert entered.acquire(timeout=5)
+        threads[1].start()
+        assert not entered.acquire(timeout=0.3)
+        release.set()
+        for t in threads:
+            t.join(5)
+    assert peak[0] == 1
+
+
+def test_an_unpinned_request_holds_the_model_exclusively():
+    """No slot means llama.cpp picks one, so it cannot share the pool safely."""
+    client = _local_client()
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    with patch("gaia.llm.lemonade_client.requests.post", side_effect=post):
+        turn = threading.Thread(
+            target=client.chat_completions,
+            kwargs={"model": model, "messages": [], "id_slot": CONVERSATION_SLOT},
+        )
+        unpinned = threading.Thread(
+            target=client.chat_completions, kwargs={"model": model, "messages": []}
+        )
+        turn.start()
+        assert entered.acquire(timeout=5)
+        unpinned.start()
+        assert not entered.acquire(timeout=0.3)
+        release.set()
+        turn.join(5)
+        unpinned.join(5)
+    assert peak[0] == 1
+
+
+def test_a_side_request_runs_while_a_conversation_stream_is_open():
     client = _local_client()
     side_entered = threading.Event()
 
@@ -316,17 +430,18 @@ def test_a_side_request_waits_for_a_conversation_stream_to_close():
         patch.object(client, "_stream_chat_chunks", side_effect=chunks),
         patch("gaia.llm.lemonade_client.requests.post", side_effect=side_post),
     ):
-        stream = client.chat_completions(model=model, messages=[], stream=True)
+        stream = client.chat_completions(
+            model=model, messages=[], stream=True, id_slot=CONVERSATION_SLOT
+        )
         next(stream)
         side = threading.Thread(
             target=client.chat_completions,
             kwargs={"model": model, "messages": [], "id_slot": SIDE_SLOT},
         )
         side.start()
-        assert not side_entered.wait(0.3)
-        stream.close()
         assert side_entered.wait(5)
         side.join(5)
+        stream.close()
 
 
 def test_requests_to_different_models_do_not_wait_on_each_other():

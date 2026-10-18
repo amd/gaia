@@ -777,6 +777,26 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+@router.get("/debug/turns", include_in_schema=False)
+async def debug_turns(limit: int = 20) -> Dict[str, Any]:
+    """The last *limit* turn records, newest last — dev mode only.
+
+    Off the contract on purpose: it exists only while ``GAIA_TURN_LOG`` is set,
+    and its shape is the turn log's (``gaia.turn/1``), not a versioned API.
+    """
+    from gaia.agents.base.turn_metrics import RECENT_TURNS, TURN_LOG_ENV, turn_log_path
+
+    if turn_log_path() is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Turn recording is off. Set {TURN_LOG_ENV}=<path> before "
+            "starting the agent to record turns.",
+        )
+    if limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be 1 or more")
+    return {"turns": list(RECENT_TURNS)[-limit:]}
+
+
 @router.get("/skills")
 async def skills() -> Dict[str, Any]:
     """The skills this agent can load, for the Agent UI's Skills settings.
