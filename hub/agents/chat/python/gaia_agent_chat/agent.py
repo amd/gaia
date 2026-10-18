@@ -691,10 +691,11 @@ class ChatAgent(
             self._start_watching()
 
     def _indexed_documents_line(self) -> str:
-        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed.
+        """``[Indexed documents: a.pdf (/docs/a.pdf), …]``, or "" when none are.
 
-        A document still indexing in the background is not searchable, so it
-        is named on a line of its own instead.
+        Each entry carries its path, so a file tool never has to search for a
+        document the user already attached. A document still indexing in the
+        background is not searchable, so it is named on a line of its own.
         """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
@@ -703,8 +704,11 @@ class ChatAgent(
             return ""
         lines = []
         if self.rag.indexed_files:
-            names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-            lines.append(f"[Indexed documents: {', '.join(names)}]")
+            entries = sorted(
+                {f"{Path(fp).name} ({fp})" for fp in self.rag.indexed_files},
+                key=str.lower,
+            )
+            lines.append(f"[Indexed documents: {', '.join(entries)}]")
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
