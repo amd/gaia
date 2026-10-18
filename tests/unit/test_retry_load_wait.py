@@ -240,3 +240,23 @@ def test_cloud_requests_do_not_wait_for_a_local_load():
     assert client._model_retrier("fireworks.some-model")._server_loading is None
     assert client._model_retrier(MODEL)._server_loading is not None
     assert client._model_retrier()._server_loading is None
+
+
+def test_retries_off_means_off_during_a_load():
+    """GAIA_LLM_RETRY_ATTEMPTS=1 is not overridden by a reported load."""
+    clock = FakeClock()
+    retrier = ModelCallRetrier(
+        RetryPolicy(max_attempts=1),
+        sleep=clock.sleep,
+        clock=clock,
+        server_loading=lambda: f"Lemonade is loading {BIG}",
+    )
+    calls = []
+
+    def call():
+        calls.append(1)
+        raise requests.exceptions.ConnectionError("reset")
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        retrier.call(call)
+    assert len(calls) == 1 and clock.now == 0

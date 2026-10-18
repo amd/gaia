@@ -738,7 +738,11 @@ class _LoadWait:
         """``None`` when no load is reported (the normal policy applies); True
         to try again now that it ended; False to give up (*state* says why)."""
         probe = retrier._server_loading
-        if probe is None or retrier._classify(error) is None:
+        if (
+            probe is None
+            or state.attempts >= retrier.policy.max_attempts
+            or retrier._classify(error) is None
+        ):
             return None
         loading = probe()
         if loading is None:

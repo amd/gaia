@@ -257,11 +257,19 @@ def test_only_a_probe_extends_residency(isolated_home, fake, monkeypatch):
     assert fake.count("GET", "/health") == 2
 
 
-def test_first_request_waits_for_a_busy_server(isolated_home, fake, capsys):
+@pytest.fixture
+def quick_probes(monkeypatch):
+    monkeypatch.setattr(lc, "PROBE_TIMEOUT", (1.0, 1.0))
+    monkeypatch.setattr(lc, "_BUSY_POLL_SECONDS", 0.5)
+
+
+def test_first_request_waits_for_a_busy_server(
+    isolated_home, fake, quick_probes, capsys
+):
     """/health stalls while another app loads a model, then answers: the
     request waits for it, says so, and never sends a load."""
     fake.health_delay = 60
-    threading.Timer(7, lambda: setattr(fake, "health_delay", 0)).start()
+    threading.Timer(3, lambda: setattr(fake, "health_delay", 0)).start()
     client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
     results, errors, elapsed = _run_bounded(
         lambda: client.chat_completions(MODEL, [{"role": "user", "content": "hi"}]),
@@ -274,9 +282,11 @@ def test_first_request_waits_for_a_busy_server(isolated_home, fake, capsys):
     assert "is busy" in capsys.readouterr().err
 
 
-def test_a_server_that_never_answers_fails_loudly(isolated_home, fake, monkeypatch):
+def test_a_server_that_never_answers_fails_loudly(
+    isolated_home, fake, quick_probes, monkeypatch
+):
     fake.health_delay = 60
-    monkeypatch.setenv("GAIA_LLM_LOAD_WAIT", "6")
+    monkeypatch.setenv("GAIA_LLM_LOAD_WAIT", "3")
     client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
     results, errors, elapsed = _run_bounded(
         lambda: client.chat_completions(MODEL, [{"role": "user", "content": "hi"}]),
@@ -286,6 +296,19 @@ def test_a_server_that_never_answers_fails_loudly(isolated_home, fake, monkeypat
     assert len(errors) == 1 and isinstance(errors[0], lc.LemonadeUnresponsiveError)
     assert "GAIA_LLM_LOAD_WAIT" in str(errors[0])
     assert fake.count("POST", "/chat/completions") == 0
+
+
+def test_load_wait_zero_fails_at_once(isolated_home, fake, quick_probes, monkeypatch):
+    fake.health_delay = 60
+    monkeypatch.setenv("GAIA_LLM_LOAD_WAIT", "0")
+    client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
+    results, errors, elapsed = _run_bounded(
+        lambda: client.chat_completions(MODEL, [{"role": "user", "content": "hi"}]),
+        n=1,
+        limit=20,
+    )
+    assert len(errors) == 1 and isinstance(errors[0], lc.LemonadeUnresponsiveError)
+    assert elapsed < 5
 
 
 # ── A busy server is never mistaken for a stopped one ────────────────────
