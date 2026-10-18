@@ -194,10 +194,12 @@ def test_attach_reports_a_busy_daemon_instead_of_no_daemon(monkeypatch):
 def test_daemon_status_reports_busy_rather_than_stale(monkeypatch):
     inst, _calls, killed, _spawned = _stale_registry(monkeypatch, [("busy", None)])
 
-    report = daemon_client.status_report()
+    told = []
+    report = daemon_client.status_report(on_slow=lambda: told.append(True))
 
     assert report == {"state": "busy", "instance": inst}
     assert killed == []
+    assert told == [True], "the CLI was not told it is waiting on a slow daemon"
 
 
 def test_a_busy_daemon_fails_a_model_load_as_a_broker_error(monkeypatch):
@@ -228,3 +230,20 @@ def test_probe_state_classifies_a_read_timeout_as_busy(monkeypatch):
 
     monkeypatch.setattr(requests, "get", _refused)
     assert probe_state(inst)[0] == "gone"
+
+
+def test_a_busy_daemon_fails_a_lemonade_start_with_the_start_error(monkeypatch):
+    """ensure_ready only handles LemonadeStartError; anything else would reach
+    the user as a traceback instead of its clean message."""
+    from gaia.llm import lemonade_service
+    from gaia.llm.lemonade_service import LemonadeStartError
+
+    def _busy(*a, **k):
+        raise DaemonBusyError("the GAIA daemon (pid 4242) is running but ...")
+
+    monkeypatch.setattr(daemon_client, "attach", _busy)
+
+    with pytest.raises(LemonadeStartError) as err:
+        lemonade_service._post_start({}, 1.0)
+    assert "pid 4242" in str(err.value)
+    assert isinstance(err.value.__cause__, DaemonBusyError)

@@ -59,7 +59,7 @@ _LOG_TAIL_LINES = 5
 #: The second, longer probe a daemon gets after one that connected but timed
 #: out. Status never waits on other work, so a daemon still silent after this is
 #: overloaded or stuck, and is reported busy rather than killed.
-_BUSY_PROBE_TIMEOUT = 10.0
+BUSY_PROBE_TIMEOUT_S = 10.0
 
 #: Called with the seconds waited so far while a daemon start is in progress.
 ProgressCallback = Callable[[float], None]
@@ -128,11 +128,20 @@ def _check_version(inst: DaemonInstance) -> None:
         )
 
 
-def _patient_probe(inst: DaemonInstance, timeout: float) -> Tuple[str, Optional[dict]]:
-    """:func:`probe_state`, giving a busy daemon one longer second chance."""
+def _patient_probe(
+    inst: DaemonInstance,
+    timeout: float,
+    on_slow: Optional[Callable[[], None]] = None,
+) -> Tuple[str, Optional[dict]]:
+    """:func:`probe_state`, giving a busy daemon one longer second chance.
+
+    *on_slow* is called before that second, longer wait.
+    """
     state, body = probe_state(inst, timeout=timeout)
     if state == "busy":
-        state, body = probe_state(inst, timeout=max(timeout, _BUSY_PROBE_TIMEOUT))
+        if on_slow is not None:
+            on_slow()
+        state, body = probe_state(inst, timeout=max(timeout, BUSY_PROBE_TIMEOUT_S))
     return state, body
 
 
@@ -149,7 +158,7 @@ def _answers(inst: DaemonInstance, timeout: float) -> bool:
     if state == "busy":
         raise DaemonBusyError(
             f"the GAIA daemon (pid {inst.pid}, port {inst.port}) is running but "
-            f"did not answer its status check within {_BUSY_PROBE_TIMEOUT:.0f}s, "
+            f"did not answer its status check within {BUSY_PROBE_TIMEOUT_S:.0f}s, "
             "so it is overloaded or stuck. It was left running. Retry in a "
             "moment; if it stays like this, `gaia daemon restart` restarts it "
             "and its sidecar agents. Where to look: `gaia daemon logs` "
@@ -709,14 +718,17 @@ def wait_until_gone(inst: DaemonInstance, timeout: float = 10.0) -> bool:
     return not pid_alive(inst.pid)
 
 
-def status_report() -> dict:
-    """Structured status for the CLI: running/stale/absent + identity + uptime."""
+def status_report(on_slow: Optional[Callable[[], None]] = None) -> dict:
+    """Structured status for the CLI: running/busy/stale/absent + identity + uptime.
+
+    *on_slow* is called if the daemon is slow to answer, before a longer wait.
+    """
     inst = read_instance()
     if inst is None:
         return {"state": "not_running"}
     if not pid_alive(inst.pid):
         return {"state": "stale", "reason": "pid_dead", "instance": inst}
-    state, body = _patient_probe(inst, 1.5)
+    state, body = _patient_probe(inst, 1.5, on_slow)
     if state == "busy":
         return {"state": "busy", "instance": inst}
     if body is None:

@@ -8577,7 +8577,12 @@ def _handle_daemon_start():
 def _handle_daemon_status():
     from gaia.daemon import client, paths
 
-    report = client.status_report()
+    report = client.status_report(
+        on_slow=lambda: print(
+            "GAIA daemon: slow to answer, waiting up to "
+            f"{client.BUSY_PROBE_TIMEOUT_S:.0f}s…"
+        )
+    )
     state = report["state"]
     if state == "not_running":
         print("GAIA daemon: not running")
