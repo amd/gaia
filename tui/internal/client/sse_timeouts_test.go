@@ -93,4 +93,8 @@ func TestADaemonWithAnUnusableBudgetFailsTheTurnLoudly(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "GAIA_AGENT_TOOL_TIMEOUT") {
 		t.Fatalf("expected an error naming the daemon's bad setting, got %v", err)
 	}
+	// The setting lives in the daemon's environment, so fixing it means a daemon restart.
+	if !strings.Contains(err.Error(), "gaia daemon restart") {
+		t.Errorf("the error must say the daemon has to be restarted: %v", err)
+	}
 }

@@ -584,7 +584,8 @@ func (s *SSEClient) turnReadTimeout(inst *daemon.Instance) (time.Duration, error
 	b := inst.RelayBudget
 	switch {
 	case b.Err != "":
-		return 0, fmt.Errorf("the daemon cannot relay the '%s' query: %s", s.agentID, b.Err)
+		return 0, fmt.Errorf("the daemon cannot relay the '%s' query: %s. The daemon reads this setting "+
+			"from its own environment, so fix it there, then run `gaia daemon restart`", s.agentID, b.Err)
 	case b.Known && b.Seconds == 0:
 		return maxAgentReadTimeout, nil
 	case b.Known:
