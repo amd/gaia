@@ -871,3 +871,30 @@ def test_the_in_process_broker_refuses_a_non_finite_hold():
         with pytest.raises(ValueError):
             broker.acquire("m", renewable=True, max_hold_s=bad)
     assert broker.snapshot()["waiting"] == []
+
+
+@pytest.mark.parametrize(
+    "error, unreachable",
+    [
+        (requests.exceptions.ConnectionError("refused"), True),
+        (requests.exceptions.ConnectTimeout("no route"), True),
+        (requests.exceptions.ReadTimeout("no headers after 310s"), False),
+    ],
+    ids=["refused", "connect-timeout", "read-timeout"],
+)
+def test_only_a_failed_connection_counts_as_an_unreachable_daemon(
+    monkeypatch, error, unreachable
+):
+    """A daemon that accepted the request and then went quiet was reachable;
+    re-attaching would re-queue the request at the back of the line."""
+    monkeypatch.setenv(BROKER_URL_ENV_VAR, "http://127.0.0.1:1")
+    monkeypatch.setenv(BROKER_TOKEN_ENV_VAR, _TOKEN)
+
+    def _post(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(requests, "post", _post)
+
+    with pytest.raises(broker_client.BrokerUnavailableError) as err:
+        broker_client.acquire_lease("m")
+    assert err.value.unreachable is unreachable

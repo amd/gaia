@@ -474,7 +474,8 @@ def acquire_lease(
             f"{unreachable}: {e}. The daemon may be down — check `gaia daemon "
             "status` and `gaia daemon logs`. Refusing a direct load that would "
             "race-evict another process's model.",
-            unreachable=True,
+            # A read timeout means it accepted the request: reachable, just slow.
+            unreachable=isinstance(e, requests.exceptions.ConnectionError),
         ) from e
     with r:
         if r.status_code != 200:
