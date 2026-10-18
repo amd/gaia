@@ -1241,7 +1241,6 @@ class PathValidator:
         except OSError:
             # Unreadable is not missing; let the user decide as before.
             return ""
-        logger.info("Not asking about %s: it does not exist", real_path)
         message = (
             f"Not found: '{path}' does not exist, so access was not requested. "
             "Check the name and folder, or ask the user where the file is."
