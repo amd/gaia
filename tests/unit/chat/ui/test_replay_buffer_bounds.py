@@ -129,3 +129,20 @@ async def test_a_long_reply_is_recorded_quickly_and_stays_capped(monkeypatch):
     text = _answer(events)
     assert len(text) <= 100_000
     assert text.endswith("000019999 ")
+
+
+async def test_the_newest_frame_survives_a_trim_and_sizes_count_escapes(monkeypatch):
+    monkeypatch.setattr(rm, "MAX_REPLAY_BYTES", 5_000)
+    run = Run("s5")
+    run.emit(_frame({"type": "status", "status": "info", "message": "start"}))
+    run.emit(_frame({"type": "tool_result", "summary": "big", "data": "x" * 6_000}))
+
+    events = _events(await _replay(run))
+    assert events[-1]["summary"] == "big"
+
+    run2 = Run("s6")
+    monkeypatch.setattr(rm, "MAX_REPLAY_BYTES", 10_000)
+    for _ in range(400):
+        run2.emit(_frame({"type": "chunk", "content": "日本語テキスト"}))
+    replayed = await _replay(run2)
+    assert sum(len(f.encode("utf-8")) for f in replayed) <= 10_000 + 2_000

@@ -136,7 +136,8 @@ class Run:
         if _plain_chunk(event):
             text = event.get("content") or ""
             self._open_chunk.append(text)
-            self._open_chunk_bytes += len(text)
+            # Sized as it will be sent: JSON escapes non-ASCII text.
+            self._open_chunk_bytes += len(json.dumps(text)) - 2
         else:
             self._close_chunk()
             if (
@@ -183,10 +184,11 @@ class Run:
             self._trimmed = True
             self.buffer.insert(min(1, len(self.buffer)), _TRIMMED_NOTE)
             self._buffer_bytes += len(_TRIMMED_NOTE)
-        # Keep the first frame and the note; drop from just after them.
+        # Keep the first frame, the note and the newest frame; drop from
+        # just after the note.
         while (
             self._buffer_bytes + self._open_chunk_bytes > MAX_REPLAY_BYTES
-            and len(self.buffer) > 2
+            and len(self.buffer) > 3
         ):
             self._buffer_bytes -= len(self.buffer.pop(2))
         # One reply text bigger than the cap: keep its end.
@@ -194,7 +196,7 @@ class Run:
             self._buffer_bytes + self._open_chunk_bytes > MAX_REPLAY_BYTES
             and len(self._open_chunk) > 1
         ):
-            self._open_chunk_bytes -= len(self._open_chunk.pop(0))
+            self._open_chunk_bytes -= len(json.dumps(self._open_chunk.pop(0))) - 2
 
     def finish(self) -> None:
         """Mark the run complete and close out every live subscriber."""
