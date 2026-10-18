@@ -147,4 +147,17 @@ describe('ChatView title pinning (#2165)', () => {
             title_is_custom: true,
         });
     });
+
+    it('leaves an old over-long title alone when the rename is not edited', async () => {
+        const longTitle = 'y'.repeat(MAX_SESSION_TITLE_CHARS + 50);
+        setSession({ ...SESSION, title: longTitle });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: longTitle }));
+        await act(async () => {
+            fireEvent.blur(screen.getByLabelText('Chat title'));
+        });
+
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+    });
 });

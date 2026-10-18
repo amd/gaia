@@ -1257,7 +1257,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const saveTitle = async () => {
         const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
-        if (title && title !== session?.title) {
+        // Untouched draft: never cut an old over-long title the user didn't edit.
+        if (title && titleDraft !== session?.title && title !== session?.title) {
             // Explicit rename — pin against the auto-retitler (#2165).
             await api.updateSession(sessionId, { title, title_is_custom: true });
             updateSessionInList(sessionId, { title });
