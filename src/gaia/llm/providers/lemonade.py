@@ -14,6 +14,7 @@ from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
     LemonadeAuthError,
     LemonadeClient,
@@ -162,6 +163,22 @@ class LemonadeContextOverflowError(LemonadeError):
     user_message = (
         "This conversation got too long for the model's context window. "
         "Start a fresh task to keep going."
+    )
+
+
+class LemonadeKVCacheSharedError(LemonadeError):
+    """Requests running at once on one model outgrew its shared KV cache.
+
+    Not a long conversation: llama.cpp fails every request active at that
+    moment, and the same request fits once the other one ends. The client has
+    already retried it; trimming the history would not help.
+    """
+
+    retryable = True
+    user_message = (
+        "Another request was using the model's memory at the same time, so "
+        "this one could not fit — your conversation is not too long. Send "
+        "your message again."
     )
 
 
@@ -387,6 +404,8 @@ def _classify_lemonade_response(
 
     if "model_not_loaded" in type_blob or "no model loaded" in msg_blob:
         return LemonadeModelNotLoadedError(payload=response), True
+    if any(phrase in msg_blob for phrase in KV_CACHE_SHARED_PHRASES):
+        return LemonadeKVCacheSharedError(payload=response), True
     if any(
         phrase in type_blob or phrase in msg_blob for phrase in CONTEXT_OVERFLOW_PHRASES
     ):
@@ -515,6 +534,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     ):
         m = re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
         return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
+    if any(phrase in text for phrase in KV_CACHE_SHARED_PHRASES):
+        return LemonadeKVCacheSharedError()
     if any(phrase in text for phrase in CONTEXT_OVERFLOW_PHRASES):
         err = LemonadeContextOverflowError()
         m = re.search(r"context size \((\d+) tokens?\)", text)
