@@ -150,7 +150,7 @@ async def test_a_streaming_turn_is_interactive_and_shows_its_model_wait(runtime)
 
 
 def test_the_granted_line_says_how_long_the_turn_waited():
-    line = helpers._model_queue_status(
+    line = broker_client.queue_status_event(
         {"event": "granted", "scope": "daemon", "model": "m", "waited_s": 41.7}
     )
     assert line["message"] == "Got the model after waiting 41s"

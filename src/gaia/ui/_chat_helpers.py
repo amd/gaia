@@ -1773,37 +1773,16 @@ def _format_duration(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
-def _model_queue_status(event: dict) -> dict:
-    """The turn's status line for a wait on the model slot.
-
-    *event* is a :func:`gaia.daemon.broker_client.lease_wait_listener` event.
-    Each update also counts as progress, so a long queue never trips the
-    turn's idle stop.
-    """
-    from gaia.daemon.broker_client import describe_wait
-
-    waited = int(event.get("waited_s") or 0)
-    if event.get("event") == "granted":
-        message = f"Got the model after waiting {waited}s"
-    else:
-        message = f"{describe_wait(event)} ({waited}s)"
-    return {
-        "type": "status",
-        "status": "working",
-        "phase": "model_queue",
-        "message": message,
-        "queue": event,
-    }
-
-
 def _as_interactive_turn(run, cancel_event, sse_handler=None, on_wait_event=None):
     """*run* as the user's turn: it leases the model ahead of background work,
     a wait for the model shows on the turn's stream (or reaches
     *on_wait_event* when it has none), and Stop ends the wait."""
-    from gaia.daemon.broker_client import interactive_turn
+    from gaia.daemon.broker_client import interactive_turn, queue_status_event
 
+    # Each update also counts as progress, so a long queue never trips the
+    # turn's idle stop.
     def _listen(event: dict) -> None:
-        sse_handler._emit(_model_queue_status(event))
+        sse_handler._emit(queue_status_event(event))
 
     class _Stopped:
         # Stop sets the handler's flag; teardown and the idle stop set the turn's.

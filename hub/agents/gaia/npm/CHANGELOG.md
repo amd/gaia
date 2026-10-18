@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A turn queued for the model says so on the stream.** When another process
+  or request is using the model, `/query` now sends `status` events with
+  `phase: "model_queue"` every ~2 s, carrying a `queue` object with the turn's
+  place in line, who holds the model and how long it has waited, then one
+  `granted` update. A turn queued this way leases ahead of background work, and
+  `/query/{run_id}/cancel` takes it out of the queue. Before, the stream went
+  silent for the whole wait, so a client could not tell a queued turn from a
+  dead one.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

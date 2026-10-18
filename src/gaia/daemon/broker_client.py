@@ -816,6 +816,28 @@ def model_lease(
         release_lease(lease["lease_id"])
 
 
+def queue_status_event(event: dict) -> dict:
+    """The turn-stream ``status`` event for a :func:`lease_wait_listener` event.
+
+    One shape for every stream a turn has (the Agent UI's and the sidecar's):
+    ``phase: "model_queue"``, a human ``message``, and the wait itself under
+    ``queue`` (``event`` ``queued``/``granted``, ``position``, ``queue_length``,
+    ``holder``, ``holder_model``, ``waited_s``).
+    """
+    waited = int(event.get("waited_s") or 0)
+    if event.get("event") == "granted":
+        message = f"Got the model after waiting {waited}s"
+    else:
+        message = f"{describe_wait(event)} ({waited}s)"
+    return {
+        "type": "status",
+        "status": "working",
+        "phase": "model_queue",
+        "message": message,
+        "queue": event,
+    }
+
+
 def describe_wait(status: dict) -> str:
     """A one-line, user-facing description of a queued wait."""
     holder = status.get("holder")
