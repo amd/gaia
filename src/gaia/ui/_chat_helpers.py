@@ -32,7 +32,7 @@ from gaia.agents.install_hints import (
     agent_import_error_message,
     agent_not_installed_message,
 )
-from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -1773,6 +1773,54 @@ def _format_duration(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
+def _model_queue_status(event: dict) -> dict:
+    """The turn's status line for a wait on the model slot.
+
+    *event* is a :func:`gaia.daemon.broker_client.lease_wait_listener` event.
+    Each update also counts as progress, so a long queue never trips the
+    turn's idle stop.
+    """
+    from gaia.daemon.broker_client import describe_wait
+
+    waited = int(event.get("waited_s") or 0)
+    if event.get("event") == "granted":
+        message = f"Got the model after waiting {waited}s"
+    else:
+        message = f"{describe_wait(event)} ({waited}s)"
+    return {
+        "type": "status",
+        "status": "working",
+        "phase": "model_queue",
+        "message": message,
+        "queue": event,
+    }
+
+
+def _as_interactive_turn(run, cancel_event, sse_handler=None):
+    """*run* as the user's turn: it leases the model ahead of background work,
+    a wait for the model shows on the turn's stream, and Stop ends the wait."""
+    from gaia.daemon.broker_client import interactive_turn
+
+    def _listen(event: dict) -> None:
+        sse_handler._emit(_model_queue_status(event))
+
+    class _Stopped:
+        # Stop sets the handler's flag; teardown and the idle stop set the turn's.
+        def is_set(self) -> bool:
+            return cancel_event.is_set() or (
+                sse_handler is not None and sse_handler.cancelled.is_set()
+            )
+
+    def _run():
+        with interactive_turn(
+            on_wait_event=_listen if sse_handler is not None else None,
+            cancel=_Stopped(),
+        ):
+            return run()
+
+    return _run
+
+
 def _turn_idle_message(seconds: int) -> str:
     """What the user is told when a turn is stopped for making no progress."""
     return (
@@ -2113,6 +2161,8 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             sse_handler._emit(
                 {"type": "status", "status": "warning", "message": str(exc)}
             )
+    except LeaseWaitCancelled:
+        logger.info("Pre-flight model load stopped with the turn")
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
@@ -2418,7 +2468,9 @@ async def _get_chat_response(
 
     try:
         idle = _TurnIdleClock(_time.monotonic())
-        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        worker = asyncio.get_running_loop().run_in_executor(
+            None, _as_interactive_turn(_do_chat, cancel_event)
+        )
         idle_message = None
         try:
             while not worker.done():
@@ -3041,7 +3093,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # task that keeps making progress runs to the end.
         _idle = _TurnIdleClock(_time.monotonic())
         idle_message = None
-        producer = threading.Thread(target=_run_agent, daemon=True)
+        producer = threading.Thread(
+            target=_as_interactive_turn(_run_agent, cancel_event, sse_handler),
+            daemon=True,
+        )
         producer.start()
 
         # Yield SSE events from the handler's queue

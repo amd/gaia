@@ -18,16 +18,33 @@ is no slot contention to arbitrate, so :func:`model_lease` is a no-op — that i
 the *absence* of a broker, not a fallback around a failed one. But when the URL
 IS set and the broker cannot be reached, :func:`model_lease` raises loudly rather
 than doing a direct load that would race-evict another process's model.
+
+**Queued is not dead.** A lease request streams the broker's queue updates, so
+a wait lasts as long as the holder ahead stays alive, the waiter hears where it
+stands every couple of seconds, and a silent daemon is caught within
+:data:`STREAM_IDLE_TIMEOUT_S`. Only :data:`LEASE_WAIT_LIMIT_ENV_VAR` caps the
+wait. A granted lease is renewed in the background while it is held, so a long
+generation is never reclaimed under its holder.
+
+**A turn's scope.** :func:`interactive_turn` marks the code running a user's
+turn: its leases go ahead of queued background work, its waits are reported to
+the turn's own event stream (:func:`lease_wait_listener`), and the turn's stop
+signal cancels them (:func:`lease_cancel_scope`). Context variables carry all
+three, so a thread the turn starts plainly (memory extraction) does not inherit
+them and stays background.
 """
 
 from __future__ import annotations
 
 import contextvars
+import json
 import os
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, ContextManager, Iterator, Optional
 
 from gaia.daemon.constants import (
     AUTH_SCHEME,
@@ -36,10 +53,20 @@ from gaia.daemon.constants import (
     BROKER_TOKEN_FILE_ENV_VAR,
     BROKER_URL_ENV_VAR,
     HOST_API_PREFIX,
+    LEASE_WAIT_LIMIT_ENV_VAR,
 )
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: A queued lease request hears from the broker every ~2 s; this much silence
+#: means the daemon died or hung, not that the queue is long.
+STREAM_IDLE_TIMEOUT_S = 30.0
+
+#: How often a wait on this process's own per-model lock re-checks for a cancel
+#: and reports how long it has waited.
+LOCAL_WAIT_POLL_S = 0.25
+LOCAL_WAIT_UPDATE_EVERY_S = 2.0
 
 
 class BrokerUnavailableError(Exception):
@@ -58,6 +85,97 @@ class BrokerUnavailableError(Exception):
     def __init__(self, message: str, *, status_code: Optional[int] = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+class LeaseWaitCancelled(Exception):
+    """The caller's cancel signal fired while it waited for the model slot."""
+
+
+# The turn-scoped state described in the module docstring.
+_priority_scope: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "gaia_model_lease_priority", default=None
+)
+_wait_listener: contextvars.ContextVar[Optional[Callable[[dict], None]]] = (
+    contextvars.ContextVar("gaia_model_lease_wait_listener", default=None)
+)
+_cancel_scope: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar(
+    "gaia_model_lease_cancel", default=None
+)
+
+
+@contextmanager
+def _scoped(var: contextvars.ContextVar, value) -> Iterator[None]:
+    token = var.set(value)
+    try:
+        yield
+    finally:
+        var.reset(token)
+
+
+def lease_priority(priority: str) -> ContextManager[None]:
+    """Lease at *priority* (``interactive``/``background``) within the block."""
+    return _scoped(_priority_scope, priority)
+
+
+def lease_wait_listener(listener: Callable[[dict], None]) -> ContextManager[None]:
+    """Send every model-slot wait inside the block to *listener*.
+
+    It is called with ``{"event": "queued", "scope": "daemon"|"process", ...}``
+    when a request starts waiting and every couple of seconds after (place in
+    line, who holds the slot, seconds waited), then ``{"event": "granted", ...}``
+    once it gets the slot. It runs on the waiting thread and must not block.
+    """
+    return _scoped(_wait_listener, listener)
+
+
+def lease_cancel_scope(cancel) -> ContextManager[None]:
+    """End a model-slot wait inside the block once ``cancel.is_set()``.
+
+    The wait raises :class:`LeaseWaitCancelled`, and the broker drops it from
+    its queue instead of granting the slot to a caller that has gone.
+    """
+    return _scoped(_cancel_scope, cancel)
+
+
+@contextmanager
+def interactive_turn(
+    *,
+    on_wait_event: Optional[Callable[[dict], None]] = None,
+    cancel=None,
+) -> Iterator[None]:
+    """Mark the block as a user's turn (see the module docstring)."""
+    with lease_priority("interactive"):
+        with _scoped(_wait_listener, on_wait_event or _wait_listener.get()):
+            with _scoped(_cancel_scope, cancel or _cancel_scope.get()):
+                yield
+
+
+def current_priority() -> str:
+    """The lease priority for a request made here: turn scope, env, background."""
+    return (
+        _priority_scope.get()
+        or os.environ.get(BROKER_PRIORITY_ENV_VAR, "").strip()
+        or "background"
+    )
+
+
+def waits_are_listened() -> bool:
+    """True when a wait here reaches a listener rather than only the log."""
+    return _wait_listener.get() is not None
+
+
+def notify_wait(event: dict) -> None:
+    """Hand a wait event to this context's listener, if it has one."""
+    listener = _wait_listener.get()
+    if listener is not None:
+        listener(event)
+
+
+def check_cancelled(what: str) -> None:
+    """Raise :class:`LeaseWaitCancelled` if this context's cancel has fired."""
+    cancel = _cancel_scope.get()
+    if cancel is not None and cancel.is_set():
+        raise LeaseWaitCancelled(f"stopped while waiting for {what}")
 
 
 def broker_configured() -> bool:
@@ -213,8 +331,22 @@ def _credential() -> str:
     return token
 
 
-def _default_priority() -> str:
-    return os.environ.get(BROKER_PRIORITY_ENV_VAR, "background").strip() or "background"
+def _user_wait_limit() -> Optional[float]:
+    raw = os.environ.get(LEASE_WAIT_LIMIT_ENV_VAR, "").strip()
+    if not raw:
+        return None
+    try:
+        limit = float(raw)
+    except ValueError as e:
+        raise BrokerUnavailableError(
+            f"{LEASE_WAIT_LIMIT_ENV_VAR} must be a number of seconds; got "
+            f"{raw!r}. Fix it, or unset it to wait while the model is in use."
+        ) from e
+    if limit <= 0:
+        raise BrokerUnavailableError(
+            f"{LEASE_WAIT_LIMIT_ENV_VAR} must be greater than 0; got {raw!r}."
+        )
+    return limit
 
 
 def acquire_lease(
@@ -223,12 +355,20 @@ def acquire_lease(
     priority: Optional[str] = None,
     timeout: Optional[float] = None,
     request_timeout: float = 310.0,
+    on_update: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     """Acquire a model-slot lease from the broker. Blocks until granted.
 
-    Returns the lease dict (``lease_id``, ``model``, ``waited``, ``switching``…).
-    Raises :class:`BrokerUnavailableError` on any transport/HTTP failure — never
+    Returns the lease dict (``lease_id``, ``model``, ``waited``, ``switching``,
+    and ``renew_interval_s`` when the lease must be renewed). Raises
+    :class:`BrokerUnavailableError` on any transport/HTTP failure — never
     returns without a lease when the broker is configured.
+
+    The wait has no limit of its own: it lasts while the holder ahead keeps its
+    lease. *timeout*, else :data:`LEASE_WAIT_LIMIT_ENV_VAR`, caps it.
+    *on_update* gets the broker's queue status each time it reports one, and
+    this context's :func:`lease_cancel_scope` ends the wait. *request_timeout*
+    bounds the wait for a daemon too old to stream its queue.
 
     The lease *holder* label is not a client input: the broker derives it from
     the authenticated caller (agent_id for a sidecar, ``"host"`` otherwise), so
@@ -237,27 +377,160 @@ def acquire_lease(
     import requests
 
     url = f"{_broker_base()}{HOST_API_PREFIX}/models/lease"
-    payload = {"model": model, "priority": priority or _default_priority()}
-    if timeout is not None:
-        payload["timeout"] = timeout
+    limit_from_env = timeout is None
+    wait_limit = _user_wait_limit() if limit_from_env else timeout
+    payload = {
+        "model": model,
+        "priority": priority or current_priority(),
+        "stream": True,
+        "renewable": True,
+    }
+    if wait_limit is not None:
+        payload["timeout"] = wait_limit
     headers = {"Authorization": f"{AUTH_SCHEME} {_credential()}"}
+    unreachable = f"could not reach the model-slot broker at {url} to lease '{model}'"
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=request_timeout)
+        r = requests.post(
+            url, json=payload, headers=headers, timeout=request_timeout, stream=True
+        )
     except requests.exceptions.RequestException as e:
         raise BrokerUnavailableError(
-            f"could not reach the model-slot broker at {url} to lease '{model}': "
-            f"{e}. The daemon may be down — check `gaia daemon status` and "
-            "`gaia daemon logs`. Refusing a direct load that would race-evict "
-            "another process's model."
+            f"{unreachable}: {e}. The daemon may be down — check `gaia daemon "
+            "status` and `gaia daemon logs`. Refusing a direct load that would "
+            "race-evict another process's model."
         ) from e
-    if r.status_code != 200:
-        detail = _safe_detail(r)
+    with r:
+        if r.status_code != 200:
+            detail = _safe_detail(r)
+            raise BrokerUnavailableError(
+                f"model-slot broker refused the lease for '{model}' "
+                f"(HTTP {r.status_code}): {detail}. Check `gaia daemon logs`.",
+                status_code=r.status_code,
+            )
+        if not r.headers.get("content-type", "").startswith("application/x-ndjson"):
+            return r.json()  # a daemon from before queue streaming
+        _fail_reads_after_silence(r, url)
+        try:
+            for raw in r.iter_lines():
+                if not raw:
+                    check_cancelled(f"the model slot for '{model}'")
+                    continue
+                event = json.loads(raw)
+                kind = event.pop("event", None)
+                if kind == "granted":
+                    try:
+                        check_cancelled(f"the model slot for '{model}'")
+                    except LeaseWaitCancelled:
+                        release_lease(event["lease_id"])  # granted too late
+                        raise
+                    return event
+                check_cancelled(f"the model slot for '{model}'")
+                if kind == "queued":
+                    if on_update is not None:
+                        on_update(event)
+                elif kind == "error":
+                    raise _queue_error(model, event, limit_from_env)
+        except requests.exceptions.RequestException as e:
+            raise BrokerUnavailableError(
+                f"the model-slot broker at {url} stopped answering while "
+                f"'{model}' was queued (no update for {STREAM_IDLE_TIMEOUT_S:.0f}s; "
+                f"it sends one every few seconds): {e}. The daemon may have "
+                "died or hung — check `gaia daemon status` and `gaia daemon logs`."
+            ) from e
+    raise BrokerUnavailableError(
+        f"the model-slot broker at {url} ended the lease stream for '{model}' "
+        "without granting or refusing it. Check `gaia daemon logs`."
+    )
+
+
+def _fail_reads_after_silence(response, url: str) -> None:
+    """Make a body read with no data for :data:`STREAM_IDLE_TIMEOUT_S` raise.
+
+    Not the request's own read timeout: a daemon from before queue streaming
+    sends nothing at all until the grant, for up to its 300 s wait.
+    """
+    conn = getattr(response.raw, "connection", None)
+    sock = getattr(conn, "sock", None)
+    if sock is None:
         raise BrokerUnavailableError(
-            f"model-slot broker refused the lease for '{model}' "
-            f"(HTTP {r.status_code}): {detail}. Check `gaia daemon logs`.",
-            status_code=r.status_code,
+            f"cannot watch the lease stream from {url} for silence: the HTTP "
+            "response exposes no socket. This needs requests with urllib3 1.26 "
+            "or newer; reinstall GAIA's dependencies."
         )
-    return r.json()
+    sock.settimeout(STREAM_IDLE_TIMEOUT_S)
+
+
+def _queue_error(model: str, event: dict, limit_from_env: bool) -> Exception:
+    status = event.get("status")
+    detail = event.get("detail", "")
+    if status == 504 and limit_from_env:
+        detail += (
+            f" To wait longer, raise {LEASE_WAIT_LIMIT_ENV_VAR}, or unset it to "
+            "wait for as long as the model is in use."
+        )
+    return BrokerUnavailableError(
+        f"no model-slot lease for '{model}': {detail}", status_code=status
+    )
+
+
+def renew_lease(lease_id: str, *, request_timeout: float = 10.0) -> Optional[int]:
+    """Renew a lease's heartbeat. Returns the HTTP status, ``None`` if unreachable."""
+    import requests
+
+    url = f"{_broker_base()}{HOST_API_PREFIX}/models/lease/{lease_id}/renew"
+    headers = {"Authorization": f"{AUTH_SCHEME} {_credential()}"}
+    try:
+        r = requests.post(url, headers=headers, timeout=request_timeout)
+    except requests.exceptions.RequestException as e:
+        logger.warning(
+            "broker client: could not renew lease %s at %s: %s. It is reclaimed "
+            "if renewals keep failing for the broker's heartbeat TTL.",
+            lease_id,
+            url,
+            e,
+        )
+        return None
+    if r.status_code != 200:
+        logger.error(
+            "broker client: renewal of lease %s returned HTTP %s: %s",
+            lease_id,
+            r.status_code,
+            _safe_detail(r),
+        )
+    return r.status_code
+
+
+class _Heartbeat:
+    """Renews a held lease every ``renew_interval_s`` until stopped."""
+
+    def __init__(self, lease: dict):
+        self._stop = threading.Event()
+        interval = lease.get("renew_interval_s")
+        if not interval:  # a daemon whose leases do not renew
+            return
+        threading.Thread(
+            target=self._run,
+            args=(lease["lease_id"], lease.get("model"), float(interval)),
+            name="broker-lease-heartbeat",
+            daemon=True,
+        ).start()
+
+    def _run(self, lease_id: str, model: Optional[str], interval: float) -> None:
+        while not self._stop.wait(interval):
+            status = renew_lease(lease_id)
+            if status is not None and 400 <= status < 500:
+                # 409: reclaimed; 401: the daemon restarted. Either way it's gone.
+                logger.error(
+                    "broker client: lost the model-slot lease for '%s' while "
+                    "still using it (renewal: HTTP %s). Another process may now "
+                    "load a model over this one's request.",
+                    model,
+                    status,
+                )
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 def release_lease(lease_id: str, *, request_timeout: float = 10.0) -> None:
@@ -311,7 +584,9 @@ _broker_unsupported = False
 _STALE_ATTACH_STATUSES = (401, 403)
 
 
-def _acquire_with_reattach(model: str, priority: Optional[str]) -> Optional[dict]:
+def _acquire_with_reattach(
+    model: str, priority: Optional[str], on_update=None
+) -> Optional[dict]:
     """Acquire a lease, re-discovering the daemon once if a stale one is cached.
 
     Returns ``None`` when the attached daemon has no broker to lease from — see
@@ -330,7 +605,7 @@ def _acquire_with_reattach(model: str, priority: Optional[str]) -> Optional[dict
     global _broker_unsupported  # pylint: disable=global-statement
 
     try:
-        return acquire_lease(model, priority=priority)
+        return acquire_lease(model, priority=priority, on_update=on_update)
     except BrokerUnavailableError as e:
         if e.status_code == 404:
             # The daemon is running but exposes no lease route: a build older
@@ -362,7 +637,7 @@ def _acquire_with_reattach(model: str, priority: Optional[str]) -> Optional[dict
         _detach()
         if not attach_broker_env():
             raise
-        return acquire_lease(model, priority=priority)
+        return acquire_lease(model, priority=priority, on_update=on_update)
 
 
 @dataclass
@@ -409,9 +684,11 @@ def model_lease(
     unload→load sequence in an outer lease reaches an inner one on the load. The
     outermost ``with`` owns the lease; inner ones yield ``None`` and are no-ops.
 
-    ``on_wait`` is called with a human-readable reason when the grant response
-    indicates the request had to queue, so the caller can surface a
-    ``switching model…`` status.
+    ``on_wait`` is called once, with a human-readable reason, as soon as the
+    request has to queue, so the caller can surface a ``switching model…``
+    status while it waits. Every queue update also reaches this context's
+    :func:`lease_wait_listener`. While the lease is held it is renewed in the
+    background, so a long request keeps the slot.
     """
     # Discover lazily, at the moment of the load, rather than once at process
     # start: a daemon can come up *after* a long-lived host process (the UI
@@ -448,22 +725,59 @@ def model_lease(
         )
         yield None
         return
-    lease = _acquire_with_reattach(model, priority)
+    started = time.monotonic()
+    told = {"on_wait": False}
+
+    def _queued(status: dict) -> None:
+        if not told["on_wait"] and on_wait is not None:
+            told["on_wait"] = True
+            on_wait(describe_wait(status))
+        notify_wait({"event": "queued", "scope": "daemon", **status})
+
+    lease = _acquire_with_reattach(model, priority, on_update=_queued)
     if lease is None:  # daemon has no broker — proceed unbrokered (warned above)
         yield None
         return
-    if lease.get("waited") and on_wait is not None:
-        reason = (
-            "switching model…"
-            if lease.get("switching")
-            else "waiting for the model slot…"
-        )
-        on_wait(reason)
+    heartbeat = None
     hold = _HeldLease(model)
     _held.set(hold)
     try:
+        heartbeat = _Heartbeat(lease)
+        if lease.get("waited"):
+            if not told["on_wait"] and on_wait is not None:
+                # A daemon from before queue streaming reports the wait only now.
+                on_wait(
+                    "switching model…"
+                    if lease.get("switching")
+                    else "waiting for the model slot…"
+                )
+            notify_wait(
+                {
+                    "event": "granted",
+                    "scope": "daemon",
+                    "model": model,
+                    "waited_s": time.monotonic() - started,
+                }
+            )
         yield lease
     finally:
         hold.live = False
         _held.set(None)
+        if heartbeat is not None:
+            heartbeat.stop()
         release_lease(lease["lease_id"])
+
+
+def describe_wait(status: dict) -> str:
+    """A one-line, user-facing description of a queued wait."""
+    holder = status.get("holder")
+    if status.get("scope") == "process":
+        ahead = "another request from this app is using it"
+    elif holder:
+        ahead = f"'{holder}' is using it for '{status.get('holder_model')}'"
+    else:
+        ahead = "a higher-priority request goes first"
+    place = ""
+    if status.get("queue_length", 1) > 1:
+        place = f", #{status['position']} of {status['queue_length']} in line"
+    return f"Waiting for the model — {ahead}{place}"

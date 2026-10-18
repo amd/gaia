@@ -522,6 +522,56 @@ def _local_request_lock(model: str) -> threading.RLock:
         return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
 
 
+@contextmanager
+def _holding_local_request_lock(model: str):
+    """Hold *model*'s lock; a wait for it is reported and cancellable.
+
+    Reported and cancelled like a broker wait (see
+    :func:`gaia.daemon.broker_client.lease_wait_listener`), so a request queued
+    behind another in this process reads as waiting, and a stopped turn stops.
+    """
+    from gaia.daemon import broker_client
+
+    lock = _local_request_lock(model)
+    if not lock.acquire(blocking=False):
+        started = time.monotonic()
+        next_update = started
+        while True:
+            now = time.monotonic()
+            if now >= next_update:
+                broker_client.notify_wait(
+                    {
+                        "event": "queued",
+                        "scope": "process",
+                        "model": model,
+                        "position": 1,
+                        "queue_length": 1,
+                        "waited_s": now - started,
+                        "reason": "another request in this process is using it",
+                    }
+                )
+                next_update = now + broker_client.LOCAL_WAIT_UPDATE_EVERY_S
+            broker_client.check_cancelled(f"'{model}' (in use by this process)")
+            if lock.acquire(timeout=broker_client.LOCAL_WAIT_POLL_S):
+                break
+        try:
+            broker_client.notify_wait(
+                {
+                    "event": "granted",
+                    "scope": "process",
+                    "model": model,
+                    "waited_s": time.monotonic() - started,
+                }
+            )
+        except BaseException:
+            lock.release()
+            raise
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def _slots_in_flags(flags: List[str]) -> Optional[int]:
     """The ``--parallel`` / ``-np`` value in llama-server *flags*, if any."""
     for i, flag in enumerate(flags):
@@ -5930,10 +5980,12 @@ class LemonadeClient:
         if self.cloud_model_provider(model) or self._is_cloud_model(model):
             return nullcontext()
 
-        from gaia.daemon.broker_client import model_lease
+        from gaia.daemon.broker_client import model_lease, waits_are_listened
 
         def _on_wait(reason: str) -> None:
             self.log.info(f"Model slot busy — {reason}")
+            if waits_are_listened():
+                return  # the turn's own stream shows it
             try:
                 from rich.console import Console
 
@@ -5942,13 +5994,12 @@ class LemonadeClient:
                 print(f"⏳ {reason}")
 
         lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
-        lock = _local_request_lock(model)
 
         @contextmanager
         def _held():
             # Broker first: a thread holding the broker lease must never wait on
             # this lock while its holder waits on the broker.
-            with lease, lock:
+            with lease, _holding_local_request_lock(model):
                 yield
 
         return _held()

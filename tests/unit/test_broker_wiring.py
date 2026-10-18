@@ -91,7 +91,9 @@ class _LocalBroker:
         monkeypatch.setattr(broker_client, "acquire_lease", self._acquire)
         monkeypatch.setattr(broker_client, "release_lease", self._release)
 
-    def _acquire(self, model, *, priority=None, timeout=None, request_timeout=310.0):
+    def _acquire(
+        self, model, *, priority=None, timeout=None, request_timeout=310.0, **_kw
+    ):
         prio = priority or "background"
         self.acquired.append((model, prio))
         lease = self.broker.acquire(model, priority=prio, holder="host")

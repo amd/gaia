@@ -3252,9 +3252,24 @@ model **evicts** the first. The daemon therefore runs a **model-slot broker**
 that hands out one lease at a time, so model loads queue instead of racing.
 
 When a daemon is running, `gaia` commands and the Agent UI backend attach to it
-automatically and take a lease around each model load — you may see a brief
-`⏳ switching model…` while another process finishes. Interactive chat turns
-take priority over background work (embedder warm-ups, autonomous briefs).
+automatically and take a lease around each model load and request. Interactive
+chat turns take priority over background work (memory extraction, embedder
+warm-ups, autonomous briefs).
+
+A request that has to wait is **queued, not failed**:
+
+- It waits for as long as the request ahead of it is alive, however long that
+  generation runs. The holder renews its lease every 15 seconds; one that stops
+  renewing for a minute (it exited or hung) is dropped and the queue moves on.
+- While it waits, the Agent UI shows `Waiting for the model — <who> is using
+  it` with its place in line and seconds waited, updated every two seconds. A
+  `gaia` command prints `⏳` once.
+- Stopping the turn, pressing Ctrl+C, or closing the app takes the request out
+  of the queue, so the slot never goes to a caller that has left.
+- To cap the wait, set `GAIA_MODEL_LEASE_WAIT_S` to a number of seconds. Past
+  it, the request fails with where it stood in line and who held the model.
+- If the daemon stops sending queue updates for 30 seconds, the request fails
+  and names the daemon as the cause.
 
 With **no daemon running, nothing changes**: there are no sidecars, nothing else
 holds the slot, and loads proceed directly. Attaching never starts a daemon.
