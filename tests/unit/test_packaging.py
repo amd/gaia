@@ -327,9 +327,8 @@ class TestAgentWheelExtras:
     """Regression guard for #2240.
 
     The gaia-agent-* wheels (chat, email, code, ...) aren't published to
-    PyPI. An 'agents'
-    extra -- or any 'agent-<id>' extra -- naming one of those packages
-    makes that *whole* amd-gaia release unsatisfiable, so pip/uv silently
+    PyPI. An 'agents' extra -- or any 'agent-<id>' extra -- naming one of
+    those packages makes that *whole* amd-gaia release unsatisfiable, so pip/uv silently
     backtrack past it to the newest older release that doesn't declare the
     extra. That's what turned `pip install "amd-gaia[agents]"` into a
     silent downgrade from 0.22.0 to 0.20.0. Don't re-add these extras until
