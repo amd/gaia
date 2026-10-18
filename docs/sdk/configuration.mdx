@@ -151,7 +151,8 @@ never repeats output. Each retry shows a status line such as
 | `GAIA_LLM_RETRY_ATTEMPTS` | `5` | Attempts per request, the first included. `1` turns retry off. |
 | `GAIA_LLM_RETRY_BASE_DELAY` | `2` | Backoff base in seconds: retry *n* waits up to `base × 2ⁿ`. |
 | `GAIA_LLM_RETRY_MAX_DELAY` | `30` | Longest single wait in seconds, `Retry-After` included. |
-| `GAIA_LLM_RETRY_DEADLINE` | `120` | Seconds one request may spend across all its attempts and waits. |
+| `GAIA_LLM_RETRY_DEADLINE` | `120` | Seconds one request may spend across all its attempts and waits, apart from time spent behind a model load (below). |
+| `GAIA_LLM_LOAD_WAIT` | `600` | Seconds one request may wait for Lemonade while it is busy or loading a model. `0` gives up at once. |
 | `GAIA_LLM_STREAM_IDLE_TIMEOUT` | `120` | Seconds a stream may send nothing before it counts as stalled. |
 | `GAIA_LLM_HOSTED_REPLY_TIMEOUT` | `300`, or longer for a long reply | Seconds a hosted model may take to send a whole reply without streaming. |
 
@@ -167,6 +168,16 @@ with a message saying so. Stop ends a stalled stream at once. A hosted model ans
 streaming sends its reply all at once, so it gets the reply limit above (300 s,
 or 1 s per 40 requested tokens if longer) and the same single retry; a local
 model keeps its request budget.
+
+**A busy Lemonade** — one another app shares, which is loading a model — is
+waited for, not treated as down. A server that accepts the connection but does
+not answer a status check within 5 s is reported as busy: GAIA never starts or
+restarts it, and the first request prints that it is waiting. A request that
+fails while Lemonade reports a model load in progress waits for that load
+instead of backing off, and is retried once it ends, within its attempts. That
+time does not count against `GAIA_LLM_RETRY_DEADLINE`; `GAIA_LLM_LOAD_WAIT`
+bounds it, and the error names that setting when it runs out. A cloud model's
+request never waits on a local load.
 
 **An agent step** whose request still fails after that is not the end of the
 run. The agent waits, then asks again with its conversation and tool history
@@ -185,7 +196,7 @@ task up from there.
 
 ```bash
 # Fail fast while debugging an endpoint
-GAIA_LLM_RETRY_ATTEMPTS=1 GAIA_AGENT_MODEL_RETRIES=0 gaia chat
+GAIA_LLM_RETRY_ATTEMPTS=1 GAIA_LLM_LOAD_WAIT=0 GAIA_AGENT_MODEL_RETRIES=0 gaia chat
 ```
 
 Invalid nonempty values fail with an actionable error; unset or blank values
