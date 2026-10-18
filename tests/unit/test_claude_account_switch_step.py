@@ -171,6 +171,27 @@ def _harness_script() -> str:
             },
             "false",
         ),
+        # A transient 429 mid-run is throttling, not an exhausted account.
+        (
+            {
+                "type": "result",
+                "is_error": True,
+                "modelUsage": {"claude-opus-5-5": {}},
+                "total_cost_usd": 0.4,
+                "result": "API Error: 429 rate limit exceeded, retry later",
+            },
+            "false",
+        ),
+        (
+            {
+                "type": "result",
+                "is_error": True,
+                "modelUsage": {"claude-opus-5-5": {}},
+                "total_cost_usd": 0.4,
+                "result": "You've hit your session limit - limit resets 4pm",
+            },
+            "true",
+        ),
         ({"type": "result", "is_error": False, "modelUsage": {"m": {}}}, "false"),
     ],
 )

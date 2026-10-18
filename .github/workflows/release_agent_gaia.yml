@@ -423,7 +423,8 @@ jobs:
   eval-report:
     name: Report the eval result
     needs: [gaia-eval]
-    if: ${{ always() && needs.gaia-eval.result != 'skipped' }}
+    # Not on a cancelled release: nothing was measured, so there is nothing to report.
+    if: ${{ !cancelled() && needs.gaia-eval.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

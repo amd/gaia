@@ -250,7 +250,7 @@ def test_agent_release_publish_does_not_wait_on_the_eval():
     assert "inputs.skip_eval_gate != true" in jobs["gaia-eval"]["if"]
     report = jobs["eval-report"]
     assert _needs(report) == ["gaia-eval"]
-    assert "always()" in report["if"]
+    assert "!cancelled()" in report["if"]
     assert report["permissions"]["issues"] == "write"
 
 

@@ -425,7 +425,8 @@ jobs:
           quota_suspected=false
           if [ "$status" = "not_started" ]; then
             quota_suspected=true
-          elif [ "$status" = "errored" ] && printf '%s' "$detail" | grep -qiE 'spend limit|usage limit|weekly limit|rate limit|quota|credit balance|billing|upgrade your plan'; then
+          # Exhaustion wording only: a transient 429 "rate limit" is not an empty account.
+          elif [ "$status" = "errored" ] && printf '%s' "$detail" | grep -qiE 'spend limit|usage limit|weekly limit|session limit|limit resets|quota|credit balance|billing|upgrade your plan'; then
             quota_suspected=true
           fi
           {
