@@ -70,8 +70,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 — http.server's naming
         if self.path == "/live":
             body = {"status": "ok"}
-        elif self.path == "/api/v1/docs" and self.server.lemonade:
-            body = _REAL_DOCS_INDEX
+        elif self.path == "/api/v1/docs":
+            body = _REAL_DOCS_INDEX if self.server.lemonade else {"docs": []}
         elif self.path == "/api/v1/health":
             if self.headers.get("Authorization") != f"Bearer {KEY}":
                 self.send_response(401)
@@ -258,6 +258,47 @@ class TestSlowButAliveEmbeddedServer:
 
         assert manager.status().busy
 
+    def test_a_recovered_server_starts_fresh_at_its_next_swap(
+        self, manager, slow_health, monkeypatch
+    ):
+        """busy -> healthy -> busy, as `gaia init` sees it: the record from the
+        first swap must not make the second look idle since then."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS + 1, {"111": 5.0})
+        self._backends(monkeypatch, {"111": 5.0})
+
+        slow_health.health_delay = 0.0
+        assert manager.status().busy is False
+        assert not manager.busy_since_path.exists()
+
+        slow_health.health_delay = 4.0
+        assert manager.status().busy, "the old record called a fresh swap stalled"
+
+    def test_forgetting_the_server_forgets_its_record(self, manager):
+        manager.root.mkdir(parents=True, exist_ok=True)
+        manager.busy_since_path.write_text("{}", encoding="utf-8")
+        manager._clear_state()
+        assert not manager.busy_since_path.exists()
+
+    def test_an_unreadable_backend_is_no_evidence(self, monkeypatch):
+        """Dropping it would read as "no work" and call a working server stuck."""
+
+        class Hidden:
+            pid = 222
+
+            def cpu_times(self):
+                raise psutil.AccessDenied(pid=222)
+
+        class Lemond:
+            def __init__(self, pid):
+                pass
+
+            def children(self, recursive=False):
+                return [Hidden()]
+
+        monkeypatch.setattr(psutil, "Process", Lemond)
+        assert emb.backend_activity(111) is None
+
     def test_activity_is_read_from_the_real_process_tree(self, tmp_path):
         """A working backend's counters move; an idle one's stay put."""
         script = tmp_path / "tree.py"
@@ -344,10 +385,31 @@ class TestSlowButAliveSupervisedServer:
 
         return make
 
-    def test_a_busy_lemonade_is_attached_to(self, supervisor, slow_health):
-        state = supervisor(slow_health.port).ensure_running(ctx_size=65536)
+    def test_a_busy_lemonade_is_attached_to(self, supervisor, slow_health, monkeypatch):
+        s = supervisor(slow_health.port)
+        # A busy Lemonade is known at once: no waiting out the stranger grace.
+        monkeypatch.setattr(sup, "_OCCUPIED_PORT_GRACE_S", 60.0)
+        started = time.monotonic()
+        state = s.ensure_running(ctx_size=65536)
+        assert time.monotonic() - started < 30, "waited out the grace window"
         assert state.started is False
         assert state.owned is False
+
+    def test_the_listener_is_found_without_the_global_table(self, monkeypatch):
+        """macOS refuses psutil.net_connections() without root; a server this
+        user runs must still be found, by walking the user's own processes."""
+
+        def refuse(*args, **kwargs):
+            raise psutil.AccessDenied()
+
+        monkeypatch.setattr(psutil, "net_connections", refuse)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        try:
+            assert sup._listener_pid(sock.getsockname()[1]) == os.getpid()
+        finally:
+            sock.close()
 
     def test_a_quiet_busy_system_server_is_an_error(
         self, supervisor, slow_health, monkeypatch
@@ -387,13 +449,15 @@ class TestSlowButAliveSupervisedServer:
     def test_a_system_server_it_cannot_inspect_is_never_called_stuck(
         self, supervisor, slow_health, monkeypatch
     ):
-        """macOS hides the listener's pid without root: no evidence, no verdict."""
+        """Another user's server hides its pid and sockets: no evidence, no verdict."""
         monkeypatch.setattr(sup, "_listener_pid", lambda port: None)
         s = supervisor(slow_health.port)
         assert s.ensure_running(ctx_size=65536).started is False
         assert s.ensure_running(ctx_size=65536).started is False
 
-    def test_another_app_answering_live_is_not_taken_for_lemonade(self, supervisor):
+    def test_another_app_answering_live_and_docs_is_not_taken_for_lemonade(
+        self, supervisor
+    ):
         stranger = _FakeLemond(health_delay=4.0, lemonade=False)
         try:
             with pytest.raises(sup.LemonadeStartError):

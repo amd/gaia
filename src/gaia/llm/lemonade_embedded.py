@@ -195,8 +195,9 @@ class EmbeddedStatus:
         base_url: OpenAI-compatible base URL, if running.
         dist_dir: Where the artifact is unpacked.
         unresponsive_pid: A daemon process that is alive but not answering:
-            neither health nor liveness replies, or it has been busy longer
-            than any request may run. Set only when ``running`` is False; the
+            neither health nor liveness replies, or it is busy and its backends
+            have done no work for :data:`_QUIET_SECONDS` (see
+            :class:`QuietWatch`). Set only when ``running`` is False; the
             caller must stop it rather than start a second one.
         owner_pid: The GAIA daemon that owns the instance, if one claimed it.
             None for one ``gaia init`` or ``gaia lemonade embedded start``
@@ -206,8 +207,8 @@ class EmbeddedStatus:
         busy: The instance is running and answers liveness, but its health
             endpoint is slow -- a model load or eviction holds the lock that
             endpoint needs. Requests sent now wait their turn, so callers reuse
-            it rather than restart it. Busy for longer than a request may run,
-            it is reported through ``unresponsive_pid`` instead.
+            it rather than restart it. Once its backends stop doing any work it
+            is reported through ``unresponsive_pid`` instead.
     """
 
     installed: bool
@@ -271,8 +272,10 @@ def backend_activity(pid: int) -> Optional[Dict[int, float]]:
             if hasattr(child, "io_counters"):  # absent on macOS
                 io = child.io_counters()
                 total += (io.read_bytes + io.write_bytes) / 1e6
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+        except psutil.NoSuchProcess:
+            continue  # exited: the changed pid set already counts as work
+        except psutil.AccessDenied:
+            return None
         activity[str(child.pid)] = total
     return activity
 
@@ -1655,8 +1658,9 @@ class EmbeddedLemonade:
         if existing.unresponsive_pid:
             raise EmbeddedLemonadeError(
                 f"Embedded Lemonade (pid {existing.unresponsive_pid}) is running "
-                f"but not answering on port {existing.port}: it is not loading "
-                f"a model, or has been stuck longer than any request may run. "
+                f"but not answering on port {existing.port}: it answers neither "
+                f"health nor liveness, or its backends have done no work for "
+                f"over {_QUIET_SECONDS // 60} minutes. "
                 f"Starting another would leave two servers behind. Check "
                 f"{self.log_path} for why it stalled; if it shows no progress, run "
                 f"`gaia lemonade embedded stop`, then start again."

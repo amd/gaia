@@ -585,15 +585,30 @@ def _quiet_seconds() -> int:
 
 
 def _listener_pid(port: int) -> Optional[int]:
-    """The pid listening on *port*, or None when the OS will not say."""
+    """The pid listening on *port*, or None when the OS will not say.
+
+    macOS refuses the machine-wide table without root, but still shows a
+    user's own processes' sockets, so those are walked instead.
+    """
     import psutil
 
+    def listens(conn) -> bool:
+        return conn.status == psutil.CONN_LISTEN and conn.laddr.port == port
+
     try:
-        for conn in psutil.net_connections(kind="tcp"):
-            if conn.status == psutil.CONN_LISTEN and conn.laddr.port == port:
-                return conn.pid
+        return next(
+            (c.pid for c in psutil.net_connections(kind="tcp") if listens(c)), None
+        )
     except psutil.AccessDenied:
         pass
+    for proc in psutil.process_iter():
+        try:
+            # net_connections is psutil 6+; setup.py allows 5.9.
+            conns = getattr(proc, "net_connections", None) or proc.connections
+            if any(listens(c) for c in conns(kind="tcp")):
+                return proc.pid
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue  # another user's process, or gone: not inspectable
     return None
 
 

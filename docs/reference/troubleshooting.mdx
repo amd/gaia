@@ -142,14 +142,18 @@ icon: "bug"
       it with `LEMONADE_BASE_URL`.
     - **`exited immediately` / `did not answer`** — the server started but failed. Its own
       error is in `~/.gaia/lemonade/lemond.log`.
-    - **`could not bind port … another program took it first`** — another program took
-      each port GAIA picked before the server could bind it. GAIA tries three ports, and
-      logs each retry. Free a port and start it there with
-      `gaia lemonade embedded start --port <port>`.
-    - **`busy` in `gaia lemonade embedded status`** — the server is loading or swapping a
-      model, so its health check is slow. It is working, and requests wait for it. If its
-      model backends then do no work at all for five minutes, GAIA reports it as not
-      answering and names the command that restarts it.
+    - **`could not bind port …: it was taken by another program first`** — another
+      program took each port GAIA picked before the server could bind it. GAIA tries three
+      ports, and logs each retry. Free a port and start it there with
+      `gaia lemonade embedded start --port <port>`. With `--port`, the error reads
+      **`it is in use by another program`** instead, and GAIA does not try another port.
+    - **`busy loading or swapping a model; requests wait for it`** in
+      `gaia lemonade embedded status` — its health check is slow while a model loads or
+      unloads. It is working: don't stop it.
+    - **`is running but not answering on port …`** — the server answers nothing, or its
+      model backends have done no work for over 5 minutes. Check
+      `~/.gaia/lemonade/lemond.log`; if it shows no progress, run
+      `gaia lemonade embedded stop`, then start it again.
 
     To start over with a fresh copy, run `gaia init --force-reinstall`.
   </Accordion>
