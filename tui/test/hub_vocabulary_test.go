@@ -90,7 +90,7 @@ func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
 	repo := filepath.Dir(repoTUIDir(t))
 	docs := []string{
 		filepath.Join(repo, "tui", "README.md"),
-		filepath.Join(repo, "docs", "guides", "terminal-hub.mdx"),
+		filepath.Join(repo, "docs", "guides", "tui.mdx"),
 		filepath.Join(repo, "docs", "reference", "cli.mdx"),
 		filepath.Join(repo, "tui", "Makefile"),
 	}

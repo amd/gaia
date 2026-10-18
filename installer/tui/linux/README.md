@@ -1,4 +1,4 @@
-# Linux packages for the GAIA terminal hub
+# Linux packages for the GAIA Terminal UI
 
 Builds a `.deb` and an `.rpm` for **x86-64 only**, each containing:
 

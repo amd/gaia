@@ -12,10 +12,11 @@ $GAIA_VENV = "$GAIA_HOME\venv"
 $GAIA_BIN = "$GAIA_HOME\bin"
 $PYTHON_VERSION = "3.12"
 
-# The Agent Hub is the canonical channel for the terminal hub binary:
+# The Agent Hub is the canonical channel for the GAIA Terminal UI binary:
 # release_components.yml publishes all six platform builds there.
 $GAIA_HUB_BASE_URL = if ($env:GAIA_HUB_BASE_URL) { $env:GAIA_HUB_BASE_URL } else { "https://hub.amd-gaia.ai" }
 $GAIA_HUB_BASE_URL = $GAIA_HUB_BASE_URL.TrimEnd('/')
+# The published component id keeps its legacy name; published paths are immutable.
 $TERMINAL_HUB_ID = "terminal-hub"
 $FLAGSHIP_AGENT_ID = "gaia"
 
@@ -237,7 +238,7 @@ function Install-HubBinary {
     $resolved = Resolve-HubArtifact -AgentId $AgentId -Filename $Filename -Label $Label
     if (-not $resolved) {
         if ($Optional) {
-            Write-GaiaWarning "Skipping $Label - see above. The terminal hub still works."
+            Write-GaiaWarning "Skipping $Label - see above. The GAIA Terminal UI still works."
             return $false
         }
         throw "GAIA install failed - see the error above."
@@ -300,12 +301,12 @@ function Install-HubBinary {
 
 # A missing terminal hub fails the install - it is the advertised entry point.
 function Install-Tui {
-    Write-Step "Installing the GAIA terminal hub"
+    Write-Step "Installing the GAIA Terminal UI"
 
     $platform = Get-TerminalHubPlatform
     if (-not $platform) {
         $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
-        Write-GaiaError "No terminal hub build for processor architecture '$arch'."
+        Write-GaiaError "No GAIA Terminal UI build for processor architecture '$arch'."
         Write-Host "  Published targets: win-x64, win-arm64, linux-x64, linux-arm64," -ForegroundColor $COLOR_YELLOW
         Write-Host "  darwin-x64, darwin-arm64. See $GAIA_HUB_BASE_URL/index.json" -ForegroundColor $COLOR_YELLOW
         throw "GAIA install failed - see the error above."
@@ -313,7 +314,7 @@ function Install-Tui {
 
     # Never `gaia.exe`: tui/internal/daemon/client.go resolves `gaia` on PATH to
     # start the Python-owned daemon, so a Go binary by that name finds itself.
-    [void](Install-HubBinary -AgentId $TERMINAL_HUB_ID -Filename "gaia-$platform.exe" -DestName "gaia-tui.exe" -Label "terminal hub")
+    [void](Install-HubBinary -AgentId $TERMINAL_HUB_ID -Filename "gaia-$platform.exe" -DestName "gaia-tui.exe" -Label "GAIA Terminal UI")
 }
 
 # The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
@@ -403,7 +404,7 @@ function Show-NextSteps {
         Write-Host "/agents" -ForegroundColor $COLOR_GREEN -NoNewline
         Write-Host " to list installed agents)" -ForegroundColor White
     } else {
-        Write-Host "  3. Open the terminal hub: " -ForegroundColor White -NoNewline
+        Write-Host "  3. Open the GAIA Terminal UI: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
         Write-Host "     The GAIA agent was skipped - see the warning above - so this" -ForegroundColor $COLOR_YELLOW
         Write-Host "     opens the agent list, not a chat. Re-run this installer to retry." -ForegroundColor $COLOR_YELLOW
