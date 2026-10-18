@@ -448,6 +448,16 @@ def asset_url(version: str = LEMONADE_VERSION) -> str:
     return f"{GITHUB_RELEASE_BASE}/v{version}/{asset_name(version)}"
 
 
+def _inside(path: str, root: str) -> bool:
+    """Whether *path* is under *root* (both compared case-normalized)."""
+    try:
+        resolved = os.path.normcase(str(Path(path).resolve()))
+        return os.path.commonpath([root, resolved]) == root
+    except (OSError, ValueError):
+        # ValueError: different drives on Windows -- not under root.
+        return False
+
+
 def _free_port() -> int:
     """Return a TCP port the OS reports as free on loopback.
 
@@ -1152,8 +1162,89 @@ class EmbeddedLemonade:
             )
 
         self._report_gone(state)
+        self._reap_orphaned_backends()
         self._clear_state()
         return stopped
+
+    def _reap_orphaned_backends(self) -> List[int]:
+        """Kill backends a dead lemond of this install left running.
+
+        lemond's llama-server children each hold gigabytes of memory. Killed
+        without its tree, or crashed, lemond leaves them running, and the next
+        start loads the same models again beside them. A backend is reaped only
+        when its executable is under this install's ``cache/bin`` and its parent
+        is not a running lemond of this install, so another Lemonade's backends
+        and a live server's are never touched.
+
+        Returns:
+            The pids killed.
+        """
+        import psutil
+
+        bin_dir = self.cache_dir / "bin"
+        # Names first: reading every process's path or parent takes seconds.
+        names = {name.lower() for _, _, files in os.walk(bin_dir) for name in files}
+        if not names:
+            return []
+        bin_root = os.path.normcase(str(bin_dir.resolve()))
+        killed = []
+        for proc in psutil.process_iter(["pid", "name"]):
+            if (proc.info.get("name") or "").lower() not in names:
+                continue
+            try:
+                exe = proc.exe()
+                if not _inside(exe, bin_root):
+                    continue
+                parent = proc.ppid()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if self._is_running_lemond(parent):
+                continue
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as e:
+                log.warning(
+                    "Backend %s (pid %s) outlived its lemond, but GAIA may not "
+                    "stop it (%s). End it by hand: Task Manager on Windows, "
+                    "`kill %s` elsewhere.",
+                    exe,
+                    proc.pid,
+                    e,
+                    proc.pid,
+                )
+                continue
+            log.warning(
+                "Stopped backend %s (pid %s): the lemond that started it is gone",
+                exe,
+                proc.pid,
+            )
+            killed.append(proc)
+        # The next lemond loads models into the memory these release.
+        _, alive = psutil.wait_procs(killed, timeout=5)
+        for proc in alive:
+            log.warning("Backend pid %s is still exiting after 5s", proc.pid)
+        return [proc.pid for proc in killed]
+
+    def _is_running_lemond(self, pid: Optional[int]) -> bool:
+        """Whether *pid* is a running lemond from this install's ``dist`` tree.
+
+        When the OS hides it, it counts as running: a backend is never killed
+        on a guess.
+        """
+        import psutil
+
+        if not pid:
+            return False
+        try:
+            exe = psutil.Process(pid).exe()
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied:
+            return True
+        dist_root = os.path.normcase(str((self.root / "dist").resolve()))
+        return Path(exe).stem.lower() == "lemond" and _inside(exe, dist_root)
 
     def _log_tail(self, lines: int = 3) -> str:
         """The last *lines* non-health lines of lemond's log, `` | ``-joined."""
@@ -1457,6 +1548,7 @@ class EmbeddedLemonade:
                 )
             self.install()
 
+        self._reap_orphaned_backends()
         self.write_config()
         port = port or self._choose_port()
         api_key = secrets.token_urlsafe(32)

@@ -798,3 +798,109 @@ class TestVulkanWorkarounds:
             lambda: pytest.fail("read the registry off Windows"),
         )
         assert vulkan_workarounds() == {}
+
+
+class TestOrphanedBackends:
+    """The reaper's choice, on every platform. The Windows-only file
+    test_lemonade_orphaned_backends.py runs it on real processes."""
+
+    class _Proc:
+        def __init__(self, pid, ppid, exe, kill_denied=False):
+            self.pid = pid
+            self.info = {"pid": pid, "name": Path(exe).name}
+            self._ppid, self._exe = ppid, exe
+            self._kill_denied = kill_denied
+            self.killed = False
+
+        def exe(self):
+            return self._exe
+
+        def ppid(self):
+            return self._ppid
+
+        def kill(self):
+            import psutil
+
+            if self._kill_denied:
+                raise psutil.AccessDenied(self.pid)
+            self.killed = True
+
+    def _world(self, manager, monkeypatch, procs, lemonds=()):
+        """Put *procs* in the process table; *lemonds* are live parent pids."""
+        import psutil
+
+        (manager.cache_dir / "bin" / "llamacpp").mkdir(parents=True)
+        (manager.cache_dir / "bin" / "llamacpp" / "llama-server").touch()
+        monkeypatch.setattr(psutil, "process_iter", lambda attrs: iter(procs))
+        monkeypatch.setattr(psutil, "wait_procs", lambda procs, timeout: (procs, []))
+        lemond = str(manager.dist_dir / "lemond")
+
+        class Parent:
+            def __init__(self, pid):
+                if pid not in lemonds:
+                    raise psutil.NoSuchProcess(pid)
+
+            def exe(self):
+                return lemond
+
+        monkeypatch.setattr(psutil, "Process", Parent)
+
+    def _backend(self, manager):
+        return str(manager.cache_dir / "bin" / "llamacpp" / "llama-server")
+
+    def test_only_this_installs_orphans_are_killed(self, manager, monkeypatch):
+        orphan = self._Proc(10, 1, self._backend(manager))
+        served = self._Proc(11, 2, self._backend(manager))
+        theirs = self._Proc(12, 1, str(manager.root.parent / "x" / "llama-server"))
+        self._world(manager, monkeypatch, [orphan, served, theirs], lemonds={2})
+
+        assert manager._reap_orphaned_backends() == [10]
+        assert orphan.killed and not served.killed and not theirs.killed
+
+    def test_a_parent_the_os_hides_keeps_its_backend(self, manager, monkeypatch):
+        import psutil
+
+        child = self._Proc(10, 2, self._backend(manager))
+        self._world(manager, monkeypatch, [child])
+
+        class Hidden:
+            def __init__(self, pid):
+                pass
+
+            def exe(self):
+                raise psutil.AccessDenied(2)
+
+        monkeypatch.setattr(psutil, "Process", Hidden)
+
+        assert manager._reap_orphaned_backends() == []
+        assert not child.killed
+
+    def test_an_orphan_it_may_not_kill_is_reported(self, manager, monkeypatch, caplog):
+        child = self._Proc(10, 1, self._backend(manager), kill_denied=True)
+        self._world(manager, monkeypatch, [child])
+
+        with caplog.at_level("WARNING"):
+            assert manager._reap_orphaned_backends() == []
+        assert any("may not stop it" in r.getMessage() for r in caplog.records)
+
+    def test_nothing_is_scanned_without_backends_installed(self, manager, monkeypatch):
+        import psutil
+
+        monkeypatch.setattr(
+            psutil, "process_iter", lambda attrs: pytest.fail("scanned for nothing")
+        )
+        assert manager._reap_orphaned_backends() == []
+
+    def test_a_healthy_status_never_scans(self, manager, monkeypatch):
+        """status() is on every request's path; the scan belongs to the gone
+        branch only."""
+        manager._write_state(
+            {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
+        monkeypatch.setattr(
+            EmbeddedLemonade,
+            "_reap_orphaned_backends",
+            lambda self: pytest.fail("scanned processes on a healthy status"),
+        )
+        assert manager.status().running
