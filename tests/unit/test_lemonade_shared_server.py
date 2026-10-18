@@ -392,3 +392,11 @@ def test_a_slow_but_alive_server_ends_the_busy_wait(
     started = time.monotonic()
     assert client._wait_while_busy(MODEL).running
     assert time.monotonic() - started < 10
+
+
+def test_a_slow_but_alive_server_is_not_a_load(isolated_home, fake):
+    """The retrier's load probe gets the full probe time: a /health that takes
+    2 s to say nothing is loading must not turn into a load wait."""
+    fake.health_delay = 2
+    client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
+    assert client._server_load_in_progress() is None
