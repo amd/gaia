@@ -531,6 +531,7 @@ func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error 
 		},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("answer the '%s' agent's question", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -603,6 +604,7 @@ func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) er
 		},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver the '%s' agent's confirmation decision", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -656,6 +658,7 @@ func (s *SSEClient) postCancel(ctx context.Context, inst *daemon.Instance, runID
 			url.PathEscape(s.agentID), url.PathEscape(runID)),
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
+		RunScoped:  true,
 	})
 	return resp, err
 }
@@ -801,6 +804,7 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver a follow-up to the '%s' run", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("could not deliver the follow-up to the '%s' agent: %w", s.agentID, err)
@@ -1158,6 +1162,7 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver the '%s' agent's permission decision", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -1219,6 +1224,7 @@ func (s *SSEClient) SetFullAccess(enabled bool) error {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("change the '%s' agent's full-access setting", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err

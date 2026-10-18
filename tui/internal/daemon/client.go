@@ -464,6 +464,10 @@ type Request struct {
 	HTTPClient *http.Client
 	// Op names the operation for error messages, e.g. "stream the 'email' query".
 	Op string
+	// RunScoped marks a call about state held by a running sidecar (a run or a
+	// session). A restarted daemon starts fresh sidecars, so such a call is not
+	// carried over to it; it fails with DaemonRestartedError instead.
+	RunScoped bool
 }
 
 // Do sends an authenticated request to the daemon.
@@ -475,8 +479,9 @@ type Request struct {
 //
 // A daemon restart can also move it to a new port. When the connection cannot
 // be made, instance.json is re-read once and, if it names a different live
-// daemon, the request is replayed there: a failed dial never reached any
-// server, so the replay cannot run anything twice.
+// daemon, the request goes there: a failed dial never reached any server, so
+// nothing can run twice. A relayed call first ensures its agent there, since
+// sidecars do not survive a restart; a RunScoped call is not sent at all.
 //
 // The caller owns resp.Body and must close it.
 func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Response, *Instance, error) {
@@ -487,13 +492,22 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 		}
 		moved, rerr := c.rediscover(ctx, inst)
 		if rerr != nil {
-			return nil, inst, fmt.Errorf("%w (instance.json was rewritten, but the daemon it names is not usable either: %v)", err, rerr)
+			return nil, inst, fmt.Errorf("%w (instance.json was rewritten, but the daemon it names is not usable either: %w)", err, rerr)
 		}
 		if moved == nil {
 			return nil, inst, err
 		}
-		c.opts.Logf("daemon: %s refused the connection; instance.json now names %s, retrying %s %s",
-			inst.BaseURL(), moved.BaseURL(), r.Method, r.Path)
+		c.opts.Logf("daemon: could not reach %s (%v); instance.json now names %s",
+			inst.BaseURL(), dialCause(err), moved.BaseURL())
+		if r.RunScoped {
+			return nil, moved, &DaemonRestartedError{Op: c.opDescription(r)}
+		}
+		if agentID := relayedAgent(r.Path); agentID != "" {
+			if _, err := c.ensureOn(ctx, moved, agentID); err != nil {
+				return nil, moved, err
+			}
+		}
+		c.opts.Logf("daemon: retrying %s %s on %s", r.Method, r.Path, moved.BaseURL())
 		inst = moved
 		if resp, err = c.send(ctx, inst, r); err != nil {
 			return nil, inst, err
@@ -564,6 +578,25 @@ func (c *Client) refresh(ctx context.Context, old *Instance, path string) (*Inst
 func isDialFailure(err error) bool {
 	var op *net.OpError
 	return errors.As(err, &op) && op.Op == "dial"
+}
+
+// dialCause is the dial's own failure (refused, timed out, unreachable) for the log.
+func dialCause(err error) error {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Err != nil {
+		return op.Err
+	}
+	return err
+}
+
+// relayedAgent is the agent id a /v1/<agent>/... relay path addresses, or "".
+func relayedAgent(path string) string {
+	rest, ok := strings.CutPrefix(path, "/v1/")
+	if !ok {
+		return ""
+	}
+	agentID, _, _ := strings.Cut(rest, "/")
+	return agentID
 }
 
 // rediscover returns the daemon instance.json now records in place of old: nil
@@ -649,13 +682,6 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if agentID == "" {
 		return nil, &RequestError{Op: "ensure an agent sidecar", Detail: "no agent id was given"}
 	}
-	body, err := ensureRequestBody(agentID)
-	if err != nil {
-		return nil, &RequestError{
-			Op:     fmt.Sprintf("resolve the caller settings for the '%s' sidecar", agentID),
-			Detail: err.Error(),
-		}
-	}
 	inst, err := c.StartOrAttach(ctx)
 	if err != nil {
 		return nil, err
@@ -663,7 +689,18 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if err := inst.CheckAgentsFloor(); err != nil {
 		return nil, err
 	}
+	return c.ensureOn(ctx, inst, agentID)
+}
 
+// ensureOn asks the daemon at inst to start-or-attach agentID's sidecar.
+func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string) (*Instance, error) {
+	body, err := ensureRequestBody(agentID)
+	if err != nil {
+		return nil, &RequestError{
+			Op:     fmt.Sprintf("resolve the caller settings for the '%s' sidecar", agentID),
+			Detail: err.Error(),
+		}
+	}
 	resp, inst, err := c.Do(ctx, inst, Request{
 		Method:     http.MethodPost,
 		Path:       APIPrefix + "/agents/" + agentID + "/ensure",

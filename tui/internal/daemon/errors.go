@@ -208,3 +208,15 @@ func (e *RequestError) Error() string {
 }
 
 func (e *RequestError) Unwrap() error { return e.Err }
+
+// DaemonRestartedError is a call about a run or session that a daemon restart
+// ended: the new daemon starts fresh sidecars, so there is nothing to send it to.
+type DaemonRestartedError struct {
+	Op string
+}
+
+func (e *DaemonRestartedError) Error() string {
+	return fmt.Sprintf(
+		"could not %s: GAIA's daemon restarted, which ended the agent session this belonged to. "+
+			"Nothing was sent. Send your message again", e.Op)
+}

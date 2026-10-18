@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,20 +15,17 @@ import (
 	"testing"
 )
 
-// restartOnNewPort stops the fake daemon and brings it back on a different port
-// with a new token, rewriting instance.json the way a real daemon restart does.
+// restartOnNewPort stops the fake daemon and brings it back with a new token,
+// usually on a new port, rewriting instance.json the way a real daemon restart
+// does. The token alone is enough to make it a different daemon to the client.
 func (f *fakeDaemon) restartOnNewPort(token string) {
 	f.t.Helper()
-	oldPort := f.port()
 	f.srv.Close()
 	f.mu.Lock()
 	f.token = token
 	f.mu.Unlock()
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	f.t.Cleanup(f.srv.Close)
-	if f.port() == oldPort {
-		f.t.Fatalf("restarted fake daemon reused port %d", oldPort)
-	}
 	f.writeInstance(nil)
 }
 
@@ -188,5 +186,85 @@ func TestDoReportsBothFailuresWhenTheRecordedReplacementIsDead(t *testing.T) {
 	}
 	if !strings.Contains(msg, "instance.json was rewritten, but the daemon it names is not usable either") {
 		t.Errorf("error must add why the replacement was rejected: %v", err)
+	}
+}
+
+// The real daemon stops its sidecars on shutdown and the next one never adopts
+// them, so a run-scoped call cannot be carried over: it names the restart.
+func TestDoDoesNotCarryARunScopedCallToARestartedDaemon(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	f.restartOnNewPort("token-B")
+
+	cancelPath := "/v1/email/query/run-1/cancel"
+	_, got, err := c.Do(context.Background(), inst, Request{
+		Method: http.MethodPost, Path: cancelPath, Op: "cancel the 'email' run", RunScoped: true,
+	})
+	var restarted *DaemonRestartedError
+	if !errors.As(err, &restarted) {
+		t.Fatalf("want a DaemonRestartedError, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "restarted") || !strings.Contains(err.Error(), "cancel the 'email' run") {
+		t.Errorf("error must name the restart and the operation: %v", err)
+	}
+	if f.sawPath("POST " + cancelPath) {
+		t.Error("a run-scoped call was sent to a daemon that never had the run")
+	}
+	if got.Token != "token-B" {
+		t.Errorf("the caller should learn the restarted daemon so later calls go there")
+	}
+}
+
+// A call that is not tied to a run is replayed, after the agent is ensured on
+// the restarted daemon, since its sidecar did not survive the restart.
+func TestDoEnsuresTheAgentBeforeReplayingARelayCallToARestartedDaemon(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	f.restartOnNewPort("token-B")
+
+	resp, _, err := c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: "/v1/email/memory"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
+		t.Error("the agent was not ensured on the restarted daemon before the replay")
+	}
+	if !f.sawPath("GET /v1/email/memory") {
+		t.Error("the call was not replayed")
+	}
+}
+
+// A replacement that speaks another contract keeps its typed error, so callers
+// that check for a version mismatch still see one.
+func TestDoKeepsTheReplacementsVersionErrorInTheChain(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	f.restartOnNewPort("token-B")
+	f.writeInstance(func(i *Instance) { i.APIVersion = "9.0" })
+
+	_, _, err = c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: APIPrefix + "/status"})
+	var verr *VersionError
+	if !errors.As(err, &verr) {
+		t.Fatalf("the replacement's VersionError was dropped from the chain: %v", err)
+	}
+	var rerr *RequestError
+	if !errors.As(err, &rerr) {
+		t.Errorf("the original connection failure was dropped from the chain: %v", err)
 	}
 }

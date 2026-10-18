@@ -5,20 +5,27 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/amd/gaia/tui/internal/daemon"
 )
 
 // moveDaemon brings up a second listener for the same fake, points
 // instance.json at it with a new token, and stops the first one accepting
-// connections: a daemon restart that landed on a new port. A stream already
-// open on the old listener keeps running.
+// connections: a daemon restart that landed on a new port. Like the real one,
+// the restarted daemon has no sidecar until the agent is ensured again. A
+// stream already open on the old listener keeps running, which is how the
+// client still holds a run to cancel.
 func (f *fakeRelay) moveDaemon(token string) {
 	f.t.Helper()
 	old := f.srv
 	f.mu.Lock()
 	f.token = token
+	f.sidecarGone = true
 	f.mu.Unlock()
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	f.t.Cleanup(f.srv.Close)
@@ -30,7 +37,7 @@ func (f *fakeRelay) moveDaemon(token string) {
 	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
 }
 
-func TestCancelReachesADaemonThatRestartedOnANewPort(t *testing.T) {
+func TestCancelAfterADaemonRestartSaysTheRunEnded(t *testing.T) {
 	f := newFakeRelay(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -56,14 +63,19 @@ func TestCancelReachesADaemonThatRestartedOnANewPort(t *testing.T) {
 
 	f.moveDaemon("token-B")
 
-	if err := c.Cancel(context.Background()); err != nil {
-		t.Fatalf("Cancel after a daemon restart on a new port: %v", err)
+	err = c.Cancel(context.Background())
+	var restarted *daemon.DaemonRestartedError
+	if !errors.As(err, &restarted) {
+		t.Fatalf("Cancel after a daemon restart: want DaemonRestartedError, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "restarted, which ended the agent session this belonged to") {
+		t.Errorf("the error must say the run ended with the restart: %v", err)
 	}
 	f.mu.Lock()
 	cancelled := append([]string(nil), f.cancelled...)
 	f.mu.Unlock()
-	if len(cancelled) != 1 || cancelled[0] != f.lastQuery().RunID {
-		t.Fatalf("cancelled runs = %v, want the active run %q", cancelled, f.lastQuery().RunID)
+	if len(cancelled) != 0 {
+		t.Errorf("a cancel was sent to a daemon that never had the run: %v", cancelled)
 	}
 
 	// Later calls go straight to the new daemon instead of rediscovering it again.
