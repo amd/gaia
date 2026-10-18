@@ -16,6 +16,7 @@ import logging
 import os
 import platform
 import subprocess
+import tempfile
 
 from gaia.env import child_env
 
@@ -284,14 +285,26 @@ def _table_to_markdown(table) -> str:
 # code, so ``PPTX_TO_PDF_PS_SCRIPT`` stays a constant no input can alter.
 PPTX_IN_ENV_VAR = "GAIA_PPTX_CONVERT_IN"
 PDF_OUT_ENV_VAR = "GAIA_PPTX_CONVERT_OUT"
+PID_FILE_ENV_VAR = "GAIA_PPTX_CONVERT_PIDFILE"
 
+# PowerPoint is single-instance: when the user already has it open, COM hands
+# us *their* process.  ``$owned`` records whether GAIA started it, so only a
+# PowerPoint GAIA launched is quit — or, on timeout, killed by the PID the
+# script writes to the PID file.
+#
 # MsoTriState values are raw integers to avoid needing the Office interop
 # assembly: msoTrue = -1, msoFalse = 0, ppSaveAsPDF = 32.
 PPTX_TO_PDF_PS_SCRIPT = (
     "$ErrorActionPreference = 'Stop'; "
     f"$in = $env:{PPTX_IN_ENV_VAR}; "
     f"$out = $env:{PDF_OUT_ENV_VAR}; "
+    "$owned = -not (Get-Process POWERPNT -ErrorAction SilentlyContinue); "
     "$ppt = New-Object -ComObject PowerPoint.Application; "
+    "if ($owned) { "
+    "  $p = Get-Process POWERPNT -ErrorAction SilentlyContinue | Select-Object -First 1; "
+    f"  if ($p) {{ Set-Content -LiteralPath $env:{PID_FILE_ENV_VAR} -Value $p.Id }} "
+    "} "
+    "$pres = $null; "
     "try { "
     "  $pres = $ppt.Presentations.Open($in, "
     "    [int]-1, "  # ReadOnly = msoTrue
@@ -299,11 +312,43 @@ PPTX_TO_PDF_PS_SCRIPT = (
     "    [int]0"  # WithWindow = msoFalse
     "  ); "
     "  $pres.SaveAs($out, 32); "  # 32 = ppSaveAsPDF
-    "  $pres.Close(); "
     "} finally { "
-    "  $ppt.Quit(); "
+    "  if ($pres) { $pres.Close() }; "
+    "  if ($owned) { $ppt.Quit() } "
     "}"
 )
+
+CONVERT_TIMEOUT_S = 120
+
+
+def _kill_owned_powerpoint(pid_file: str) -> None:
+    """Kill the PowerPoint this conversion started, and nothing else."""
+    try:
+        with open(pid_file, encoding="utf-8") as f:
+            pid = f.read().strip()
+    except FileNotFoundError:
+        logger.warning(
+            "PPTX→PDF conversion timed out inside a PowerPoint that was already "
+            "running; leaving it open. Close any stuck dialog in PowerPoint."
+        )
+        return
+    if not pid.isdigit():
+        logger.warning("PPTX→PDF: PID file %s holds %r, not a PID", pid_file, pid)
+        return
+    # The image-name filter stops a recycled PID from killing another program.
+    result = subprocess.run(
+        ["taskkill", "/f", "/pid", pid, "/fi", "IMAGENAME eq POWERPNT.EXE"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Could not stop the PowerPoint (PID %s) GAIA started for PPTX→PDF: %s",
+            pid,
+            (result.stderr or result.stdout or "").strip()[:200],
+        )
 
 
 def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
@@ -335,14 +380,23 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
     pdf_name = Path(pptx_path).stem + ".pdf"
     pdf_abs = str(Path(output_dir).resolve() / pdf_name)
 
-    ps_env = child_env({PPTX_IN_ENV_VAR: pptx_abs, PDF_OUT_ENV_VAR: pdf_abs})
+    fd, pid_file = tempfile.mkstemp(prefix="gaia-pptx-", suffix=".pid")
+    os.close(fd)
+    os.unlink(pid_file)  # the script creates it only when it starts PowerPoint
+    ps_env = child_env(
+        {
+            PPTX_IN_ENV_VAR: pptx_abs,
+            PDF_OUT_ENV_VAR: pdf_abs,
+            PID_FILE_ENV_VAR: pid_file,
+        }
+    )
 
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", PPTX_TO_PDF_PS_SCRIPT],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=CONVERT_TIMEOUT_S,
             check=False,
             env=ps_env,
         )
@@ -359,14 +413,8 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
         return None
 
     except subprocess.TimeoutExpired:
-        logger.warning("PPTX→PDF conversion timed out after 120s")
-        # Kill any orphaned PowerPoint process spawned by COM
-        subprocess.run(
-            ["taskkill", "/f", "/im", "POWERPNT.EXE"],
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
+        logger.warning("PPTX→PDF conversion timed out after %ds", CONVERT_TIMEOUT_S)
+        _kill_owned_powerpoint(pid_file)
         return None
     except FileNotFoundError:
         logger.debug("PowerShell not found on PATH")
@@ -374,3 +422,8 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
     except Exception as e:
         logger.debug("PPTX→PDF conversion failed: %s", e)
         return None
+    finally:
+        try:
+            os.unlink(pid_file)
+        except FileNotFoundError:
+            pass
