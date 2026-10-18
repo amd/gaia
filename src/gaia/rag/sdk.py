@@ -117,11 +117,22 @@ def _is_connection_failure(exc: BaseException) -> bool:
 
 
 class IndexingStopped(Exception):
-    """Raised from an ``index_document`` progress callback to stop indexing.
+    """Raised from an ``index_document`` callback to stop indexing.
 
     It leaves ``index_document`` as raised: the document is not indexed, and
     any cache it had is kept.
     """
+
+
+# The running index_document's ``heartbeat`` on this thread, called once per
+# extracted page, so a long extraction shows progress and can be stopped.
+_HEARTBEAT = threading.local()
+
+
+def _beat() -> None:
+    heartbeat = getattr(_HEARTBEAT, "fn", None)
+    if heartbeat is not None:
+        heartbeat()
 
 
 class EmbeddingUnavailableError(RuntimeError):
@@ -990,6 +1001,7 @@ class RAGSDK:
             page_warnings = {}
 
             for i, page in enumerate(reader.pages, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
@@ -1149,9 +1161,9 @@ class RAGSDK:
                 )
 
             return full_text, total_pages, metadata
-        except PDFExtractionError:
-            # Already a well-formed extraction error with actionable guidance —
-            # re-raise without wrapping or re-logging (callers will log).
+        except (PDFExtractionError, IndexingStopped):
+            # Already a well-formed extraction error with actionable guidance,
+            # or a stop — re-raise without wrapping or re-logging.
             raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
@@ -2686,6 +2698,25 @@ These positions indicate where to split the text."""
         return False
 
     def index_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        heartbeat: Optional[Callable[[], None]] = None,
+    ) -> Dict[str, Any]:
+        """Index a document for retrieval; see :meth:`_index_document`.
+
+        ``heartbeat`` is called once per extracted PDF page. Raising
+        :class:`IndexingStopped` from it, or from ``progress_callback``,
+        stops the index and keeps any cache the document had.
+        """
+        previous = getattr(_HEARTBEAT, "fn", None)
+        _HEARTBEAT.fn = heartbeat
+        try:
+            return self._index_document(file_path, progress_callback)
+        finally:
+            _HEARTBEAT.fn = previous
+
+    def _index_document(
         self,
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,

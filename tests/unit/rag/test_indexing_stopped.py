@@ -52,3 +52,23 @@ def test_stopping_a_cached_document_keeps_its_cache(sdk, tmp_path):
 
     after = sorted(p.name for p in Path(sdk.config.cache_dir).rglob("*") if p.is_file())
     assert after == cached
+
+
+def test_a_heartbeat_can_stop_a_pdf_between_pages(sdk, tmp_path):
+    pypdf = pytest.importorskip("pypdf")
+    writer = pypdf.PdfWriter()
+    for _ in range(3):
+        writer.add_blank_page(width=200, height=200)
+    doc = tmp_path / "doc.pdf"
+    with open(doc, "wb") as f:
+        writer.write(f)
+    beats = []
+
+    def heartbeat():
+        beats.append(1)
+        if len(beats) == 2:
+            raise IndexingStopped("doc.pdf")
+
+    with pytest.raises(IndexingStopped):
+        sdk.index_document(str(doc), heartbeat=heartbeat)
+    assert len(beats) == 2
