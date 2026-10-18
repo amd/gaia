@@ -249,13 +249,13 @@ _PRODUCER_STOP_GRACE_SECONDS = 5.0
 _stopping_sessions: dict[str, threading.Thread] = {}
 
 
-def session_still_stopping(session_id: str) -> bool:
-    """True while a stopped turn's agent thread in *session_id* winds down."""
+def stuck_producer(session_id: str) -> Optional[threading.Thread]:
+    """The stopped turn's agent thread still running in *session_id*, if any."""
     thread = _stopping_sessions.get(session_id)
     if thread is not None and not thread.is_alive():
         _stopping_sessions.pop(session_id, None)
-        return False
-    return thread is not None
+        return None
+    return thread
 
 
 def _stream_timeout_from_env() -> int:
@@ -314,20 +314,29 @@ class TurnStopped(Exception):
     """The turn was stopped while it waited to build its agent."""
 
 
+# A build that holds the registry longer than this is stuck (a hung MCP server).
+_REGISTRY_WAIT_LIMIT_S = 120.0
+
+
 @contextmanager
 def writing_tool_registry(handler=None):
     """Hold ``tool_registry_lock`` while an agent is built or re-registers tools.
 
     A turn that has to wait (a stopped chat's agent thread, or the warm-up, is
-    still building) says so, and Stop ends the wait with :class:`TurnStopped`.
+    still building) says so and gives the model to other chats meanwhile.
+    Stop ends the wait with :class:`TurnStopped`.
+
+    Raises:
+        TurnStopped: the turn was stopped while waiting.
+        TimeoutError: the registry stayed held past ``_REGISTRY_WAIT_LIMIT_S``.
     """
-    shown = False
-    while not tool_registry_lock.acquire(timeout=0.2):
-        if handler is None:
-            continue
-        if handler.cancelled.is_set():
-            raise TurnStopped()
-        if not shown:
+    if tool_registry_lock.acquire(blocking=False):
+        acquired = True
+    else:
+        acquired = False
+        slot = getattr(handler, "turn_slot", None)
+        stepped_away = slot is not None and slot.step_away()
+        if handler is not None:
             handler._emit(
                 {
                     "type": "status",
@@ -335,7 +344,25 @@ def writing_tool_registry(handler=None):
                     "message": "Waiting for another chat to finish setting up",
                 }
             )
-            shown = True
+        deadline = _time.monotonic() + _REGISTRY_WAIT_LIMIT_S
+        try:
+            while not tool_registry_lock.acquire(timeout=0.2):
+                if handler is not None and handler.cancelled.is_set():
+                    raise TurnStopped()
+                if _time.monotonic() > deadline:
+                    raise TimeoutError(
+                        "Another chat has been setting up its agent for over "
+                        f"{_REGISTRY_WAIT_LIMIT_S:.0f}s, most likely waiting on an "
+                        "MCP server that does not answer. Check Settings -> MCP "
+                        "servers, then send the message again."
+                    )
+            acquired = True
+            if stepped_away and not slot.come_back(handler.cancelled):
+                raise TurnStopped()
+        except BaseException:
+            if acquired:
+                tool_registry_lock.release()
+            raise
     try:
         yield
     finally:
@@ -2592,8 +2619,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 )
                 slot = getattr(run, "slot", None)
                 if slot is not None:
-                    slot.release()
-                run.lingering_producer = producer
+                    slot.close()
                 _stopping_sessions[session_id] = producer
 
     try:
@@ -3739,7 +3765,7 @@ async def _run_chat_lifecycle(
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
         finally:
-            run.slot.release()
+            run.slot.close()
     finally:
         _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if

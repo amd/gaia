@@ -61,8 +61,6 @@ class Run:
         self.task: Optional[asyncio.Task] = None
         # The turn's place on the model (``turn_queue.TurnSlot``), once in line.
         self.slot = None
-        # A producer thread still winding down after Stop; the chat stays busy.
-        self.lingering_producer = None
 
     # ── Producer side (called from the lifecycle task) ────────────────
     def emit(self, data: str) -> None:

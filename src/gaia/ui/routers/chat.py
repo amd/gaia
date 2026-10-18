@@ -25,7 +25,7 @@ from starlette.background import BackgroundTask
 from gaia.agents.base.tool_grants import grant_scope
 
 from .. import permissions as session_permissions
-from .._chat_helpers import _spawn_background, session_still_stopping
+from .._chat_helpers import _spawn_background, stuck_producer
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
@@ -113,14 +113,14 @@ async def send_message(
     #
     # The session lock and run registry cover the entire producer lifetime,
     # including detached runs, to protect the cached agent's conversation state.
+    if stuck_producer(sid) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is still stopping the previous reply in this chat: "
+            "a tool it was running has not returned yet. Send your message "
+            "again in a moment; other chats are not affected.",
+        )
     if session_lock.locked() or run_manager.is_running(sid):
-        if session_still_stopping(sid):
-            raise HTTPException(
-                status_code=409,
-                detail="GAIA is still stopping the previous reply in this chat: "
-                "a tool it was running has not returned yet. Send your message "
-                "again in a moment; other chats are not affected.",
-            )
         raise HTTPException(
             status_code=409,
             detail="A chat request is already in progress for this session. "
@@ -145,6 +145,11 @@ async def send_message(
                 detail="This message was stopped while it waited for another "
                 "chat to finish. It is saved in the chat; send it again to retry.",
             )
+        except asyncio.CancelledError:
+            # The client left while waiting: close the turn it saved.
+            db.add_message(sid, "assistant", "Cancelled.")
+            session_lock.release()
+            raise
         except BaseException:
             session_lock.release()
             raise
@@ -162,15 +167,15 @@ async def send_message(
         if request.stream:
             stream_resources_released = False
 
-            def _release_stream_locks(_task=None, run=None):
+            def _release_stream_locks(_task=None):
                 nonlocal stream_resources_released
                 if stream_resources_released:
                     return
                 stream_resources_released = True
-                lingering = getattr(run, "lingering_producer", None)
-                if lingering is not None and lingering.is_alive():
+                stuck = stuck_producer(sid)
+                if stuck is not None:
                     # The stopped turn's thread still drives this chat's agent.
-                    _spawn_background(_release_after(lingering, session_lock))
+                    _spawn_background(_release_after(stuck, session_lock))
                     return
                 session_lock.release()
 
@@ -178,9 +183,7 @@ async def send_message(
                 # A disconnected subscriber must not admit a second producer.
                 run = run_manager.get(sid)
                 if run is not None and run.task is not None and not run.done.is_set():
-                    run.task.add_done_callback(
-                        lambda task: _release_stream_locks(task, run)
-                    )
+                    run.task.add_done_callback(_release_stream_locks)
                 else:
                     # Includes disconnect/failure before the producer started.
                     _release_stream_locks()
@@ -261,7 +264,9 @@ async def send_message(
 
 async def _release_after(thread: threading.Thread, session_lock: asyncio.Lock):
     """Free a chat once the agent thread of its stopped turn has exited."""
-    await asyncio.to_thread(thread.join)
+    # Polled, not joined: a join would hold a worker of the shared executor.
+    while thread.is_alive():
+        await asyncio.sleep(0.5)
     session_lock.release()
 
 

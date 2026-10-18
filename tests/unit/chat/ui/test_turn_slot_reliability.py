@@ -20,6 +20,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -60,6 +61,22 @@ def runtime(monkeypatch):
     # Nothing here may reach a real model server.
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
     monkeypatch.setattr(LemonadeManager, "get_base_url", lambda: None)
+
+    class NoStats:
+        # A dead port can take seconds to refuse on Windows; fail at once.
+        def __init__(self, *_a, **_k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def get(self, url, **_k):
+            raise httpx.ConnectError(f"no model server in this test ({url})")
+
+    monkeypatch.setattr(httpx, "AsyncClient", NoStats)
     db = ChatDatabase(":memory:")
     manager = RunManager()
     queue = TurnQueue()
@@ -325,6 +342,48 @@ async def test_stop_frees_the_model_even_when_the_agent_thread_is_stuck(runtime)
     finally:
         unstick.set()
         await _cleanup(rt, a, b)
+
+
+async def _read_to_the_end(response):
+    """Stay connected, like an open chat tab, until the stream ends."""
+    ended = asyncio.Event()
+
+    async def receive():
+        await ended.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            ended.set()
+
+    await response({"type": "http", "asgi": {"spec_version": "2.0"}}, receive, send)
+
+
+async def test_stopped_chat_stays_busy_while_its_tab_stays_open(runtime):
+    rt = runtime
+    unstick = threading.Event()
+    sid, agent = _seed(rt.db, lambda _agent: unstick.wait(30) and "late")
+    try:
+        with patch.object(helpers, "_PRODUCER_STOP_GRACE_SECONDS", 0.3):
+            reading = asyncio.create_task(
+                _read_to_the_end(await _send(rt, sid, "hang"))
+            )
+            assert await asyncio.to_thread(agent.started.wait, 5)
+            await chat.cancel_stream(chat.CancelStreamRequest(session_id=sid))
+            await asyncio.wait_for(reading, 5)
+
+            # The stream ended, but its agent thread still runs: no new turn yet.
+            with pytest.raises(HTTPException) as busy:
+                await _send(rt, sid, "again")
+            assert busy.value.status_code == 409
+            assert "stopping" in busy.value.detail.lower()
+            assert rt.http.app.state.session_locks[sid].locked()
+
+            unstick.set()
+            await _until(lambda: not rt.http.app.state.session_locks[sid].locked())
+    finally:
+        unstick.set()
+        await _cleanup(rt, sid)
 
 
 # ── A turn waiting on the warm-up says so and can be stopped ─────────────────

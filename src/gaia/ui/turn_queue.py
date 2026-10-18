@@ -208,6 +208,8 @@ class TurnSlot:
         self._on_resume = on_resume
         # Read and written on the event loop only.
         self.held = False
+        # Set once the turn is over: a late come_back must not retake the model.
+        self.closed = False
 
     async def acquire(self, *, front: bool = False) -> None:
         """Wait in line, then hold the model (event loop only)."""
@@ -221,6 +223,11 @@ class TurnSlot:
         self.held = False
         self._queue.release()
         return True
+
+    def close(self) -> None:
+        """End the turn's hold for good (event loop only)."""
+        self.closed = True
+        self.release()
 
     def step_away(self) -> bool:
         """Give the model up while the turn waits on the user (worker thread).
@@ -247,8 +254,13 @@ class TurnSlot:
                 return False
 
     async def _resume(self) -> None:
+        if self.closed:
+            raise TurnCancelled(self._owner)
         waited = self._queue.locked()
         await self.acquire(front=True)
+        if self.closed:
+            self.release()
+            raise TurnCancelled(self._owner)
         if waited and self._on_resume is not None:
             self._on_resume()
 

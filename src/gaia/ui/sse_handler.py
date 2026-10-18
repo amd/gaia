@@ -1843,7 +1843,14 @@ class SSEOutputHandler(OutputHandler):
         and a Stop while it waits there ends the turn.
         """
         slot = self.turn_slot
-        if slot is None or not slot.step_away():
+        try:
+            stepped_away = slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            stepped_away = False
+        if not stepped_away:
             yield
             return
         try:
