@@ -15,6 +15,7 @@ file is never clobbered).
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import socket
@@ -356,13 +357,16 @@ def run(host: str = HOST) -> None:
     def _exit_on_own(_reason: str) -> None:
         server.should_exit = True
 
-    def _slots_busy() -> bool:
+    def _slots_idle() -> Optional[float]:
         slots = broker.snapshot()
-        return slots["active"] is not None or bool(slots["waiting"])
+        if slots["active"] is not None or slots["waiting"]:
+            return None
+        ago = slots["last_activity_s_ago"]
+        return math.inf if ago is None else ago
 
     idle = DaemonIdle(
         clients_idle=lambda: lemonade_clients.snapshot()["idle_seconds"],
-        slots_busy=_slots_busy,
+        slots_idle=_slots_idle,
         jobs_pending=lambda: bool(clock.job_counts()["pending"]),
         limit=idle_limit,
     )

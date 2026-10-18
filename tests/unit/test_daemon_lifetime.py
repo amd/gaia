@@ -8,6 +8,7 @@ Test runs used to leave dozens of daemons polling a deleted temp home forever.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -343,9 +344,8 @@ def test_the_watch_shuts_an_idle_scratch_daemon_down(registered):
 
 class _Fake:
     def __init__(self):
-        self.now = 1000.0
         self.clients_idle = 0.0
-        self.slots_busy = False
+        self.slots_idle = math.inf
         self.jobs_pending = False
         self.job_reads = 0
 
@@ -356,10 +356,9 @@ class _Fake:
     def idle(self, limit=600.0):
         return lifetime.DaemonIdle(
             clients_idle=lambda: self.clients_idle,
-            slots_busy=lambda: self.slots_busy,
+            slots_idle=lambda: self.slots_idle,
             jobs_pending=self.jobs,
             limit=limit,
-            clock=lambda: self.now,
         )
 
 
@@ -372,19 +371,15 @@ def test_a_connected_client_means_in_use():
 def test_a_held_or_queued_model_slot_means_in_use():
     fake = _Fake()
     fake.clients_idle = 10_000.0
-    fake.slots_busy = True
+    fake.slots_idle = None
     assert fake.idle()() is None
 
 
-def test_the_idle_clock_restarts_when_a_slot_lease_ends():
+def test_a_recent_slot_lease_keeps_the_idle_time_short():
     fake = _Fake()
     fake.clients_idle = 10_000.0
-    idle = fake.idle()
-    fake.slots_busy = True
-    idle()
-    fake.slots_busy = False
-    fake.now += 30.0
-    assert idle() == 30.0
+    fake.slots_idle = 30.0
+    assert fake.idle()() == 30.0
 
 
 def test_a_pending_job_keeps_it_only_once_past_the_limit():
@@ -402,3 +397,19 @@ def test_past_the_limit_with_nothing_pending_reports_the_idle_time():
     fake = _Fake()
     fake.clients_idle = 700.0
     assert fake.idle()() == 700.0
+
+
+# -- ModelSlotBroker: when the slot was last used ------------------------------
+
+
+def test_the_broker_reports_how_long_the_slot_sat_unused():
+    from gaia.daemon.broker import ModelSlotBroker
+
+    now = [100.0]
+    broker = ModelSlotBroker(time_fn=lambda: now[0])
+    assert broker.snapshot()["last_activity_s_ago"] is None
+    lease = broker.acquire("m", holder="t", timeout=1)
+    now[0] = 103.0
+    broker.release(lease.lease_id)
+    now[0] = 110.0
+    assert broker.snapshot()["last_activity_s_ago"] == 7.0
