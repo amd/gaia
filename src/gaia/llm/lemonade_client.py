@@ -6335,10 +6335,22 @@ class LemonadeClient:
 
         Raises:
             LemonadeClientError: if the stream emits an ``error`` event.
+            ModelDownloadCancelledError: Stop was pressed (see
+                :func:`gaia.llm.retry.model_retry_notices`).
         """
         download_complete = False
         last_logged_percent = -10  # Log at 0%, 10%, 20%, ...
-        for event in self.pull_model_stream(model_name=model_name):
+        is_cancelled = current_cancel_check()
+        events = self.pull_model_stream(model_name=model_name)
+        for event in events:
+            if is_cancelled is not None and is_cancelled():
+                # Closing the stream hangs up, which cancels Lemonade's pull.
+                close = getattr(events, "close", None)
+                if close is not None:
+                    close()
+                raise ModelDownloadCancelledError(
+                    f"Download of {model_name} stopped at your request."
+                )
             event_type = event.get("event")
             if event_type == "progress":
                 percent = event.get("percent", 0)
@@ -7827,25 +7839,38 @@ def create_lemonade_client(
                         f"Attempting to pull model '{model_name}' before loading..."
                     )
 
+                    # Streamed: progress is logged, a silent server ends it after
+                    # PULL_IDLE_TIMEOUT_S, and Stop hangs up (which cancels it).
                     try:
-                        pull_result = client.pull_model(model_name)
+                        finished = client._consume_pull_stream(model_name, "download")
+                    except ModelDownloadCancelledError:
+                        raise
                     except LemonadeClientError as pull_error:
                         raise LemonadeClientError(
-                            f"could not download it from {client.base_url} "
-                            f"({pull_error}). Check the model name and your "
-                            "connection, or run `gaia init` to install it."
+                            f"Failed to load {model_name}: could not download it "
+                            f"from {client.base_url} ({pull_error}). Check the "
+                            "model name and your connection, or run `gaia init` "
+                            "to install it."
                         ) from pull_error
-                    client.log.info(f"Successfully pulled model: {pull_result}")
+                    if not finished:
+                        raise LemonadeClientError(
+                            f"Failed to load {model_name}: the download from "
+                            f"{client.base_url} did not finish (the server ended "
+                            "it without reporting completion). Run the command "
+                            "again to resume it, or check the Lemonade server log."
+                        )
                 else:
                     client.log.info(
                         f"Model '{model_name}' found in registry, proceeding with load"
                     )
 
-            # The default load timeout: a load can queue behind another app's.
-            client.load_model(model_name)
+            # Not 60 s (it can queue behind another app's load), and not the
+            # download-sized default: the model is already on disk here.
+            client.load_model(model_name, timeout=RetryPolicy.from_env().load_wait)
         except LemonadeClientError as e:
+            # Re-raised as is: callers branch on its type (auth, memory, disk).
             client.log.error(f"Failed to load {model_name}: {e}")
-            raise LemonadeClientError(f"Failed to load {model_name}: {e}") from e
+            raise
 
     return client
 
