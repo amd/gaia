@@ -389,9 +389,10 @@ class _CountingAgent:
         return {"result": "answered"}
 
 
+@pytest.mark.parametrize("stopped_by", ["stop", "turn_cancel"])
 @pytest.mark.parametrize("wait_ends", ["returns", "raises"])
 def test_a_turn_stopped_while_waiting_for_the_model_never_queries(
-    lemonade, monkeypatch, wait_ends
+    lemonade, monkeypatch, wait_ends, stopped_by
 ):
     import json
     from unittest.mock import AsyncMock
@@ -411,7 +412,12 @@ def test_a_turn_stopped_while_waiting_for_the_model_never_queries(
     monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
 
     def press_stop_while_waiting(_model, _kwargs):
-        helpers._active_sse_handlers[sid].cancelled.set()
+        handler = helpers._active_sse_handlers[sid]
+        if stopped_by == "stop":
+            handler.cancelled.set()
+        else:
+            # The turn's own cancel (teardown, the idle stop), not the Stop flag.
+            helpers._agent_cache[sid]["agent"]._cancel_event.set()
         if wait_ends == "raises":
             # What a broker wait cancelled by the turn's Stop raises.
             raise RuntimeError("stopped while waiting for the model slot")
@@ -435,30 +441,58 @@ def test_a_turn_stopped_while_waiting_for_the_model_never_queries(
 
     assert agent.queries == 0, "the query went to a model nobody loaded"
     lemonade["client"].load_model.assert_not_called()
-    done = [e for e in events if e.get("type") == "done"]
-    assert done and done[-1].get("cancelled") is True
-    assert not [e for e in events if e.get("type") == "error"]
+    if stopped_by == "stop":
+        assert not [e for e in events if e.get("type") == "error"]
+        done = [e for e in events if e.get("type") == "done"]
+        assert done and done[-1].get("cancelled") is True
 
 
-# ── A restart still knows which models are GAIA's own ────────────────────────
+# ── A restart still knows which models are the Agent UI's own ──────────────
 
 
-@pytest.mark.parametrize("users_server,adopted", [(False, True), (True, False)])
-def test_models_resident_at_startup_on_gaias_server_count_as_its_own(
-    lemonade, monkeypatch, users_server, adopted
-):
-    from gaia.ui import server
+@pytest.fixture
+def record(monkeypatch):
+    """Restart the Agent UI: forget what is in memory; the record (a tmp file,
+    see tests/conftest.py) stays."""
+    monkeypatch.setattr(helpers, "_models_loaded_here", None)
 
-    lemonade["resident"] = [_model("Mine-Old-GGUF")]
-    monkeypatch.setattr(lemonade_choice, "is_users_server", lambda _u: users_server)
-    resp = MagicMock(status_code=200)
-    resp.json.return_value = {"all_models_loaded": list(lemonade["resident"])}
-    resp.raise_for_status = lambda: None
-    monkeypatch.setattr(httpx, "get", lambda *_a, **_k: resp)
+    def restart():
+        monkeypatch.setattr(helpers, "_models_loaded_here", None)
 
-    server._adopt_resident_chat_models(_URL, {})
+    return restart
 
-    assert helpers._loaded_here("Mine-Old-GGUF") is adopted
+
+def test_a_restart_still_knows_the_models_it_loaded(record):
+    helpers.note_model_loaded("user.Mine-Old-GGUF")
+    record()  # The Agent UI restarts: in-memory state is gone.
+
+    assert helpers._loaded_here("mine-old-gguf")
+    assert not helpers._loaded_here("Email-Agent-Model-GGUF")
+
+
+def test_after_a_restart_only_its_own_models_make_room(lemonade, record):
+    helpers.note_model_loaded("Mine-Old-GGUF")
+    record()
+    # Another GAIA process (the email agent) has a model loaded too.
+    lemonade["resident"] = [_model("Mine-Old-GGUF"), _model("Email-Agent-GGUF")]
+    loads = []
+
+    def load(name, **_kwargs):
+        loads.append(name)
+        if len(loads) == 1:
+            raise InsufficientMemoryError("Not enough free memory to load it")
+
+    lemonade["client"].load_model.side_effect = load
+
+    helpers._maybe_load_expected_model("Mine-New-GGUF")
+
+    unloaded = [c.args[0] for c in lemonade["client"].unload_model.call_args_list]
+    assert unloaded == ["Mine-Old-GGUF"]
+    record()
+    assert not helpers._loaded_here(
+        "Mine-Old-GGUF"
+    ), "the record kept an unloaded model"
+    assert helpers._loaded_here("Mine-New-GGUF")
 
 
 @pytest.mark.allow_network

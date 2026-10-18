@@ -289,9 +289,10 @@ _mcp_status_lock = threading.Lock()
 # Public (no underscore) because it is intentionally accessed cross-module.
 model_load_lock = threading.Lock()
 
-# Chat models this process loaded. Only these may be unloaded to make room: a
-# model another app loaded is never taken from under it.
-_models_loaded_here: set[str] = set()
+# Chat models the Agent UI loaded. Only these may be unloaded to make room: a
+# model another app (or another GAIA process) loaded is never taken from under
+# it. Kept on disk so a restart still knows them; None until first read.
+_models_loaded_here: Optional[set] = None
 
 
 def _model_key(model_id: str) -> str:
@@ -302,13 +303,59 @@ def _model_key(model_id: str) -> str:
     )
 
 
+def _owned_models_path() -> Path:
+    from gaia.config import gaia_home
+
+    return gaia_home() / "ui" / "loaded_models.json"
+
+
+def _owned_models() -> set:
+    """The models the Agent UI has loaded, read from its record on first use."""
+    global _models_loaded_here  # pylint: disable=global-statement
+    if _models_loaded_here is None:
+        path = _owned_models_path()
+        names: list = []
+        try:
+            if path.exists():
+                names = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # Unknown ownership is the safe direction: nothing gets unloaded.
+            logger.warning(
+                "Could not read which models the Agent UI loaded (%s): %s; "
+                "none will be unloaded to make room",
+                path,
+                exc,
+            )
+        _models_loaded_here = (
+            {str(n) for n in names} if isinstance(names, list) else set()
+        )
+    return _models_loaded_here
+
+
+def _save_owned_models() -> None:
+    path = _owned_models_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sorted(_owned_models())), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not record the Agent UI's loaded models: %s", exc)
+
+
 def note_model_loaded(model_id: str) -> None:
-    """Record a chat model this process loaded (pre-flight, preload, Settings)."""
-    _models_loaded_here.add(_model_key(model_id))
+    """Record a chat model the Agent UI loaded (pre-flight, preload, Settings)."""
+    key = _model_key(model_id)
+    if key not in _owned_models():
+        _owned_models().add(key)
+        _save_owned_models()
+
+
+def _forget_model(model_id: str) -> None:
+    _owned_models().discard(_model_key(model_id))
+    _save_owned_models()
 
 
 def _loaded_here(model_id: str) -> bool:
-    return _model_key(model_id) in _models_loaded_here
+    return _model_key(model_id) in _owned_models()
 
 
 def _take_model_load_lock(sse_handler=None) -> bool:
@@ -363,7 +410,7 @@ def _load_making_room(
                     }
                 )
             client.unload_model(name, ignore_if_not_loaded=True)
-            _models_loaded_here.discard(_model_key(name))
+            _forget_model(name)
         client.load_model(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
@@ -2251,6 +2298,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
             status_code=exc.status_code,
         ) from exc
     except Exception as exc:
+        if stopped():
+            raise  # The caller reads it as the stop, not as a failure.
         logger.error("Pre-flight model load failed for %s: %s", model_id, exc)
         raise RuntimeError(
             f"Could not load {model_id} before answering: {exc}. Check that "
@@ -2259,17 +2308,22 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
         ) from exc
 
 
-def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+def _maybe_load_expected_model(
+    model_id: str, sse_handler=None, cancel_event=None
+) -> None:
     """Load *model_id* at the window a turn needs before it is queried.
 
     See :func:`_preflight_load` for what is checked, loaded and raised. A
-    turn stopped while this waits (``sse_handler.cancelled``) loads nothing:
-    whatever the wait raised then, the Stop is why, so this returns and the
-    caller sees the turn as cancelled.
+    turn stopped while this waits (``sse_handler.cancelled`` for Stop, or the
+    turn's own *cancel_event*, which teardown and the idle stop set) loads
+    nothing: whatever the wait raised then, the stop is why, so this returns
+    and the caller sees the turn as stopped.
     """
 
     def stopped() -> bool:
-        return sse_handler is not None and sse_handler.cancelled.is_set()
+        return (sse_handler is not None and sse_handler.cancelled.is_set()) or (
+            cancel_event is not None and cancel_event.is_set()
+        )
 
     try:
         _preflight_load(model_id, sse_handler, stopped)
@@ -3095,11 +3149,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler
+                    _effective_model(agent, model_id), sse_handler, cancel_event
                 )
                 # Stopped while waiting for the model: nothing was loaded,
                 # so the turn must not send its query either.
-                if sse_handler.cancelled.is_set():
+                if sse_handler.cancelled.is_set() or cancel_event.is_set():
                     return
 
                 # -- Phase 5: Query processing.  One automatic retry on
@@ -3125,10 +3179,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # mid-conversation when the model got evicted.
                     try:
                         _maybe_load_expected_model(
-                            _effective_model(agent, model_id), sse_handler
+                            _effective_model(agent, model_id),
+                            sse_handler,
+                            cancel_event,
                         )
                     except Exception as exc:  # pylint: disable=broad-except
                         logger.warning("Model reload before retry failed: %s", exc)
+                    if sse_handler.cancelled.is_set() or cancel_event.is_set():
+                        return
                     # Surface a brief status line to the SSE so the user
                     # sees we're recovering, not silently retrying.
                     sse_handler._emit(

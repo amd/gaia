@@ -266,38 +266,6 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
     return str(result) if result else ""
 
 
-def _adopt_resident_chat_models(base_url: str, auth: dict) -> None:
-    """Count chat models already on GAIA's own Lemonade as this app's.
-
-    A restart forgets what the previous run loaded, and the pre-flight only
-    unloads models it counts as its own to make room. On a server the user
-    runs, nothing is adopted: those models are the user's.
-    """
-    import httpx
-
-    from gaia.llm.lemonade_choice import is_users_server
-    from gaia.ui._chat_helpers import note_model_loaded
-
-    if is_users_server(base_url):
-        return
-    try:
-        resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=auth)
-        resp.raise_for_status()
-        loaded = resp.json().get("all_models_loaded", [])
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning(
-            "Could not read which models are loaded at %s (%s); models loaded "
-            "before this start won't be unloaded to make room",
-            base_url,
-            exc,
-        )
-        return
-    for m in loaded:
-        if m.get("type") in ("llm", "vlm") and m.get("recipe") != "cloud":
-            if m.get("model_name"):
-                note_model_loaded(m["model_name"])
-
-
 # ── Application Factory ────────────────────────────────────────────────────
 
 
@@ -435,7 +403,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
             base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
-            _adopt_resident_chat_models(base_url, _auth)
 
             low_memory = preload_skip_reason()
             if low_memory:
