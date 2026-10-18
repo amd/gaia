@@ -109,6 +109,8 @@ def _lease_json(lease: Lease, waited: dict, broker: ModelSlotBroker) -> dict:
         "switching": waited["flag"] and "switching model" in waited["reason"],
         "renewable": lease.renewable,
     }
+    if lease.max_hold_s is not None:
+        body["max_hold_s"] = lease.max_hold_s
     if lease.renewable:
         body["heartbeat_ttl_s"] = broker.heartbeat_ttl_s
         body["renew_interval_s"] = broker.heartbeat_ttl_s / 4
@@ -291,6 +293,21 @@ def build_broker_router(
                 ),
             )
 
+        max_hold = body.get("max_hold_s")
+        if max_hold is not None and (
+            isinstance(max_hold, bool)
+            or not isinstance(max_hold, (int, float))
+            or max_hold <= 0
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Broker lease 'max_hold_s' must be a number of seconds > 0 "
+                    f"(the longest the caller's work may hold the slot); got "
+                    f"{max_hold!r}."
+                ),
+            )
+
         waited = {"flag": False, "reason": ""}
 
         def _on_wait(reason: str) -> None:
@@ -307,6 +324,7 @@ def build_broker_router(
                 timeout=timeout,
                 on_wait=_on_wait,
                 renewable=body.get("renewable") is True,
+                max_hold_s=max_hold,
             )
 
         if stream:

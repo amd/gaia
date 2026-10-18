@@ -3258,14 +3258,21 @@ warm-ups, autonomous briefs).
 
 A request that has to wait is **queued, not failed**:
 
-- It waits for as long as the request ahead of it is alive, however long that
-  generation runs. The holder renews its lease every 15 seconds; one that stops
-  renewing for a minute (it exited or hung) is dropped and the queue moves on.
-- While it waits, the Agent UI shows `Waiting for the model — <who> is using
-  it` with its place in line and seconds waited, updated every two seconds. A
-  `gaia` command prints `⏳` once.
-- Stopping the turn, pressing Ctrl+C, or closing the app takes the request out
-  of the queue, so the slot never goes to a caller that has left.
+- It waits for as long as the request ahead of it holds the slot. The holder
+  renews its lease every 15 seconds. One that stops renewing for a minute (it
+  exited) is dropped and the queue moves on. One that keeps renewing past the
+  time its own request is allowed (its request timeout plus 15 minutes for a
+  model load) is wedged, and loses the slot too.
+- Background work (memory extraction, document indexing) that has waited ten
+  minutes goes ahead of newer chat turns, so it is never starved.
+- While an **Agent UI** turn waits, it shows `Waiting for the model — <who> is
+  using it` with its place in line and seconds waited, updated every two
+  seconds, and the wait never counts toward the turn's idle stop. A `gaia`
+  command prints `⏳` once. The terminal UI and sidecar agents do not show the
+  wait yet; it is logged.
+- Pressing Stop in the Agent UI, pressing Ctrl+C, or closing the app takes the
+  request out of the queue, so the slot never goes to a caller that has left.
+  Indexing a turn started keeps going after the turn ends.
 - To cap the wait, set `GAIA_MODEL_LEASE_WAIT_S` to a number of seconds. Past
   it, the request fails with where it stood in line and who held the model.
 - If the daemon stops sending queue updates for 30 seconds, the request fails

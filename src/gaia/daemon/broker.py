@@ -27,11 +27,17 @@ Design (§0.12, refined by §0.35.5):
 - **Legibility.** When a request has to wait, an ``on_wait`` callback fires so the
   caller can surface a ``switching model…`` status instead of freezing, and
   ``on_update`` reports its place in the queue for as long as it waits.
-- **Queued is not dead.** A holder that renews its lease keeps it for as long as
-  it renews (up to :data:`DEFAULT_MAX_HOLD_S`); one that stops renewing is
-  presumed gone and reclaimed after :data:`DEFAULT_HEARTBEAT_TTL_S`. So a waiter
-  waits while the holder ahead is alive, and only an explicit ``timeout`` or
-  ``cancel`` ends its wait early.
+- **Queued is not dead.** A holder that renews its lease keeps it while it
+  renews, up to the budget it declared for its call (``max_hold_s``; without
+  one, :data:`DEFAULT_LEASE_TTL_S`, and never past :data:`DEFAULT_MAX_HOLD_S`).
+  One that stops renewing is presumed gone and reclaimed after
+  :data:`DEFAULT_HEARTBEAT_TTL_S`. A renewal proves the holder is alive, not
+  that its request progresses, so the budget is what bounds a wedged one. A
+  waiter waits while the holder ahead keeps its lease, and only an explicit
+  ``timeout`` or ``cancel`` ends its wait early.
+- **No starvation.** A background request waiting longer than
+  :data:`AGING_S` ranks as interactive, so a stream of turns cannot hold back
+  background work forever.
 
 The broker is designed to be later-extractable to its own process (§0.35.5 #3):
 it owns no daemon state beyond the slot itself and takes an injectable clock so
@@ -63,10 +69,12 @@ DEFAULT_LEASE_TTL_S = 900.0
 #: A renewing holder that has not renewed for this long has exited or hung.
 DEFAULT_HEARTBEAT_TTL_S = 60.0
 
-#: The longest a renewing holder may keep the slot. Above the longest local
-#: request budget (3600 s) plus a cold load, so it only stops a holder that
-#: renews forever without finishing.
-DEFAULT_MAX_HOLD_S = 4 * 3600.0
+#: The ceiling on the hold a renewing holder may declare: the longest local
+#: request budget (3600 s) plus margin for a cold load and a retry.
+DEFAULT_MAX_HOLD_S = 2 * 3600.0
+
+#: A background request queued this long ranks as interactive.
+AGING_S = 600.0
 
 
 class LeasePriority(IntEnum):
@@ -135,6 +143,7 @@ class Lease:
     holder: str
     granted_at: float
     renewable: bool = False
+    max_hold_s: Optional[float] = None
 
 
 @dataclass
@@ -193,6 +202,7 @@ class ModelSlotBroker:
         timeout: Optional[float] = None,
         on_wait: Optional[Callable[[str], None]] = None,
         renewable: bool = False,
+        max_hold_s: Optional[float] = None,
         cancel: Optional[threading.Event] = None,
         on_update: Optional[Callable[[dict], None]] = None,
         update_every_s: float = 2.0,
@@ -209,7 +219,11 @@ class ModelSlotBroker:
                 cannot be granted immediately — the hook the caller uses to
                 surface a ``switching model…`` status instead of a frozen UI.
             renewable: the caller will :meth:`renew` the lease while it holds
-                it, and keeps it for as long as it does.
+                it, and keeps it for as long as it does, up to *max_hold_s*.
+            max_hold_s: the longest the caller's work under this lease can
+                legitimately take (its call budget). A renewing holder still
+                holding it then is wedged, and loses it. Capped at the
+                broker's ``max_hold_s``; defaults to its fixed TTL.
             cancel: set it, then call :meth:`wake`, when the requester gives
                 up; the request leaves the queue instead of being granted to
                 nobody.
@@ -245,7 +259,7 @@ class ModelSlotBroker:
                             "was cancelled by its requester while queued"
                         )
                     if self._active is None and self._best_waiter_locked() is waiter:
-                        return self._grant_locked(waiter, renewable)
+                        return self._grant_locked(waiter, renewable, max_hold_s)
                     if not notified_wait and on_wait is not None:
                         on_wait(self._wait_reason_locked(waiter))
                     notified_wait = True
@@ -344,7 +358,13 @@ class ModelSlotBroker:
 
     # -- internals (all called under self._cv) --------------------------------
 
-    def _grant_locked(self, waiter: _Waiter, renewable: bool) -> Lease:
+    def _grant_locked(
+        self, waiter: _Waiter, renewable: bool, max_hold_s: Optional[float]
+    ) -> Lease:
+        if renewable:
+            max_hold_s = min(max_hold_s or self._ttl, self._max_hold)
+        else:
+            max_hold_s = None
         lease = Lease(
             lease_id=secrets.token_urlsafe(16),
             model=waiter.model,
@@ -352,6 +372,7 @@ class ModelSlotBroker:
             holder=waiter.holder,
             granted_at=self._now(),
             renewable=renewable,
+            max_hold_s=max_hold_s,
         )
         self._active = lease
         self._renewed_at = lease.granted_at
@@ -377,10 +398,14 @@ class ModelSlotBroker:
 
         Expressed so ``max()`` picks the winner: higher priority first; on a
         tie, the waiter whose model is already loaded (affinity) wins; on a
-        further tie, the earliest arrival (lowest seq → negated) wins.
+        further tie, the earliest arrival (lowest seq → negated) wins. A
+        background waiter queued for :data:`AGING_S` counts as interactive.
         """
         affinity = 1 if w.model == self._loaded_model else 0
-        return (int(w.priority), affinity, -w.seq)
+        priority = int(w.priority)
+        if self._now() - w.enqueued_at >= AGING_S:
+            priority = max(priority, int(LeasePriority.INTERACTIVE))
+        return (priority, affinity, -w.seq)
 
     def _best_waiter_locked(self) -> Optional[_Waiter]:
         if not self._waiters:
@@ -441,7 +466,7 @@ class ModelSlotBroker:
         if self._active.renewable:
             expires_at = min(
                 self._renewed_at + self._heartbeat_ttl,
-                self._active.granted_at + self._max_hold,
+                self._active.granted_at + self._active.max_hold_s,
             )
         else:
             expires_at = self._active.granted_at + self._ttl
@@ -458,13 +483,16 @@ class ModelSlotBroker:
                 f"held for {held_for:.0f}s >= TTL {self._ttl:.0f}s — the holder "
                 "likely crashed without releasing"
             )
-        elif held_for < self._max_hold:
+        elif held_for < self._active.max_hold_s:
             why = (
                 f"not renewed for {self._heartbeat_ttl:.0f}s — the holder has "
                 "likely exited or hung"
             )
         else:
-            why = f"held for {held_for:.0f}s, past the {self._max_hold:.0f}s cap"
+            why = (
+                f"held for {held_for:.0f}s, past its {self._active.max_hold_s:.0f}s "
+                "budget — the holder is alive but its request is not finishing"
+            )
         logger.warning(
             "broker: reclaiming lease %s (model '%s', holder '%s'): %s. This is "
             "a leaked lease; investigate the holder.",

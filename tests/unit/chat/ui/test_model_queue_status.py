@@ -154,3 +154,34 @@ def test_the_granted_line_says_how_long_the_turn_waited():
         {"event": "granted", "scope": "daemon", "model": "m", "waited_s": 41.7}
     )
     assert line["message"] == "Got the model after waiting 41s"
+
+
+class _LongQueueAgent(_QueuedAgent):
+    """Waits for the model longer than the turn's idle limit, then answers."""
+
+    def process_query(self, _message):
+        for _ in range(8):
+            broker_client.notify_wait(_QUEUED)
+            threading.Event().wait(0.1)
+        return "answer after the queue"
+
+
+@pytest.mark.asyncio
+async def test_a_non_streaming_turn_waiting_for_the_model_is_not_idle(runtime):
+    db, http_request = runtime
+    session = db.create_session(model="M-GGUF", agent_type="chat")
+    agent = _LongQueueAgent()
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 0.3):
+        response = await asyncio.wait_for(
+            chat.send_message(
+                ChatRequest(session_id=session["id"], message="hi", stream=False),
+                http_request,
+                db,
+            ),
+            timeout=15,
+        )
+
+    assert response.content == "answer after the queue"
+    assert not agent._cancel_event.is_set(), "the queue wait was stopped as idle"

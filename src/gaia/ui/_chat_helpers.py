@@ -1796,9 +1796,10 @@ def _model_queue_status(event: dict) -> dict:
     }
 
 
-def _as_interactive_turn(run, cancel_event, sse_handler=None):
+def _as_interactive_turn(run, cancel_event, sse_handler=None, on_wait_event=None):
     """*run* as the user's turn: it leases the model ahead of background work,
-    a wait for the model shows on the turn's stream, and Stop ends the wait."""
+    a wait for the model shows on the turn's stream (or reaches
+    *on_wait_event* when it has none), and Stop ends the wait."""
     from gaia.daemon.broker_client import interactive_turn
 
     def _listen(event: dict) -> None:
@@ -1813,7 +1814,7 @@ def _as_interactive_turn(run, cancel_event, sse_handler=None):
 
     def _run():
         with interactive_turn(
-            on_wait_event=_listen if sse_handler is not None else None,
+            on_wait_event=_listen if sse_handler is not None else on_wait_event,
             cancel=_Stopped(),
         ):
             return run()
@@ -2468,8 +2469,15 @@ async def _get_chat_response(
 
     try:
         idle = _TurnIdleClock(_time.monotonic())
+        # A wait for the model is progress: the queue reports every few seconds.
+        queue_seen = {"at": 0.0}
+
+        def _queue_update(_event: dict) -> None:
+            queue_seen["at"] = _time.monotonic()
+
         worker = asyncio.get_running_loop().run_in_executor(
-            None, _as_interactive_turn(_do_chat, cancel_event)
+            None,
+            _as_interactive_turn(_do_chat, cancel_event, on_wait_event=_queue_update),
         )
         idle_message = None
         try:
@@ -2480,6 +2488,7 @@ async def _get_chat_response(
                 owned_wait = activity is not None and activity.tool_running
                 if activity is not None:
                     idle.progressed(activity.last_progress)
+                idle.progressed(queue_seen["at"])
                 if (
                     not worker.done()
                     and idle.idle_for(owned_wait, _time.monotonic())

@@ -23,6 +23,7 @@ import os
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from typing import List
 
 import pytest
@@ -311,7 +312,7 @@ def test_a_renewed_lease_outlives_the_fixed_ttl():
     3600 s, and the holder's release then failed with 409."""
     clock = _Clock()
     broker = ModelSlotBroker(lease_ttl_s=900, heartbeat_ttl_s=60, time_fn=clock)
-    lease = broker.acquire("m", renewable=True)
+    lease = broker.acquire("m", renewable=True, max_hold_s=3600)
 
     for _ in range(80):  # 2400 s of a long generation, renewing every 30 s
         clock.t += 30
@@ -359,7 +360,7 @@ def test_a_lease_from_a_client_that_does_not_renew_keeps_the_fixed_ttl():
 def test_model_lease_renews_while_held(daemon_factory):
     """A holder that runs past the heartbeat TTL keeps the slot end to end."""
     daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=1.0))
-    holder, released = _hold_in_thread("holder-model", 3.0)
+    holder, released = _hold_in_thread("holder-model", 3.0, max_hold_s=30)
 
     lease = broker_client.acquire_lease("waiter-model")
 
@@ -564,3 +565,178 @@ def test_a_heartbeat_that_cannot_renew_says_the_lease_will_lapse(monkeypatch, ca
 
     assert calls == ["L1"], "the heartbeat kept going after it lost its credential"
     assert "lapses after the broker's heartbeat TTL" in caplog.text
+
+
+# ── Second review: background work, heartbeat races, hung holders ──────────
+
+
+def test_background_indexing_outlives_its_turn_without_inheriting_its_stop():
+    """An index job runs on after the turn that started it. The turn's end sets
+    its cancel, so a job that inherited it failed every later model lease."""
+    from gaia.agents.tools import rag_tools
+
+    gate, seen = threading.Event(), {}
+
+    class _SlowRag:
+        def index_document(self, path, progress_callback=None):
+            gate.wait(5)
+            seen["priority"] = broker_client.current_priority()
+            try:
+                broker_client.check_cancelled("the embedder")
+                seen["cancelled"] = False
+            except broker_client.LeaseWaitCancelled:
+                seen["cancelled"] = True
+            return {"success": True}
+
+    turn_stop = threading.Event()
+    rag = _SlowRag()
+    with broker_client.interactive_turn(cancel=turn_stop):
+        result, job = rag_tools._index_within_budget(rag, "doc.pdf", budget=0)
+    assert result is None  # still indexing when the turn ends
+    turn_stop.set()  # the turn's normal end
+    gate.set()
+    assert job.done.wait(5)
+
+    assert seen == {"priority": "background", "cancelled": False}
+
+
+def test_a_renewal_that_lands_after_the_release_is_not_reported_as_lost(
+    monkeypatch, caplog
+):
+    in_flight, released, done = threading.Event(), threading.Event(), threading.Event()
+
+    def _slow_renew(lease_id, **_kw):
+        in_flight.set()
+        released.wait(5)  # the holder releases while this renewal is in flight
+        done.set()
+        return 409, "lease 'L1' is not a lease this caller holds"
+
+    monkeypatch.setattr(broker_client, "renew_lease", _slow_renew)
+    beat = broker_client._Heartbeat(
+        {"lease_id": "L1", "model": "m", "renew_interval_s": 0.01}
+    )
+    assert in_flight.wait(5)
+    beat.stop()
+    released.set()
+    assert done.wait(5)
+    time.sleep(0.1)
+
+    assert "lost the model-slot lease" not in caplog.text
+
+
+def test_a_hung_holder_that_keeps_renewing_is_reclaimed_at_its_own_budget():
+    """Renewal proves the process is alive, not that its request progresses.
+    A holder wedged past its own call budget must not keep the slot for hours."""
+    clock = _Clock()
+    broker = ModelSlotBroker(heartbeat_ttl_s=60, time_fn=clock)
+    lease = broker.acquire("m", renewable=True, max_hold_s=1200)
+    for _ in range(40):  # renews every 30 s, forever
+        clock.t += 30
+        try:
+            broker.renew(lease.lease_id)
+        except LeaseNotHeldError:
+            break
+
+    assert clock.t - 1000 <= 1200 + 30
+    assert broker.acquire("other", timeout=0).model == "other"
+
+
+def test_a_renewing_holder_that_declares_no_budget_keeps_mains_900s_cap():
+    clock = _Clock()
+    broker = ModelSlotBroker(lease_ttl_s=900, heartbeat_ttl_s=60, time_fn=clock)
+    lease = broker.acquire("m", renewable=True)
+    for _ in range(60):  # renews every 30 s, forever
+        clock.t += 30
+        try:
+            broker.renew(lease.lease_id)
+        except LeaseNotHeldError:
+            break
+
+    assert clock.t - 1000 <= 900 + 30
+    assert broker.acquire("other", timeout=0).model == "other"
+
+
+def test_a_declared_budget_is_still_held_to_the_brokers_ceiling():
+    clock = _Clock()
+    broker = ModelSlotBroker(heartbeat_ttl_s=60, max_hold_s=600, time_fn=clock)
+    lease = broker.acquire("m", renewable=True, max_hold_s=10_000)
+
+    assert lease.max_hold_s == 600
+
+
+def test_a_lemonade_request_declares_its_own_call_budget(monkeypatch):
+    from gaia.llm import lemonade_client
+
+    seen = {}
+
+    @contextmanager
+    def _record(model, **kwargs):
+        seen.update(kwargs)
+        yield None
+
+    monkeypatch.setattr(broker_client, "model_lease", _record)
+    monkeypatch.setattr(lemonade_client, "request_budget_seconds", lambda: 2048)
+    client = _local_client()
+    with client._model_slot_lease("local-model"):
+        pass
+
+    assert seen["max_hold_s"] == 2048 + lemonade_client.LEASE_LOAD_MARGIN_S
+
+
+def test_background_work_is_not_starved_by_a_stream_of_turns():
+    from gaia.daemon.broker import AGING_S
+
+    clock = _Clock()
+    broker = ModelSlotBroker(time_fn=clock)
+    held = broker.acquire("m")
+    order = []
+
+    def _wait(model, priority):
+        order.append(broker.acquire(model, priority=priority).model)
+
+    background = threading.Thread(target=_wait, args=("brief", "background"))
+    background.start()
+    _until(lambda: len(broker.snapshot()["waiting"]) == 1)
+    clock.t += AGING_S + 1  # the background request has waited ten minutes
+    turn = threading.Thread(target=_wait, args=("turn", "interactive"))
+    turn.start()
+    _until(lambda: len(broker.snapshot()["waiting"]) == 2)
+
+    broker.release(held.lease_id)
+    background.join(5)
+    assert order == ["brief"], "a fresh turn jumped a request queued ten minutes"
+    broker.release(broker._active.lease_id)
+    turn.join(5)
+
+
+def _until(check, timeout=5.0):
+    deadline = time.time() + timeout
+    while not check():
+        assert time.time() < deadline
+        time.sleep(0.01)
+
+
+def test_the_wait_limit_also_caps_a_wait_on_this_processs_model_lock(monkeypatch):
+    monkeypatch.delenv(BROKER_URL_ENV_VAR, raising=False)
+    monkeypatch.setattr(broker_client, "_attached", None)
+    monkeypatch.setenv(LEASE_WAIT_LIMIT_ENV_VAR, "0.5")
+    client = _local_client()
+    holding, done = threading.Event(), threading.Event()
+
+    def _hold():
+        with client._model_slot_lease("capped-model"):
+            holding.set()
+            done.wait(10)
+
+    threading.Thread(target=_hold, daemon=True).start()
+    assert holding.wait(5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(broker_client.BrokerUnavailableError) as err:
+            with client._model_slot_lease("capped-model"):
+                pass
+    finally:
+        done.set()
+
+    assert time.monotonic() - started < 3
+    assert LEASE_WAIT_LIMIT_ENV_VAR in str(err.value)

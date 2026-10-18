@@ -522,6 +522,11 @@ def _local_request_lock(model: str) -> threading.RLock:
         return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
 
 
+#: Time a model-slot lease allows on top of the request budget for the load it
+#: may do first. The broker's fixed TTL, which a load always had before.
+LEASE_LOAD_MARGIN_S = 900
+
+
 @contextmanager
 def _holding_local_request_lock(model: str):
     """Hold *model*'s lock; a wait for it is reported and cancellable.
@@ -534,10 +539,20 @@ def _holding_local_request_lock(model: str):
 
     lock = _local_request_lock(model)
     if not lock.acquire(blocking=False):
+        limit = broker_client.user_wait_limit()
         started = time.monotonic()
         next_update = started
         while True:
             now = time.monotonic()
+            if limit is not None and now - started >= limit:
+                raise broker_client.BrokerUnavailableError(
+                    f"no turn on '{model}' within the {limit:g}s wait limit: "
+                    "another request in this process is still using it. The "
+                    "model is busy, not broken. To wait longer, raise "
+                    f"{broker_client.LEASE_WAIT_LIMIT_ENV_VAR}, or unset it to "
+                    "wait for as long as the model is in use.",
+                    status_code=504,
+                )
             if now >= next_update:
                 broker_client.notify_wait(
                     {
@@ -5993,7 +6008,12 @@ class LemonadeClient:
             except ImportError:
                 print(f"⏳ {reason}")
 
-        lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
+        lease = model_lease(
+            model,
+            priority=self.model_lease_priority,
+            on_wait=_on_wait,
+            max_hold_s=request_budget_seconds() + LEASE_LOAD_MARGIN_S,
+        )
 
         @contextmanager
         def _held():
