@@ -5536,6 +5536,7 @@ class LemonadeClient:
         connect_timeout = 30
         read_timeout = PULL_IDLE_TIMEOUT_S
 
+        response = None
         try:
             response = requests.post(
                 url,
@@ -5598,7 +5599,11 @@ class LemonadeClient:
         except requests.exceptions.RequestException as e:
             message = f"Failed to install {model_name}: {e}"
             self.log.error(message)
-            raise LemonadeClientError(message)
+            raise LemonadeClientError(message) from e
+        finally:
+            # Also on an early close (Stop): hanging up is what cancels the pull.
+            if response is not None:
+                response.close()
 
     def delete_model(
         self,
@@ -6695,6 +6700,10 @@ class LemonadeClient:
                         self.model = model_name
                         return response
 
+                except ModelDownloadCancelledError:
+                    # Stop is the user's choice, not a failed resume: never
+                    # go on to delete the model.
+                    raise
                 except Exception as resume_error:
                     self.log.warning(
                         f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
@@ -6745,6 +6754,8 @@ class LemonadeClient:
                             f"Fresh download did not complete for '{model_name}'"
                         )
 
+                    except ModelDownloadCancelledError:
+                        raise
                     except Exception as fresh_error:
                         self.log.error(
                             f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"

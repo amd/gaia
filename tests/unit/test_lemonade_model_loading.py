@@ -11,6 +11,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    ModelDownloadCancelledError,
     _prompt_user_for_delete,
 )
 
@@ -419,6 +420,29 @@ class TestLoadModelCorruptNonInteractive:
     @patch.object(LemonadeClient, "delete_model")
     @patch.object(LemonadeClient, "pull_model_stream")
     @patch.object(LemonadeClient, "_send_request")
+    def test_stop_during_the_repair_never_deletes_the_model(
+        self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
+    ):
+        """Stop pressed while the resume downloads is the user's choice, not a
+        failed resume: the model must not be deleted and re-downloaded."""
+        from gaia.llm.retry import model_retry_notices
+
+        mock_send.side_effect = [Exception(_CORRUPT_ERROR_MESSAGE)]
+        mock_pull.return_value = iter(
+            [{"event": "progress", "percent": p} for p in (10, 20, 30)]
+        )
+        client = _make_client()
+        with model_retry_notices(lambda _n: None, is_cancelled=lambda: True):
+            with pytest.raises(ModelDownloadCancelledError):
+                client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+        mock_delete_model.assert_not_called()
+        assert mock_pull.call_count == 1
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
     def test_resume_failure_triggers_single_delete_and_redownload(
         self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
     ):
@@ -550,3 +574,21 @@ class TestLoadModelCorruptInteractive:
 
         assert result == {"status": "loaded"}
         mock_repair.assert_called_once()
+
+
+def test_an_abandoned_pull_stream_closes_its_response():
+    """Stop closes the pull stream early; its HTTP response must close with it,
+    or the download keeps running on the server."""
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.status_code = 200
+    response.iter_lines.return_value = iter(
+        [b"event: progress", b'data: {"percent": 10}', b"event: progress"]
+    )
+    client = _make_client()
+    with patch("gaia.llm.lemonade_client.requests.post", return_value=response):
+        stream = client.pull_model_stream("Qwen3-0.6B-GGUF")
+        next(stream)
+        stream.close()
+    response.close.assert_called_once()
