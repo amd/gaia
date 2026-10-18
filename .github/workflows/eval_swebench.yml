@@ -9,7 +9,10 @@
 #           touch the agent loop, its tools or the coding skill run these; a
 #           failure there is a regression signal, not noise.
 #   hard  - ten tasks strong Claude agents rarely solve on the leaderboard and
-#           that separated GAIA configurations in measured runs. Nightly.
+#           that separated GAIA configurations in measured runs. On dispatch.
+#           The nightly schedule is off: every run since 2026-10-14 failed with
+#           Fireworks answering HTTP 404 for the model. Put it back once a
+#           dispatch of `hard` passes the model preflight below.
 #
 # The model is DeepSeek V4.1 Flash on Fireworks, reached through GAIA's own
 # embedded Lemonade, so no GPU is needed and the Linux runner's Docker grades
@@ -23,8 +26,6 @@
 name: SWE-bench (flagship)
 
 on:
-  schedule:
-    - cron: '43 9 * * *'
   workflow_dispatch:
     inputs:
       subset:
@@ -81,7 +82,7 @@ jobs:
       - name: Require the Fireworks key
         run: |
           if [ -z "$LEMONADE_FIREWORKS_API_KEY" ]; then
-            echo "::error::The FIREWORKS_API_KEY repository secret is not set. Add it under Settings > Secrets and variables > Actions; this workflow cannot reach the model without it."
+            echo "::error title=FIREWORKS_API_KEY is not set::SWE-bench cannot reach its model without it. | WHAT TO DO: gh secret set FIREWORKS_API_KEY --repo $GITHUB_REPOSITORY (a key from https://fireworks.ai/account/api-keys) | WHERE TO LOOK: .github/workflows/eval_swebench.yml. A fork PR never has it; this job is skipped there."
             exit 1
           fi
 
@@ -101,6 +102,22 @@ jobs:
         run: |
           gaia lemonade embedded start --timeout 180
           gaia lemonade embedded status
+
+      # One tiny request before ten 40-minute tasks: a model Fireworks will not
+      # serve fails here with its status, not as ten ERROR rows and "no predictions".
+      - name: Require the model to answer
+        run: |
+          . "$HOME/.gaia/lemonade/env.sh"
+          body=$(printf '{"model":"%s","messages":[{"role":"user","content":"ok"}],"max_tokens":1}' "$SWE_MODEL")
+          # curl prints 000 itself when it cannot connect; never add a second code.
+          code=$(curl -sS -o "$RUNNER_TEMP/preflight.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $LEMONADE_API_KEY" -H 'Content-Type: application/json' \
+            -d "$body" "$LEMONADE_BASE_URL/chat/completions" || true)
+          if [ "$code" != "200" ]; then
+            echo "::error title=SWE-bench model unavailable::$SWE_MODEL answered HTTP $code through the embedded Lemonade, so no task can run. | WHAT TO DO: 404 means Fireworks does not serve this model to the FIREWORKS_API_KEY account (retired or not deployed) - pick a served model and update SWE_MODEL and the rate card in src/gaia/eval/bench/metering.py; 401/403 means the key is wrong or revoked - rotate FIREWORKS_API_KEY. | WHERE TO LOOK: .github/workflows/eval_swebench.yml"
+            exit 1
+          fi
+          echo "$SWE_MODEL answered."
 
       - name: Pick the instances
         id: pick

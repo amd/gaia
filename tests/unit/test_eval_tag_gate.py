@@ -225,3 +225,106 @@ def test_failing_tag_run_files_an_issue_but_a_skipped_one_does_not():
     assert "github.event_name == 'push'" in condition
     assert "github.ref_type == 'tag'" in condition
     assert "needs.eval-gate.outputs.run == 'true'" in condition
+
+
+# --- release evals report, they never gate (#5172) ----------------------------
+
+EVAL_WORKFLOW_FILES = {
+    "test_gaia_agent_eval.yml",
+    "test_email_agent_eval.yml",
+    "eval_flagship.yml",
+}
+
+
+def _needs(job):
+    needs = job.get("needs", [])
+    return needs if isinstance(needs, list) else [needs]
+
+
+def test_agent_release_publish_does_not_wait_on_the_eval():
+    jobs = _load("release_agent_gaia.yml")["jobs"]
+    assert jobs["gaia-eval"]["uses"] == "./.github/workflows/test_gaia_agent_eval.yml"
+    assert "gaia-eval" not in _needs(jobs["publish"])
+    assert "gaia-eval" not in jobs["publish"]["if"]
+    # The explicit skip still works; it now only saves the eval pool.
+    assert "inputs.skip_eval_gate != true" in jobs["gaia-eval"]["if"]
+    report = jobs["eval-report"]
+    assert _needs(report) == ["gaia-eval"]
+    assert "always()" in report["if"]
+    assert report["permissions"]["issues"] == "write"
+
+
+def test_core_release_approval_waits_on_no_eval():
+    jobs = _load("publish.yml")["jobs"]
+    eval_jobs = {
+        job_id
+        for job_id, job in jobs.items()
+        if job.get("uses", "").rsplit("/", 1)[-1] in EVAL_WORKFLOW_FILES
+    }
+    assert not eval_jobs, f"publish.yml calls an eval workflow: {eval_jobs}"
+    for job_id, job in jobs.items():
+        assert not set(_needs(job)) & {"email-eval", "gaia-eval"}, job_id
+
+
+def test_swebench_runs_on_dispatch_not_a_schedule_and_checks_the_model_first():
+    workflow = _load("eval_swebench.yml")
+    assert "schedule" not in workflow["on"]
+    assert "workflow_dispatch" in workflow["on"]
+    names = [s.get("name", "") for s in workflow["jobs"]["swebench"]["steps"]]
+    assert names.index("Require the Fireworks key") < names.index(
+        "Setup Python Environment"
+    )
+    assert names.index("Require the model to answer") < names.index("Run and grade")
+
+
+def test_merge_queue_notifier_only_wakes_for_merge_queue_runs():
+    trigger = _load("merge-queue-notify.yml")["on"]["workflow_run"]
+    assert trigger["branches"] == ["gh-readonly-queue/**"]
+
+
+# --- one source for the eval driver/judge model -------------------------------
+
+BASELINE_META = REPO_ROOT / "tests/fixtures/eval_baselines/gaia-flagship/meta.json"
+_USES_EVAL_MODEL = re.compile(r"\$env:EVAL_MODEL(?!_)")
+
+
+def test_the_eval_model_comes_from_the_baseline_meta_only():
+    import json
+
+    assert json.loads(BASELINE_META.read_text(encoding="utf-8"))["eval_model"]
+    users = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        if not _USES_EVAL_MODEL.search(text):
+            continue
+        users.append(path.name)
+        workflow = _load(path.name)
+        assert "EVAL_MODEL" not in workflow.get("env", {}), path.name
+        assert not re.search(r"default:\s*'claude-", text), path.name
+        for job_id, job in workflow["jobs"].items():
+            steps = job.get("steps", [])
+            if not any(_USES_EVAL_MODEL.search(s.get("run", "")) for s in steps):
+                continue
+            names = [s.get("name", "") for s in steps]
+            assert "Resolve the eval driver model" in names, f"{path.name}:{job_id}"
+            first_use = next(
+                i
+                for i, s in enumerate(steps)
+                if _USES_EVAL_MODEL.search(s.get("run", ""))
+                and s.get("name") != "Resolve the eval driver model"
+            )
+            assert names.index("Resolve the eval driver model") < first_use
+    assert {
+        "eval_flagship.yml",
+        "test_gaia_agent_eval.yml",
+        "gaia_scorecard_refresh.yml",
+    } <= set(users)
+
+
+def test_local_lane_runs_judge_with_the_baseline_model():
+    import json
+
+    import run_eval_lane
+
+    expected = json.loads(BASELINE_META.read_text(encoding="utf-8"))["eval_model"]
+    assert run_eval_lane.baseline_eval_model() == expected

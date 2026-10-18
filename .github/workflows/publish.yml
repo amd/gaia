@@ -382,26 +382,9 @@ jobs:
       needs.validate.outputs.is_rc == 'true'
     uses: ./.github/workflows/build_flagship_sidecar.yml
 
-  # ── Email eval suite (release gate, self-hosted) ────────────────────
-  # Runs the triage + drafting + action-item eval suite (test_email_agent_eval.yml)
-  # on the [self-hosted, lemonade-eval] AMD runner, so the core release
-  # exercises the email agent on its committed corpus before
-  # publish. Report mode: it runs + uploads its scorecard/gate reports and only
-  # HARD-BLOCKS the release when a tests/fixtures/email/ threshold manifest sets
-  # enforce:true (data, not code). The approval gate below waits on it; the
-  # shared `lemonade-eval` concurrency group keeps it serial with the other
-  # runs on the single Lemonade slot.
-  #
-  # NOTE: the general `gaia eval agent` gate is intentionally NOT wired here yet.
-  # The same v* tag push starts eval_flagship.yml as a separate run, in report
-  # mode against the committed flagship baseline, so it has no enforced verdict
-  # to gate a release on and this workflow never waits for it. Wire it once the
-  # eval is enforcing.
-  email-eval:
-    name: Email eval suite (release gate)
-    needs: validate
-    uses: ./.github/workflows/test_email_agent_eval.yml
-    secrets: inherit
+  # No eval gates this workflow. The same v* tag starts eval_flagship.yml as a
+  # separate run that reports (job summary + an issue when it does not pass) and
+  # never blocks publishing; regressions are reported, not gated (#5172).
 
   # ── Stage 3: Approve (single manual gate) ───────────────────────────
   # All builds must pass before the approval prompt appears.
@@ -409,11 +392,7 @@ jobs:
 
   approve-publish:
     name: Approve Publishing
-    # email-eval dropped from the gate: the email agent's capability is moving
-    # into the core flagship agent (#3329), so its eval suite no longer blocks
-    # a core release. (The job is also disabled at its source in
-    # test_email_agent_eval.yml — if: false — so this isn't the only guard.)
-    needs: [validate, build-pypi, build-npm, build-desktop-installers, email-eval, rc-flagship]
+    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
@@ -438,8 +417,8 @@ jobs:
     name: Publish to PyPI
     needs: approve-publish
     # Explicit `if:` on purpose, not the default: GitHub's implicit success()
-    # check walks the FULL ancestor chain (including email-eval, disabled and
-    # reporting 'skipped'), not just this job's direct `needs:` — so without
+    # check walks the FULL ancestor chain (including rc-flagship, which a final
+    # release skips), not just this job's direct `needs:` — so without
     # this, a clean approve-publish success still gets silently skipped
     # downstream. approve-publish already carries its own explicit override;
     # this one has to carry its own too, independently. `!cancelled()` is
