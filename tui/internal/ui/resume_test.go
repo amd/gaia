@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/sessionstore"
 )
 
@@ -77,5 +78,15 @@ func TestNoResumeReadsNothing(t *testing.T) {
 	got, err := resumeTarget(catalog.Agent{ID: "email", Transport: catalog.TransportDaemon}, Resume{})
 	if got != nil || err != nil {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestResumeRefusesAPinnedHistoryFile(t *testing.T) {
+	t.Setenv(client.HistoryFileEnv, "/tmp/mine.sqlite3")
+	for _, r := range []Resume{{Pick: true}, {ID: "feed0001"}} {
+		_, err := resumeTarget(flagship(), r)
+		if err == nil || !strings.Contains(err.Error(), client.HistoryFileEnv) {
+			t.Errorf("%+v: err = %v", r, err)
+		}
 	}
 }

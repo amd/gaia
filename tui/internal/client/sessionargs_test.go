@@ -46,16 +46,31 @@ func TestOnlyTheSpawnedFlagshipCanKeepAListedSession(t *testing.T) {
 	}
 }
 
-func TestAHistoryFileWithoutAKindIsRefused(t *testing.T) {
+func TestAKindWithoutAHistoryFileIsRefused(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	agent := catalog.Agent{ID: catalog.FlagshipID, BinaryPath: self, CanonicalEvents: true}
-	for _, opts := range []ForAgentOptions{{HistoryFile: "/h/a.sqlite3"}, {SessionKind: "chat"}} {
-		if _, err := ForAgent(agent, opts); err == nil {
-			t.Errorf("%+v was accepted", opts)
-		}
+	if _, err := ForAgent(agent, ForAgentOptions{SessionKind: "chat"}); err == nil {
+		t.Error("a kind with no history file was accepted")
+	}
+}
+
+// A pinned transcript (GAIA_HISTORY_FILE) is kept but not listed.
+func TestAHistoryFileWithoutAKindIsKeptUnlisted(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := catalog.Agent{ID: catalog.FlagshipID, BinaryPath: self, CanonicalEvents: true}
+	c, err := ForAgent(agent, ForAgentOptions{HistoryFile: "/h/mine.sqlite3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := strings.Join(c.(*SubprocessClient).args, " "); got != "--history-file /h/mine.sqlite3" {
+		t.Fatalf("args = %q", got)
 	}
 }
 

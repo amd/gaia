@@ -311,3 +311,31 @@ def test_a_listing_failure_at_turn_start_does_not_cost_the_turn(tmp_path, monkey
     assert events[-1] == {"type": "final", "answer": "conversation_cleared"}
     assert any("Could not save" in e.get("message", "") for e in events)
     index.closed()
+
+
+def test_a_non_json_line_still_reaches_the_host(tmp_path):
+    index = SessionIndex(str(tmp_path / "5e550005.sqlite3"), "chat")
+    index.turn_started("q")
+    wire = io.StringIO()
+    session_index.IndexedOut(wire, index).write("not json\n")
+    assert wire.getvalue() == "not json\n"
+    assert _meta(index)["status"] == "running"
+    index.closed()
+
+
+def test_a_lock_held_for_an_instant_is_waited_out(tmp_path, monkeypatch):
+    path = tmp_path / "5e550006.sqlite3"
+    held = SessionIndex(str(path), "chat")
+    calls = []
+    real_sleep = session_index.time.sleep
+
+    def release_on_first_wait(seconds):
+        if not calls:
+            held.closed()
+        calls.append(seconds)
+        real_sleep(0)
+
+    monkeypatch.setattr(session_index.time, "sleep", release_on_first_wait)
+    reopened = SessionIndex(str(path), "chat")
+    assert calls, "the lock was free on the first try; the test proved nothing"
+    reopened.closed()

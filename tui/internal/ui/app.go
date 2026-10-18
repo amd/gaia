@@ -493,6 +493,11 @@ func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
 		return nil, fmt.Errorf("--resume needs the built-in GAIA agent the TUI starts itself; "+
 			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
 	}
+	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
+		return nil, fmt.Errorf("--resume cannot be used while %s=%s pins every launch to that "+
+			"transcript. Unset %s to choose a session, or drop --resume to keep using that file",
+			client.HistoryFileEnv, pinned, client.HistoryFileEnv)
+	}
 	if resume.Pick {
 		return nil, nil
 	}

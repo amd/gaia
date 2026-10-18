@@ -830,7 +830,9 @@ Pick one with `Enter` and its conversation is redrawn, the agent restarts on
 that session, and you carry on where you left off — the model remembers what
 was said, not just the screen. `gaia tui --resume=<id>` reopens one directly; a
 unique prefix of the id is enough. A session that is still open in another
-window can't be reopened until you close it there.
+window can't be reopened until you close it there. If `GAIA_HISTORY_FILE` pins
+GAIA to one transcript, every launch keeps using that file and `--resume`
+refuses to run until you unset it.
 
 The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,

@@ -97,6 +97,9 @@ func Dir() (string, error) {
 	return filepath.Join(home, "history"), nil
 }
 
+// ValidID reports whether id is a stem the agent lists and this package reads.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
 // NewID mints a session id the agent accepts as a file stem.
 func NewID() (string, error) {
 	buf := make([]byte, 16)

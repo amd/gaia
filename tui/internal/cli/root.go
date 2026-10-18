@@ -114,6 +114,19 @@ var resumeArg string
 
 const resumePick = "pick"
 
+// resumeFromFlag turns --resume into a request. An empty --resume= (a script's
+// unset variable) is refused rather than read as "start a new session".
+func resumeFromFlag(changed bool, arg string) (ui.Resume, error) {
+	switch {
+	case changed && arg == "":
+		return ui.Resume{}, fmt.Errorf("--resume= was given an empty session id: pass " +
+			"--resume=<id>, or --resume alone to choose from the list")
+	case arg == resumePick:
+		return ui.Resume{Pick: true}, nil
+	}
+	return ui.Resume{ID: arg}, nil
+}
+
 // resumeArgAdvice catches `--resume <id>` written with a space: pflag reads
 // that as a bare --resume plus a stray argument.
 func resumeArgAdvice(args []string) error {
@@ -202,9 +215,9 @@ var rootCmd = &cobra.Command{
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
 		}
-		resume := ui.Resume{Pick: resumeArg == resumePick}
-		if !resume.Pick {
-			resume.ID = resumeArg
+		resume, err := resumeFromFlag(cmd.Flags().Changed("resume"), resumeArg)
+		if err != nil {
+			return err
 		}
 		return ui.RunFlagship(mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume)
 	},

@@ -700,8 +700,9 @@ The agent holds an exclusive lock on the first byte of `<id>.lock` for its whole
 life; that lock, not `pid`, is how a host tells an open session from a closed
 one, since it dies with the process and a reused pid cannot fake it. Reopening
 a session takes the lock and rewrites `<id>.json` at once (a status left at
-`running` or `waiting` becomes `failed`); if another process holds the lock the
-agent refuses to start. `<id>` must be hex, as the TUI mints it.
+`running` or `waiting` becomes `failed`); if another process still holds the
+lock after a short wait (a host's probe takes and drops it), the agent refuses
+to start. `<id>` must be hex, as the TUI mints it.
 Only real turns move the listing — sentinels and `/model` do not. Without
 `--session-kind` nothing is written. The TUI passes `chat`; other launchers name
 their own kind (`eval`, `scheduled`), which the TUI hides by default.

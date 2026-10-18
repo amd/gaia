@@ -11,7 +11,6 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
-	"github.com/amd/gaia/tui/internal/sessionstore"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
@@ -649,11 +648,7 @@ func (m FlagshipModel) logf(format string, args ...any) {
 
 func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea.Model, tea.Cmd) {
 	resuming := m.resumeID != ""
-	sessionID, historyFile, err := m.sessionLaunch(agent)
-	kind := ""
-	if historyFile != "" {
-		kind = sessionstore.KindChat
-	}
+	plan, err := m.sessionLaunch(agent)
 	// Interactive: this launch opens the chat view, which renders a mid-run
 	// question and answers it.
 	var c client.AgentClient
@@ -665,8 +660,8 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 			FullAccess:  m.fullAccess,
 			UseClaude:   m.useClaude,
 			ClaudeModel: m.claudeModel,
-			HistoryFile: historyFile,
-			SessionKind: kind,
+			HistoryFile: plan.file,
+			SessionKind: plan.kind,
 		})
 	}
 	if err != nil {
@@ -702,7 +697,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 		m.chatClient.retire()
 	}
 	m.chatClient.set(c)
-	m.sessionID = sessionID
+	m.sessionID = plan.id
 
 	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, setupVerified).
 		WithHubClient(m.hub())
@@ -720,6 +715,9 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	if m.launchNotice != "" {
 		chatModel = chatModel.WithNotice(m.launchNotice)
 		m.launchNotice = ""
+	}
+	if plan.notice != "" {
+		chatModel = chatModel.WithNotice(plan.notice)
 	}
 	chatModel = m.withStartupModel(agent, chatModel, m.gateChatModel)
 	m.gateChatModel = ""

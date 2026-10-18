@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/sessionstore"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/sessions"
@@ -77,9 +78,63 @@ func TestEveryFlagshipLaunchIsAListedSession(t *testing.T) {
 	if m.SessionID() == "" {
 		t.Fatal("the flagship launched without a session to come back to")
 	}
-	_, file, err := m.sessionLaunch(m.agent)
-	if err != nil || filepath.Dir(file) != dir {
-		t.Fatalf("history file %q, %v; want one in %s", file, err, dir)
+	plan, err := m.sessionLaunch(m.agent)
+	if err != nil || filepath.Dir(plan.file) != dir || plan.kind != sessionstore.KindChat {
+		t.Fatalf("plan %+v, %v; want a listed session in %s", plan, err, dir)
+	}
+}
+
+// GAIA_HISTORY_FILE pinned every launch's transcript before sessions existed,
+// and still does: listed when /sessions can reopen it, kept and explained when not.
+func TestAPinnedHistoryFileIsHonoured(t *testing.T) {
+	m, dir := sessionChat(t)
+	other := t.TempDir()
+	for _, tc := range []struct {
+		name, pinned, id string
+		listed           bool
+	}{
+		{"a session file in the store", filepath.Join(dir, "abcd1234.sqlite3"), "abcd1234", true},
+		{"a session name elsewhere", filepath.Join(other, "abcd1234.sqlite3"), "", false},
+		{"any other name", filepath.Join(dir, "my notes.sqlite3"), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(client.HistoryFileEnv, tc.pinned)
+			plan, err := m.sessionLaunch(m.agent)
+			if err != nil || plan.file != tc.pinned || plan.id != tc.id || (plan.kind != "") != tc.listed {
+				t.Fatalf("plan %+v, %v", plan, err)
+			}
+			if !tc.listed && !strings.Contains(plan.notice, "won't appear in /sessions") {
+				t.Fatalf("an unlisted pinned file says nothing: %q", plan.notice)
+			}
+		})
+	}
+}
+
+func TestAnUnlistedPinnedFileSaysSoInTheChat(t *testing.T) {
+	m, _ := sessionChat(t)
+	t.Setenv(client.HistoryFileEnv, filepath.Join(t.TempDir(), "mine.sqlite3"))
+	updated, _ := m.launchAgent(m.agent, true)
+	got := updated.(FlagshipModel)
+	if got.SessionID() != "" {
+		t.Fatalf("an unlisted session claimed id %q", got.SessionID())
+	}
+	found := false
+	for _, msg := range got.chat.Messages() {
+		found = found || strings.Contains(msg.Content, "won't appear in /sessions")
+	}
+	if !found {
+		t.Fatalf("no notice in the chat: %+v", got.chat.Messages())
+	}
+}
+
+// Picking a session in /sessions is explicit, so it wins over the pin.
+func TestAPickedSessionWinsOverAPinnedFile(t *testing.T) {
+	m, dir := sessionChat(t)
+	t.Setenv(client.HistoryFileEnv, filepath.Join(t.TempDir(), "mine.sqlite3"))
+	m.resumeID = "abcdef09"
+	plan, err := m.sessionLaunch(m.agent)
+	if err != nil || plan.id != "abcdef09" || filepath.Dir(plan.file) != dir {
+		t.Fatalf("plan %+v, %v", plan, err)
 	}
 }
 

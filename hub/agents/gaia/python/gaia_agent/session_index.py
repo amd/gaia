@@ -71,8 +71,9 @@ def title_from(query: str) -> str:
     return ""
 
 
-#: How long a replace waits out a reader holding the index open. On Windows a
-#: host reading ``<id>.json`` at that instant makes ``os.replace`` fail.
+#: How long a write or the session lock waits out a host's brief hold: on
+#: Windows a host reading ``<id>.json`` makes ``os.replace`` fail, and a host
+#: probing ``<id>.lock`` holds it for an instant.
 REPLACE_ATTEMPTS = 10
 REPLACE_PAUSE_S = 0.02
 
@@ -118,20 +119,26 @@ def _hold_lock(path: Path):
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     f = open(path, "a+b")  # noqa: SIM115 - held open until the process exits
-    try:
-        if os.name == "nt":
-            import msvcrt
+    # A host checking whether the session is open takes and drops this lock;
+    # waiting out that instant keeps the probe from turning a free session away.
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            if os.name == "nt":
+                import msvcrt
 
-            f.seek(0)
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
 
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        f.close()
-        return None
-    return f
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except OSError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                f.close()
+                return None
+            time.sleep(REPLACE_PAUSE_S)
+    return None
 
 
 class SessionOpenElsewhere(RuntimeError):
@@ -308,9 +315,14 @@ class IndexedOut:
 
     def write(self, data: str) -> int:
         for line in data.splitlines():
-            if line.strip():
+            if not line.strip():
+                continue
+            try:
                 event = json.loads(line)
-                guarded(self._index, partial(self._index.observe, event), self._out)
+            except ValueError:
+                logger.warning("Session listing skipped a non-JSON line on the wire")
+                continue
+            guarded(self._index, partial(self._index.observe, event), self._out)
         return self._out.write(data)
 
     def flush(self) -> None:

@@ -46,3 +46,18 @@ func TestResumeWithASpacedIDNamesTheFix(t *testing.T) {
 		t.Fatalf("err = %v, want the attached form named", err)
 	}
 }
+
+func TestAnEmptyResumeIDIsRefused(t *testing.T) {
+	if _, err := resumeFromFlag(true, ""); err == nil || !strings.Contains(err.Error(), "empty session id") {
+		t.Fatalf("err = %v", err)
+	}
+	if r, err := resumeFromFlag(false, ""); err != nil || r.Pick || r.ID != "" {
+		t.Fatalf("no flag: %+v, %v", r, err)
+	}
+	if r, err := resumeFromFlag(true, resumePick); err != nil || !r.Pick {
+		t.Fatalf("bare: %+v, %v", r, err)
+	}
+	if r, err := resumeFromFlag(true, "ab12"); err != nil || r.ID != "ab12" {
+		t.Fatalf("id: %+v, %v", r, err)
+	}
+}

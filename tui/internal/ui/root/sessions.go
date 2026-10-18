@@ -5,10 +5,13 @@ package root
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/sessionstore"
 	"github.com/amd/gaia/tui/internal/ui/chat"
@@ -51,24 +54,57 @@ func (m FlagshipModel) storeDir() (string, error) {
 	return sessionstore.Dir()
 }
 
-// sessionLaunch is the history file and kind the agent is launched with: the
-// session being resumed, or a new one. Empty for an agent that keeps none.
-func (m *FlagshipModel) sessionLaunch(agent catalog.Agent) (id, file string, err error) {
+// sessionPlan is how one launch keeps its history: the file, and the id and
+// kind that list it. A file with no kind is kept but not listed; notice then
+// tells the user why it is missing from /sessions.
+type sessionPlan struct {
+	id, file, kind, notice string
+}
+
+// sessionLaunch plans the agent's history: the session being resumed, the
+// file GAIA_HISTORY_FILE pins, or a new session. Empty for an agent that
+// keeps none.
+func (m *FlagshipModel) sessionLaunch(agent catalog.Agent) (sessionPlan, error) {
 	if !keepsSessions(agent) {
-		return "", "", nil
+		return sessionPlan{}, nil
 	}
 	dir, err := m.storeDir()
 	if err != nil {
-		return "", "", err
+		return sessionPlan{}, err
 	}
-	id = m.resumeID
+	id := m.resumeID
 	m.resumeID = ""
 	if id == "" {
+		if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
+			return pinnedPlan(dir, pinned), nil
+		}
 		if id, err = sessionstore.NewID(); err != nil {
-			return "", "", err
+			return sessionPlan{}, err
 		}
 	}
-	return id, sessionstore.HistoryPath(dir, id), nil
+	return sessionPlan{id: id, file: sessionstore.HistoryPath(dir, id), kind: sessionstore.KindChat}, nil
+}
+
+// pinnedPlan honours GAIA_HISTORY_FILE. It is listed only when it is a file
+// /sessions can find and reopen: <id>.sqlite3 inside the session store.
+func pinnedPlan(dir, pinned string) sessionPlan {
+	stem := filepath.Base(pinned)
+	if filepath.Ext(stem) == ".sqlite3" {
+		stem = stem[:len(stem)-len(".sqlite3")]
+		if sessionstore.ValidID(stem) && sameDir(filepath.Dir(pinned), dir) {
+			return sessionPlan{id: stem, file: pinned, kind: sessionstore.KindChat}
+		}
+	}
+	return sessionPlan{file: pinned, notice: fmt.Sprintf(
+		"This chat keeps its history in %s, as %s asks. It won't appear in /sessions: "+
+			"only sessions GAIA names itself, in %s, are listed. Unset %s to get a listed session.",
+		pinned, client.HistoryFileEnv, dir, client.HistoryFileEnv)}
+}
+
+func sameDir(a, b string) bool {
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
 }
 
 // launchOrPick is the gate's hand-off: straight into chat or, for a bare
