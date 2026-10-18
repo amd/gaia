@@ -5588,16 +5588,27 @@ class LemonadeClient:
             )
 
         def send_unless_stopped() -> "requests.Response":
-            # Lemonade can sit on the request before sending any headers; the
-            # POST runs on a worker so Stop is not held up by it.
+            """``send()`` on a worker, so Stop is not held up while Lemonade
+            sits on the request before sending headers.
+
+            After a Stop in that window the worker's POST stays open until
+            headers arrive (then it is closed at once) or its read timeout
+            (``PULL_IDLE_TIMEOUT_S``) ends it: bounded, and off the caller's
+            thread.
+            """
             outcome: Dict[str, Any] = {}
             answered = threading.Event()
+            # Whoever runs second under this lock closes the response: the
+            # worker if Stop came first, the caller if the answer did.
+            handoff = threading.Lock()
 
             def run() -> None:
                 try:
-                    outcome["response"] = send()
-                    if stopped.is_set():
-                        outcome["response"].close()
+                    reply = send()
+                    with handoff:
+                        outcome["response"] = reply
+                        if stopped.is_set():
+                            reply.close()
                 except BaseException as e:  # pylint: disable=broad-except
                     outcome["error"] = e  # re-raised on the caller's thread
                 finally:
@@ -5606,7 +5617,10 @@ class LemonadeClient:
             threading.Thread(target=run, name="gaia-pull-send", daemon=True).start()
             while not answered.wait(_STOP_CHECK_SECONDS):
                 if is_cancelled():
-                    stopped.set()
+                    with handoff:
+                        stopped.set()
+                        if "response" in outcome:
+                            outcome["response"].close()
                     raise cancelled()
             if "error" in outcome:
                 raise outcome["error"]

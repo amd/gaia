@@ -749,3 +749,34 @@ def test_stop_during_an_auto_download_is_a_cancellation(
     with pytest.raises(ModelDownloadCancelledError):
         client.load_model("Qwen3-0.6B-GGUF", prompt=False, auto_download=True)
     assert mock_send.call_count == 1
+
+
+def test_a_pull_answered_while_stop_lands_is_still_closed():
+    """The POST answers in the gap between the worker's Stop check and the
+    caller recording Stop: that response must still be closed, or Lemonade
+    keeps downloading after the user was told it stopped."""
+    import time
+    from unittest.mock import MagicMock
+
+    from gaia.llm.retry import model_retry_notices
+
+    response = MagicMock()
+    response.status_code = 200
+
+    def slow_post(*_args, **_kwargs):
+        time.sleep(0.6)
+        return response
+
+    def slow_stop_check():
+        # The first check runs at ~0.5 s and takes 0.3 s: the POST answers
+        # (at ~0.6 s) while it is still deciding.
+        time.sleep(0.3)
+        return True
+
+    client = _make_client()
+    with patch("gaia.llm.lemonade_client.requests.post", side_effect=slow_post):
+        with model_retry_notices(lambda _n: None, is_cancelled=slow_stop_check):
+            with pytest.raises(ModelDownloadCancelledError):
+                for _event in client.pull_model_stream(model_name="Qwen3-0.6B-GGUF"):
+                    pass
+    response.close.assert_called()
