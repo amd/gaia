@@ -38,6 +38,7 @@ def _stub(tmp_path, body):
 
 def _transport(script, timeout=30):
     t = StdioTransport(sys.executable, args=["-u", str(script)], timeout=timeout)
+    t.name = "stub"
     assert t.connect()
     return t
 
@@ -71,7 +72,7 @@ def test_server_that_never_replies_times_out_with_its_name(tmp_path):
     assert isinstance(box.get("exc"), TimeoutError), box
     assert elapsed < 5
     message = str(box["exc"])
-    assert "python" in message and "stub_server.py" in message
+    assert "stub (python" in message
     assert "tools/list" in message
     assert "1s" in message
 
@@ -265,15 +266,20 @@ def test_disconnect_mid_request_reports_the_disconnect(tmp_path):
     assert elapsed < 10
 
 
-def test_the_error_label_names_the_server_without_its_arguments():
-    t = StdioTransport(
-        "C:/tools/npx.cmd", args=["-y", "@scope/server", "--token", "s3cret"]
-    )
-    assert t.label == "npx.cmd @scope/server"
-    legacy = StdioTransport("uvx my-server --api-key=s3cret")
-    assert "s3cret" not in legacy.label
-    inline = StdioTransport("python", args=["-c", "import os; TOKEN='s3cret'"])
-    assert inline.label == "python <inline code>"
+def test_the_error_label_names_the_server_by_name_and_executable():
+    t = StdioTransport("C:/tools/npx.cmd", args=["-y", "@scope/server"])
+    t.name = "github"
+    assert t.label == "github (npx.cmd)"
+
+
+def test_the_error_label_never_carries_an_argument():
+    for command, args in (
+        ("npx", ["-y", "@scope/server", "--token", "XYZ"]),
+        ("uvx", ["--api-key", "XYZ", "my-server"]),
+        ("uvx my-server --api-key=XYZ", None),
+        ("python", ["-c", "TOKEN='XYZ'"]),
+    ):
+        assert "XYZ" not in StdioTransport(command, args=args).label
 
 
 def test_a_server_that_stops_reading_cannot_block_the_write(tmp_path):
@@ -509,3 +515,122 @@ def test_the_child_watcher_backs_off_once_the_tree_settles(tmp_path, monkeypatch
     assert sleeps, "the watcher never ran"
     assert max(sleeps) > stdio_module._CHILD_SCAN_S
     assert max(sleeps) <= stdio_module._CHILD_SCAN_MAX_S
+
+
+def test_a_server_ping_gets_an_empty_result(tmp_path):
+    script = _stub(
+        tmp_path,
+        """
+        if req.get("method") == "tools/list":
+            send({"jsonrpc": "2.0", "id": "srv-ping", "method": "ping"})
+            answer = json.loads(sys.stdin.readline())
+            send({"jsonrpc": "2.0", "id": req["id"], "result": {"pong": answer}})
+        """,
+    )
+    transport = _transport(script)
+    try:
+        box, _ = _call_with_watchdog(lambda: transport.send_request("tools/list"))
+    finally:
+        transport.disconnect()
+
+    assert box["result"]["result"]["pong"] == {
+        "jsonrpc": "2.0",
+        "id": "srv-ping",
+        "result": {},
+    }
+
+
+class _FakeClient:
+    """An MCPClient stand-in whose connect() takes as long as a test needs."""
+
+    def __init__(self, name, connect_s=0.0, connects=True):
+        self.name = name
+        self.connect_s = connect_s
+        self.connects = connects
+        self.last_error = None
+        self.disconnected = threading.Event()
+
+    def connect(self):
+        time.sleep(self.connect_s)
+        return self.connects
+
+    def disconnect(self):
+        self.disconnected.set()
+
+
+class _OneServer:
+    def get_servers(self):
+        return {"srv": {"command": "unused"}}
+
+
+def test_a_connect_finishing_at_the_deadline_is_kept(monkeypatch):
+    """Done just after as_completed gave up, but before the timeout check."""
+    from concurrent.futures import TimeoutError as FuturesTimeout
+    from concurrent.futures import wait as futures_wait
+
+    from gaia.mcp.client import mcp_client_manager as mgr_mod
+
+    fake = _FakeClient("srv")
+    monkeypatch.setattr(mgr_mod.MCPClient, "from_config", lambda *a, **k: fake)
+
+    def times_out_after_everything_finished(futures, timeout=None):
+        futures_wait(list(futures))
+        raise FuturesTimeout()
+        yield  # pragma: no cover - a generator, like the real one
+
+    monkeypatch.setattr(mgr_mod, "as_completed", times_out_after_everything_finished)
+    manager = mgr_mod.MCPClientManager(config=_OneServer())
+    manager.load_from_config()
+
+    assert manager._clients.get("srv") is fake, manager._failed
+    assert not fake.disconnected.is_set()
+
+
+def test_a_connect_that_finishes_after_being_given_up_stops_itself(monkeypatch):
+    """Given up on before its process existed, it must not run unrecorded."""
+    from concurrent.futures import TimeoutError as FuturesTimeout
+
+    from gaia.mcp.client import mcp_client_manager as mgr_mod
+
+    fake = _FakeClient("srv", connect_s=0.5)
+
+    def slow_from_config(*args, **kwargs):
+        time.sleep(0.3)  # the deadline lands before the client even exists
+        return fake
+
+    monkeypatch.setattr(mgr_mod.MCPClient, "from_config", slow_from_config)
+
+    def times_out_at_once(futures, timeout=None):
+        raise FuturesTimeout()
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(mgr_mod, "as_completed", times_out_at_once)
+    manager = mgr_mod.MCPClientManager(config=_OneServer())
+    manager.load_from_config()
+
+    assert "timed out" in manager._failed["srv"]
+    assert fake.disconnected.wait(5), "a late connect kept its server running"
+    assert "srv" not in manager._clients
+
+
+def test_a_launch_that_cannot_start_its_readers_stops_the_server(tmp_path, monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    script = _stub(tmp_path, "time.sleep(3600)")
+    transport = StdioTransport(sys.executable, args=["-u", str(script)])
+    launched = {}
+    real_start = stdio_module.StdioTransport._start_readers
+
+    def no_threads(self):
+        launched["pid"] = self._process.pid
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(stdio_module.StdioTransport, "_start_readers", no_threads)
+
+    with pytest.raises(RuntimeError, match="new thread"):
+        transport.connect()
+    assert real_start is not None
+    pid = launched["pid"]
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(pid), "a failed launch left the server running"

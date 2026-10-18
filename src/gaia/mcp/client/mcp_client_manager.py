@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeoutError
 from concurrent.futures import as_completed
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from gaia.logger import get_logger
 
@@ -275,12 +276,23 @@ class MCPClientManager:
         # Every client started, so one still connecting at the deadline can
         # be stopped rather than left running with its pipes open.
         started: Dict[str, MCPClient] = {}
+        # Names given up on at the deadline. A worker that finishes later
+        # stops its own server, so a late success never runs unrecorded.
+        abandoned: Set[str] = set()
+        abandon_lock = threading.Lock()
 
         def _connect_one(name, server_config):
             try:
                 client = MCPClient.from_config(name, server_config, debug=self.debug)
-                started[name] = client
-                if client.connect():
+                with abandon_lock:
+                    started[name] = client
+                connected = client.connect()
+                with abandon_lock:
+                    late = name in abandoned
+                if late:
+                    client.disconnect()
+                    return name, None, "connected after the deadline; stopped"
+                if connected:
                     return name, client, None
                 return name, None, client.last_error
             except Exception as e:
@@ -318,7 +330,9 @@ class MCPClientManager:
                     self._failed[server_name] = (
                         f"Connection timed out after {_CONNECT_TIMEOUT_S:.0f}s"
                     )
-                    client = started.get(server_name)
+                    with abandon_lock:
+                        abandoned.add(server_name)
+                        client = started.get(server_name)
                     if client is not None:
                         client.disconnect()
                     logger.warning(

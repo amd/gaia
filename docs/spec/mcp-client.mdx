@@ -1057,8 +1057,9 @@ def send_request(
     "method not found" (-32601) error back, and an error reply with a null id
     (a parse error) is raised at once. The wait also ends once the agent
     abandons the tool call (`tool_cancelled()`); a request given up on is
-    cancelled on the server with `notifications/cancelled`. Errors name the
-    server by its program and package or script, never its full arguments.
+    cancelled on the server with `notifications/cancelled`, and a server's
+    `ping` gets an empty result. Errors name the server by its configured name
+    and executable.
     Writes are bounded too: a server that stops reading its input is stopped
     rather than left blocking the request, and waiting behind another request
     ends on Stop.

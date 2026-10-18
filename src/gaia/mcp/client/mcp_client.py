@@ -396,7 +396,7 @@ class MCPClient:
             ValueError: If ``command`` contains shell syntax, which would not be
                 interpreted. Pass the program and its arguments separately.
         """
-        transport = StdioTransport(command, timeout=timeout, debug=debug)
+        transport = StdioTransport(command, timeout=timeout, debug=debug, name=name)
         return cls(name, transport, debug=debug)
 
     @classmethod
@@ -433,6 +433,7 @@ class MCPClient:
             env=resolved_env or None,
             timeout=timeout,
             debug=debug,
+            name=name,
         )
         return cls(name, transport, debug=debug)
 

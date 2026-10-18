@@ -49,9 +49,6 @@ _TOOL_CALL_MARGIN_S = 5
 # reader, which back-pressures the server instead of growing without bound.
 _STDOUT_QUEUE_LINES = 10_000
 
-# Flags whose value is inline code, never a name worth printing.
-_INLINE_CODE_FLAGS = frozenset({"-c", "-e", "--eval", "-command", "-encodedcommand"})
-
 
 def tool_call_timeout() -> float:
     """Seconds a ``tools/call`` may wait: the agent's per-tool limit, less a margin."""
@@ -142,6 +139,7 @@ class StdioTransport(MCPTransport):
         timeout: Seconds to wait for each reply (default: 30). A server that
             stays silent that long raises ``TimeoutError``.
         debug: Enable debug logging (default: False)
+        name: The server's configured name, used in errors
     """
 
     def __init__(
@@ -151,7 +149,9 @@ class StdioTransport(MCPTransport):
         env: Optional[Dict[str, str]] = None,
         timeout: int = 30,
         debug: bool = False,
+        name: Optional[str] = None,
     ):
+        self.name = name
         self.command = command
         self.args = args
         self.env = env
@@ -173,29 +173,13 @@ class StdioTransport(MCPTransport):
 
     @property
     def label(self) -> str:
-        """The program and the package or script it runs, for errors.
-
-        Never the full command line: arguments can carry tokens.
-        """
-        tokens = [self.command] + list(self.args) if self.args else self.command.split()
-        if not tokens:
-            return "?"
-        names = [os.path.basename(tokens[0])]
-        target = None
-        for token in tokens[1:]:
-            if token.lower() in _INLINE_CODE_FLAGS:
-                target = "<inline code>"
-                break
-            if not token.startswith("-") and "=" not in token:
-                target = token
-                break
-        if target is not None and target != "<inline code>":
-            # ``@scope/server`` is a package name; a path is shown by its file.
-            if not target.startswith("@"):
-                target = os.path.basename(target.rstrip("/\\")) or target
-        if target is not None:
-            names.append(target)
-        return " ".join(names)[:120]
+        """The server's configured name and executable, for errors."""
+        if self.args:
+            executable = self.command
+        else:
+            executable = self.command.split()[0] if self.command.split() else "?"
+        executable = os.path.basename(executable.rstrip("/\\")) or executable
+        return f"{self.name} ({executable})" if self.name else executable
 
     def _start_readers(self) -> None:
         """Drain stdout into a queue and stderr into a tail buffer.
@@ -347,12 +331,29 @@ class StdioTransport(MCPTransport):
             return True
 
         except RuntimeError:
-            # Propagate crash diagnostics (from early death detection) to caller
+            # Propagate crash diagnostics (from early death detection) to
+            # caller, and "can't start new thread" from the readers.
+            self._abandon_launch()
             raise
         except Exception as e:
-            logger.error(f"Failed to start MCP server: {e}")
-            self._process = None
+            logger.error(f"Failed to start MCP server '{self.label}': {e}")
+            self._abandon_launch()
             return False
+
+    def _abandon_launch(self) -> None:
+        """Stop a server whose launch failed after Popen, so none runs unread."""
+        proc, self._process = self._process, None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.warning(
+                "Could not stop MCP server '%s' after a failed start: %s",
+                self.label,
+                e,
+            )
 
     def disconnect(self) -> None:
         """Terminate the MCP server subprocess."""
@@ -747,11 +748,14 @@ class StdioTransport(MCPTransport):
     def _handle_server_message(
         self, proc: subprocess.Popen, message: Dict[str, Any]
     ) -> None:
-        """Answer a server request with an error; log a notification."""
+        """Answer a server request; log a notification."""
         if "id" not in message:
             logger.debug(
                 "MCP server '%s' notification: %s", self.label, message["method"]
             )
+            return
+        if message["method"] == "ping":
+            self._write(proc, {"jsonrpc": "2.0", "id": message["id"], "result": {}})
             return
         self._write(
             proc,
