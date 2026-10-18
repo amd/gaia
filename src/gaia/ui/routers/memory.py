@@ -22,6 +22,9 @@ from gaia.agents.base.memory_store import (
     USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
 )
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
+from gaia.agents.base.memory_store import (
+    MemoryContentError,
+)
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -463,18 +466,21 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
 def create_knowledge(body: KnowledgeCreate) -> Dict:
     """Create a knowledge entry from the dashboard and embed it."""
     store = _get_store()
-    knowledge_id = store.store(
-        allow_privileged=True,  # category capped by KnowledgeCreate
-        category=body.category,
-        content=body.content,
-        domain=body.domain,
-        context=body.context,
-        entity=body.entity,
-        sensitive=body.sensitive,
-        due_at=body.due_at,
-        source="user",
-        confidence=0.8,
-    )
+    try:
+        knowledge_id = store.store(
+            allow_privileged=True,  # category capped by KnowledgeCreate
+            category=body.category,
+            content=body.content,
+            domain=body.domain,
+            context=body.context,
+            entity=body.entity,
+            sensitive=body.sensitive,
+            due_at=body.due_at,
+            source="user",
+            confidence=0.8,
+        )
+    except MemoryContentError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return {
         "status": "created",
         "knowledge_id": knowledge_id,
@@ -490,7 +496,10 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
         raise HTTPException(400, "No fields to update")
     store = _get_store()
     # Category capped by KnowledgeUpdate.
-    success = store.update(knowledge_id, allow_privileged=True, **kwargs)
+    try:
+        success = store.update(knowledge_id, allow_privileged=True, **kwargs)
+    except MemoryContentError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     result: Dict[str, Any] = {"status": "updated", "knowledge_id": knowledge_id}

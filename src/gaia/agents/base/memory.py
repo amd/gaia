@@ -70,6 +70,7 @@ from gaia.agents.base.memory_store import (
     MAX_CONTENT_LENGTH,
     MAX_EXTRACTION_TURN_LENGTH,
     VALID_CATEGORIES,
+    MemoryContentError,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -4148,17 +4149,29 @@ class MemoryMixin(ProceduralMemoryMixin):
             sens = sensitive.lower() == "true" if sensitive else False
 
             was_truncated = len(fact) > MAX_CONTENT_LENGTH
-            knowledge_id = mixin._memory_store.store(
-                category=category,
-                content=fact[:MAX_CONTENT_LENGTH],
-                domain=domain or None,
-                due_at=due_at or None,
-                source="tool",
-                context=ctx,
-                sensitive=sens,
-                entity=entity or None,
-                confidence=0.7,  # Explicit remember() calls are high-confidence
-            )
+            try:
+                # The full fact: the store checks it for markup, then truncates.
+                knowledge_id = mixin._memory_store.store(
+                    category=category,
+                    content=fact,
+                    domain=domain or None,
+                    due_at=due_at or None,
+                    source="tool",
+                    context=ctx,
+                    sensitive=sens,
+                    entity=entity or None,
+                    confidence=0.7,  # Explicit remember() calls are high-confidence
+                )
+            except MemoryContentError as e:
+                return {
+                    "status": "error",
+                    "stored": 0,
+                    "unrun_tool_calls": e.unrun_tool_calls,
+                    "message": (
+                        f"Not stored: {e} Use one remember call per fact, and "
+                        "tell the user only what was actually stored."
+                    ),
+                }
             mixin._embed_and_index(
                 knowledge_id, fact[:MAX_CONTENT_LENGTH], "remembered fact"
             )
@@ -4168,6 +4181,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
             return {
                 "status": "stored",
+                "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
@@ -4391,7 +4405,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                             "keep secrets in memory."
                         ),
                     }
-                kwargs["content"] = content[:MAX_CONTENT_LENGTH]
+                # Untruncated: the store checks it for markup, then truncates.
+                kwargs["content"] = content
             if category:
                 if category not in EXTRACTABLE_CATEGORIES:
                     return {
@@ -4442,7 +4457,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Re-embed if content changed
                 if content:
                     mixin._embed_and_index(
-                        knowledge_id, kwargs["content"], "edited memory", replace=True
+                        knowledge_id,
+                        content[:MAX_CONTENT_LENGTH],
+                        "edited memory",
+                        replace=True,
                     )
                 mixin._refresh_if_shown(knowledge_id)
 
