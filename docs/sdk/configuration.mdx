@@ -201,9 +201,8 @@ GAIA_LLM_RETRY_ATTEMPTS=1 GAIA_LLM_LOAD_WAIT=0 GAIA_AGENT_MODEL_RETRIES=0 gaia c
 
 Invalid nonempty values fail with an actionable error; unset or blank values
 use the defaults. Stop cancels any retry wait, within half a second: the client's
-backoff as well as the agent's wait between step attempts. Waiting on a busy
-Lemonade it takes up to about 1.5 s, because each check of the server can take
-a second to go unanswered.
+backoff as well as the agent's wait between step attempts, and the wait on a
+busy Lemonade, even while a check of the server is still waiting for its answer.
 
 ## 16.2 Configuration in Code
 
