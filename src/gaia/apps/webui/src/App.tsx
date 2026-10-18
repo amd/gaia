@@ -39,6 +39,8 @@ type SetupGate =
     | { state: 'unknown'; error: string };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
+/** A backend that has answered no status request for this long is treated as gone. */
+const BACKEND_SILENT_LOST_MS = 5 * 60_000;
 const RESTORE_NOTICE_MS = 6000;
 
 function Loading() {
@@ -116,12 +118,14 @@ function App() {
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
     const slowCount = useRef(0);
+    const slowSince = useRef<number | null>(null);
     // A backend that answers late is busy, not gone; only a refused request means it is unreachable.
     const [backendSlow, setBackendSlow] = useState(false);
     const applyStatus = useCallback((outcome: StatusOutcome) => {
         if (outcome.kind === 'unreachable') {
             log.system.warn('System status check failed', outcome.error);
             slowCount.current = 0;
+            slowSince.current = null;
             setBackendSlow(false);
             setBackendConnected(false);
             setSystemStatus(null);
@@ -129,12 +133,21 @@ function App() {
         }
         if (outcome.kind === 'slow') {
             slowCount.current += 1;
+            slowSince.current ??= Date.now();
             log.system.warn(`System status did not answer in time (${slowCount.current} in a row)`);
-            if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) setBackendSlow(true);
+            if (Date.now() - slowSince.current >= BACKEND_SILENT_LOST_MS) {
+                // Busy does not last this long; one that never answers is as good as gone.
+                setBackendSlow(false);
+                setBackendConnected(false);
+                setSystemStatus(null);
+            } else if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) {
+                setBackendSlow(true);
+            }
             return;
         }
         const { status } = outcome;
         slowCount.current = 0;
+        slowSince.current = null;
         setBackendSlow(false);
         setBackendConnected(true);
         if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);

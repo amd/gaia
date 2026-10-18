@@ -157,6 +157,21 @@ describe('system status poll', () => {
         expect(document.body.textContent).not.toMatch(/Lost the connection/i);
     });
 
+    it('calls a backend that has answered nothing for five minutes lost, with a next step', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+        mocked.getSystemStatus.mockImplementation((signal?: AbortSignal) => new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }));
+        useChatStore.setState({ backendConnected: true });
+        render(<App />);
+        // Timeouts end at 60, 130, 210, 300 and 390 s; the first was at 60 s.
+        await advance(305_000);
+        expect(useChatStore.getState().backendConnected).toBe(true);
+        await advance(90_000);
+        expect(useChatStore.getState().backendConnected).toBe(false);
+        expect(document.body.textContent).toMatch(/Lost the connection to GAIA/i);
+    });
+
     it('waits long enough for the status handler to finish its own probes', async () => {
         fakeTimers();
         const signals: AbortSignal[] = [];
