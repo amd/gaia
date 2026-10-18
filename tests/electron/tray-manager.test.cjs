@@ -735,19 +735,22 @@ describe("Windows taskbar overlay", () => {
     expect(win.setOverlayIcon.mock.calls.length).toBe(calls);
   });
 
-  test("a reopened window gets the overlay again", () => {
+  test("a reopened window gets the overlay again, with nothing else changing", () => {
     setPlatform("win32");
     const win = createMockWindow();
     const mgr = newTray(win);
     mgr.create();
-    mgr.setActivity(activity({ needsYou: [{ id: "a", title: "A", reason: "approval" }] }));
+    mgr.setNotificationCount(3);
+    expect(win.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("unread"), "3 unread notifications");
+
     win._isDestroyed = true;
     mgr.windowClosed();
     const fresh = createMockWindow();
     mgr._reopenWindow.mockReturnValue(fresh);
     mgr._showWindow();
-    mgr.setActivity(activity({ needsYou: [{ id: "a", title: "A", reason: "approval" }] }));
-    expect(fresh.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("needs-you"), "1 chat needs you");
+
+    // Same unread count, no new report: the new window must still get the overlay.
+    expect(fresh.setOverlayIcon).toHaveBeenLastCalledWith(mgr._overlayImage("unread"), "3 unread notifications");
   });
 
   test("is Windows-only", () => {

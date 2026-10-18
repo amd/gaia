@@ -82,6 +82,32 @@ test("Later never asks about running work", async () => {
   expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
 });
 
-test("a confirmRestart that isn't a function fails loudly", () => {
-  expect(() => initUpdater({ confirmRestart: true })).toThrow(/confirmRestart must be a function/);
+test("a failing restart check is shown to the user, and nothing installs", async () => {
+  const confirmRestart = jest.fn(async () => {
+    throw new Error("dialog failed");
+  });
+  initUpdater({ confirmRestart });
+  await downloadedAndRestartChosen();
+  expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+  expect(electronMock.dialog.showErrorBox).toHaveBeenCalledWith(
+    "GAIA update",
+    expect.stringMatching(/dialog failed[\s\S]*installs the next time you quit/)
+  );
+});
+
+test.each([[undefined], [{}], [{ confirmRestart: true }]])(
+  "init without a restart check (%p) fails loudly instead of restarting silently",
+  (options) => {
+    expect(() => initUpdater(options)).toThrow(/needs options.confirmRestart/);
+  }
+);
+
+test("main.cjs hands init the restart check", () => {
+  // main.cjs can't be required without launching Electron; init() throwing
+  // above is what makes a dropped option fail at startup, this pins main's call.
+  const main = fs.readFileSync(
+    path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"),
+    "utf8"
+  );
+  expect(main).toContain("autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart })");
 });

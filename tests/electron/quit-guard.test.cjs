@@ -225,6 +225,17 @@ describe("installQuitGuard", () => {
     expect(deps.onError).toHaveBeenCalledWith(expect.objectContaining({ message: "dialog failed" }));
     expect(app.quit).not.toHaveBeenCalled();
   });
+
+  test("after the question fails, quitting again quits without asking", async () => {
+    const { app, deps } = setup({ confirm: async () => { throw new Error("dialog failed"); } });
+    app.emit("before-quit", quitEvent());
+    await flush();
+    const again = quitEvent();
+    app.emit("before-quit", again);
+    expect(again.preventDefault).not.toHaveBeenCalled();
+    expect(deps.confirm).toHaveBeenCalledTimes(1);
+    expect(deps.onQuitting).toHaveBeenCalled();
+  });
 });
 
 describe("attachWindowGuards", () => {
@@ -321,11 +332,14 @@ describe("attachWindowGuards", () => {
     expect(win.hide).not.toHaveBeenCalled();
   });
 
-  test("a Windows sign-out lets the quit through without asking", () => {
-    const { win, guard } = setup();
-    win.emit("session-end");
-    expect(guard.allow).toHaveBeenCalled();
-  });
+  test.each([["query-session-end"], ["session-end"]])(
+    "a Windows sign-out (%s) lets the quit through without asking",
+    (event) => {
+      const { win, guard } = setup();
+      win.emit(event);
+      expect(guard.allow).toHaveBeenCalledTimes(1);
+    }
+  );
 });
 
 describe("the update restart wording", () => {
@@ -346,16 +360,26 @@ describe("the update restart wording", () => {
 
 describe("backendJson timeout", () => {
   test("a service that never answers fails after the timeout, naming it", async () => {
-    // Hangs until aborted, as a wedged backend does.
-    const fetchImpl = (_url, { signal }) =>
+    // A wedged backend: never answers, and only an abort signal ends the wait.
+    const fetchImpl = (_url, { signal } = {}) =>
       new Promise((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason));
+        if (signal) signal.addEventListener("abort", () => reject(signal.reason));
       });
-    const started = Date.now();
-    await expect(backendJson(4321, "/api/system/work-in-progress", { fetchImpl, timeoutMs: 50 })).rejects.toThrow(
+    const guard = new Promise((_resolve, reject) =>
+      setTimeout(() => reject(new Error("backendJson never timed out")), 2000)
+    );
+    const err = await Promise.race([
+      backendJson(4321, "/api/system/work-in-progress", { fetchImpl, timeoutMs: 50 }).then(
+        () => null,
+        (e) => e
+      ),
+      guard,
+    ]);
+    expect(err.message).toMatch(
       /the GAIA service at http:\/\/127\.0\.0\.1:4321\/api\/system\/work-in-progress did not answer/
     );
-    expect(Date.now() - started).toBeLessThan(2000);
+    // It was the timeout that ended it, not some other failure.
+    expect(err.cause.name).toBe("TimeoutError");
   });
 
   test("the quit check uses a bounded timeout", () => {

@@ -1296,7 +1296,11 @@ const quitGuard = installQuitGuard({
   },
   onError: (err) => {
     console.error("[main] Quit check failed:", err);
-    dialog.showErrorBox("GAIA", `GAIA couldn't finish quitting: ${err.message}`);
+    dialog.showErrorBox(
+      "GAIA",
+      `GAIA couldn't ask whether to stop the running work: ${err.message}\n\n` +
+        "Quit again to quit anyway; any answer still being written will be lost."
+    );
   },
 });
 

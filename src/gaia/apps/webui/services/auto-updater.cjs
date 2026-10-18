@@ -106,7 +106,7 @@ const state = {
 };
 
 let mainWindowRef = null;
-/** Asks before an update restart would cut off running work; null asks nothing. */
+/** Asks before an update restart would cut off running work (set by init). */
 let confirmRestartRef = null;
 let checkInProgress = false;
 let scheduledTimeout = null;
@@ -620,7 +620,7 @@ function wireAutoUpdaterEvents() {
       if (choice && choice.response === 0) {
         // quitAndInstall starts the installer at once, so ask about running
         // work here; the quit that follows doesn't ask again.
-        if (confirmRestartRef && !(await confirmRestartRef())) {
+        if (!(await confirmRestartRef())) {
           log("info", "Restart put off: work is still running — will install on next quit");
           return;
         }
@@ -630,7 +630,13 @@ function wireAutoUpdaterEvents() {
         log("info", "User deferred restart — will install on next quit");
       }
     } catch (err) {
-      log("error", "Failed to show restart dialog:", err && err.message);
+      const message = (err && err.message) || String(err);
+      log("error", "Failed to show restart dialog:", message);
+      electronApi.dialog.showErrorBox(
+        "GAIA update",
+        `GAIA couldn't finish asking about the update restart: ${message}\n\n` +
+          "The update installs the next time you quit GAIA."
+      );
     }
   });
 
@@ -697,16 +703,19 @@ function unregisterIpcHandlers() {
  * continues, and this function itself never throws.
  *
  * @param {Electron.BrowserWindow | null} mainWindow
- * @param {object} [options]
- * @param {() => Promise<boolean>} [options.confirmRestart] - Whether "Restart now"
- *   may go ahead; asked before the installer starts.
+ * @param {object} options
+ * @param {() => Promise<boolean>} options.confirmRestart - Whether "Restart now"
+ *   may go ahead; asked before the installer starts. Required: without it an
+ *   update restart would silently cut off a running answer.
  */
 function init(mainWindow, options = {}) {
-  mainWindowRef = mainWindow || null;
-  if (options.confirmRestart !== undefined && typeof options.confirmRestart !== "function") {
-    throw new TypeError("auto-updater init: confirmRestart must be a function");
+  if (typeof options.confirmRestart !== "function") {
+    throw new TypeError(
+      "auto-updater init needs options.confirmRestart, so Restart now can ask before it stops running work"
+    );
   }
-  confirmRestartRef = options.confirmRestart || null;
+  mainWindowRef = mainWindow || null;
+  confirmRestartRef = options.confirmRestart;
 
   // Disabled path — short-circuit BEFORE touching any Electron APIs so
   // this works in plain Node tests where require('electron') returns a

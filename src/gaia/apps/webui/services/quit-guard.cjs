@@ -30,7 +30,7 @@ async function backendJson(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    throw new Error(`the GAIA service at ${url} did not answer (${err.message})`);
+    throw new Error(`the GAIA service at ${url} did not answer (${err.message})`, { cause: err });
   }
   let reply = null;
   try {
@@ -137,18 +137,22 @@ async function confirmQuit({ getWork, showMessageBox, action = QUIT }) {
  *
  * @param {{app: Electron.App, updater: NodeJS.EventEmitter,
  *   shouldAsk: () => boolean, confirm: () => Promise<boolean>,
- *   onQuitting: () => void, onError: (err: Error) => void}} deps
+ *   onQuitting: () => void, onError: (err: Error) => void}} deps `onError` should
+ *   tell the user that quitting again quits without asking.
  * @returns {{readonly confirmed: boolean, allow(): void}}
  */
 function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onError }) {
   let confirmed = false;
   let inFlight = false;
+  // If the question itself can't be shown, the next quit goes through, so a
+  // broken dialog can never trap the user in GAIA.
+  let questionFailed = false;
   // The restart was already confirmed in the update dialog.
   updater.on("before-quit-for-update", () => {
     confirmed = true;
   });
   app.on("before-quit", (event) => {
-    if (!confirmed && shouldAsk()) {
+    if (!confirmed && !questionFailed && shouldAsk()) {
       event.preventDefault();
       if (inFlight) return;
       inFlight = true;
@@ -164,6 +168,7 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
         })
         .catch((err) => {
           inFlight = false;
+          questionFailed = true;
           onError(err);
         });
       return;
@@ -215,6 +220,8 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
       app.quit();
     }
   });
+  // Windows asks (query-session-end) before it ends the session (session-end).
+  win.on("query-session-end", () => guard.allow());
   win.on("session-end", () => guard.allow());
 }
 
