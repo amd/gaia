@@ -200,10 +200,16 @@
     color: var(--text-muted);
 }
 
-.sb-row-title {
+/* Long titles fade out instead of ending in an ellipsis. The fade covers 24px
+ * of padding only overflowing text reaches, so a short title is never dimmed. */
+.sb-row-title,
+.sb-location-text {
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    padding-right: 24px;
+    margin-right: -24px;
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }
 
 .sb-row-delete {
@@ -279,12 +285,6 @@
 .sb-location:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
-}
-
-.sb-location-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .sb-bottom-actions {
