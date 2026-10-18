@@ -549,6 +549,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
     - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+    - Two documents index at a time; the rest wait their turn. Indexing one document stops after 30 minutes with an error that says so; for very large documents, raise the limit before GAIA starts with `GAIA_INDEX_TIMEOUT` (seconds), e.g. `export GAIA_INDEX_TIMEOUT=3600`
   </Accordion>
 
   <Accordion title="Access denied: path must be within one of ...">

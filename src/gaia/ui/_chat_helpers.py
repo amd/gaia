@@ -14,6 +14,7 @@ patches take effect.
 """
 
 import asyncio
+import concurrent.futures
 import copy
 import importlib.util
 import json
@@ -3620,28 +3621,79 @@ async def _attach_chat_stream(session_id: str):
 # ── Document Indexing ────────────────────────────────────────────────────────
 
 
+# Indexing gets its own small pool: a big PDF embeds for minutes, and on the
+# shared default executor a few of them starve the chat stream loop.
+_INDEX_MAX_PARALLEL = 2
+_INDEX_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index"
+)
+_INDEX_TIMEOUT_ENV = "GAIA_INDEX_TIMEOUT"
+
+
+def _index_timeout_from_env() -> float:
+    """Seconds one document may take to index (``GAIA_INDEX_TIMEOUT``, default 1800).
+
+    Raises:
+        ValueError: the variable is set to something other than a positive number.
+    """
+    raw = os.environ.get(_INDEX_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return 1800.0
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{_INDEX_TIMEOUT_ENV}={raw!r} is not a number of seconds. Set it to "
+            "a positive number (e.g. 3600) or unset it for the 1800 s default."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"{_INDEX_TIMEOUT_ENV}={raw!r} must be positive. Set it to a positive "
+            "number of seconds or unset it for the 1800 s default."
+        )
+    return value
+
+
+# Read once at import so a bad value stops the Agent UI server at startup.
+_INDEX_TIMEOUT_S = _index_timeout_from_env()
+
+
+class _IndexingStopped(Exception):
+    """Raised inside the embedding loop to stop a cancelled or timed-out index."""
+
+
 async def _index_document(filepath: Path) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
-    Runs the synchronous RAG indexing in a thread pool executor
-    to avoid blocking the async event loop.
+    Runs on the indexing pool (``_INDEX_MAX_PARALLEL`` at once; more wait
+    their turn). Cancelling the awaiting task stops the embedding at its next
+    progress step, and an index that runs past ``GAIA_INDEX_TIMEOUT`` is
+    stopped the same way and fails.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails for any reason.
+        RuntimeError: If indexing fails or times out.
+        asyncio.CancelledError: If the awaiting task was cancelled.
     """
+    stop = threading.Event()
+
+    def _check_stop(_done: int, _total: int) -> None:
+        if stop.is_set():
+            raise _IndexingStopped(filepath.name)
 
     def _do_index():
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
+        if stop.is_set():
+            raise _IndexingStopped(filepath.name)
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(str(filepath))
+        result = rag.index_document(str(filepath), progress_callback=_check_stop)
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
@@ -3661,9 +3713,18 @@ async def _index_document(filepath: Path) -> int:
         logger.info("Indexed %s: %d chunks", filepath, chunks)
         return chunks
 
+    future = asyncio.get_running_loop().run_in_executor(_INDEX_EXECUTOR, _do_index)
     try:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _do_index)
+        return await asyncio.wait_for(asyncio.shield(future), _INDEX_TIMEOUT_S)
+    except asyncio.TimeoutError as e:
+        stop.set()
+        raise RuntimeError(
+            f"Indexing {filepath.name} took longer than {_INDEX_TIMEOUT_S:g} s and "
+            f"was stopped. Raise {_INDEX_TIMEOUT_ENV} for very large documents."
+        ) from e
+    except asyncio.CancelledError:
+        stop.set()
+        raise
     except RuntimeError:
         raise
     except Exception as e:
