@@ -35,8 +35,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-hub-worker-ci-${{ github.ref }}
-  # Never cancel a dispatch: it may be mid-deploy.
+  # Dispatches get their own group: cancel-in-progress is read from the
+  # incoming run, so a shared group would let a push cancel a deploy midway.
+  group: agent-hub-worker-ci-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'ci' }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:

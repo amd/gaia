@@ -42,4 +42,11 @@ def test_deploy_waits_for_the_tests(workflow):
 
 
 def test_a_push_never_cancels_a_dispatched_deploy(workflow):
-    assert "workflow_dispatch" in workflow["concurrency"]["cancel-in-progress"]
+    # cancel-in-progress is read from the INCOMING run, so a dispatch is only
+    # safe from a push if the two never share a concurrency group.
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] == (
+        "${{ github.event_name != 'workflow_dispatch' }}"
+    )
+    group = concurrency["group"]
+    assert "github.event_name == 'workflow_dispatch' && 'dispatch' || 'ci'" in group
