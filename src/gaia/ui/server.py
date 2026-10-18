@@ -25,8 +25,10 @@ import shutil  # noqa: F401  # pylint: disable=unused-import
 import sys
 import threading
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
@@ -51,6 +53,7 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from ._chat_helpers import writing_tool_registry
 from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
@@ -228,8 +231,13 @@ def lemonade_is_remote() -> bool:
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
-def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
-    """Run one scheduled prompt through a fresh GAIA agent; returns the answer."""
+def _run_scheduled_prompt(
+    db: ChatDatabase, prompt: str, cancel_event: Optional[threading.Event] = None
+) -> str:
+    """Run one scheduled prompt through a fresh GAIA agent; returns the answer.
+
+    Setting *cancel_event* stops the agent at its next step.
+    """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError as e:
@@ -257,13 +265,75 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
         dynamic_tools=dynamic_tools,
         memory_incognito=not memory_enabled(db),
     )
-    agent = GaiaAgent(config)
+    with writing_tool_registry():
+        agent = GaiaAgent(config)
     agent._incognito_reason = "memory_off"
+    agent._cancel_event = cancel_event
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
         return val if val is not None else result.get("answer", "")
     return str(result) if result else ""
+
+
+# How long a timed-out scheduled run's thread gets to stop before the model is freed.
+_SCHEDULE_STOP_GRACE_SECONDS = 10.0
+
+
+class _ScheduledRuns:
+    """Runs scheduled prompts one at a time, in line with chat turns.
+
+    A run waits in the turn queue (it builds and drives an agent on the same
+    model), gets *timeout* seconds once it reaches the model, and on timeout
+    is told to stop. A run whose thread ignores that keeps the next run from
+    starting, so stuck threads never pile up.
+    """
+
+    def __init__(self, db: ChatDatabase, timeout: float):
+        self._db = db
+        self._timeout = timeout
+        self._stuck: Optional[threading.Thread] = None
+
+    async def run(self, prompt: str) -> str:
+        from gaia.ui.agent_threads import run_in_own_thread
+        from gaia.ui.turn_queue import turn_queue
+
+        if self._stuck is not None and self._stuck.is_alive():
+            raise RuntimeError(
+                "Scheduled run not started: the previous one is still stopping "
+                f"after its {self._timeout:g}s timeout (a tool it called has not "
+                "returned). It will run at its next time; raise "
+                "GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+            )
+        await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
+        try:
+            cancel = threading.Event()
+            thread_box: dict = {}
+
+            def work() -> str:
+                thread_box["thread"] = threading.current_thread()
+                return _run_scheduled_prompt(self._db, prompt, cancel_event=cancel)
+
+            worker = run_in_own_thread(work, name="gaia-scheduled-run")
+            done, _ = await asyncio.wait({worker}, timeout=self._timeout)
+            if done:
+                return worker.result()
+            cancel.set()
+            done, _ = await asyncio.wait({worker}, timeout=_SCHEDULE_STOP_GRACE_SECONDS)
+            if not done:
+                self._stuck = thread_box.get("thread")
+                logger.error(
+                    "Scheduled run still running %.0fs after its %gs timeout; "
+                    "freeing the model, and the next run waits for it to exit",
+                    _SCHEDULE_STOP_GRACE_SECONDS,
+                    self._timeout,
+                )
+            raise asyncio.TimeoutError(
+                f"Scheduled run did not finish within {self._timeout:g}s and was "
+                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+            )
+        finally:
+            turn_queue.release()
 
 
 # ── Application Factory ────────────────────────────────────────────────────
@@ -506,6 +576,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui.scheduler import Scheduler
 
         _sched_timeout = float(os.environ.get("GAIA_SCHEDULE_TIMEOUT", "300"))
+        scheduled_runs = _ScheduledRuns(db, _sched_timeout)
 
         async def _schedule_executor(prompt: str) -> str:
             """Execute a scheduled prompt through a fresh GAIA (flagship) agent.
@@ -525,11 +596,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
                 )
 
-            loop = asyncio.get_running_loop()
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, _run_scheduled_prompt, db, prompt),
-                timeout=_sched_timeout,
-            )
+            return await scheduled_runs.run(prompt)
 
         scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler

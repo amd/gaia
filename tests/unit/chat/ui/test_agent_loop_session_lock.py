@@ -11,6 +11,7 @@ lookup under the wrong type evicts (and disconnects) the user's agent.
 
 import asyncio
 import sys
+import threading
 import types
 from unittest.mock import MagicMock
 
@@ -191,3 +192,30 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert config.kwargs["ui_session_id"] == session["id"]
     assert config.kwargs["silent_mode"] is True
     assert len(agent.calls) == 1
+
+
+async def test_timed_out_tick_frees_the_model_while_its_thread_winds_down(
+    env, monkeypatch
+):
+    monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.2)
+    monkeypatch.setattr(agent_loop_mod, "_TICK_STOP_GRACE_SECONDS", 0.2, raising=False)
+    loop, session, agent = _make("chat")
+    unstick = threading.Event()
+    # Stuck where the tick's cancel can't reach it, e.g. a hung tool call.
+    agent.process_query = lambda _message: unstick.wait(30) and "late"
+    try:
+        await asyncio.wait_for(
+            loop._run_step(AgentTrigger("idle_tick", session["id"])), 5
+        )
+        assert not agent_loop_mod.turn_queue.locked()
+        # The session's agent is still in use until the thread exits.
+        lock = loop._app_state.session_locks[session["id"]]
+        assert lock.locked()
+        unstick.set()
+        for _ in range(100):
+            if not lock.locked():
+                break
+            await asyncio.sleep(0.02)
+        assert not lock.locked()
+    finally:
+        unstick.set()

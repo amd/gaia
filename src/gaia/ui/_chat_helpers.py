@@ -23,6 +23,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -241,6 +242,20 @@ _DEFAULT_STREAM_TIMEOUT_SECONDS = 4500
 _MAX_STREAM_TIMEOUT_SECONDS = 86400
 # How often a waiting turn checks whether it has gone idle.
 _IDLE_POLL_SECONDS = 0.2
+# How long an ended turn waits for its agent thread before freeing the model.
+_PRODUCER_STOP_GRACE_SECONDS = 5.0
+
+# Chats whose stopped turn left its agent thread running (session_id -> thread).
+_stopping_sessions: dict[str, threading.Thread] = {}
+
+
+def session_still_stopping(session_id: str) -> bool:
+    """True while a stopped turn's agent thread in *session_id* winds down."""
+    thread = _stopping_sessions.get(session_id)
+    if thread is not None and not thread.is_alive():
+        _stopping_sessions.pop(session_id, None)
+        return False
+    return thread is not None
 
 
 def _stream_timeout_from_env() -> int:
@@ -289,6 +304,42 @@ _mcp_status_lock = threading.Lock()
 # path (_maybe_load_expected_model) and the boot-time preload task in server.py.
 # Public (no underscore) because it is intentionally accessed cross-module.
 model_load_lock = threading.Lock()
+
+# Building an agent and ``_register_tools`` write the process-global tool
+# registry, then snapshot it: two at once can hand one agent the other's tools.
+tool_registry_lock = threading.RLock()
+
+
+class TurnStopped(Exception):
+    """The turn was stopped while it waited to build its agent."""
+
+
+@contextmanager
+def writing_tool_registry(handler=None):
+    """Hold ``tool_registry_lock`` while an agent is built or re-registers tools.
+
+    A turn that has to wait (a stopped chat's agent thread, or the warm-up, is
+    still building) says so, and Stop ends the wait with :class:`TurnStopped`.
+    """
+    shown = False
+    while not tool_registry_lock.acquire(timeout=0.2):
+        if handler is None:
+            continue
+        if handler.cancelled.is_set():
+            raise TurnStopped()
+        if not shown:
+            handler._emit(
+                {
+                    "type": "status",
+                    "status": "working",
+                    "message": "Waiting for another chat to finish setting up",
+                }
+            )
+            shown = True
+    try:
+        yield
+    finally:
+        tool_registry_lock.release()
 
 
 # ── Lemonade error classification ──────────────────────────────────────────
@@ -2239,7 +2290,8 @@ async def _get_chat_response(
             agent = cached_agent
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
-            agent._register_tools()
+            with writing_tool_registry():
+                agent._register_tools()
             _extend_cached_scope(agent, allowed)
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
@@ -2312,28 +2364,29 @@ async def _get_chat_response(
                 # in ``_index_rag_with_progress`` so the user sees progress
                 # events; forwarding the real list there would double-index
                 # (see the regression test in test_chat_helpers.py).
-                agent = registry.create_agent(
-                    agent_type,
-                    **_build_create_kwargs(
-                        custom_model=custom_model,
-                        model_id=model_id,
-                        device=device,
-                        min_context_size=device_ctx,
-                    ),
-                    **_session_agent_kwargs(
-                        rag_file_paths=rag_file_paths,
-                        library_paths=library_paths,
-                        allowed=allowed,
-                        session_id=session_id,
-                        dynamic_tools=dynamic_tools,
-                        memory_incognito=_memory_off(session, db),
-                    ),
-                    # Forwarded only here (not via _session_agent_kwargs, which
-                    # also feeds the strict ChatAgentConfig). Non-email factories
-                    # drop it via dataclasses.fields filtering. None = scan every
-                    # connected mailbox (#1596).
-                    mail_provider=_session_mail_provider(session),
-                )
+                with writing_tool_registry():
+                    agent = registry.create_agent(
+                        agent_type,
+                        **_build_create_kwargs(
+                            custom_model=custom_model,
+                            model_id=model_id,
+                            device=device,
+                            min_context_size=device_ctx,
+                        ),
+                        **_session_agent_kwargs(
+                            rag_file_paths=rag_file_paths,
+                            library_paths=library_paths,
+                            allowed=allowed,
+                            session_id=session_id,
+                            dynamic_tools=dynamic_tools,
+                            memory_incognito=_memory_off(session, db),
+                        ),
+                        # Forwarded only here (not via _session_agent_kwargs, which
+                        # also feeds the strict ChatAgentConfig). Non-email factories
+                        # drop it via dataclasses.fields filtering. None = scan every
+                        # connected mailbox (#1596).
+                        mail_provider=_session_mail_provider(session),
+                    )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -2499,6 +2552,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     sse_handler = None
     producer = None
     cleanup_done = False
+    # When the turn was stopped and its thread got its grace period already.
+    stop_grace_spent = False
     from gaia.agents.base.agent import TurnCancel
 
     # Cooperative cancel signal for the producer's agent loop. Set when the
@@ -2521,14 +2576,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         if sse_handler is not None:
             session_permissions.for_session(session_id).detach(sse_handler)
         if producer is not None:
-            await asyncio.to_thread(producer.join, 5.0)
+            await asyncio.to_thread(
+                producer.join, 0.0 if stop_grace_spent else _PRODUCER_STOP_GRACE_SECONDS
+            )
             if producer.is_alive():
+                # Stuck where it can't see the Stop (a hung tool or MCP read):
+                # end the turn and free the model, but keep this chat busy
+                # until the thread exits, since it still holds the agent.
                 logger.warning(
-                    "Producer thread still running after stream ended; "
-                    "holding the session until it exits"
+                    "Session %s: the agent thread is still running %.0fs after "
+                    "the turn ended; freeing the model for other chats and "
+                    "holding this chat until the thread exits",
+                    session_id[:8],
+                    _PRODUCER_STOP_GRACE_SECONDS,
                 )
-                # The run (and so the session lock) must outlive the producer.
-                await asyncio.to_thread(producer.join)
+                slot = getattr(run, "slot", None)
+                if slot is not None:
+                    slot.release()
+                run.lingering_producer = producer
+                _stopping_sessions[session_id] = producer
 
     try:
         # Create SSE handler for streaming events
@@ -2537,6 +2603,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Expose the handler on the run so an external Stop can signal the
         # producer to bail even after every client has detached (#1580).
         run.handler = sse_handler
+        sse_handler.turn_slot = getattr(run, "slot", None)
         # Register so /api/chat/confirm-tool can find this handler.
         _active_sse_handlers[session_id] = sse_handler
 
@@ -2652,7 +2719,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
-                wait_for_warm_up()
+                wait_for_warm_up(handler=sse_handler)
+                if sse_handler.cancelled.is_set():
+                    return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
                 if cached_agent is not None:
@@ -2663,7 +2732,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent.streaming = True
 
                     # Re-register tools so _TOOL_REGISTRY points at this agent's self.
-                    agent._register_tools()
+                    with writing_tool_registry(sse_handler):
+                        agent._register_tools()
 
                     # Early-exit if consumer disconnected
                     if sse_handler.cancelled.is_set():
@@ -2738,7 +2808,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                     _stamp_chat_identity(config)
                     t_construct = _time.monotonic()
-                    agent = ChatAgent(config)
+                    with writing_tool_registry(sse_handler):
+                        agent = ChatAgent(config)
                     logger.info(
                         "chat: Invoking agent chat for session %s, model=%s took=%.3fs",
                         session_id[:8],
@@ -2875,28 +2946,29 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         # would be indexed twice on every cache miss, surfacing
                         # a noisy "Used tool index_documents" card for a
                         # 0-work hash-cache hit on casual chat turns.
-                        agent = registry.create_agent(
-                            agent_type,
-                            **_build_create_kwargs(
-                                custom_model=custom_model,
-                                model_id=model_id,
-                                streaming=True,
-                                device=device,
-                                min_context_size=device_ctx,
-                            ),
-                            **_session_agent_kwargs(
-                                rag_file_paths=[],
-                                library_paths=library_paths,
-                                allowed=allowed,
-                                session_id=session_id,
-                                dynamic_tools=dynamic_tools,
-                                memory_incognito=_memory_off(session, db),
-                            ),
-                            # See the non-streaming path: email-only kwarg,
-                            # filtered out by non-email factories. None = scan
-                            # every connected mailbox (#1596).
-                            mail_provider=_session_mail_provider(session),
-                        )
+                        with writing_tool_registry(sse_handler):
+                            agent = registry.create_agent(
+                                agent_type,
+                                **_build_create_kwargs(
+                                    custom_model=custom_model,
+                                    model_id=model_id,
+                                    streaming=True,
+                                    device=device,
+                                    min_context_size=device_ctx,
+                                ),
+                                **_session_agent_kwargs(
+                                    rag_file_paths=[],
+                                    library_paths=library_paths,
+                                    allowed=allowed,
+                                    session_id=session_id,
+                                    dynamic_tools=dynamic_tools,
+                                    memory_incognito=_memory_off(session, db),
+                                ),
+                                # See the non-streaming path: email-only kwarg,
+                                # filtered out by non-email factories. None = scan
+                                # every connected mailbox (#1596).
+                                mail_provider=_session_mail_provider(session),
+                            )
                         agent.console = sse_handler
                         logger.info(
                             "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
@@ -3024,6 +3096,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                 else:
                     result_holder["answer"] = str(result) if result else ""
+            except TurnStopped:
+                logger.info(
+                    "Session %s stopped before its agent was built", session_id[:8]
+                )
             except Exception as e:
                 logger.error("Agent error: %s", e, exc_info=True)
                 # Prefer the typed Lemonade error's user_message over the
@@ -3054,6 +3130,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
+        stopped_at = None
         _stream_start = _time.time()
 
         def _blocked_policy_steps():
@@ -3288,6 +3365,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             except queue.Empty:
                 if not producer.is_alive():
                     break
+                if sse_handler.cancelled.is_set():
+                    # Stopped: give the agent a moment to wind down, no more.
+                    if stopped_at is None:
+                        stopped_at = _time.monotonic()
+                    elif _time.monotonic() - stopped_at > _PRODUCER_STOP_GRACE_SECONDS:
+                        stop_grace_spent = True
+                        break
                 idle_cycles += 1
                 # Send a padded keepalive every ~5s (25 cycles × 0.2s).
                 # The padding flushes Chromium's receive buffer so any events
@@ -3555,6 +3639,15 @@ def _queued_status_event(position: int, ordinal) -> dict:
     }
 
 
+# Ends the "in line" status once a turn that stepped away for the user is back.
+_RESUMED_STATUS_EVENT = {
+    "type": "status",
+    "status": "working",
+    "phase": "resumed",
+    "message": "Continuing",
+}
+
+
 class _RunOutcome:
     """How a turn ended, read off the SSE events it emitted (#5221)."""
 
@@ -3612,7 +3705,7 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
-    from gaia.ui.turn_queue import TurnCancelled, ordinal, turn_queue
+    from gaia.ui.turn_queue import TurnCancelled, TurnSlot, ordinal, turn_queue
 
     session_id = request.session_id
     outcome = _RunOutcome()
@@ -3624,9 +3717,20 @@ async def _run_chat_lifecycle(
     def _announce_place(position: int) -> None:
         _emit(_sse(_queued_status_event(position, ordinal)))
 
+    def _announce_resume() -> None:
+        _emit(_sse(_RESUMED_STATUS_EVENT))
+
+    # The producer thread hands this back while the turn waits on the user.
+    run.slot = TurnSlot(
+        turn_queue,
+        session_id,
+        asyncio.get_running_loop(),
+        on_position=_announce_place,
+        on_resume=_announce_resume,
+    )
     try:
         try:
-            await turn_queue.acquire(session_id, on_position=_announce_place)
+            await run.slot.acquire()
         except TurnCancelled:
             msg_id = db.add_message(session_id, "assistant", "Cancelled.")
             _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
@@ -3635,7 +3739,7 @@ async def _run_chat_lifecycle(
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
         finally:
-            turn_queue.release()
+            run.slot.release()
     finally:
         _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
