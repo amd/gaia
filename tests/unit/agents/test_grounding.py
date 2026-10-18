@@ -456,6 +456,9 @@ def test_versions_code_and_ordinals_are_not_data(answer):
         ("I reviewed the code in `dates.py`.", ["read"]),
         ("We ran into a problem with this approach before.", []),
         ("We have run out of options here.", []),
+        ("I ran two targeted searches of `employee_handbook.md`.", ["searched"]),
+        ("I ran a query against the indexed handbook.", ["searched"]),
+        ("We ran the script and it printed 4.", ["ran"]),
     ],
 )
 def test_action_claim_vocabulary(answer, kinds):
@@ -487,6 +490,33 @@ def test_tested_after_a_passing_pytest_is_backed():
     records[-1]["output"] = "4 passed in 0.05s\n"
 
     assert ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, locate=_locate) == []
+
+
+@pytest.mark.parametrize("tool_name", ["query_specific_file", "query_documents"])
+def test_a_document_query_backs_a_search_claim(tool_name):
+    records = [
+        _rec(
+            tool_name,
+            {"file_path": "employee_handbook.md", "query": "stock options equity"},
+            {
+                "status": "success",
+                "chunks": ["Section 5: Benefits. Health insurance, 401(k)."],
+            },
+        )
+    ]
+    answer = (
+        "I ran two targeted searches of `employee_handbook.md`. The handbook does "
+        "not mention stock options."
+    )
+
+    findings = ungrounded(
+        answer,
+        "What does the handbook say about stock options?",
+        records,
+        locate=lambda p: None,
+    )
+
+    assert ACTION not in [f.gate for f in findings]
 
 
 def test_documented_with_no_tool_is_caught_alongside_the_unread_readme():
