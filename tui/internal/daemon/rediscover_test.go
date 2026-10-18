@@ -268,3 +268,59 @@ func TestDoKeepsTheReplacementsVersionErrorInTheChain(t *testing.T) {
 		t.Errorf("the original connection failure was dropped from the chain: %v", err)
 	}
 }
+
+// A daemon that restarts on the same port shows up as a rotated token rather
+// than a refused connection. It is still a new daemon with fresh sidecars.
+func TestDoDoesNotCarryARunScopedCallAcrossASamePortRestart(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	f.rotateToken("token-B")
+
+	cancelPath := "/v1/email/query/run-1/cancel"
+	_, got, err := c.Do(context.Background(), inst, Request{
+		Method: http.MethodPost, Path: cancelPath, Op: "cancel the 'email' run", RunScoped: true,
+	})
+	var restarted *DaemonRestartedError
+	if !errors.As(err, &restarted) {
+		t.Fatalf("want a DaemonRestartedError after a same-port restart, got %v", err)
+	}
+	f.mu.Lock()
+	var replayed bool
+	for i, p := range f.paths {
+		if p == "POST "+cancelPath && f.authSeen[i] == AuthScheme+" token-B" {
+			replayed = true
+		}
+	}
+	f.mu.Unlock()
+	if replayed {
+		t.Error("a run-scoped call was replayed to the restarted daemon")
+	}
+	if got.Token != "token-B" {
+		t.Error("the caller should learn the restarted daemon")
+	}
+}
+
+func TestDoEnsuresTheAgentBeforeReplayingAcrossASamePortRestart(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	f.rotateToken("token-B")
+
+	resp, _, err := c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: "/v1/email/memory"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
+		t.Error("the agent was not ensured on the restarted daemon before the replay")
+	}
+}

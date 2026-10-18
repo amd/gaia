@@ -499,13 +499,8 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 		}
 		c.opts.Logf("daemon: could not reach %s (%v); instance.json now names %s",
 			inst.BaseURL(), dialCause(err), moved.BaseURL())
-		if r.RunScoped {
-			return nil, moved, &DaemonRestartedError{Op: c.opDescription(r)}
-		}
-		if agentID := relayedAgent(r.Path); agentID != "" {
-			if _, err := c.ensureOn(ctx, moved, agentID); err != nil {
-				return nil, moved, err
-			}
+		if moved, err = c.afterRestart(ctx, moved, r); err != nil {
+			return nil, moved, err
 		}
 		c.opts.Logf("daemon: retrying %s %s on %s", r.Method, r.Path, moved.BaseURL())
 		inst = moved
@@ -521,6 +516,10 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 	fresh, err := c.refresh(ctx, inst, r.Path)
 	if err != nil {
 		return nil, inst, err
+	}
+	// The token rotates only when the daemon restarts, here on the same port.
+	if fresh, err = c.afterRestart(ctx, fresh, r); err != nil {
+		return nil, fresh, err
 	}
 	c.opts.Logf("daemon: client token rotated; retrying %s %s", r.Method, r.Path)
 
@@ -572,6 +571,24 @@ func (c *Client) refresh(ctx context.Context, old *Instance, path string) (*Inst
 		return nil, err
 	}
 	return fresh, nil
+}
+
+// afterRestart prepares a call for a daemon that replaced the one it was meant
+// for. That daemon starts with no sidecars, so a RunScoped call has nothing to
+// go to, and a relayed call needs its agent ensured there first.
+func (c *Client) afterRestart(ctx context.Context, fresh *Instance, r Request) (*Instance, error) {
+	if r.RunScoped {
+		return fresh, &DaemonRestartedError{Op: c.opDescription(r)}
+	}
+	agentID := relayedAgent(r.Path)
+	if agentID == "" {
+		return fresh, nil
+	}
+	ensured, err := c.ensureOn(ctx, fresh, agentID)
+	if err != nil {
+		return fresh, err
+	}
+	return ensured, nil
 }
 
 // isDialFailure reports a request that never connected, so no server saw it.
@@ -686,14 +703,14 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if err != nil {
 		return nil, err
 	}
-	if err := inst.CheckAgentsFloor(); err != nil {
-		return nil, err
-	}
 	return c.ensureOn(ctx, inst, agentID)
 }
 
 // ensureOn asks the daemon at inst to start-or-attach agentID's sidecar.
 func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string) (*Instance, error) {
+	if err := inst.CheckAgentsFloor(); err != nil {
+		return nil, err
+	}
 	body, err := ensureRequestBody(agentID)
 	if err != nil {
 		return nil, &RequestError{
