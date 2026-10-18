@@ -342,7 +342,12 @@ def test_stop_ends_the_busy_server_wait():
     client._retry_clock = clock
     busy = lc.LemonadeStatus(running=False)
     busy.busy = True
-    with patch.object(client, "get_status", return_value=busy):
+    with (
+        patch.object(
+            client, "health_check", side_effect=lc.LemonadeUnresponsiveError("silent")
+        ),
+        patch.object(client, "get_status", return_value=busy),
+    ):
         with retry.model_retry_notices(
             lambda _n: None, is_cancelled=lambda: clock.now >= 1
         ):
@@ -361,7 +366,11 @@ def test_busy_wait_is_announced_not_printed(capsys):
     busy.busy = True
     ready = lc.LemonadeStatus(running=True)
     notices = []
-    with patch.object(client, "get_status", side_effect=[busy, busy, ready]):
+    silent = lc.LemonadeUnresponsiveError("no answer")
+    with (
+        patch.object(client, "health_check", side_effect=[silent, {"status": "ok"}]),
+        patch.object(client, "get_status", return_value=ready),
+    ):
         with retry.model_retry_notices(notices.append):
             assert client._wait_while_busy(MODEL).running
     assert notices and "busy" in notices[0].reason

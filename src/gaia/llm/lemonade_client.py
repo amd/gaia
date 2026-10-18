@@ -1014,6 +1014,9 @@ SYSTEM_INFO_TIMEOUT = (3.05, 15.0)
 CATALOG_TIMEOUT = (3.05, 30.0)
 #: Seconds between status probes while a busy server is waited for.
 _BUSY_POLL_SECONDS = 5.0
+#: ``(connect, read)`` for a probe made while waiting. Short, so Stop is seen
+#: within about 1.5 s even when the probe itself goes unanswered.
+_WAIT_PROBE_TIMEOUT = (1.0, 1.0)
 #: ``/health`` per-model ``status`` of a model taking or leaving the LLM slot.
 #: A download holds no slot (and can take hours), so it is not one of them.
 _LOADING_STATES = frozenset({"loading", "evicting", "pending", "queued"})
@@ -3711,7 +3714,7 @@ class LemonadeClient:
         does not answer it counts as busy loading.
         """
         try:
-            health = self.health_check()
+            health = self.health_check(timeout=_WAIT_PROBE_TIMEOUT)
         except LemonadeUnresponsiveError:
             return "Lemonade is busy and not answering status checks"
         except LemonadeClientError as e:
@@ -3734,7 +3737,8 @@ class LemonadeClient:
 
         Bounded by ``GAIA_LLM_LOAD_WAIT`` (see :class:`RetryPolicy`), said
         through the retry notice (so a front-end shows it as waiting, not
-        hung), and ended by Stop within half a second.
+        hung), and ended by Stop within about 1.5 s: half a second of sleep
+        plus one short, possibly unanswered, probe.
 
         Raises:
             LemonadeUnresponsiveError: It did not answer within that limit.
@@ -3763,15 +3767,20 @@ class LemonadeClient:
                     "stuck: check the Lemonade server log, or set "
                     f"{LOAD_WAIT_ENV} (seconds) to wait longer for a slow load."
                 )
+            stopped = StreamCancelledError(
+                f"Stopped while waiting for a busy Lemonade to load '{model}'."
+            )
             if not sleep_unless_cancelled(
                 sleep, min(_BUSY_POLL_SECONDS, limit - waited), is_cancelled
             ):
-                raise StreamCancelledError(
-                    f"Stopped while waiting for a busy Lemonade to load '{model}'."
-                )
-            status = self.get_status(include_catalog=False)
-            if not status.busy:
-                return status
+                raise stopped
+            try:
+                self.health_check(timeout=_WAIT_PROBE_TIMEOUT)
+            except LemonadeUnresponsiveError:
+                if is_cancelled is not None and is_cancelled():
+                    raise stopped from None
+                continue
+            return self.get_status(include_catalog=False)
 
     def _record_retries(self, state: RetryState) -> None:
         self.last_request_retries = state.retries
