@@ -112,6 +112,12 @@ on:
         type: string
         default: 'claude-sonnet-4-6'
     secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Claude Code subscription token (primary account); preferred over ANTHROPIC_API_KEY, as in eval_flagship.yml.'
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN_SECONDARY:
+        description: 'Secondary account token, used when vars.CLAUDE_ACCOUNT is secondary.'
+        required: false
       ANTHROPIC_API_KEY:
         description: 'Judge/driver credential — REQUIRED; absent → the preflight fails the run before any eval spend, never a skip. (Declared optional only so `secrets: inherit` call sites need not name it.)'
         required: false
@@ -257,10 +263,11 @@ jobs:
       # instead, on EVERY trigger (a run that cannot judge proves nothing).
       - name: Preflight — judge credential
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
-            Write-Host '::error::ANTHROPIC_API_KEY is not set. gaia eval agent drives + judges every scenario via claude -p, which needs the credential on this runner; without it the run could only produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass secrets: inherit from the calling workflow.'
+          if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CODE_OAUTH_TOKEN) -and [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+            Write-Host '::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set. gaia eval agent drives + judges every scenario via claude -p, which needs the credential on this runner; without it the run could only produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass secrets: inherit from the calling workflow.'
             exit 1
           }
           Write-Host "Judge credential present."
@@ -378,7 +385,9 @@ jobs:
         # derivation on the job.
         timeout-minutes: ${{ github.event_name == 'pull_request' && 300 || 1980 }}
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          # Blank when the OAuth token is set: the judge adds --bare only with a key.
+          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           # Deliberately NOT "Stop": the eval's stderr is piped through 2>&1
           # and under Stop the first stderr line becomes a terminating
