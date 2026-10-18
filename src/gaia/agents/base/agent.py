@@ -2704,6 +2704,8 @@ Do NOT wrap conversational replies in JSON.
                 prompt_fragments={
                     origin: len(text)
                     for text, origin in (self._mixin_prompt_origins or {}).items()
+                    # A subclass may filter a fragment out of the final prompt.
+                    if text in self.system_prompt
                 },
             )
             for name, t0, t1 in pre_spans:

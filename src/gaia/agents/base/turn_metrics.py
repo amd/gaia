@@ -216,7 +216,9 @@ class TurnRecorder:
             # Which system prompt went out, and how big each mixin's part of it
             # was: a changed hash between two turns of one chat is a full
             # re-read on a model whose template puts the tools after it.
-            "system_sha": hashlib.sha1(system_prompt.encode("utf-8")).hexdigest()[:12],
+            "system_sha": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[
+                :12
+            ],
             "fragments": dict(prompt_fragments or {}),
         }
 

@@ -256,3 +256,73 @@ def test_a_nested_turn_hands_the_thread_back_to_the_outer_one(tmp_path):
         assert perf_trace.current() is outer
     finally:
         perf_trace.activate(None)
+
+
+def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
+    tmp_path, monkeypatch
+):
+    """The real request path, not numbers fed to the recorder by hand."""
+    from gaia.llm.lemonade_client import LemonadeClient, _local_request_lock
+
+    client = LemonadeClient(base_url="http://127.0.0.1:9/api/v1", verbose=False)
+    monkeypatch.setattr(client, "cloud_model_provider", lambda model: None)
+    monkeypatch.setattr(client, "_is_cloud_model", lambda model: False)
+    monkeypatch.setattr(
+        client,
+        "_ensure_model_loaded_locked",
+        lambda model, force=False: time.sleep(0.05),
+    )
+    model = "perf-trace-wiring-model"
+    held, release = threading.Event(), threading.Event()
+
+    def other_request():
+        with _local_request_lock(model):
+            held.set()
+            release.wait(2)
+
+    holder = threading.Thread(target=other_request)
+    holder.start()
+    assert held.wait(2)
+    threading.Timer(0.1, release.set).start()
+    rec = _recorder(tmp_path)
+    perf_trace.activate(rec)
+    try:
+        rec.start_llm_call(1, "prompt")
+        with client._model_slot_lease(model):
+            client._ensure_model_loaded(model)
+        rec.end_llm_call({})
+    finally:
+        perf_trace.activate(None)
+        holder.join(2)
+
+    waits = rec.llm_calls[0]["client"]
+    assert waits["lock_wait_s"] >= 0.08  # queued behind the other request
+    assert "lease_wait_s" in waits
+    assert waits["ensure_loaded_s"] >= 0.04
+
+
+def test_only_fragments_in_the_sent_prompt_are_sized(tmp_path, monkeypatch):
+    """A subclass may drop a mixin fragment from the composed prompt."""
+    from types import SimpleNamespace
+
+    from gaia.agents.base.agent import Agent
+
+    monkeypatch.setenv(TURN_LOG_ENV, str(tmp_path / "turns.jsonl"))
+    agent = SimpleNamespace(
+        _pre_turn_spans=None,
+        system_prompt="kept fragment\n\nagent text",
+        _openai_tools=None,
+        _tools_registry={},
+        _active_tool_filter=None,
+        _mixin_prompt_origins={
+            "kept fragment": "get_memory_system_prompt",
+            "filtered fragment": "get_sd_system_prompt",
+        },
+        chat=None,
+        console=None,
+    )
+    try:
+        rec = Agent._begin_turn_record(agent, "hello")
+    finally:
+        perf_trace.activate(None)
+    assert rec.prompt["fragments"] == {"get_memory_system_prompt": 13}
