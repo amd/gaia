@@ -119,6 +119,7 @@ function App() {
     const failCount = useRef(0);
     const slowCount = useRef(0);
     const slowSince = useRef<number | null>(null);
+    const wasUnreachable = useRef(false);
     // A backend that answers late is busy, not gone; only a refused request means it is unreachable.
     const [backendSlow, setBackendSlow] = useState(false);
     // The backend answered the status request with an HTTP error: reachable, but failing.
@@ -126,6 +127,7 @@ function App() {
     const applyStatus = useCallback((outcome: StatusOutcome) => {
         if (outcome.kind === 'unreachable') {
             log.system.warn('System status check failed', outcome.error);
+            wasUnreachable.current = true;
             slowCount.current = 0;
             slowSince.current = null;
             setBackendSlow(false);
@@ -136,6 +138,7 @@ function App() {
         }
         if (outcome.kind === 'error') {
             log.system.warn(`System status answered HTTP ${outcome.httpStatus}`, outcome.message);
+            wasUnreachable.current = false;
             slowCount.current = 0;
             slowSince.current = null;
             setBackendSlow(false);
@@ -155,12 +158,14 @@ function App() {
                 setSystemStatus(null);
                 return;
             }
-            // Something accepted the request, so the backend is back, if slow.
+            // Something accepted the request, so the backend is back, if slow. Fresh
+            // from an outage, say so at once rather than show nothing until it answers.
             setBackendConnected(true);
-            if (slowCount.current >= LEMONADE_FAIL_THRESHOLD) setBackendSlow(true);
+            if (wasUnreachable.current || slowCount.current >= LEMONADE_FAIL_THRESHOLD) setBackendSlow(true);
             return;
         }
         const { status } = outcome;
+        wasUnreachable.current = false;
         slowCount.current = 0;
         slowSince.current = null;
         setBackendSlow(false);

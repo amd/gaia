@@ -188,6 +188,8 @@ describe('system status poll', () => {
         await advance(70_000);
         expect(useChatStore.getState().backendConnected).toBe(true);
         expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+        // Coming back from an outage without an answer yet is slow, not fine.
+        expect(document.body.textContent).toMatch(/GAIA is slow to answer/i);
     });
 
     it('says the backend answered with an error, not that it is unreachable', async () => {
