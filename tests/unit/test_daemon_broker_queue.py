@@ -136,7 +136,8 @@ def _hold_in_thread(model, seconds, **lease_kwargs):
         with broker_client.model_lease(model, **lease_kwargs):
             granted.set()
             time.sleep(seconds)
-        released["at"] = time.monotonic()
+            # Before the release: a waiter may be granted the instant it lands.
+            released["at"] = time.monotonic()
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
@@ -543,3 +544,23 @@ def test_a_raising_queue_callback_never_leaves_a_dead_waiter_behind():
     assert broker.snapshot()["waiting"] == []
     broker.release(held.lease_id)
     assert broker.acquire("next", timeout=0).model == "next"
+
+
+def test_a_heartbeat_that_cannot_renew_says_the_lease_will_lapse(monkeypatch, caplog):
+    calls = []
+
+    def _no_credential(lease_id, **_kw):
+        calls.append(lease_id)
+        raise broker_client.BrokerUnavailableError("credential file is gone")
+
+    monkeypatch.setattr(broker_client, "renew_lease", _no_credential)
+    beat = broker_client._Heartbeat(
+        {"lease_id": "L1", "model": "m", "renew_interval_s": 0.05}
+    )
+    deadline = time.time() + 5
+    while "cannot renew" not in caplog.text and time.time() < deadline:
+        time.sleep(0.02)
+    beat.stop()
+
+    assert calls == ["L1"], "the heartbeat kept going after it lost its credential"
+    assert "lapses after the broker's heartbeat TTL" in caplog.text

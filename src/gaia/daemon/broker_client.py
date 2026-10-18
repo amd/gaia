@@ -517,7 +517,17 @@ class _Heartbeat:
 
     def _run(self, lease_id: str, model: Optional[str], interval: float) -> None:
         while not self._stop.wait(interval):
-            status = renew_lease(lease_id)
+            try:
+                status = renew_lease(lease_id)
+            except BrokerUnavailableError as e:  # e.g. the credential file is gone
+                logger.error(
+                    "broker client: cannot renew the model-slot lease for '%s' "
+                    "(%s); it lapses after the broker's heartbeat TTL, and "
+                    "another process may then load a model over this request.",
+                    model,
+                    e,
+                )
+                return
             if status is not None and 400 <= status < 500:
                 # 409: reclaimed; 401: the daemon restarted. Either way it's gone.
                 logger.error(
