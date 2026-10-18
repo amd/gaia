@@ -58,6 +58,7 @@ class _FakeLemond(ThreadingHTTPServer):
     def __init__(self, health_delay: float, lemonade: bool = True):
         self.health_delay = health_delay
         self.lemonade = lemonade
+        self.live = True
         super().__init__(("127.0.0.1", 0), _Handler)
         self.port = self.server_address[1]
         threading.Thread(target=self.serve_forever, daemon=True).start()
@@ -68,7 +69,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):  # noqa: N802 — http.server's naming
-        if self.path == "/live":
+        if self.path == "/live" and self.server.live:
             body = {"status": "ok"}
         elif self.path == "/api/v1/docs":
             body = _REAL_DOCS_INDEX if self.server.lemonade else {"docs": []}
@@ -195,6 +196,16 @@ class TestSlowButAliveEmbeddedServer:
         _record_own_server(manager, slow_health.port, monkeypatch)
         self._recorded(manager, 3 * 3600, {"111": 5.0})
         self._backends(monkeypatch, {"222": 0.0})
+
+        assert manager.status().busy
+
+    def test_a_new_backend_with_the_same_counter_counts_as_work(
+        self, manager, slow_health, monkeypatch
+    ):
+        """A replaced llama-server can land on the old one's exact count."""
+        _record_own_server(manager, slow_health.port, monkeypatch)
+        self._recorded(manager, emb._QUIET_SECONDS + 1, {"111": 5.0})
+        self._backends(monkeypatch, {"222": 5.0})
 
         assert manager.status().busy
 
@@ -394,6 +405,18 @@ class TestSlowButAliveSupervisedServer:
         assert time.monotonic() - started < 30, "waited out the grace window"
         assert state.started is False
         assert state.owned is False
+
+    def test_a_server_that_turns_busy_during_the_grace_is_attached_to(
+        self, supervisor, slow_health, monkeypatch
+    ):
+        """Bound but not routed yet when first probed, then a model swap: by the
+        end of the grace window it is a busy Lemonade, not a stranger."""
+        slow_health.live = False
+        s = supervisor(slow_health.port)
+        monkeypatch.setattr(sup, "_OCCUPIED_PORT_GRACE_S", 2.0)
+        threading.Timer(0.5, lambda: setattr(slow_health, "live", True)).start()
+
+        assert s.ensure_running(ctx_size=65536).started is False
 
     def test_the_listener_is_found_without_the_global_table(self, monkeypatch):
         """macOS refuses psutil.net_connections() without root; a server this

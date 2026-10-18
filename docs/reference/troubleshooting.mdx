@@ -158,6 +158,19 @@ icon: "bug"
     To start over with a fresh copy, run `gaia init --force-reinstall`.
   </Accordion>
 
+  <Accordion title="GAIA says the Lemonade Server is stuck rather than loading a model" icon="hourglass">
+    A Lemonade Server that is loading or swapping a model answers its health check
+    slowly, so GAIA waits for it rather than calling it down. It reports
+    **`… is stuck rather than loading a model`** only when the server still answers
+    but its model backends have done no work at all for 5 minutes. Waiting longer will
+    not help.
+
+    Restart it the way the error names (for the Lemonade you installed, that is its own
+    start command), then retry. For GAIA's own server, run `gaia init`. If it gets stuck
+    again, its log shows what it was doing: `~/.gaia/lemonade/lemond.log` for GAIA's
+    own server.
+  </Accordion>
+
   <Accordion title="gaia init can't install the GAIA agent from the Agent Hub" icon="store">
     `gaia init` installs the GAIA agent from the Agent Hub (`https://hub.amd-gaia.ai`, or
     `GAIA_HUB_URL`). If the hub can't be reached, setup finishes everything else, then
@@ -299,7 +312,7 @@ icon: "bug"
     ```
   </Accordion>
 
-  <Accordion title="The local model didn't respond in time" icon="hourglass-end">
+  <Accordion title="The local model didn't respond in time" icon="hourglass">
     You're seeing an error like:
 
     > The local model didn't respond in time. The Lemonade Server is
