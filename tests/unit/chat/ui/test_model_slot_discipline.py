@@ -617,3 +617,124 @@ def test_a_stop_during_the_retry_reload_does_not_run_the_query_again(
 
     assert agent.queries == 1, "the query ran again after the Stop"
     assert not any("retrying" in (e.get("message") or "") for e in events)
+
+
+@pytest.mark.parametrize(
+    "window,reloaded", [(65536, True), (32768, False)], ids=["auto", "chosen"]
+)
+def test_a_copy_at_the_servers_own_window_counts_as_an_auto_load(
+    lemonade, monkeypatch, window, reloaded
+):
+    # GAIA's supervisor starts Lemonade with the profile window (64K here), so
+    # that is what a request-triggered load comes up with; this chat needs 128K.
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *_a, **_k: 131072)
+    monkeypatch.setattr(lemonade_client, "active_profile_ctx_size", lambda: 65536)
+    lemonade["resident"] = [_model("Mine-GGUF", ctx=window)]
+
+    if reloaded:
+        helpers._maybe_load_expected_model("Mine-GGUF")
+        lemonade["client"].unload_model.assert_called_once()
+    else:
+        with pytest.raises(helpers.ModelInUseError):
+            helpers._maybe_load_expected_model("Mine-GGUF")
+        lemonade["client"].unload_model.assert_not_called()
+
+
+def test_a_reload_by_the_uis_own_agent_counts_as_its_own(monkeypatch):
+    from contextlib import nullcontext
+
+    client = lemonade_client.LemonadeClient(verbose=False)
+    monkeypatch.setattr(client, "_model_slot_lease", lambda _m: nullcontext())
+    monkeypatch.setattr(client, "_load_model_leased", lambda *_a, **_k: {})
+
+    client.load_model(
+        "Mine-Reloaded-GGUF", prompt=False
+    )  # As _ensure_model_loaded does.
+
+    assert helpers._loaded_here("Mine-Reloaded-GGUF")
+
+
+def test_a_non_streamed_turn_lets_its_idle_stop_end_the_model_wait(monkeypatch):
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="Mine-GGUF", agent_type="chat")
+    agent = _CountingAgent()
+    helpers._agent_cache.clear()
+    helpers._store_agent(session["id"], "Mine-GGUF", [], agent, "chat")
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "wait_for_warm_up", lambda *a, **k: None)
+    seen = []
+
+    def preflight(_model, _handler=None, cancel_event=None):
+        seen.append(cancel_event)
+        cancel_event.set()  # The idle stop fires while the wait runs.
+
+    monkeypatch.setattr(helpers, "_maybe_load_expected_model", preflight)
+    request = ChatRequest(session_id=session["id"], message="hi", stream=False)
+    try:
+        asyncio.run(helpers._get_chat_response(db, session, request))
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+
+    assert seen and seen[0] is not None, "the turn's cancel never reached the wait"
+    assert agent.queries == 0
+
+
+# ── The record and lock nits, each guarded ────────────────────────────────────
+
+
+def test_the_load_lock_wait_ends_on_the_turns_own_cancel(lemonade):
+    cancel = threading.Event()
+    finished = threading.Event()
+
+    def preflight():
+        helpers._maybe_load_expected_model("Mine-GGUF", None, cancel)
+        finished.set()
+
+    with helpers.model_load_lock:  # Another chat is loading.
+        threading.Thread(target=preflight, daemon=True).start()
+        threading.Event().wait(0.3)
+        cancel.set()  # The idle stop: no handler, no Stop flag.
+        assert finished.wait(5), "the turn's cancel did not end the lock wait"
+    lemonade["client"].load_model.assert_not_called()
+
+
+def test_a_failed_record_write_keeps_the_previous_record(monkeypatch):
+    import os
+
+    helpers.note_model_loaded("Mine-Old-GGUF")
+    path = helpers._owned_models_path()
+    before = path.read_text(encoding="utf-8")
+
+    def crash(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", crash)
+    helpers.note_model_loaded("Mine-New-GGUF")
+
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_concurrent_loads_all_land_in_the_record(monkeypatch):
+    import json as json_mod
+    import pathlib
+
+    real_write = pathlib.Path.write_text
+
+    def slow_first_write(self, data, *args, **kwargs):
+        if json_mod.loads(data) == ["first-gguf"]:
+            threading.Event().wait(0.3)  # Still writing when the second lands.
+        return real_write(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "write_text", slow_first_write)
+    first = threading.Thread(target=helpers.note_model_loaded, args=("First-GGUF",))
+    first.start()
+    threading.Event().wait(0.05)
+    helpers.note_model_loaded("Second-GGUF")
+    first.join(5)
+
+    monkeypatch.setattr(helpers, "_models_loaded_here", None)  # Restart.
+    assert helpers._loaded_here("First-GGUF") and helpers._loaded_here("Second-GGUF")

@@ -33,6 +33,7 @@ from gaia.agents.install_hints import (
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -332,8 +333,15 @@ def _owned_models() -> set:
     return _models_loaded_here
 
 
-# The window Lemonade loads a model at when a request auto-loads it.
-_LEMONADE_DEFAULT_CTX = 4096
+def _auto_load_windows() -> set:
+    """Windows a model has when a request made Lemonade load it, unasked.
+
+    Lemonade's own default, and the window GAIA's supervisor starts the server
+    with (``LEMONADE_CTX_SIZE``, the machine's profile window).
+    """
+    from gaia.llm.lemonade_client import active_profile_ctx_size
+
+    return {4096, active_profile_ctx_size()}
 
 
 class ModelInUseError(RuntimeError):
@@ -363,6 +371,10 @@ def note_model_loaded(model_id: str) -> None:
         if key not in _owned_models():
             _owned_models().add(key)
             _save_owned_models()
+
+
+# Loads by this process's own agents (a mid-turn reload) count as the UI's.
+_lemonade_client_mod.add_model_load_listener(note_model_loaded)
 
 
 def _forget_model(model_id: str) -> None:
@@ -2305,7 +2317,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         if (m.get("model_name") or "").lower() != expected_lower:
                             continue
                         window = (m.get("recipe_options") or {}).get("ctx_size") or 0
-                        nobody_chose = window <= _LEMONADE_DEFAULT_CTX
+                        nobody_chose = window in _auto_load_windows()
                         if not (_loaded_here(m["model_name"]) or nobody_chose):
                             raise ModelInUseError(
                                 f"{model_id} is loaded by another app with a "
@@ -2599,7 +2611,9 @@ async def _get_chat_response(
         # a value invisible pre-construction. Using _effective_model preserves
         # the existing 100-900s silent-hang protection for all code paths.
         effective = _effective_model(agent, model_id)
-        _maybe_load_expected_model(effective)
+        _maybe_load_expected_model(effective, None, cancel_event)
+        if cancel_event.is_set():
+            return ""  # Stopped (idle) while waiting for the model.
 
         agent._cancel_event = cancel_event
 
@@ -2622,9 +2636,11 @@ async def _get_chat_response(
                     first_exc,
                 )
                 try:
-                    _maybe_load_expected_model(effective)
+                    _maybe_load_expected_model(effective, None, cancel_event)
                 except Exception as exc:  # pylint: disable=broad-except
                     logger.warning("Model reload before retry failed: %s", exc)
+                if cancel_event.is_set():
+                    return ""
                 try:
                     return agent.process_query(request.message)
                 except Exception as second_exc:  # pylint: disable=broad-except
