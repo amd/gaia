@@ -1943,11 +1943,13 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `{"model", "ctx_size"}`, with `ctx_size: null` for Automatic. If the model
     is loaded, GAIA reloads it in the background through its normal load path
     (free-memory check included); `reload` says `{"started": true}`, or
-    `started: false` with `reason` `busy` (a reply is running), `restarting`, or
-    `not_gaias_server` (GAIA never reloads a model on a server it doesn't run),
-    in which case the size applies on the next load. **422** for a size not
-    offered on this PC. A saved size that stops fitting is refused at load with
-    how to fix it; `GAIA_CTX_SIZE` still overrides it.
+    `started: false` with `reason` `already_loaded` (it is loaded at that size
+    already), `busy` (a reply is running), `warm_up` (GAIA is preparing a new
+    chat), `restarting`, or `not_gaias_server` (GAIA never reloads a model on a
+    server it doesn't run); in the last four cases the size applies on the next
+    load. **422** for a size not offered on this PC. A saved size that stops
+    fitting, or that can't be checked because this PC's memory can't be read,
+    is refused at load with how to fix it; `GAIA_CTX_SIZE` still overrides it.
   </Accordion>
 
   <Accordion title="GET /api/providers/local/status">

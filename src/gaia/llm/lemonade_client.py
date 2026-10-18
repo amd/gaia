@@ -842,14 +842,12 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
     try:
         capacity = machine_capacity(base_url)
     except (LemonadeClientError, ModelFitError) as e:
-        get_logger(__name__).warning(
-            "Cannot read this machine's memory (%s); loading %s at the %d-token "
-            "window you chose without checking that it fits.",
-            e,
-            model,
-            tokens,
-        )
-        return tokens
+        raise LemonadeClientError(
+            f"GAIA can't read this PC's memory ({e}), so it can't check that the "
+            f"{tokens // 1024}K context size you chose for {model} fits, and won't "
+            "load it unchecked. Choose Automatic in Settings › Model, or set "
+            "GAIA_CTX_SIZE to pin a size yourself."
+        ) from e
     try:
         check_saved_size(model, tokens, capacity)
     except ContextChoiceError as e:

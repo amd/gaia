@@ -425,6 +425,30 @@ def test_load_refuses_a_saved_size_this_pc_cannot_hold(halo_lemonade):
 
 
 @responses.activate
+def test_a_saved_size_is_not_loaded_unchecked_when_memory_is_unreadable(monkeypatch):
+    """The promise is that a size that may not fit is refused, not loaded blind."""
+    monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+    lc._CAPACITY_CACHE.clear()
+    lc._SYSTEM_INFO_CACHE.clear()
+    # A /system-info naming no memory at all: GAIA cannot judge any window.
+    responses.get(BASE + "/system-info", json={"devices": {}})
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"context_sizes": {LARGE_DEFAULT_MODEL_NAME: 131072}}),
+        encoding="utf-8",
+    )
+    try:
+        with pytest.raises(
+            LemonadeClientError, match="can't read this PC's memory"
+        ) as e:
+            resolve_ctx_size(LARGE_DEFAULT_MODEL_NAME, base_url=BASE)
+        assert "Choose Automatic in Settings › Model" in str(e.value)
+        assert _load_bodies() == []
+    finally:
+        lc._CAPACITY_CACHE.clear()
+        lc._SYSTEM_INFO_CACHE.clear()
+
+
+@responses.activate
 def test_gaia_ctx_size_rescues_a_saved_size_that_no_longer_fits(
     halo_lemonade, monkeypatch
 ):

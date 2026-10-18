@@ -121,6 +121,21 @@ describe('ModelSettings local models', () => {
         expect(await screen.findByText(/GAIA is answering right now/)).toBeInTheDocument();
     });
 
+    it('waits for the new-chat warm-up too', async () => {
+        mockedApi.setContextChoice.mockResolvedValue({ ...CTX, chosen: 131072, reload: { started: false, reason: 'warm_up' } });
+        await renderLocal();
+        fireEvent.change(await screen.findByLabelText('Context size'), { target: { value: '131072' } });
+        expect(await screen.findByText(/getting the model ready for a new chat/)).toBeInTheDocument();
+    });
+
+    it('says nothing reloads when the model is already at that size', async () => {
+        mockedApi.setContextChoice.mockResolvedValue({ ...CTX, chosen: null, reload: { started: false, reason: 'already_loaded' } });
+        mockedApi.getContextChoice.mockResolvedValue({ ...CTX, chosen: 131072 });
+        await renderLocal();
+        fireEvent.change(await screen.findByLabelText('Context size'), { target: { value: 'auto' } });
+        expect(await screen.findByText(/is already loaded at the automatic size, so nothing reloads/)).toBeInTheDocument();
+    });
+
     it('Automatic clears the saved size', async () => {
         mockedApi.getContextChoice.mockResolvedValue({ ...CTX, chosen: 131072 });
         await renderLocal();

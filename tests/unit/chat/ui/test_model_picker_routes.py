@@ -269,12 +269,46 @@ def test_choosing_a_size_persists_and_reloads_through_gaia(client, lemonade, job
 
 
 def test_a_size_change_never_reloads_mid_reply(client, lemonade, jobs):
-    lemonade.loaded = [{**_entry(LARGE_DEFAULT_MODEL_NAME), "is_busy": True}]
+    lemonade.loaded = [
+        {**_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144), "is_busy": True}
+    ]
     body = client.put(
         "/api/providers/local/context",
         json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072},
     ).json()
     assert body["reload"] == {"started": False, "reason": "busy"}
+    assert jobs == []
+
+
+def test_a_size_change_waits_for_the_new_chat_warm_up(
+    client, lemonade, jobs, monkeypatch
+):
+    """Restart and a size change agree: neither reloads under a warm-up."""
+    monkeypatch.setattr(warmup, "warm_up_status", lambda: {"state": warmup.WARMING})
+    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144)]
+    body = client.put(
+        "/api/providers/local/context",
+        json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072},
+    ).json()
+    assert body["reload"] == {"started": False, "reason": "warm_up"}
+    assert jobs == []
+
+
+@pytest.mark.parametrize("ctx_size", [131072, None])
+def test_no_reload_when_the_model_is_already_at_that_size(
+    client, lemonade, jobs, ctx_size
+):
+    """Picking the size already loaded, including Automatic, never stalls chat."""
+    span = client.get(
+        "/api/providers/local/context", params={"model": LARGE_DEFAULT_MODEL_NAME}
+    ).json()
+    loaded = ctx_size or span["automatic"]
+    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME, ctx=loaded)]
+    body = client.put(
+        "/api/providers/local/context",
+        json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": ctx_size},
+    ).json()
+    assert body["reload"] == {"started": False, "reason": "already_loaded"}
     assert jobs == []
 
 
@@ -517,7 +551,7 @@ def test_gaia_never_starts_a_server_it_does_not_run(client, lemonade, jobs, owne
 
 def test_a_size_change_never_reloads_the_users_server(client, lemonade, jobs):
     lemonade.owner = "user"
-    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME)]
+    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144)]
     body = client.put(
         "/api/providers/local/context",
         json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072},

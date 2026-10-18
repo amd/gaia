@@ -939,9 +939,15 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
             entry = _chat_entry(_read_health())
         except ProviderError as e:
             _raise(e)
-        if _server_owner(_base_url()) != "gaia":
+        busy_reason = _busy_reason(entry, _warming_up()) if entry else None
+        if view["loaded_ctx"] == (view["chosen"] or view["automatic"]):
+            # Already loaded at that size: a reload would only stall chat.
+            reload = {"started": False, "reason": "already_loaded"}
+        elif _server_owner(_base_url()) != "gaia":
             reload = {"started": False, "reason": "not_gaias_server"}
-        elif entry is not None and entry.get("is_busy"):
+        elif busy_reason == "warm_up":
+            reload = {"started": False, "reason": "warm_up"}
+        elif busy_reason == "request":
             reload = {"started": False, "reason": "busy"}
         elif _start_reload(model_id, server_up=True):
             reload = {"started": True, "reason": None}

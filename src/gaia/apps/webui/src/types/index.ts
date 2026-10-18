@@ -907,7 +907,7 @@ export interface ContextChoice {
     memory_source: string;
     note: string | null;
     /** On PUT for a loaded model: whether GAIA started reloading it at the new size. */
-    reload?: { started: boolean; reason: 'busy' | 'restarting' | 'not_gaias_server' | null } | null;
+    reload?: { started: boolean; reason: 'busy' | 'warm_up' | 'already_loaded' | 'restarting' | 'not_gaias_server' | null } | null;
 }
 
 /** GET /api/providers/local/status — the sidebar pill's popover. */

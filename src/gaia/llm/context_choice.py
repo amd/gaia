@@ -7,8 +7,9 @@ GAIA picks a window automatically (``lemonade_client.context_for_capacity``).
 A user may pick another in Settings › Model, from the model's floor up to the
 largest window that fits this PC (``model_fit.largest_context``). The choice is
 kept per model in ``config.json``'s ``context_sizes`` and used for every load of
-that model. A saved size that no longer fits — another PC, less memory — is
-refused at load with how to fix it, never loaded into an out-of-memory crash.
+that model. A saved size that no longer fits — another PC, less memory — or
+that can't be checked because the PC's memory can't be read, is refused at load
+with how to fix it, never loaded into an out-of-memory crash.
 """
 
 from __future__ import annotations

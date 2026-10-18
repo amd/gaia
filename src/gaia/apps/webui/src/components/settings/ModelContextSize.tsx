@@ -35,6 +35,10 @@ export function ModelContextSize({ model }: { model: string }) {
             const size = next.chosen ? ctxLabel(next.chosen) : 'the automatic size';
             if (next.reload?.started) {
                 setNotice(`Reloading ${next.display_name} at ${size}. Chat pauses until it's back.`);
+            } else if (next.reload?.reason === 'already_loaded') {
+                setNotice(`Saved. ${next.display_name} is already loaded at ${size}, so nothing reloads.`);
+            } else if (next.reload?.reason === 'warm_up') {
+                setNotice(`Saved. GAIA is getting the model ready for a new chat, so ${next.display_name} switches to ${size} the next time it loads.`);
             } else if (next.reload?.reason === 'busy') {
                 setNotice(`Saved. GAIA is answering right now, so ${next.display_name} switches to ${size} the next time it loads.`);
             } else if (next.reload?.reason === 'not_gaias_server') {
