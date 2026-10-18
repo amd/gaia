@@ -165,8 +165,22 @@ def test_a_running_lemonds_backends_are_left_alone(manager, spawned):
     assert not _gone(child, timeout=2), "killed a live lemond's backend"
 
 
+def test_a_tool_the_user_runs_from_a_terminal_is_left_alone(manager, tmp_path, spawned):
+    """cache/bin also ships llama-bench, llama-cli and the like. One a user
+    starts from a shell has a live parent that is not lemond: not an orphan."""
+    bench = _interpreter_as(manager.cache_dir / "bin" / "llamacpp" / "llama-bench.exe")
+    shell = _interpreter_as(tmp_path / "shell" / "python.exe")
+    _, child = _start_tree(shell, bench, spawned)
+
+    manager._reap_orphaned_backends()
+
+    assert not _gone(child, timeout=2), "killed a tool the user is running"
+
+
 def test_backends_outside_this_install_are_never_touched(manager, tmp_path, spawned):
     """Another Lemonade's llama-server, even orphaned, is not GAIA's to kill."""
+    # This install has a llama-server too, so the scan really looks.
+    _interpreter_as(_backend_path(manager))
     foreign = _interpreter_as(tmp_path / "users-lemonade" / "llama-server.exe")
     stand_in = _interpreter_as(tmp_path / "other" / "lemond.exe")
     orphan = _orphan_backend(stand_in, foreign, spawned)

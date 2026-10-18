@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.llm import lemonade_embedded
 from gaia.llm.lemonade_client import REQUEST_BUDGET_ENV
 from gaia.llm.lemonade_embedded import (
     _ASSET_TEMPLATES,
@@ -801,8 +802,10 @@ class TestVulkanWorkarounds:
 
 
 class TestOrphanedBackends:
-    """The reaper's choice, on every platform. The Windows-only file
-    test_lemonade_orphaned_backends.py runs it on real processes."""
+    """The reaper's choice, on every platform, against a fake process table.
+    test_lemonade_orphaned_backends.py runs it on real processes (Windows)."""
+
+    BORN = 1000.0
 
     class _Proc:
         def __init__(self, pid, ppid, exe, kill_denied=False):
@@ -818,6 +821,9 @@ class TestOrphanedBackends:
         def ppid(self):
             return self._ppid
 
+        def create_time(self):
+            return TestOrphanedBackends.BORN
+
         def kill(self):
             import psutil
 
@@ -825,58 +831,103 @@ class TestOrphanedBackends:
                 raise psutil.AccessDenied(self.pid)
             self.killed = True
 
-    def _world(self, manager, monkeypatch, procs, lemonds=()):
-        """Put *procs* in the process table; *lemonds* are live parent pids."""
+    def _world(self, manager, monkeypatch, procs, alive=None, hidden=()):
+        """*procs* make the process table. *alive* maps the other live pids to
+        their start times; *hidden* pids exist but may not be inspected."""
         import psutil
 
+        alive = alive or {}
         (manager.cache_dir / "bin" / "llamacpp").mkdir(parents=True)
-        (manager.cache_dir / "bin" / "llamacpp" / "llama-server").touch()
+        for name in ("llama-server", "llama-bench"):
+            (manager.cache_dir / "bin" / "llamacpp" / name).touch()
         monkeypatch.setattr(psutil, "process_iter", lambda attrs: iter(procs))
         monkeypatch.setattr(psutil, "wait_procs", lambda procs, timeout: (procs, []))
-        lemond = str(manager.dist_dir / "lemond")
 
-        class Parent:
+        class Anchor:
             def __init__(self, pid):
-                if pid not in lemonds:
+                if pid not in alive and pid not in hidden:
                     raise psutil.NoSuchProcess(pid)
+                self.pid = pid
 
-            def exe(self):
-                return lemond
+            def create_time(self):
+                if self.pid in hidden:
+                    raise psutil.AccessDenied(self.pid)
+                return alive[self.pid]
 
-        monkeypatch.setattr(psutil, "Process", Parent)
+        monkeypatch.setattr(psutil, "Process", Anchor)
 
-    def _backend(self, manager):
-        return str(manager.cache_dir / "bin" / "llamacpp" / "llama-server")
+    def _bin(self, manager, name="llama-server"):
+        return str(manager.cache_dir / "bin" / "llamacpp" / name)
 
-    def test_only_this_installs_orphans_are_killed(self, manager, monkeypatch):
-        orphan = self._Proc(10, 1, self._backend(manager))
-        served = self._Proc(11, 2, self._backend(manager))
-        theirs = self._Proc(12, 1, str(manager.root.parent / "x" / "llama-server"))
-        self._world(manager, monkeypatch, [orphan, served, theirs], lemonds={2})
+    def _anchored(self, monkeypatch, windows):
+        real = lemonade_embedded._anchor_pid
+        monkeypatch.setattr(
+            lemonade_embedded, "_anchor_pid", lambda proc: real(proc, windows)
+        )
+
+    def _windows(self, monkeypatch):
+        self._anchored(monkeypatch, windows=True)
+
+    def test_only_orphans_from_this_install_are_killed(self, manager, monkeypatch):
+        self._windows(monkeypatch)
+        orphan = self._Proc(10, 1, self._bin(manager))
+        served = self._Proc(11, 2, self._bin(manager))
+        bench = self._Proc(12, 3, self._bin(manager, "llama-bench"))
+        theirs = self._Proc(13, 1, str(manager.root.parent / "x" / "llama-server"))
+        # 2 is a live lemond, 3 the user's shell: both older than the backends.
+        self._world(
+            manager,
+            monkeypatch,
+            [orphan, served, bench, theirs],
+            alive={2: self.BORN - 5, 3: self.BORN - 60},
+        )
 
         assert manager._reap_orphaned_backends() == [10]
-        assert orphan.killed and not served.killed and not theirs.killed
+        assert orphan.killed
+        assert not served.killed and not bench.killed and not theirs.killed
 
-    def test_a_parent_the_os_hides_keeps_its_backend(self, manager, monkeypatch):
-        import psutil
+    def test_a_dead_parents_reused_pid_does_not_shelter_its_orphan(
+        self, manager, monkeypatch
+    ):
+        self._windows(monkeypatch)
+        orphan = self._Proc(10, 2, self._bin(manager))
+        # pid 2 is alive again, but started after the backend did.
+        self._world(manager, monkeypatch, [orphan], alive={2: self.BORN + 30})
 
-        child = self._Proc(10, 2, self._backend(manager))
-        self._world(manager, monkeypatch, [child])
+        assert manager._reap_orphaned_backends() == [10]
 
-        class Hidden:
-            def __init__(self, pid):
-                pass
+    def test_on_posix_an_orphan_is_found_by_its_session_not_its_parent(
+        self, manager, monkeypatch
+    ):
+        """Reparented to init (pid 1, alive and old), the backend still sits in
+        dead lemond's session; the user's tool sits in their live shell's."""
+        self._anchored(monkeypatch, windows=False)
+        monkeypatch.setattr(
+            lemonade_embedded.os,
+            "getsid",
+            lambda pid: {10: 50, 12: 3}[pid],
+            raising=False,
+        )
+        orphan = self._Proc(10, 1, self._bin(manager))
+        bench = self._Proc(12, 3, self._bin(manager, "llama-bench"))
+        self._world(
+            manager, monkeypatch, [orphan, bench], alive={1: 0.0, 3: self.BORN - 60}
+        )
 
-            def exe(self):
-                raise psutil.AccessDenied(2)
+        assert manager._reap_orphaned_backends() == [10]
+        assert not bench.killed
 
-        monkeypatch.setattr(psutil, "Process", Hidden)
+    def test_an_anchor_the_os_hides_keeps_its_backend(self, manager, monkeypatch):
+        self._windows(monkeypatch)
+        child = self._Proc(10, 2, self._bin(manager))
+        self._world(manager, monkeypatch, [child], hidden={2})
 
         assert manager._reap_orphaned_backends() == []
         assert not child.killed
 
     def test_an_orphan_it_may_not_kill_is_reported(self, manager, monkeypatch, caplog):
-        child = self._Proc(10, 1, self._backend(manager), kill_denied=True)
+        self._windows(monkeypatch)
+        child = self._Proc(10, 1, self._bin(manager), kill_denied=True)
         self._world(manager, monkeypatch, [child])
 
         with caplog.at_level("WARNING"):
@@ -904,3 +955,40 @@ class TestOrphanedBackends:
             lambda self: pytest.fail("scanned processes on a healthy status"),
         )
         assert manager.status().running
+
+    def test_a_start_scans_once(self, manager, monkeypatch):
+        scans = []
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_reap_orphaned_backends", lambda self: scans.append(1)
+        )
+        manager._write_state(
+            {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "other"
+        )
+        monkeypatch.setattr(manager, "is_installed", lambda: False)
+        with pytest.raises(EmbeddedLemonadeError):
+            manager.start(install_if_missing=False)
+        assert scans == []  # the gone server was found, but start reaps later
+
+    def test_a_start_recorded_meanwhile_is_not_forgotten(self, manager, monkeypatch):
+        """status() finds the old server gone while another process records a
+        new one: only the old record may be cleared."""
+        manager._write_state(
+            {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "other"
+        )
+
+        def new_start_meanwhile(self, state):
+            self._write_state({**state, "pid": 9999})
+
+        monkeypatch.setattr(EmbeddedLemonade, "_report_gone", new_start_meanwhile)
+        monkeypatch.setattr(EmbeddedLemonade, "_reap_orphaned_backends", lambda s: [])
+
+        manager.status()
+        assert manager._read_state()["pid"] == 9999

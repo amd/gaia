@@ -458,6 +458,32 @@ def _inside(path: str, root: str) -> bool:
         return False
 
 
+def _anchor_pid(proc, windows: bool = sys.platform == "win32") -> int:
+    """The process whose death orphans *proc*.
+
+    Windows never reparents, so it is the recorded parent. POSIX reparents an
+    orphan to init or a subreaper, so it is the session leader instead: lemond
+    starts its own session, and its backends stay in it.
+    """
+    if windows:
+        return proc.ppid()
+    return os.getsid(proc.pid)  # pylint: disable=no-member
+
+
+def _outlived(anchor: int, born: float) -> bool:
+    """Whether the process *anchor* is gone, or its pid now names a process
+    younger than one created at *born*. One the OS hides counts as alive."""
+    import psutil
+
+    try:
+        return psutil.Process(anchor).create_time() > born
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.AccessDenied as e:
+        log.debug("Treating pid %s as alive: cannot inspect it (%s)", anchor, e)
+        return False
+
+
 def _free_port() -> int:
     """Return a TCP port the OS reports as free on loopback.
 
@@ -1092,11 +1118,15 @@ class EmbeddedLemonade:
         The state file is only discarded once the recorded process is gone.
         A daemon that is up but slow to answer -- loading a multi-gigabyte
         backend, say -- is reported through ``unresponsive_pid`` and keeps its
-        state, so ``stop`` can still reach it.
+        state, so ``stop`` can still reach it. Finding it gone also stops the
+        backends it left (:meth:`_reap_orphaned_backends`).
 
         Returns:
             The current :class:`EmbeddedStatus`.
         """
+        return self._status(reap=True)
+
+    def _status(self, reap: bool) -> EmbeddedStatus:
         installed = self.is_installed()
         stopped = EmbeddedStatus(
             installed=installed,
@@ -1162,8 +1192,11 @@ class EmbeddedLemonade:
             )
 
         self._report_gone(state)
-        self._reap_orphaned_backends()
-        self._clear_state()
+        recorded = self._read_state()
+        if recorded is not None and recorded.get("pid") == pid:
+            self._clear_state()  # unless a start recorded a new server since
+        if reap:
+            self._reap_orphaned_backends()
         return stopped
 
     def _reap_orphaned_backends(self) -> List[int]:
@@ -1171,10 +1204,12 @@ class EmbeddedLemonade:
 
         lemond's llama-server children each hold gigabytes of memory. Killed
         without its tree, or crashed, lemond leaves them running, and the next
-        start loads the same models again beside them. A backend is reaped only
-        when its executable is under this install's ``cache/bin`` and its parent
-        is not a running lemond of this install, so another Lemonade's backends
-        and a live server's are never touched.
+        start loads the same models again beside them. A process is reaped only
+        when its executable is under this install's ``cache/bin`` and the
+        process that anchored it (:func:`_anchor_pid`) is gone or was replaced
+        by a younger one on the same pid. A tool the user runs from that
+        directory has a live anchor -- their shell -- and is left alone, as are
+        a live lemond's backends and anything outside the install.
 
         Returns:
             The pids killed.
@@ -1195,10 +1230,11 @@ class EmbeddedLemonade:
                 exe = proc.exe()
                 if not _inside(exe, bin_root):
                     continue
-                parent = proc.ppid()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                anchor, born = _anchor_pid(proc), proc.create_time()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError) as e:
+                log.debug("Not reaping pid %s: cannot inspect it (%s)", proc.pid, e)
                 continue
-            if self._is_running_lemond(parent):
+            if not _outlived(anchor, born):
                 continue
             try:
                 proc.kill()
@@ -1206,9 +1242,9 @@ class EmbeddedLemonade:
                 continue
             except psutil.AccessDenied as e:
                 log.warning(
-                    "Backend %s (pid %s) outlived its lemond, but GAIA may not "
-                    "stop it (%s). End it by hand: Task Manager on Windows, "
-                    "`kill %s` elsewhere.",
+                    "Backend %s (pid %s) outlived the server that started it, "
+                    "but GAIA may not stop it (%s). End it by hand: Task "
+                    "Manager on Windows, `kill %s` elsewhere.",
                     exe,
                     proc.pid,
                     e,
@@ -1216,7 +1252,7 @@ class EmbeddedLemonade:
                 )
                 continue
             log.warning(
-                "Stopped backend %s (pid %s): the lemond that started it is gone",
+                "Stopped backend %s (pid %s): the server that started it is gone",
                 exe,
                 proc.pid,
             )
@@ -1226,25 +1262,6 @@ class EmbeddedLemonade:
         for proc in alive:
             log.warning("Backend pid %s is still exiting after 5s", proc.pid)
         return [proc.pid for proc in killed]
-
-    def _is_running_lemond(self, pid: Optional[int]) -> bool:
-        """Whether *pid* is a running lemond from this install's ``dist`` tree.
-
-        When the OS hides it, it counts as running: a backend is never killed
-        on a guess.
-        """
-        import psutil
-
-        if not pid:
-            return False
-        try:
-            exe = psutil.Process(pid).exe()
-        except psutil.NoSuchProcess:
-            return False
-        except psutil.AccessDenied:
-            return True
-        dist_root = os.path.normcase(str((self.root / "dist").resolve()))
-        return Path(exe).stem.lower() == "lemond" and _inside(exe, dist_root)
 
     def _log_tail(self, lines: int = 3) -> str:
         """The last *lines* non-health lines of lemond's log, `` | ``-joined."""
@@ -1518,7 +1535,7 @@ class EmbeddedLemonade:
         owner_pid: Optional[int],
         owner_started: Optional[float],
     ) -> EmbeddedStatus:
-        existing = self.status()
+        existing = self._status(reap=False)
         if existing.running:
             if existing.version != self.version:
                 raise EmbeddedLemonadeError(
