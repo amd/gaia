@@ -476,3 +476,62 @@ async def test_the_model_is_checked_again_before_an_approved_tool_runs(
     finally:
         preflight.side_effect = None
         await _cleanup(rt, a)
+
+
+async def test_waiting_for_agent_setup_never_deadlocks_with_the_model_holder(
+    monkeypatch,
+):
+    """B waits for the setup lock with the model given up; a tick then takes
+    the model and waits for the same lock. Neither may wait on the other."""
+    from gaia.ui.turn_queue import TurnSlot
+
+    loop = asyncio.get_running_loop()
+    queue = TurnQueue()
+    monkeypatch.setattr(helpers, "tool_registry_lock", threading.RLock())
+    lock = helpers.tool_registry_lock
+    handler_b = SimpleNamespace(
+        turn_slot=TurnSlot(queue, "chat-b", loop),
+        cancelled=threading.Event(),
+        _emit=lambda _event: None,
+    )
+    await handler_b.turn_slot.acquire()  # B is answering.
+
+    stuck_build_holds = threading.Event()
+    stuck_build_done = threading.Event()
+
+    def stopped_chats_build():  # Another chat's agent build, still going.
+        with lock:
+            stuck_build_holds.set()
+            stuck_build_done.wait(10)
+
+    threading.Thread(target=stopped_chats_build, daemon=True).start()
+    assert await asyncio.to_thread(stuck_build_holds.wait, 5)
+
+    b_built = threading.Event()
+
+    def chat_b_builds():
+        with helpers.writing_tool_registry(handler_b):
+            b_built.set()
+
+    threading.Thread(target=chat_b_builds, daemon=True).start()
+    for _ in range(100):  # B gives the model up while it waits.
+        if not queue.locked():
+            break
+        await asyncio.sleep(0.02)
+    await queue.acquire("tick")  # A tick takes the model...
+    stuck_build_done.set()  # ...the other build ends, and B gets the lock first.
+    await asyncio.sleep(0.3)
+
+    tick_built = threading.Event()
+
+    def tick_builds():
+        with helpers.writing_tool_registry():
+            tick_built.set()
+
+    threading.Thread(target=tick_builds, daemon=True).start()
+    assert await asyncio.to_thread(tick_built.wait, 5), "deadlocked on the setup lock"
+    queue.release()  # The tick's turn ends.
+    assert await asyncio.to_thread(b_built.wait, 5)
+    assert handler_b.turn_slot.held
+    handler_b.turn_slot.release()
+    assert not queue.locked()

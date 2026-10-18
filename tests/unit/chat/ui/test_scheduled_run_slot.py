@@ -67,7 +67,7 @@ async def test_timed_out_scheduled_run_stops_and_keeps_the_model_until_it_has(
     calls = []
 
     def stuck_run(_db, _prompt, *_args, **kwargs):
-        calls.append(kwargs.get("cancel_event"))
+        calls.append((kwargs.get("cancel_event"), kwargs.get("console")))
         unstick.wait(30)  # Generating, and ignoring the stop for now.
         return "late"
 
@@ -76,7 +76,10 @@ async def test_timed_out_scheduled_run_stops_and_keeps_the_model_until_it_has(
     try:
         first = asyncio.create_task(runs.run("first"))
         await asyncio.sleep(0.6)
-        assert calls[0] is not None and calls[0].is_set(), "not told to stop"
+        cancel, console = calls[0]
+        assert cancel is not None and cancel.is_set(), "not told to stop"
+        # The console's flag is what ends a streaming model reply mid-token.
+        assert console.cancelled.is_set(), "a reply in progress was not stopped"
         # Still in its model call: it keeps the model, so others wait in line.
         assert queue.locked() and not first.done()
         second = asyncio.create_task(runs.run("second"))

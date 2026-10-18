@@ -330,10 +330,7 @@ def writing_tool_registry(handler=None):
         TurnStopped: the turn was stopped while waiting.
         TimeoutError: the registry stayed held past ``_REGISTRY_WAIT_LIMIT_S``.
     """
-    if tool_registry_lock.acquire(blocking=False):
-        acquired = True
-    else:
-        acquired = False
+    if not tool_registry_lock.acquire(blocking=False):
         slot = getattr(handler, "turn_slot", None)
         stepped_away = slot is not None and slot.step_away()
         if handler is not None:
@@ -345,24 +342,28 @@ def writing_tool_registry(handler=None):
                 }
             )
         deadline = _time.monotonic() + _REGISTRY_WAIT_LIMIT_S
-        try:
-            while not tool_registry_lock.acquire(timeout=0.2):
-                if handler is not None and handler.cancelled.is_set():
-                    raise TurnStopped()
-                if _time.monotonic() > deadline:
-                    raise TimeoutError(
-                        "Another chat has been setting up its agent for over "
-                        f"{_REGISTRY_WAIT_LIMIT_S:.0f}s, most likely waiting on an "
-                        "MCP server that does not answer. Check Settings -> MCP "
-                        "servers, then send the message again."
-                    )
-            acquired = True
-            if stepped_away and not slot.come_back(handler.cancelled):
-                raise TurnStopped()
-        except BaseException:
-            if acquired:
+        while True:
+            if tool_registry_lock.acquire(timeout=0.2):
+                if not stepped_away:
+                    break
+                # Never wait for the model while holding the lock: whoever has
+                # the model may be waiting for the lock.
                 tool_registry_lock.release()
-            raise
+                if not slot.come_back(handler.cancelled):
+                    raise TurnStopped()
+                if tool_registry_lock.acquire(blocking=False):
+                    break
+                stepped_away = slot.step_away()
+                continue
+            if handler is not None and handler.cancelled.is_set():
+                raise TurnStopped()
+            if _time.monotonic() > deadline:
+                raise TimeoutError(
+                    "Another chat has been setting up its agent for over "
+                    f"{_REGISTRY_WAIT_LIMIT_S:.0f}s, most likely waiting on an "
+                    "MCP server that does not answer. Check Settings -> MCP "
+                    "servers, then send the message again."
+                )
     try:
         yield
     finally:
