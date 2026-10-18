@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A `/query` run waiting for the model streams that it is waiting.** The run
+  thread runs as the user's turn: `status` events with `phase: "model_queue"`
+  and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and
+  `/query/{run_id}/cancel` ends the wait. The translator keeps `phase` and
+  `queue` on those events only.
 - **A batch organize that failed for every message is reported as a failure.**
   `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,
   `add_star_batch`, `remove_star_batch`, `label_message_batch` and

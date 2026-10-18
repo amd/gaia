@@ -185,3 +185,44 @@ async def test_a_non_streaming_turn_waiting_for_the_model_is_not_idle(runtime):
 
     assert response.content == "answer after the queue"
     assert not agent._cancel_event.is_set(), "the queue wait was stopped as idle"
+
+
+class _Health:
+    status_code = 200
+
+    def json(self):
+        return {"all_models_loaded": []}  # nothing loaded: the pre-flight loads
+
+
+class _Recorder:
+    def __init__(self):
+        self.events = []
+        self.cancelled = threading.Event()
+
+    def _emit(self, event):
+        self.events.append(event)
+
+
+def test_stop_during_a_queued_preflight_load_stays_quiet(monkeypatch):
+    """Stop while the pre-flight waits for the model is a stopped turn: no
+    "could not load" warning and no error for the turn to report."""
+    import contextlib
+
+    import httpx
+
+    monkeypatch.setattr(helpers, "_eval_provider_kwargs", lambda: {})
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Health())
+
+    @contextlib.contextmanager
+    def _stopped_while_queued(*_a, **_k):
+        raise broker_client.LeaseWaitCancelled("stopped while waiting for the model")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(broker_client, "model_lease", _stopped_while_queued)
+    handler = _Recorder()
+    handler.cancelled.set()
+
+    helpers._maybe_load_expected_model("M-GGUF", handler)
+
+    warnings = [e for e in handler.events if e.get("status") == "warning"]
+    assert warnings == [], f"Stop was reported as a failure: {warnings}"

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import math
 import os
 import threading
 import time
@@ -345,11 +346,44 @@ def _credential() -> str:
     return token
 
 
-def user_wait_limit() -> Optional[float]:
-    """The user's cap on a model-slot wait (:data:`LEASE_WAIT_LIMIT_ENV_VAR`)."""
+_wait_limit_scope: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "gaia_model_lease_wait_limit", default=None
+)
+
+
+def lease_wait_limit(seconds: float) -> ContextManager[None]:
+    """Give up on a model-slot wait inside the block after *seconds*.
+
+    For side work that must not hold a worker thread behind a long queue (a
+    chat title); the wait fails with a 504 :class:`BrokerUnavailableError`.
+    """
+    if not _positive_finite(seconds):
+        raise ValueError(f"lease_wait_limit needs seconds > 0; got {seconds!r}")
+    return _scoped(_wait_limit_scope, float(seconds))
+
+
+def _positive_finite(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def current_wait_limit() -> Tuple[Optional[float], Optional[str]]:
+    """``(limit, env var it came from)`` for a model-slot wait made here.
+
+    A :func:`lease_wait_limit` scope wins (source ``None``), then
+    :data:`LEASE_WAIT_LIMIT_ENV_VAR`; ``(None, None)`` means wait while the
+    model is in use.
+    """
+    scoped = _wait_limit_scope.get()
+    if scoped is not None:
+        return scoped, None
     raw = os.environ.get(LEASE_WAIT_LIMIT_ENV_VAR, "").strip()
     if not raw:
-        return None
+        return None, None
     try:
         limit = float(raw)
     except ValueError as e:
@@ -357,11 +391,22 @@ def user_wait_limit() -> Optional[float]:
             f"{LEASE_WAIT_LIMIT_ENV_VAR} must be a number of seconds; got "
             f"{raw!r}. Fix it, or unset it to wait while the model is in use."
         ) from e
-    if limit <= 0:
+    if not _positive_finite(limit):
         raise BrokerUnavailableError(
-            f"{LEASE_WAIT_LIMIT_ENV_VAR} must be greater than 0; got {raw!r}."
+            f"{LEASE_WAIT_LIMIT_ENV_VAR} must be a finite number greater than 0; "
+            f"got {raw!r}."
         )
-    return limit
+    return limit, LEASE_WAIT_LIMIT_ENV_VAR
+
+
+def wait_limit_hint(source: Optional[str]) -> str:
+    """How to wait longer, for a wait that hit its limit."""
+    if source is None:
+        return ""
+    return (
+        f" To wait longer, raise {source}, or unset it to wait for as long as "
+        "the model is in use."
+    )
 
 
 def acquire_lease(
@@ -395,8 +440,10 @@ def acquire_lease(
     import requests
 
     url = f"{_broker_base()}{HOST_API_PREFIX}/models/lease"
-    limit_from_env = timeout is None
-    wait_limit = user_wait_limit() if limit_from_env else timeout
+    if timeout is None:
+        wait_limit, limit_source = current_wait_limit()
+    else:
+        wait_limit, limit_source = timeout, None
     payload = {
         "model": model,
         "priority": priority or current_priority(),
@@ -449,7 +496,7 @@ def acquire_lease(
                     if on_update is not None:
                         on_update(event)
                 elif kind == "error":
-                    raise _queue_error(model, event, limit_from_env)
+                    raise _queue_error(model, event, limit_source)
         except requests.exceptions.RequestException as e:
             raise BrokerUnavailableError(
                 f"the model-slot broker at {url} stopped answering while "
@@ -480,14 +527,11 @@ def _fail_reads_after_silence(response, url: str) -> None:
     sock.settimeout(STREAM_IDLE_TIMEOUT_S)
 
 
-def _queue_error(model: str, event: dict, limit_from_env: bool) -> Exception:
+def _queue_error(model: str, event: dict, limit_source: Optional[str]) -> Exception:
     status = event.get("status")
     detail = event.get("detail", "")
-    if status == 504 and limit_from_env:
-        detail += (
-            f" To wait longer, raise {LEASE_WAIT_LIMIT_ENV_VAR}, or unset it to "
-            "wait for as long as the model is in use."
-        )
+    if status == 504:
+        detail += wait_limit_hint(limit_source)
     return BrokerUnavailableError(
         f"no model-slot lease for '{model}': {detail}", status_code=status
     )

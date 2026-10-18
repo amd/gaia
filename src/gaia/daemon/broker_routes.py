@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import queue
 import secrets
 import threading
@@ -283,6 +284,7 @@ def build_broker_router(
         if timeout is not None and (
             isinstance(timeout, bool)
             or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
             or timeout < 0
         ):
             raise HTTPException(
@@ -297,6 +299,7 @@ def build_broker_router(
         if max_hold is not None and (
             isinstance(max_hold, bool)
             or not isinstance(max_hold, (int, float))
+            or not math.isfinite(max_hold)
             or max_hold <= 0
         ):
             raise HTTPException(

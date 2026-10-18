@@ -6,6 +6,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **A request waiting for the model says so.** When another GAIA process or
+  request is using the local model, `/v1/email/query` now streams a `status`
+  every ~2 s with `phase: "model_queue"` and the request's place in line, who
+  holds the model and how long it has waited. Before, the stream went silent
+  for the whole wait. The request also goes ahead of background work, and
+  cancelling the run takes it out of the queue.
+
 - **A bulk archive, label, star or mark-read that changed nothing now says it
   failed.** When every message in the batch failed, the agent used to report
   the action as done. It now reports the failure with each message's reason,

@@ -539,7 +539,7 @@ def _holding_local_request_lock(model: str):
 
     lock = _local_request_lock(model)
     if not lock.acquire(blocking=False):
-        limit = broker_client.user_wait_limit()
+        limit, source = broker_client.current_wait_limit()
         started = time.monotonic()
         next_update = started
         while True:
@@ -548,9 +548,8 @@ def _holding_local_request_lock(model: str):
                 raise broker_client.BrokerUnavailableError(
                     f"no turn on '{model}' within the {limit:g}s wait limit: "
                     "another request in this process is still using it. The "
-                    "model is busy, not broken. To wait longer, raise "
-                    f"{broker_client.LEASE_WAIT_LIMIT_ENV_VAR}, or unset it to "
-                    "wait for as long as the model is in use.",
+                    "model is busy, not broken."
+                    + broker_client.wait_limit_hint(source),
                     status_code=504,
                 )
             if now >= next_update:
@@ -4151,7 +4150,7 @@ class LemonadeClient:
         # non-streaming path skipped it, so an embedder warm-up that unloaded the
         # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
         # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(model, request_timeout=timeout):
             if auto_download:
                 self._ensure_model_loaded(model, auto_download=True)
 
@@ -4218,7 +4217,7 @@ class LemonadeClient:
         # Re-entrant per thread, so the load's own inner lease folds into this.
         # As a generator the lease is acquired on first iteration and released
         # when the consumer finishes or closes the stream.
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(model, request_timeout=timeout):
             self._ensure_model_loaded(model, auto_download)
 
             # Known not to stream: go straight to the non-streaming call rather
@@ -5968,8 +5967,12 @@ class LemonadeClient:
             )
         self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
 
-    def _model_slot_lease(self, model: str):
+    def _model_slot_lease(self, model: str, request_timeout: Optional[float] = None):
         """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
+
+        The lease declares how long its holder may keep the slot: one request
+        of *request_timeout* (the request budget when not given), the retry
+        deadline after which no new attempt starts, and a model load.
 
         Serializes this load against every other process sharing the
         single-tenant Lemonade slot, and every request to a local model against
@@ -6012,7 +6015,9 @@ class LemonadeClient:
             model,
             priority=self.model_lease_priority,
             on_wait=_on_wait,
-            max_hold_s=request_budget_seconds() + LEASE_LOAD_MARGIN_S,
+            max_hold_s=(request_timeout or request_budget_seconds())
+            + RetryPolicy.from_env().deadline
+            + LEASE_LOAD_MARGIN_S,
         )
 
         @contextmanager

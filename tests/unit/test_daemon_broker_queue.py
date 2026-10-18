@@ -676,11 +676,18 @@ def test_a_lemonade_request_declares_its_own_call_budget(monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", _record)
     monkeypatch.setattr(lemonade_client, "request_budget_seconds", lambda: 2048)
+    deadline = lemonade_client.RetryPolicy.from_env().deadline
+    margin = lemonade_client.LEASE_LOAD_MARGIN_S
     client = _local_client()
+
     with client._model_slot_lease("local-model"):
         pass
+    assert seen["max_hold_s"] == 2048 + deadline + margin
 
-    assert seen["max_hold_s"] == 2048 + lemonade_client.LEASE_LOAD_MARGIN_S
+    # An explicit per-call timeout is what bounds that call, not the default.
+    with client._model_slot_lease("local-model", request_timeout=5000):
+        pass
+    assert seen["max_hold_s"] == 5000 + deadline + margin
 
 
 def test_background_work_is_not_starved_by_a_stream_of_turns():
@@ -694,19 +701,22 @@ def test_background_work_is_not_starved_by_a_stream_of_turns():
     def _wait(model, priority):
         order.append(broker.acquire(model, priority=priority).model)
 
-    background = threading.Thread(target=_wait, args=("brief", "background"))
+    background = threading.Thread(
+        target=_wait, args=("brief", "background"), daemon=True
+    )
     background.start()
     _until(lambda: len(broker.snapshot()["waiting"]) == 1)
     clock.t += AGING_S + 1  # the background request has waited ten minutes
-    turn = threading.Thread(target=_wait, args=("turn", "interactive"))
+    turn = threading.Thread(target=_wait, args=("turn", "interactive"), daemon=True)
     turn.start()
     _until(lambda: len(broker.snapshot()["waiting"]) == 2)
 
     broker.release(held.lease_id)
-    background.join(5)
+    _until(lambda: order)
     assert order == ["brief"], "a fresh turn jumped a request queued ten minutes"
     broker.release(broker._active.lease_id)
     turn.join(5)
+    assert not turn.is_alive()
 
 
 def _until(check, timeout=5.0):
@@ -740,3 +750,64 @@ def test_the_wait_limit_also_caps_a_wait_on_this_processs_model_lock(monkeypatch
 
     assert time.monotonic() - started < 3
     assert LEASE_WAIT_LIMIT_ENV_VAR in str(err.value)
+
+
+@pytest.mark.allow_network
+def test_a_scoped_wait_limit_caps_work_that_must_not_wait_forever(daemon_factory):
+    """Side work such as a chat title gives up instead of tying up a worker
+    thread behind a long queue."""
+    daemon_factory()
+    holder, _ = _hold_in_thread("holder-model", 4.0)
+
+    started = time.monotonic()
+    with broker_client.lease_wait_limit(1.0):
+        with pytest.raises(broker_client.BrokerUnavailableError) as err:
+            with broker_client.model_lease("title-model"):
+                pass
+
+    assert time.monotonic() - started < 3
+    assert err.value.status_code == 504
+    assert LEASE_WAIT_LIMIT_ENV_VAR not in str(err.value)
+    holder.join(10)
+
+
+def test_a_scoped_wait_limit_also_caps_this_processs_model_lock(monkeypatch):
+    monkeypatch.delenv(BROKER_URL_ENV_VAR, raising=False)
+    monkeypatch.setattr(broker_client, "_attached", None)
+    client = _local_client()
+    holding, done = threading.Event(), threading.Event()
+
+    def _hold():
+        with client._model_slot_lease("scoped-model"):
+            holding.set()
+            done.wait(10)
+
+    threading.Thread(target=_hold, daemon=True).start()
+    assert holding.wait(5)
+    started = time.monotonic()
+    try:
+        with broker_client.lease_wait_limit(0.5):
+            with pytest.raises(broker_client.BrokerUnavailableError):
+                with client._model_slot_lease("scoped-model"):
+                    pass
+    finally:
+        done.set()
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.allow_network
+@pytest.mark.parametrize("field", ["timeout", "max_hold_s"])
+@pytest.mark.parametrize("value", ["NaN", "Infinity"])
+def test_a_non_finite_wait_or_hold_is_refused(daemon_factory, field, value):
+    """NaN compares false with everything, so it would quietly turn a cap off."""
+    daemon = daemon_factory()
+    r = requests.post(
+        f"{daemon.url}/host/v1/models/lease",
+        data='{"model": "m", "%s": %s}' % (field, value),
+        headers={
+            "Authorization": f"Bearer {_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        timeout=10,
+    )
+    assert r.status_code == 422, r.text
