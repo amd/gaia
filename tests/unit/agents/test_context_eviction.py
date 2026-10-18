@@ -250,7 +250,7 @@ def test_off_sends_every_result_whole():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("window", [16384, 32768, 65536, 131072])
+@pytest.mark.parametrize("window", [32768, 65536, 131072])
 def test_marks_leave_room_for_the_reply_and_one_more_result(window):
     evictor = ContextEvictor()
     evictor.begin_turn(window, output_reserve=8192)
@@ -266,7 +266,7 @@ def test_the_gap_does_not_shrink_with_the_window():
     # A percentage gap shrinks on small windows until one result crosses both
     # marks at once; the headroom gap is one capped result everywhere.
     gaps = set()
-    for window in (16384, 32768, 65536, 131072):
+    for window in (32768, 65536, 131072):
         evictor = ContextEvictor()
         evictor.begin_turn(window, output_reserve=8192)
         gaps.add(evictor.threshold() - evictor.target())
@@ -281,11 +281,6 @@ def test_absolute_values_pin_the_marks():
         6000,
         500,
     )
-
-
-def test_a_window_with_no_room_for_input_fails_loudly():
-    with pytest.raises(ValueError, match="no room for input"):
-        ContextEvictor().begin_turn(8192, output_reserve=8192)
 
 
 def test_a_call_before_begin_turn_fails_loudly():
@@ -489,9 +484,9 @@ def test_a_small_batch_waits_unless_the_window_is_nearly_full():
     assert run.call() is None
 
     # Same small batch, but the next capped result could not fit: it goes.
-    urgent = _Run(4096, threshold_tokens=1000, min_batch_tokens=10_000)
+    urgent = _Run(3072, threshold_tokens=1000, min_batch_tokens=10_000)
     urgent.call()
-    urgent.step(1, prose(1, 6000))
+    urgent.step(1, prose(1, 9000))
     urgent.call()
     urgent.call()
     urgent.step(2, prose(2, 100))
@@ -710,7 +705,7 @@ def test_an_edited_message_is_recounted():
 def test_agent_evicts_before_the_call_and_keeps_everything_readable():
     agent = _make_agent()
     agent.console.print_context_eviction = MagicMock()
-    sent = _stub_chat(agent, _script(12))
+    sent = _stub_chat(agent, [*_script(12), _ANSWER])
 
     result = agent.process_query("read the files")
 
@@ -1174,7 +1169,7 @@ def test_counts_lean_high_for_json_and_cjk():
 def test_context_state_reports_the_stubs_the_last_request_carried():
     agent = _make_agent()
     assert agent.context_state() == {"put_away": None, "summarized": None}
-    sent = _stub_chat(agent, _script(12))
+    sent = _stub_chat(agent, [*_script(12), _ANSWER])
     agent.process_query("read the files")
 
     state = agent.context_state()

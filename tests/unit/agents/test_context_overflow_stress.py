@@ -71,3 +71,21 @@ def test_with_eviction_off_the_overflow_retry_keeps_results_rereadable(
     # Results the retry put away kept handles, and the model re-read them.
     assert report["rereads"] >= 1
     assert report["facts_correct"] == len(NEEDED), report["answer"]
+
+
+def test_a_500_step_run_reaches_its_ceiling_loudly_with_bounded_growth(monkeypatch):
+    """Every step leaves a stub and a tool call behind, and neither is folded,
+    so a long enough turn fills any window. It must end with the overflow
+    message, never an exception or a silent cut, and stay small on disk and
+    in memory on the way."""
+    monkeypatch.setenv("GAIA_CTX_SIZE", "32768")
+
+    report = run(32768, "on", 0, docs=340)
+
+    assert report["tool_steps_planned"] > 500
+    assert 150 <= report["tool_steps_done"] < report["tool_steps_planned"]
+    assert report["answer"].startswith("This request needs more than fits")
+    assert report["tokens_per_call_max"] <= 32768
+    assert report["archive_files"] >= report["tool_steps_done"] - 2
+    assert report["store_memory_kb"] < 64 * 1024
+    assert report["peak_python_mb"] < 200

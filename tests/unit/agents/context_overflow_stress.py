@@ -77,10 +77,10 @@ def search_result(query: str) -> str:
     )
 
 
-def plan() -> List[tuple]:
-    """45 calls: every document read, a search every other document, one dump."""
+def plan(docs: int = DOCS) -> List[tuple]:
+    """Every document read, a search every other document, one dump (46 calls at 30)."""
     calls: List[tuple] = []
-    for doc in range(1, DOCS + 1):
+    for doc in range(1, docs + 1):
         calls.append(("read_doc", {"doc": doc}))
         if doc % 2 == 0:
             calls.append(("search_docs", {"query": f"topic {doc}"}))
@@ -162,10 +162,10 @@ def make_agent_class(prefix_tokens: int = 0):
 class ScriptedModel:
     """Follows the plan, then answers from what the request it is sent holds."""
 
-    def __init__(self, window: int, counter):
+    def __init__(self, window: int, counter, docs: int = DOCS):
         self.window = window
         self.counter = counter
-        self.calls = plan()
+        self.calls = plan(docs)
         self.next = 0
         self.rereads: Dict[int, str] = {}
         self.metrics: Dict[str, Any] = {
@@ -267,10 +267,15 @@ class ScriptedModel:
 
 
 def run(
-    window: int, mode: str, prefix_tokens: int = 0, max_steps: int = 120
+    window: int, mode: str, prefix_tokens: int = 0, docs: int = DOCS
 ) -> Dict[str, Any]:
     """One scripted run; returns its numbers. Needs ``GAIA_CTX_SIZE`` set to *window*."""
+    import time
+    import tracemalloc
+
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    max_steps = docs * 2 + 60
 
     agent_cls = make_agent_class(prefix_tokens)
     with patch("gaia.agents.base.agent.AgentSDK"):
@@ -281,7 +286,7 @@ def run(
             context_eviction=mode,
             max_steps=max_steps,
         )
-    model = ScriptedModel(window, _BackendCounter())
+    model = ScriptedModel(window, _BackendCounter(), docs)
     chat = MagicMock()
     chat.get_stats = MagicMock(return_value={})
     chat.send_messages = MagicMock(side_effect=model)
@@ -289,8 +294,15 @@ def run(
     events: List[Dict[str, Any]] = []
     agent.console.print_context_eviction = events.append
 
+    tracemalloc.start()
+    started = time.monotonic()
     with patch.object(agent_cls, "_is_loaded_ctx_too_small", return_value=False):
         result = agent.process_query("Read every document, then report the facts.")
+    seconds = time.monotonic() - started
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    store = agent._output_artifacts
+    archived = list(store.archive_dir.glob("*.txt")) if store.archive_dir else []
 
     answer = result.get("result") or ""
     codes = dict(re.findall(r"doc (\d+): ([A-Z0-9]{8}|unknown)", answer))
@@ -321,6 +333,11 @@ def run(
         "tokens_per_call_mean": round(sum(requests) / len(requests)) if requests else 0,
         "tokens_per_call_max": max(requests) if requests else 0,
         "prefix_reuse_mean": round(sum(shares) / len(shares), 3) if shares else 0.0,
+        "seconds": round(seconds, 1),
+        "peak_python_mb": round(peak / 2**20, 1),
+        "store_memory_kb": round(sum(v[2] for v in store._items.values()) / 1024),
+        "archive_files": len(archived),
+        "archive_kb": round(sum(p.stat().st_size for p in archived) / 1024),
         "answer": answer[:300],
     }
 
@@ -350,10 +367,13 @@ def main(argv=None) -> int:
     parser.add_argument("--window", type=int, default=20480)
     parser.add_argument("--mode", default="auto")
     parser.add_argument("--prefix-tokens", type=int, default=0)
+    parser.add_argument("--docs", type=int, default=DOCS)
     args = parser.parse_args(argv)
     os.environ["GAIA_CTX_SIZE"] = str(args.window)
     os.environ.setdefault("GAIA_MEMORY_DISABLED", "1")
-    print(json.dumps(run(args.window, args.mode, args.prefix_tokens), indent=2))
+    print(
+        json.dumps(run(args.window, args.mode, args.prefix_tokens, args.docs), indent=2)
+    )
     return 0
 
 

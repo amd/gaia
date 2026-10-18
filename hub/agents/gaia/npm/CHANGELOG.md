@@ -14,6 +14,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   will then fit. Opt-in with `GAIA_CONTEXT_EVICTION=on`: older tool results
   move out of the prompt *before* the window fills, so the overflow never
   happens. Conversation turns are never touched.
+- **Token counts no longer undercount when the tokenizer data can't load.** On
+  an offline or locked-down machine the counter fell back to characters ÷ 4.28,
+  which undercounts JSON and CJK text, so history that should take half the
+  window could fill it (#5066). It now warns and counts at least one token per
+  three UTF-8 bytes.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

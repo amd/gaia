@@ -4,14 +4,66 @@
 
 import hashlib
 import os
+import re
+import shutil
 import threading
 import time
 from pathlib import Path
 from typing import Optional, Tuple
 from uuid import uuid4
 
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
 #: Most characters one ``read`` returns; a longer span continues at ``next_offset``.
 PAGE_CHARS = 8000
+
+#: Serializes archive writes: Windows refuses to replace a file another chat reads.
+_WRITE_LOCK = threading.Lock()
+
+#: The only names ``archive_dir`` ever serves: never a path, never another file.
+_RESULT_HANDLE = re.compile(r"output_[0-9a-f]{32}")
+
+
+#: Run folders untouched this long are removed when an agent with eviction starts.
+RUN_RETENTION_DAYS = 7
+
+
+def sweep_old_runs(runs_dir: Path, max_age_days: int = RUN_RETENTION_DAYS) -> int:
+    """Delete run folders whose newest file is older than *max_age_days*; return how many."""
+    if not runs_dir.is_dir():
+        return 0
+    cutoff = time.time() - max_age_days * 86400
+    removed = 0
+    for run in runs_dir.iterdir():
+        if not run.is_dir():
+            continue
+        newest = max(
+            (p.stat().st_mtime for p in run.rglob("*")), default=run.stat().st_mtime
+        )
+        if newest >= cutoff:
+            continue
+        try:
+            shutil.rmtree(run)
+        except OSError as e:
+            logger.warning("Could not remove old run archive %s: %s", run, e)
+            continue
+        removed += 1
+    if removed:
+        logger.info(
+            "Removed %d run archive(s) older than %d days", removed, max_age_days
+        )
+    return removed
+
+
+def _encode(text: str) -> bytes:
+    # Leniently decoded binary output carries lone surrogates; keep them exactly.
+    return text.encode("utf-8", "surrogatepass")
+
+
+def _result_handle(data: bytes) -> str:
+    return "output_" + hashlib.sha256(data).hexdigest()[:32]
 
 
 class ArtifactStore:
@@ -29,6 +81,8 @@ class ArtifactStore:
         self._indexes = {}
         #: Handles holding one whole tool result, which a bare ``read`` pages from 0.
         self._whole = set()
+        #: Handles this store has written to ``archive_dir``, verified then.
+        self._written = set()
         self._lock = threading.Lock()
 
     def put(self, text: str) -> str:
@@ -55,15 +109,10 @@ class ArtifactStore:
         prompt cache. With ``archive_dir`` the text is also written there, so
         the handle outlives ``ttl`` and the process.
         """
-        data = text.encode("utf-8")
-        handle = "output_" + hashlib.sha256(data).hexdigest()[:32]
+        data = _encode(text)
+        handle = _result_handle(data)
         if self.archive_dir is not None:
-            path = self.archive_dir / f"{handle}.txt"
-            if not path.exists():
-                self.archive_dir.mkdir(parents=True, exist_ok=True)
-                tmp = path.with_suffix(f".{uuid4().hex}.tmp")
-                tmp.write_bytes(data)
-                os.replace(tmp, path)
+            self._write(handle, data)
         with self._lock:
             now = time.monotonic()
             item = self._items.get(handle)
@@ -79,7 +128,42 @@ class ArtifactStore:
             self._items[handle] = (now, text, len(data))
             self._indexes[handle] = [(0, len(text))]
             self._whole.add(handle)
+            self._shed(keep=handle)
         return handle
+
+    def _write(self, handle: str, data: bytes) -> None:
+        """Put *data* at ``archive_dir/<handle>.txt``, replacing a file that differs."""
+        path = self.archive_dir / f"{handle}.txt"
+        try:
+            with _WRITE_LOCK:
+                if handle in self._written and path.is_file():
+                    return
+                if path.is_file() and path.read_bytes() == data:
+                    self._written.add(handle)
+                    return
+                self.archive_dir.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_name(f"{handle}.{uuid4().hex}.tmp")
+                tmp.write_bytes(data)
+                os.replace(tmp, path)
+                self._written.add(handle)
+        except OSError as e:
+            raise ValueError(
+                f"Cannot archive tool output under {self.archive_dir}: {e}. Free disk "
+                "space or make the folder writable; the result stays in the prompt."
+            ) from e
+
+    def _shed(self, keep: str) -> None:
+        """Drop the oldest in-memory copies of results the disk holds. Lock held."""
+        if self.archive_dir is None:
+            return
+        used = sum(v[2] for v in self._items.values())
+        for handle, item in sorted(self._items.items(), key=lambda kv: kv[1][0]):
+            if used <= self.max_bytes:
+                return
+            if handle == keep or handle not in self._whole:
+                continue
+            del self._items[handle]
+            used -= item[2]
 
     def _revive(self, handle) -> None:
         """Reload a whole result from ``archive_dir`` when memory has let it go. Lock held."""
@@ -88,15 +172,26 @@ class ArtifactStore:
         item = self._items.get(handle)
         if item is not None and time.monotonic() - item[0] < self.ttl:
             return
-        if not handle.startswith("output_") or not handle[7:].isalnum():
+        if not _RESULT_HANDLE.fullmatch(handle):
             return
         path = self.archive_dir / f"{handle}.txt"
         if not path.is_file():
             return
-        text = path.read_bytes().decode("utf-8")
-        self._items[handle] = (time.monotonic(), text, len(text.encode("utf-8")))
+        with _WRITE_LOCK:
+            data = path.read_bytes()
+        try:
+            text = data.decode("utf-8", "surrogatepass")
+        except UnicodeDecodeError:
+            text = None
+        if text is None or _result_handle(data) != handle:
+            raise ValueError(
+                f"The archived output {handle} at {path} does not match its handle: "
+                "the file was modified or corrupted. Re-run the tool for a fresh copy."
+            )
+        self._items[handle] = (time.monotonic(), text, len(data))
         self._indexes[handle] = [(0, len(text))]
         self._whole.add(handle)
+        self._shed(keep=handle)
 
     def touch(self, handle: str) -> None:
         """Restart a live handle's clock: a new stub now depends on it."""
@@ -117,7 +212,11 @@ class ArtifactStore:
     def has(self, handle) -> bool:
         """Whether ``handle`` names live output in this store."""
         with self._lock:
-            self._revive(handle)
+            try:
+                self._revive(handle)
+            except ValueError as e:
+                logger.warning("%s", e)
+                return False
             item = self._items.get(handle) if isinstance(handle, str) else None
             return item is not None and time.monotonic() - item[0] < self.ttl
 

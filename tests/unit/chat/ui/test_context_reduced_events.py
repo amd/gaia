@@ -96,3 +96,54 @@ def test_the_saved_chat_keeps_the_notice():
         "notice": True,
         "timestamp": 5,
     }
+
+
+def test_the_daemon_sidecar_and_stdio_streams_carry_the_same_detail():
+    event = _emitted()
+    stdio = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False)
+    daemon = CanonicalTranslator("run-123", agent_id="gaia")
+    (from_stdio,) = stdio.translate(event)
+    (from_daemon,) = daemon.translate(event)
+
+    assert from_stdio["context_reduced"] == from_daemon["context_reduced"]
+    assert from_daemon["context_reduced"] == event["context_reduced"]
+    assert from_stdio["message"] == from_daemon["message"] == event["message"]
+
+
+def test_a_reattaching_agent_ui_client_replays_the_notice():
+
+    from gaia.ui.run_manager import DONE, Run
+
+    run = Run("session-1")
+    run.emit(f"data: {json.dumps(_emitted())}\n\n")
+    run.finish()
+
+    q = run.subscribe()
+    replayed = []
+    while True:
+        item = q.get_nowait()
+        if item is DONE:
+            break
+        replayed.append(json.loads(item[len("data: ") :]))
+    assert replayed[0]["status"] == "context_reduced"
+    assert replayed[0]["context_reduced"]["results"] == 3
+
+
+def test_a_reloaded_chat_keeps_the_notice_row():
+    from gaia.ui._chat_helpers import _context_eviction_step
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import AgentStepResponse
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(title="t")
+    step = _context_eviction_step(_emitted(), step_id=1, timestamp=7)
+    db.add_message(session["id"], "assistant", "done", agent_steps=[step])
+
+    (message,) = [m for m in db.get_messages(session["id"]) if m["role"] == "assistant"]
+    steps = message["agent_steps"]
+    if isinstance(steps, str):
+        steps = json.loads(steps)
+    reloaded = AgentStepResponse(**steps[0])
+    assert reloaded.notice is True
+    assert reloaded.label == context_eviction_message(_EVENT)
+    assert reloaded.type == "status" and reloaded.active is False

@@ -93,10 +93,15 @@ class _Tokenizer:
         if not text:
             return 0
         if self._enc is not None:
-            return len(self._enc.encode(text, disallowed_special=()))
+            try:
+                return len(self._enc.encode(text, disallowed_special=()))
+            except UnicodeEncodeError:
+                # Lone surrogates (leniently decoded bytes): count them as U+FFFD.
+                text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+                return len(self._enc.encode(text, disallowed_special=()))
         return max(
             round(len(text) / _CHARS_PER_TOKEN),
-            -(-len(text.encode("utf-8")) // 3),
+            -(-len(text.encode("utf-8", "surrogatepass")) // 3),
         )
 
 

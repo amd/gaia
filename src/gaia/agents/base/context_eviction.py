@@ -364,7 +364,7 @@ def shortened_result(
 def message_tokens(message: Dict[str, Any]) -> int:
     """Leans high on purpose: cl100k undercounts JSON and CJK (#5066)."""
     text = json.dumps(message, ensure_ascii=False, default=str)
-    return max(count_tokens(text), -(-len(text.encode("utf-8")) // 3))
+    return max(count_tokens(text), -(-len(text.encode("utf-8", "surrogatepass")) // 3))
 
 
 def _k(tokens: int) -> str:
@@ -385,6 +385,34 @@ def context_eviction_message(event: Dict[str, Any]) -> str:
 
 
 _HANDLE_RE = re.compile(r"artifact=(output_[0-9a-f]+)")
+
+#: Asked once when the model answers over stubs it never re-read: a 4B model
+#: otherwise answers from the stub's summary, or invents the rest.
+REREAD_PROMPT = (
+    "Some earlier tool results in this conversation are not shown (the lines that "
+    'start "[Not shown, put away to save context:"). If your answer depends on any '
+    "of them, call the read_tool_output that line names and read it before you "
+    "answer; never answer from what you remember of it. If it doesn't, give the "
+    "same answer again."
+)
+
+
+def answers_over_unread_stubs(messages: List[Dict[str, Any]], handles) -> bool:
+    """A stub for one of *handles* is in the request and nothing was re-read after it."""
+
+    def fresh_stub(m):
+        text = (_message_text(m) or "") if m.get("role") == "tool" else ""
+        match = _HANDLE_RE.search(text) if is_stub(text) else None
+        return bool(match) and match.group(1) in handles
+
+    first = next((i for i, m in enumerate(messages) if fresh_stub(m)), None)
+    if first is None:
+        return False
+    return not any(
+        m.get("role") == "tool" and m.get("name") == "read_tool_output"
+        for m in messages[first:]
+    )
+
 
 _OVERFLOW_NUMBERS = (
     re.compile(
@@ -420,8 +448,11 @@ class ContextEvictor:
         self.min_batch_tokens = min_batch_tokens
         self.window_tokens: Optional[int] = None
         self.output_reserve = 0
+        self.margin = SAFETY_MARGIN_TOKENS
         #: Stubs in the last request sent: handle -> tokens the result took.
         self.put_away: Dict[str, int] = {}
+        #: Handles this turn moved out of its own results (not replayed history).
+        self.fresh_handles: set = set()
         self._stub_tokens: Dict[str, int] = {}
         self._calls = 0
         self._seen: Dict[str, int] = {}
@@ -439,14 +470,11 @@ class ContextEvictor:
             raise ValueError(
                 f"context eviction needs the loaded window in tokens, got {window_tokens!r}"
             )
-        if window_tokens - output_reserve - SAFETY_MARGIN_TOKENS < 1:
-            raise ValueError(
-                f"A {window_tokens}-token window leaves no room for input after the "
-                f"{output_reserve}-token reply reserve and {SAFETY_MARGIN_TOKENS}-token "
-                "margin; load the model with a larger window or lower max_output_tokens."
-            )
+        self.fresh_handles = set()
         self.window_tokens = window_tokens
-        self.output_reserve = output_reserve
+        # A small window can't spare an 8K reply reserve; a quarter is the most taken.
+        self.output_reserve = min(output_reserve, window_tokens // 4)
+        self.margin = min(SAFETY_MARGIN_TOKENS, window_tokens // 16)
         self._calls = 0
         self._seen.clear()
         self._first_call.clear()
@@ -463,19 +491,23 @@ class ContextEvictor:
 
     def usable(self) -> int:
         """Input tokens a request may hold: the window less reply reserve and margin."""
-        return self._window() - self.output_reserve - SAFETY_MARGIN_TOKENS
+        return self._window() - self.output_reserve - self.margin
+
+    def headroom(self) -> int:
+        """One capped result, but never more than a quarter of the usable window."""
+        return min(self.headroom_tokens, self.usable() // 4)
 
     def threshold(self) -> int:
         """Over this, the next call plus one more capped result would not fit."""
         if self.threshold_tokens is not None:
             return self.threshold_tokens
-        return self.usable() - self.headroom_tokens
+        return self.usable() - self.headroom()
 
     def target(self) -> int:
         """A batch goes on until there is room for two more capped results."""
         if self.threshold_tokens is not None:
             return self.threshold_tokens * 2 // 3
-        return self.usable() - 2 * self.headroom_tokens
+        return self.usable() - 2 * self.headroom()
 
     def min_batch(self) -> int:
         if self.min_batch_tokens is not None:
@@ -658,6 +690,7 @@ class ContextEvictor:
             return None
 
         arguments = _arguments_by_position(messages)
+        from_history = {i for i, key in keys if self._first_call[key] == 0}
         need = before - self.target()
         min_batch = self.min_batch()
         # Oldest first, until back under the target and the batch is worth it.
@@ -671,9 +704,9 @@ class ContextEvictor:
                 continue
             planned.append(i)
             freed += int(gain * scale)
-        # Past this the next capped result cannot fit: a small batch goes anyway.
+        # Halfway into the headroom, a small batch goes anyway; before that it waits.
         urgent = before > min(
-            self._window() * URGENT_RATIO, self.usable() - self.headroom_tokens
+            self._window() * URGENT_RATIO, self.usable() - self.headroom() // 2
         )
         if not planned or (freed < min_batch and not urgent):
             return None
@@ -690,6 +723,8 @@ class ContextEvictor:
                 break
             freed += self._count(message) - self._count(stub)
             self.remember_stub(item["artifact"], self._count(message))
+            if i not in from_history:
+                self.fresh_handles.add(item["artifact"])
             messages[i] = stub
             items.append(item)
         if not items:

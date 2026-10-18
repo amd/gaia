@@ -58,7 +58,9 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_CONTEXT_EVICTION,
     DEFAULT_EVICT_HEADROOM_TOKENS,
     DEFAULT_EVICT_KEEP_STEPS,
+    REREAD_PROMPT,
     ContextEvictor,
+    answers_over_unread_stubs,
     context_eviction_from_env,
     evict_headroom_from_env,
     evict_keep_from_env,
@@ -2435,13 +2437,9 @@ Do NOT wrap conversational replies in JSON.
         self._register_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
-        from gaia.config import gaia_home
 
-        # Put-away results go to disk under this run, so their handles outlive the TTL.
         self.run_id = uuid.uuid4().hex
-        self._output_artifacts = ArtifactStore(
-            archive_dir=gaia_home() / "runs" / self.run_id / "results"
-        )
+        self._output_artifacts = ArtifactStore()
         if any(name != "read_tool_output" for name in self._tools_registry):
             self._register_output_reader()
 
@@ -2505,6 +2503,15 @@ Do NOT wrap conversational replies in JSON.
         self._context_evictor: Optional[ContextEvictor] = (
             evictor if self.context_eviction_enabled else None
         )
+        if self.context_eviction_enabled:
+            from gaia.agents.base.artifacts import sweep_old_runs
+            from gaia.config import gaia_home
+
+            # Opted in: moved-out results go to disk, so their handles outlive the TTL.
+            sweep_old_runs(gaia_home() / "runs")
+            self._output_artifacts.archive_dir = (
+                gaia_home() / "runs" / self.run_id / "results"
+            )
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, Any]] = None
         # What the last overflow shrink put away, for its notice.
@@ -6763,12 +6770,12 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             return None
 
-        self._evict_before_model_call(messages)
         request = (
             messages
             + self._unanswered_tool_call_messages(messages)
             + [{"role": "user", "content": instruction}]
         )
+        self._evict_before_model_call(request)
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools
         no_calls = {"tool_choice": "none"} if tools else {}
@@ -6807,16 +6814,9 @@ Do NOT wrap conversational replies in JSON.
 
         perf_stats = stats or self.chat.get_stats()
         if perf_stats:
-            conversation.append(
-                {
-                    "role": "system",
-                    "content": {
-                        "type": "stats",
-                        "step": step,
-                        "performance_stats": perf_stats,
-                    },
-                }
-            )
+            record = {"type": "stats", "step": step, "performance_stats": perf_stats}
+            self._take_pending_eviction(record)
+            conversation.append({"role": "system", "content": record})
 
         response = re.sub(
             r"<think>.*?</think>", "", response or "", flags=re.DOTALL
@@ -7622,6 +7622,14 @@ Do NOT wrap conversational replies in JSON.
         self._pending_eviction = event
         self._publish_context_eviction(event)
 
+    def _take_pending_eviction(self, stats_record: Dict[str, Any]) -> None:
+        """Put the step's batch, if one fired, on its stats record."""
+        if self._pending_eviction is not None:
+            stats_record.update(
+                {k: v for k, v in self._pending_eviction.items() if k != "items"}
+            )
+            self._pending_eviction = None
+
     def context_state(self) -> Dict[str, Any]:
         """What the context panel shows: results the last request carried as stubs.
 
@@ -7642,7 +7650,7 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("console rejected the context eviction notice: %s", e)
 
     def _shrink_messages_for_overflow(
-        self, messages: List[Dict[str, Any]]
+        self, messages: List[Dict[str, Any]], store=None
     ) -> List[Dict[str, Any]]:
         """The sent list after the backend refused it as too long.
 
@@ -7658,7 +7666,7 @@ Do NOT wrap conversational replies in JSON.
         from gaia.agents.base.artifacts import store_for
 
         shrunk, self._last_overflow_items = shrink_for_overflow(
-            messages, store_for(self)
+            messages, store if store is not None else store_for(self)
         )
         clipped: List[Dict[str, Any]] = []
         for m in shrunk:
@@ -7682,11 +7690,14 @@ Do NOT wrap conversational replies in JSON.
         was over by, or, with no numbers in the error, a tenth of the prompt.
         Retrying a request that cannot fit only repeats the refusal (#2780).
         """
+        from gaia.agents.base.artifacts import ArtifactStore
+
         counter = self._context_evictor or ContextEvictor()
         system_prompt, tools = self.system_prompt, self._openai_tools
         before = counter.raw_tokens(messages, system_prompt, tools)
-        shrunk = self._shrink_messages_for_overflow(messages)
-        after = counter.raw_tokens(shrunk, system_prompt, tools)
+        # Sized in a throwaway store first: nothing is archived for a retry that won't run.
+        trial = self._shrink_messages_for_overflow(messages, ArtifactStore())
+        after = counter.raw_tokens(trial, system_prompt, tools)
         freed = max(0, before - after)
         report: Dict[str, Any] = {
             "freed_tokens_est": freed,
@@ -7707,6 +7718,9 @@ Do NOT wrap conversational replies in JSON.
             )
         else:
             report["fits"] = before > 0 and freed >= before * 0.1
+        shrunk = (
+            self._shrink_messages_for_overflow(messages) if report["fits"] else trial
+        )
         if report["fits"] and report["evicted_results"]:
             self._publish_context_eviction(
                 {
@@ -8902,6 +8916,7 @@ Do NOT wrap conversational replies in JSON.
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
         look_first_reprompted = False
+        reread_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         cut_off_continuations = 0
@@ -10811,15 +10826,7 @@ Do NOT wrap conversational replies in JSON.
                     "performance_stats": perf_stats or {},
                 }
                 step_timer.attach(stats_record)
-                if self._pending_eviction is not None:
-                    stats_record.update(
-                        {
-                            k: v
-                            for k, v in self._pending_eviction.items()
-                            if k != "items"
-                        }
-                    )
-                    self._pending_eviction = None
+                self._take_pending_eviction(stats_record)
                 if self._context_evictor is not None:
                     self._context_evictor.note_prompt_tokens(perf_stats)
                 conversation.append({"role": "system", "content": stats_record})
@@ -11040,6 +11047,26 @@ Do NOT wrap conversational replies in JSON.
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue
+
+                # An answer over results moved out of the prompt that were never re-read.
+                if (
+                    not reread_reprompted
+                    and self._context_evictor is not None
+                    and steps_taken < steps_limit - 1
+                    and answers_over_unread_stubs(
+                        messages, self._context_evictor.fresh_handles
+                    )
+                ):
+                    reread_reprompted = True
+                    logger.info(
+                        "[WORKFLOW] Answer given over results moved out of the "
+                        "prompt; asking once to re-read any it depends on"
+                    )
+                    # Transient: saved history holds results whole, not stubs.
+                    messages.append_transient(
+                        {"role": "user", "content": REREAD_PROMPT}
+                    )
+                    continue
 
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with

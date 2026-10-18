@@ -532,7 +532,17 @@ The scope is narrow on purpose:
   a chunk index keeps its own handle, and a `read_tool_output` page points back at
   its own archive. A put-away result read with no `entry` or `offset` comes back
   from its start, a full page at a time. A missing original is an error that
-  names the handle. The turn's conversation log keeps every result.
+  names the handle, and so is an archived file whose contents no longer match its
+  hash (edited or corrupted on disk). Handles are exactly `output_` plus 32 hex
+  characters, so a handle can never name a path. If the archive can't be written
+  (disk full, read-only), the result stays in the prompt and a warning is logged.
+  Run folders untouched for 7 days are removed when an agent with eviction on
+  starts.
+  The turn's conversation log keeps every result.
+- **A nudge to re-read.** If the model answers while results are moved out and it
+  hasn't re-read any of them, it is asked once to re-read whatever the answer
+  depends on, or give the same answer again. That costs one extra model call on
+  such turns.
 - **Never silent.** Every batch is announced: a line in the Agent UI's activity
   and the TUI transcript ("Moved 3 older tool results out of the prompt (~12.4K
   tokens); still readable"), an info log line, and `evicted_results` /
@@ -568,12 +578,14 @@ calls, 87% reuse); the plan's smaller fixed prompt is what fixes that case.
 | `context_eviction_headroom_tokens` | `5000` | Room kept for one more capped tool result |
 | `context_eviction_keep_steps` | `2` | Model calls a result must have been in before it can move |
 | `context_eviction_threshold_tokens` | `None` | An absolute trigger in tokens, instead of the headroom rule |
-| `context_eviction_min_batch_tokens` | 5% of the window | Smallest batch worth a cache break; ignored once the next result could not fit |
+| `context_eviction_min_batch_tokens` | 5% of the window | Smallest batch worth a cache break, between the trigger and halfway into the headroom; past that any batch goes |
 
 `GAIA_CONTEXT_EVICTION`, `GAIA_EVICT_HEADROOM`, `GAIA_EVICT_KEEP`,
 `GAIA_EVICT_THRESHOLD` and `GAIA_EVICT_MIN_BATCH` override them. A malformed
-value is an error when the agent is built, and a window with no room for input
-after the reply's reserve is an error when the turn starts.
+value is an error when the agent is built. On a small window the reply's reserve
+is capped at a quarter of the window, the margin at a sixteenth, and the
+headroom at a quarter of what's left, so a 4K or 8K window still has a positive
+trigger and room between the marks.
 
 **When the backend still refuses a request** (a single step added more than the
 window had left), the overflow retry runs once as a last resort. It moves every
@@ -583,7 +595,9 @@ model just asked for stays whole), clips assistant text over 800 characters, and
 restates on the last user message any lesson memory learned this turn. It
 retries only when the shrink frees more than the request was over by, read from
 the backend's error, or, when the error gives no numbers, at least a tenth of
-the request. Otherwise the turn ends with the message that the request needs
+the request; the shrink is sized first and archives nothing when it won't retry.
+With eviction off, what it moves out is kept in memory for the session, not on
+disk. Otherwise the turn ends with the message that the request needs
 more than fits, rather than repeating a refusal.
 
 ## Common Pitfalls and Solutions

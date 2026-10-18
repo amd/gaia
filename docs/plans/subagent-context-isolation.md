@@ -24,7 +24,7 @@ The problem is real and measured: a retrieval-heavy turn runs out of context aft
 Order of work:
 
 1. **Ship #1973 (artifact store) regardless.** It caps a single oversized payload. Orthogonal to everything below, already scoped, already has a design PR.
-2. **Make the existing overflow shrink proactive** — a few days, reuses shipped code, captures most of the benefit. Details in [Alternative C](#alternative-c--proactive-result-eviction). **Built:** on by default; see the decided open question below.
+2. **Make the existing overflow shrink proactive** — a few days, reuses shipped code, captures most of the benefit. Details in [Alternative C](#alternative-c--proactive-result-eviction). **Built** as an opt-in (`GAIA_CONTEXT_EVICTION=on`); see the answered open question below.
 3. **Time-box a `delegate` prototype and run the cold-start-prompt eval.** If Gemma-4-E4B writes usable child prompts, the design in [If we build it](#if-we-build-it) is sound and the plumbing already exists. If it doesn't, close this and keep the shrink.
 
 Sub-agents should never become an architecture here — only an opt-in tool the flagship may call. That distinction is the whole reason this isn't #674.
