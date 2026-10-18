@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import os
 import queue
@@ -41,7 +42,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
@@ -882,6 +883,31 @@ def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
 STOPPED_TURN_WAIT_S = 240.0
 
 
+async def _off_loop(
+    fn: Callable[..., Any],
+    *args: Any,
+    on_abandon: Optional[Callable[[Any], None]] = None,
+) -> Any:
+    """Run blocking *fn* on a worker thread so other runs keep streaming.
+
+    The thread can't be stopped, so if the request is cancelled while it runs,
+    *on_abandon* is called once it finishes — with its result, or ``None`` if
+    it raised — to release whatever the abandoned call took.
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if on_abandon is not None:
+
+            def _cleanup(done: "asyncio.Future") -> None:
+                failed = done.cancelled() or done.exception() is not None
+                on_abandon(None if failed else done.result())
+
+            task.add_done_callback(_cleanup)
+        raise
+
+
 async def _acquire_turn(session: Any) -> bool:
     """Take *session*'s run lock; ``False`` when another turn is still live.
 
@@ -895,8 +921,16 @@ async def _acquire_turn(session: Any) -> bool:
     stopping = session.active_cancel
     if stopping is None or not stopping.is_set():
         return False
-    return await asyncio.to_thread(
-        session.run_lock.acquire, True, STOPPED_TURN_WAIT_S
+
+    def _release_if_taken(taken: bool) -> None:
+        if taken:
+            session.run_lock.release()
+
+    return await _off_loop(
+        session.run_lock.acquire,
+        True,
+        STOPPED_TURN_WAIT_S,
+        on_abandon=_release_if_taken,
     )
 
 
@@ -965,7 +999,13 @@ async def query(request: QueryRequest):
             # than a throwaway. Whatever the turn puts on the instance — most
             # visibly Agent.loaded_skills — vanishes next turn otherwise, while
             # the model goes on telling the user the skill is still loaded.
-            session = session_registry.get_or_create(request.session_id, **kwargs)
+            # Building an agent takes seconds; on the loop it would freeze
+            # every other run's stream, heartbeats included.
+            session = await _off_loop(
+                functools.partial(
+                    session_registry.get_or_create, request.session_id, **kwargs
+                )
+            )
             if not await _acquire_turn(session):
                 session = None  # not ours to release
                 raise HTTPException(
@@ -983,7 +1023,12 @@ async def query(request: QueryRequest):
                 # loaded skill — the two things a retained session exists to
                 # keep. run_lock is held here, so no turn is mid-inference.
                 try:
-                    display = session.switch_model(target)
+                    # May load a model or wait behind another session's lease.
+                    display = await _off_loop(
+                        session.switch_model,
+                        target,
+                        on_abandon=lambda _display: _unwind_setup(),
+                    )
                 except RuntimeError as exc:
                     # The switch is all-or-nothing: the session is still on its
                     # previous model, so this is a failed request, not a broken
@@ -1027,7 +1072,10 @@ async def query(request: QueryRequest):
             # No session handle — a genuine one-shot. Nothing persists past this
             # turn, and the agent is told so rather than over-promising. Nothing
             # else will ever reference it either, so this run owns its teardown.
-            agent = build_query_agent(**kwargs)
+            agent = await _off_loop(
+                functools.partial(build_query_agent, **kwargs),
+                on_abandon=lambda built: built is not None and close_agent(built),
+            )
             one_shot_agent = agent
         agent.console = handler
         if request.can_answer_questions is False:
