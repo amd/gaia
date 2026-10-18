@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Set
 from gaia.logger import get_logger
 
 from .config import MCPConfig
-from .mcp_client import MCPClient
+from .mcp_client import MCPClient, server_timeout
 
 logger = get_logger(__name__)
 
@@ -298,6 +298,14 @@ class MCPClientManager:
             except Exception as e:
                 return name, None, str(e)
 
+        # A server that asks for a longer handshake (a cold npx download) gets it.
+        deadline_s = max(
+            [_CONNECT_TIMEOUT_S]
+            + [
+                server_timeout(name, cfg, _CONNECT_TIMEOUT_S)
+                for name, cfg in to_connect.items()
+            ]
+        )
         pool = ThreadPoolExecutor(max_workers=len(to_connect))
         futures = {
             pool.submit(_connect_one, name, cfg): name
@@ -317,7 +325,7 @@ class MCPClientManager:
                 logger.debug(f"Failed to connect to server '{name}': {error}")
 
         try:
-            for future in as_completed(futures, timeout=_CONNECT_TIMEOUT_S):
+            for future in as_completed(futures, timeout=deadline_s):
                 _record(future)
         except _FutureTimeoutError:
             for future, server_name in futures.items():
@@ -328,7 +336,7 @@ class MCPClientManager:
                     _record(future)
                 else:
                     self._failed[server_name] = (
-                        f"Connection timed out after {_CONNECT_TIMEOUT_S:.0f}s"
+                        f"Connection timed out after {deadline_s:.0f}s"
                     )
                     with abandon_lock:
                         abandoned.add(server_name)
@@ -338,7 +346,7 @@ class MCPClientManager:
                     logger.warning(
                         "MCP server '%s' did not respond within %.0fs; skipping",
                         server_name,
-                        _CONNECT_TIMEOUT_S,
+                        deadline_s,
                     )
         finally:
             # wait=False: don't block on threads that are stuck in readline().

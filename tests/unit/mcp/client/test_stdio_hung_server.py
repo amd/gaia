@@ -6,6 +6,7 @@ Each test runs a real stub server (a tiny Python script) so the pipes,
 blocking reads, and process lifecycle are the real ones.
 """
 
+import os
 import sys
 import textwrap
 import threading
@@ -272,22 +273,89 @@ def test_disconnect_mid_request_reports_the_disconnect(tmp_path):
 
 
 def test_the_error_label_names_the_server_by_name_and_executable():
-    t = StdioTransport("C:/tools/npx.cmd", args=["-y", "@scope/server"])
+    t = StdioTransport(sys.executable, args=["-u", "server.py"])
     t.name = "github"
-    assert t.label == "github (npx.cmd)"
+    assert t.label == f"github ({os.path.basename(sys.executable)})"
+    # A program that doesn't resolve is never echoed back.
+    assert StdioTransport("C:/tools/npx.cmd", args=["x"]).label == "?"
 
 
-def test_the_error_label_never_carries_an_argument():
-    for command, args in (
-        ("npx", ["-y", "@scope/server", "--token", "XYZ"]),
-        ("uvx", ["--api-key", "XYZ", "my-server"]),
-        ("uvx my-server --api-key=XYZ", None),
-        ("python", ["-c", "TOKEN='XYZ'"]),
-        ("API_KEY=XYZ uvx srv", None),
-        ("uvx --api-key XYZ", ["srv"]),
-        ("'API KEY=XYZ' uvx srv", None),
-    ):
-        assert "XYZ" not in StdioTransport(command, args=args).label
+def test_the_label_keeps_a_quoted_program_path_with_spaces(tmp_path):
+    folder = tmp_path / "Program Files"
+    folder.mkdir()
+    program = folder / "node.exe"
+    program.write_bytes(b"")
+    assert StdioTransport(f'"{program}" server.js').label == "node.exe"
+    assert StdioTransport(str(program), args=["s.js"]).label == "node.exe"
+
+
+# Secrets in every shape a config can carry them: with / and \, =, spaces.
+_SECRETS = ["Zq9vKe7wP2", "Zq9v/Ke7w\\P2", "Zq9v=Ke7w", "Zq9v Ke7w/P2"]
+
+
+def _grams(secret, n=4):
+    return {
+        secret[i : i + n]
+        for i in range(len(secret) - n + 1)
+        if " " not in secret[i : i + n]
+    }
+
+
+def _configs(secret, exe, script):
+    quoted = '"' + secret + '"'
+    yield {"command": exe, "args": ["-u", script, "--api-key", secret]}
+    yield {"command": exe, "args": ["-u", script, f"--token={secret}"]}
+    yield {"command": exe, "args": ["-u", script], "env": {"TOKEN": secret}}
+    yield {"command": f"API_KEY={quoted} {exe} -u {script}", "args": None}
+    yield {"command": f"{exe} --api-key {quoted}", "args": ["srv"]}
+    yield {"command": secret, "args": None}
+    yield {"command": secret, "args": ["srv"]}
+    yield {"command": f"{quoted} --flag", "args": None}
+    yield {"command": f"{exe} -u {script} --api-key {quoted}", "args": None}
+
+
+def test_no_part_of_a_secret_reaches_a_label_log_or_error(tmp_path, caplog):
+    """Property: no 4-character run of a secret in a server's command, args or
+    env ever reaches its label, GAIA's logs, or an error raised to a caller.
+
+    The stub echoes its whole command line and env to stderr and exits, the
+    way a server that rejects its options does.
+    """
+    import logging
+
+    script = tmp_path / "echo_and_die.py"
+    script.write_text(
+        "import os, sys\n"
+        "sys.stderr.write(' '.join(sys.argv) + ' ' + os.environ.get('TOKEN', ''))\n"
+        "sys.exit(2)\n"
+    )
+    exe = sys.executable.replace("\\", "/")
+    caplog.set_level(logging.DEBUG)
+    checked = 0
+    for secret in _SECRETS:
+        for config in _configs(secret, exe, str(script).replace("\\", "/")):
+            caplog.clear()
+            seen = []
+            try:
+                t = StdioTransport(
+                    config["command"], args=config["args"], env=config.get("env")
+                )
+                seen.append(t.label)
+                try:
+                    if t.connect():
+                        t.send_request("tools/list", timeout=5)
+                except Exception as e:  # noqa: BLE001 — the text is under test
+                    seen.append(str(e))
+                finally:
+                    t.disconnect()
+            except ValueError as e:  # an unparseable command line
+                seen.append(str(e))
+            seen.extend(r.getMessage() for r in caplog.records)
+            text = "\n".join(seen)
+            leaked = [g for g in _grams(secret) if g in text]
+            assert not leaked, (config, leaked, text[:500])
+            checked += 1
+    assert checked == len(_SECRETS) * 9
 
 
 def test_a_server_that_stops_reading_cannot_block_the_write(tmp_path):
@@ -647,9 +715,33 @@ def test_a_launch_that_cannot_start_its_readers_stops_the_server(tmp_path, monke
     assert not psutil.pid_exists(pid), "a failed launch left the server running"
 
 
-def test_the_label_keeps_a_quoted_program_path_with_spaces():
-    t = StdioTransport('"C:/Program Files/nodejs/node.exe" server.js')
-    assert t.label == "node.exe"
-    assert StdioTransport("C:/Program Files/nodejs/node.exe", args=["s.js"]).label == (
-        "node.exe"
+def test_a_server_can_ask_for_a_longer_handshake(monkeypatch):
+    from gaia.mcp.client import mcp_client_manager as mgr_mod
+    from gaia.mcp.client.mcp_client import MCPClient, server_timeout
+
+    assert server_timeout("s", {}, 30) == 30
+    assert server_timeout("s", {"timeout": 120}, 30) == 120
+    for bad in (0, -5, "120", True):
+        with pytest.raises(ValueError, match="positive number of seconds"):
+            server_timeout("s", {"timeout": bad}, 30)
+
+    client = MCPClient.from_config("s", {"command": "npx", "timeout": 120})
+    assert client.transport.timeout == 120
+
+    # The manager's connect deadline stretches to the longest one asked for.
+    waited = {}
+
+    def record_deadline(futures, timeout=None):
+        waited["timeout"] = timeout
+        return iter(())
+
+    class _Config:
+        def get_servers(self):
+            return {"slow": {"command": "unused", "timeout": 120}}
+
+    monkeypatch.setattr(mgr_mod, "as_completed", record_deadline)
+    monkeypatch.setattr(
+        mgr_mod.MCPClient, "from_config", lambda *a, **k: _FakeClient("slow")
     )
+    mgr_mod.MCPClientManager(config=_Config()).load_from_config()
+    assert waited["timeout"] == 120

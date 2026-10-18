@@ -6,6 +6,7 @@ import collections
 import json
 import os
 import queue
+import re
 import shlex
 import shutil
 import signal
@@ -93,13 +94,13 @@ def _split_command_string(command: str) -> List[str]:
         tokens = list(lexer)
     except ValueError as exc:
         raise ValueError(
-            f"MCP server command could not be parsed ({exc}): {command!r}. "
+            f"MCP server command could not be parsed ({exc}). "
             f"Check for unbalanced quotes. {_FIX_HINT}"
         ) from exc
 
     if not tokens:
         raise ValueError(
-            f"MCP server command is empty: {command!r}. Set 'command' to the "
+            "MCP server command is empty. Set 'command' to the "
             f'program to run, e.g. "npx". {_FIX_HINT}'
         )
 
@@ -108,9 +109,9 @@ def _split_command_string(command: str) -> List[str]:
         # lost here — reject it anywhere in the string rather than guess.
         if set(token) <= _SHELL_OPERATOR_CHARS or "`" in token:
             raise ValueError(
-                f"MCP server command contains shell syntax ({token!r}): "
-                f"{command!r}. GAIA launches MCP servers without a shell, so this "
-                f"would be passed through as literal text rather than interpreted. "
+                "MCP server command contains shell syntax (; | & < > ( ) or a "
+                "backtick). GAIA launches MCP servers without a shell, so this "
+                "would be passed through as literal text rather than interpreted. "
                 f"{_FIX_HINT}"
             )
 
@@ -166,6 +167,7 @@ class StdioTransport(MCPTransport):
         name: Optional[str] = None,
     ):
         self.name = name
+        self._label: Optional[str] = None
         self.command = command
         self.args = args
         self.env = env
@@ -189,16 +191,41 @@ class StdioTransport(MCPTransport):
     def label(self) -> str:
         """The server's configured name and executable, for errors.
 
-        Only the program itself: with ``args`` set, ``command`` is the program
-        whole; without, the first token of the command line, split the way
-        the launch splits it. Anything that isn't a plain program name shows
-        as ``?``.
+        The executable is shown only once it resolves to a real file, by its
+        file name; anything else from the command shows as ``?``.
         """
-        program = self.command if self.args else _program_token(self.command)
-        executable = os.path.basename(program.rstrip("/\\")) or program
-        if not executable or "=" in executable or any(c.isspace() for c in executable):
+        if self._label is None:
+            program = self.command if self.args else _program_token(self.command)
             executable = "?"
-        return f"{self.name} ({executable})" if self.name else executable
+            if program and (os.path.isfile(program) or shutil.which(program)):
+                executable = os.path.basename(program.rstrip("/\\")) or "?"
+            self._label = f"{self.name} ({executable})" if self.name else executable
+        return self._label
+
+    def _secrets(self) -> List[str]:
+        """Every command token, argument and env value long enough to matter."""
+        try:
+            tokens = _split_command_string(self.command)
+        except ValueError:
+            tokens = self.command.split()
+        values = [self.command, *tokens, *(self.args or [])]
+        values += list((self.env or {}).values())
+        parts = set()
+        for value in values:
+            value = str(value)
+            parts.add(value)
+            parts.update(re.split(r"[=\s]", value))
+        return sorted((v for v in parts if len(v) >= 4), key=len, reverse=True)
+
+    def _redact(self, text: str) -> str:
+        """*text* from the server with the command's arguments and env removed.
+
+        A server that echoes its own command line in an error would otherwise
+        carry tokens or keys passed to it into GAIA's logs.
+        """
+        for secret in self._secrets():
+            text = text.replace(secret, "<redacted>")
+        return text
 
     def _start_readers(self) -> None:
         """Drain stdout into a queue and stderr into a tail buffer.
@@ -309,7 +336,7 @@ class StdioTransport(MCPTransport):
 
         try:
             if self.debug:
-                logger.debug(f"Starting MCP server with command: {argv}")
+                logger.debug("Starting MCP server '%s'", self.label)
 
             # Never None: an inherited environment would carry GAIA's own
             # credentials into the server.
@@ -355,16 +382,22 @@ class StdioTransport(MCPTransport):
             self._abandon_launch()
             raise
         except Exception as e:
-            logger.error(f"Failed to start MCP server '{self.label}': {e}")
+            # The exception's text can name the program; its type cannot.
+            logger.error(
+                "Failed to start MCP server '%s': %s (errno %s)",
+                self.label,
+                type(e).__name__,
+                getattr(e, "errno", None),
+            )
             self._abandon_launch()
             return False
 
     def _abandon_launch(self) -> None:
         """Stop a server whose launch failed after Popen, so none runs unread."""
         proc, self._process = self._process, None
+        self._stop_children()
         if proc is None or proc.poll() is not None:
             return
-        self._stop_children()
         try:
             proc.kill()
             proc.wait(timeout=5)
@@ -387,7 +420,9 @@ class StdioTransport(MCPTransport):
             if self._process.poll() is not None:
                 stderr = self._read_stderr()
                 if stderr:
-                    logger.debug(f"Server stderr before disconnect:\n{stderr}")
+                    logger.debug(
+                        "Server stderr before disconnect:\n%s", self._redact(stderr)
+                    )
 
             # npx and uvx run the real server as a child, which terminate()
             # alone would leave running, holding our pipes open.
@@ -403,7 +438,9 @@ class StdioTransport(MCPTransport):
             logger.debug("MCP server process terminated")
 
         except Exception as e:
-            logger.error(f"Error during disconnect: {e}")
+            logger.error(
+                "Error disconnecting MCP server '%s': %s", self.label, type(e).__name__
+            )
 
         finally:
             self._process = None
@@ -522,9 +559,9 @@ class StdioTransport(MCPTransport):
         exit_code = self._process.returncode if self._process else None
         stderr = self._read_stderr()
         formatted_code = self._format_exit_code(exit_code)
-        msg = f"MCP server process died (exit code: {formatted_code})"
+        msg = f"MCP server '{self.label}' process died (exit code: {formatted_code})"
         if stderr:
-            msg += f"\nServer stderr:\n{stderr}"
+            msg += f"\nServer stderr:\n{self._redact(stderr)}"
         if exit_code is not None and exit_code < 0:
             msg += (
                 "\nHint: The server crashed with a signal. "
@@ -712,11 +749,17 @@ class StdioTransport(MCPTransport):
                 )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                hint = (
+                    " A first run of npx -y or uvx downloads the server first; "
+                    "set a longer 'timeout' (seconds) in its config if it needs one."
+                    if method == "initialize"
+                    else ""
+                )
                 raise TimeoutError(
                     f"MCP server '{self.label}' did not answer '{method}' within "
                     f"{wait_s:g}s. It may be hung or overloaded; check that it "
                     "starts and answers when run on its own from a terminal, "
-                    "then reconnect it."
+                    f"then reconnect it.{hint}"
                 )
             try:
                 line = self._stdout_lines.get(timeout=min(remaining, _POLL_INTERVAL_S))
@@ -736,13 +779,13 @@ class StdioTransport(MCPTransport):
             except json.JSONDecodeError as e:
                 raise ValueError(
                     f"MCP server '{self.label}' wrote non-JSON to stdout while "
-                    f"answering '{method}': {line[:200]!r}. Servers must log to "
+                    f"answering '{method}': {self._redact(line[:200])!r}. Servers must log to "
                     "stderr, never stdout."
                 ) from e
             if not isinstance(message, dict):
                 raise ValueError(
                     f"MCP server '{self.label}' sent a JSON-RPC message that is "
-                    f"not an object: {line[:200]!r}"
+                    f"not an object: {self._redact(line[:200])!r}"
                 )
 
             if "method" in message:
@@ -753,7 +796,8 @@ class StdioTransport(MCPTransport):
                 error = message["error"]
                 detail = error.get("message") if isinstance(error, dict) else error
                 raise RuntimeError(
-                    f"MCP server '{self.label}' rejected '{method}': {detail}"
+                    f"MCP server '{self.label}' rejected '{method}': "
+                    f"{self._redact(str(detail))}"
                 )
             if message.get("id") != request_id:
                 logger.debug(

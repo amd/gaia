@@ -353,6 +353,23 @@ class MCPTool:
         }
 
 
+def server_timeout(name: str, config: Dict[str, Any], default: float) -> float:
+    """The server's own ``timeout`` (seconds) from its config, else *default*.
+
+    Raises:
+        ValueError: If ``timeout`` is set but is not a positive number.
+    """
+    value = config.get("timeout")
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(
+            f"MCP server '{name}' has timeout {value!r} in its config; it must be "
+            "a positive number of seconds. Fix it in mcp_servers.json."
+        )
+    return float(value)
+
+
 class MCPClient:
     """Client for interacting with an MCP server.
 
@@ -431,7 +448,7 @@ class MCPClient:
             command=config["command"],
             args=config.get("args"),
             env=resolved_env or None,
-            timeout=timeout,
+            timeout=server_timeout(name, config, timeout),
             debug=debug,
             name=name,
         )
