@@ -85,10 +85,11 @@ def test_status_answers_while_lease_waiters_fill_the_thread_pool(live_daemon):
     ]
     for w in waiters:
         w.start()
+    # 40 is anyio's default worker-pool size: enough queued leases to fill it.
     deadline = time.time() + 5
-    while len(broker.snapshot()["waiting"]) < 45 and time.time() < deadline:
+    while len(broker.snapshot()["waiting"]) < 40 and time.time() < deadline:
         time.sleep(0.05)
-    assert len(broker.snapshot()["waiting"]) == 45, "waiters did not all queue"
+    assert len(broker.snapshot()["waiting"]) >= 40, "waiters did not queue"
 
     try:
         assert probe_state(live_daemon, timeout=1.5)[0] == "live", (
