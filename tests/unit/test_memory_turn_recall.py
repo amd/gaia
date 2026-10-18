@@ -669,3 +669,24 @@ class TestStablePromptOrderAndDueDates:
 
         with pytest.raises(ValueError, match=kid):
             host.get_memory_system_prompt()
+
+    def test_session_summaries_stay_out_of_the_always_on_section(self, host, store):
+        """A summary is dated history; always on, it would contradict newer facts."""
+        store.store(
+            category="note",
+            content="In March the user lived in Calgary and worked at Northwind",
+            source="consolidation",
+            domain="session:abcd1234",
+            context="work",
+        )
+        store.store(
+            category="fact",
+            content="User's dog is called Juniper",
+            source="consolidation",
+            context="work",
+        )
+
+        prompt = host.get_memory_system_prompt()
+
+        assert "lived in Calgary" not in prompt
+        assert "dog is called Juniper" in prompt

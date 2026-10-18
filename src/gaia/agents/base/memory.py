@@ -2884,6 +2884,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                     category, ctx, limit=STABLE_MEMORY_FETCH_LIMIT, newest_first=True
                 )
                 if not _is_lesson(item)
+                # A session summary is dated history ("in March, lived in
+                # Calgary"); always on, it would contradict newer facts.
+                and not (
+                    item["category"] == "note" and item["source"] == "consolidation"
+                )
                 # A reminder whose day has passed is the due-date path's job.
                 and (self._due_day(item) or today) >= today
             ]
