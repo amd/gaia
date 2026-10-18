@@ -398,6 +398,37 @@ async def test_non_streaming_silent_turn_is_stopped_and_told_why(runtime, clock)
     assert not isinstance(agent.console, helpers._ActivityConsole)
 
 
+@pytest.mark.asyncio
+async def test_non_streaming_silence_counts_from_the_turn_start(runtime, clock):
+    """A turn that goes quiet before the watchdog's first look is still stopped."""
+    advanced = threading.Event()
+
+    def script(agent):
+        clock.advance(301)
+        advanced.set()
+        return agent.wait_for_cancel()
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    loop = asyncio.get_running_loop()
+    real_run_in_executor = loop.run_in_executor
+
+    def worker_runs_first(executor, func, *args):
+        # The worker thread wins the race: the clock moves before this returns.
+        future = real_run_in_executor(executor, func, *args)
+        if getattr(func, "__name__", "") == "_do_chat":
+            assert advanced.wait(5)
+        return future
+
+    with (
+        patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 300),
+        patch.object(loop, "run_in_executor", worker_runs_first),
+    ):
+        answer = await _ask(runtime, session)
+
+    assert answer.startswith("This turn ran for 5 minutes without progress")
+
+
 # ---------------------------------------------------------------------------
 # The limit itself
 # ---------------------------------------------------------------------------

@@ -2418,8 +2418,8 @@ async def _get_chat_response(
         return _clean_answer_json(result_str)
 
     try:
-        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
         idle = _TurnIdleClock(_time.monotonic())
+        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
         idle_message = None
         try:
             while not worker.done():

@@ -239,36 +239,45 @@ class PinnedIPAdapter(HTTPAdapter):
         return clean, tls_hostname
 
     def send(self, request: requests.PreparedRequest, **kwargs) -> requests.Response:
-        parsed = urlparse(request.url)
+        original_url = request.url
+        parsed = urlparse(original_url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
-        if host:
-            pinned_ip = self._resolve_first_ip(host, port)
-            url_ip = self._format_ip_for_url(pinned_ip)
+        if not host:
+            return super().send(request, **kwargs)
 
-            if parsed.scheme == "https":
-                # Carry the original hostname in userinfo; it is read back in
-                # build_connection_pool_key_attributes to set the TLS SNI and
-                # the certificate-name assertion. Never sent on the wire.
-                new_netloc = f"{host}@{url_ip}:{port}"
-            else:
-                new_netloc = f"{url_ip}:{port}"
+        pinned_ip = self._resolve_first_ip(host, port)
+        url_ip = self._format_ip_for_url(pinned_ip)
 
-            new_url = urlunparse(
-                (
-                    parsed.scheme,
-                    new_netloc,
-                    parsed.path or "",
-                    parsed.params or "",
-                    parsed.query or "",
-                    parsed.fragment or "",
-                )
+        if parsed.scheme == "https":
+            # Carry the original hostname in userinfo; it is read back in
+            # build_connection_pool_key_attributes to set the TLS SNI and
+            # the certificate-name assertion. Never sent on the wire.
+            new_netloc = f"{host}@{url_ip}:{port}"
+        else:
+            new_netloc = f"{url_ip}:{port}"
+
+        request.url = urlunparse(
+            (
+                parsed.scheme,
+                new_netloc,
+                parsed.path or "",
+                parsed.params or "",
+                parsed.query or "",
+                parsed.fragment or "",
             )
-            request.url = new_url
-            request.headers.setdefault("Host", host)
+        )
+        request.headers.setdefault("Host", host)
 
-        return super().send(request, **kwargs)
+        # The pinned form only steers the connection. Restore the real URL so
+        # HTTPError text, response.url and cookie domains never show host@ip.
+        try:
+            response = super().send(request, **kwargs)
+        finally:
+            request.url = original_url
+        response.url = original_url
+        return response
 
     def build_connection_pool_key_attributes(self, request, verify, cert=None):
         """Pin the connect address to the IP while keeping the TLS identity.
