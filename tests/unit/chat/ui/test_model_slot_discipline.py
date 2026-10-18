@@ -738,3 +738,15 @@ def test_concurrent_loads_all_land_in_the_record(monkeypatch):
 
     monkeypatch.setattr(helpers, "_models_loaded_here", None)  # Restart.
     assert helpers._loaded_here("First-GGUF") and helpers._loaded_here("Second-GGUF")
+
+
+def test_a_copy_that_reports_no_window_is_reloaded(lemonade):
+    # The broken state #1030 describes: loaded, but no ctx_size reported.
+    copy = _model("Mine-GGUF")
+    copy["recipe_options"] = {}
+    lemonade["resident"] = [copy]
+
+    helpers._maybe_load_expected_model("Mine-GGUF")
+
+    lemonade["client"].unload_model.assert_called_once()
+    lemonade["client"].load_model.assert_called_once()

@@ -2317,7 +2317,9 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         if (m.get("model_name") or "").lower() != expected_lower:
                             continue
                         window = (m.get("recipe_options") or {}).get("ctx_size") or 0
-                        nobody_chose = window in _auto_load_windows()
+                        # No window reported is the broken state #1030 needs
+                        # a reload for, whoever loaded it.
+                        nobody_chose = window == 0 or window in _auto_load_windows()
                         if not (_loaded_here(m["model_name"]) or nobody_chose):
                             raise ModelInUseError(
                                 f"{model_id} is loaded by another app with a "
