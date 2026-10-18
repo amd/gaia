@@ -249,7 +249,7 @@ def answers_liveness(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def backend_activity(pid: int) -> Optional[Dict[int, float]]:
+def backend_activity(pid: int) -> Optional[Dict[str, float]]:
     """CPU seconds plus MB of disk I/O for each backend process under *pid*.
 
     The backends (llama-server and friends) do the work a busy router waits
