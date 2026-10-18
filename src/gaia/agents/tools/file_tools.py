@@ -1665,8 +1665,7 @@ class FileSearchToolsMixin:
                 # File must exist for editing
                 if not resolved_path.exists():
                     return {
-                        "status": "error",
-                        "error": f"File not found: {resolved_path}",
+                        **missing_file_error(resolved_path),
                         "operation": "edit_file",
                     }
 
@@ -1977,8 +1976,7 @@ class FileSearchToolsMixin:
 
                 if not fp.exists():
                     return {
-                        "status": "error",
-                        "error": f"File not found: {file_path}",
+                        **missing_file_error(file_path),
                         "has_errors": True,
                         "operation": "get_file_info",
                     }
