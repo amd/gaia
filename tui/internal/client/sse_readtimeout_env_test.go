@@ -16,9 +16,10 @@ func TestAgentReadTimeoutFollowsTheRelaySetting(t *testing.T) {
 		want time.Duration
 	}{
 		{"", 300 * time.Second},
-		{"100", 300 * time.Second},          // never shorter than the default
-		{"600", 660 * time.Second},          // plus the relay's grace for the tool's own error
-		{"inf", 100 * 365 * 24 * time.Hour}, // timeouts.py reads this as no limit
+		{"100", 300 * time.Second},                            // never shorter than the default
+		{"600", 660 * time.Second},                            // plus the relay's grace for the tool's own error
+		{"inf", maxAgentReadTimeout + agentToolTimeoutGrace},  // timeouts.py reads this as no limit
+		{"1e30", maxAgentReadTimeout + agentToolTimeoutGrace}, // clamped, never wrapped to a short timeout
 	} {
 		t.Setenv("GAIA_AGENT_TOOL_TIMEOUT", tc.env)
 		got, err := agentReadTimeout()

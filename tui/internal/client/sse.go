@@ -33,6 +33,7 @@ const (
 	// agentToolTimeoutEnv and agentToolTimeoutGrace mirror src/gaia/daemon/timeouts.py.
 	agentToolTimeoutEnv   = "GAIA_AGENT_TOOL_TIMEOUT"
 	agentToolTimeoutGrace = 60 * time.Second
+	maxAgentReadTimeout   = 100 * 365 * 24 * time.Hour
 )
 
 // agentReadTimeout is the relay's idle-read budget, read the way
@@ -43,16 +44,15 @@ func agentReadTimeout() (time.Duration, error) {
 		return defaultReadTimeout, nil
 	}
 	secs, err := strconv.ParseFloat(raw, 64)
-	if err == nil && math.IsInf(secs, 1) {
-		// timeouts.py turns "inf" into no idle limit; a century is the same in practice.
-		return 100 * 365 * 24 * time.Hour, nil
-	}
 	if err != nil || secs <= 0 || math.IsNaN(secs) {
 		return 0, fmt.Errorf("%s must be a positive number of seconds, got %q. "+
 			"Unset it to use the default relay read budget (%s)",
 			agentToolTimeoutEnv, raw, defaultReadTimeout)
 	}
-	return max(defaultReadTimeout, time.Duration(secs*float64(time.Second))+agentToolTimeoutGrace), nil
+	// timeouts.py has no upper bound ("inf" is no limit); a century is the same in
+	// practice and keeps the conversion from overflowing into a short timeout.
+	d := time.Duration(math.Min(secs*float64(time.Second), float64(maxAgentReadTimeout)))
+	return max(defaultReadTimeout, d+agentToolTimeoutGrace), nil
 }
 
 // Turn is one entry of the host-owned transcript.
