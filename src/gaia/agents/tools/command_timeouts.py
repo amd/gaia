@@ -457,8 +457,9 @@ def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
         i = 0
         while i < len(args):
             arg = args[i]
-            if arg in value_flags:
-                i += 2  # ``-o pipefail``
+            # ``-o pipefail``, or a cluster ending in o: ``-euo pipefail``.
+            if arg in value_flags or re.fullmatch(r"[-+][a-zA-Z]*[oO]", arg):
+                i += 2
                 continue
             if not arg.startswith("-"):
                 break  # ``bash run.sh -c cfg.yml``: a script's own flags

@@ -311,6 +311,8 @@ class TestTimeoutClasses:
             ),
             ("pwsh -WindowStyle Hidden -Command 'pytest -q'", "test"),
             ("bash -o pipefail -c 'pytest -q'", "test"),
+            ("bash -euo pipefail -c 'pytest -q'", "test"),
+            ("set -euo pipefail; pytest -q", "test"),
             ("python3.12 analyze.py", "script"),
             (r"C:\Python312\python.exe analyze.py", "script"),
             ("cmd /c build.bat", "script"),
