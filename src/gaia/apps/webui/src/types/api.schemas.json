@@ -3368,6 +3368,17 @@
         ],
         "title": "Lemonade Error"
       },
+      "lemonade_probe": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Probe"
+      },
       "lemonade_running": {
         "default": false,
         "title": "Lemonade Running",

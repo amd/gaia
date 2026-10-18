@@ -54,6 +54,9 @@ class SystemStatus(BaseModel):
     # Present when the Lemonade health/catalog query failed. This distinguishes
     # an unavailable server from a probe failure without inventing a verdict.
     lemonade_error: Optional[str] = None
+    # How the Lemonade probe ended: "ok", "down" (nothing answered the
+    # connection), "timed_out" (connected, no answer in time) or "error".
+    lemonade_probe: Optional[str] = None
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
