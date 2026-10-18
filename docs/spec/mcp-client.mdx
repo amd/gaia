@@ -1020,6 +1020,8 @@ def disconnect(self) -> None:
     """Terminate the MCP server subprocess.
 
     Process cleanup sequence:
+    0. Stop the server's children (`taskkill /T` on Windows, the process
+       group on POSIX): `npx` and `uvx` run the real server as a child
     1. Send SIGTERM
     2. Wait up to 5 seconds
     3. If still running, send SIGKILL
@@ -1053,13 +1055,17 @@ def send_request(
     abandons the tool call (`tool_cancelled()`); a request given up on is
     cancelled on the server with `notifications/cancelled`. Errors name the
     server by its program and package or script, never its full arguments.
+    Writes are bounded too: a server that stops reading its input is stopped
+    rather than left blocking the request, and waiting behind another request
+    ends on Stop.
 
     Args:
         method (str): JSON-RPC method name
         params (Dict[str, Any], optional): Parameters dictionary
         timeout (float, optional): Seconds to wait for the reply; defaults
-            to the transport's `timeout`, or 180 s (the agent's per-tool
-            limit) for `tools/call` when that is longer
+            to the transport's `timeout`, or for `tools/call` the agent's
+            per-tool limit (`GAIA_AGENT_TOOL_TIMEOUT`, 180 s by default) less
+            5 s, so the error names the server rather than a generic timeout
 
     Returns:
         Dict[str, Any]: JSON-RPC response

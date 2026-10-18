@@ -242,13 +242,14 @@ def test_a_timed_out_request_is_cancelled_on_the_server(tmp_path):
     assert seen[-1]["params"]["requestId"] == seen[0]["id"]
 
 
-def test_tool_calls_get_the_agents_tool_budget_not_the_handshake_default():
-    t = StdioTransport("npx", args=["-y", "@scope/server"])
-    # No process: only the budget arithmetic is under test.
+def test_tool_calls_end_just_inside_the_agents_tool_limit(monkeypatch):
     from gaia.mcp.client.transports import stdio
 
-    assert t.timeout < stdio.TOOL_CALL_TIMEOUT_S
-    assert stdio.TOOL_CALL_TIMEOUT_S == 180
+    monkeypatch.delenv("GAIA_AGENT_TOOL_TIMEOUT", raising=False)
+    assert stdio.tool_call_timeout() == 175
+    # The user's own limit wins, and the transport still ends first.
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "600")
+    assert stdio.tool_call_timeout() == 595
 
 
 def test_disconnect_mid_request_reports_the_disconnect(tmp_path):
@@ -270,3 +271,108 @@ def test_the_error_label_names_the_server_without_its_arguments():
     assert t.label == "npx.cmd @scope/server"
     legacy = StdioTransport("uvx my-server --api-key=s3cret")
     assert "s3cret" not in legacy.label
+    inline = StdioTransport("python", args=["-c", "import os; TOKEN='s3cret'"])
+    assert inline.label == "python <inline code>"
+
+
+def test_a_server_that_stops_reading_cannot_block_the_write(tmp_path):
+    # Never reads stdin, so a request bigger than the pipe buffer can't land.
+    script = _stub(tmp_path, "pass")
+    script.write_text("import time\ntime.sleep(3600)\n")
+    transport = _transport(script, timeout=2)
+    try:
+        box, elapsed = _call_with_watchdog(
+            lambda: transport.send_request("big", {"blob": "x" * 2_000_000}),
+            limit=15,
+        )
+    finally:
+        transport.disconnect()
+
+    assert isinstance(box.get("exc"), TimeoutError), box
+    assert "stopped reading" in str(box["exc"])
+    assert elapsed < 8
+    assert not transport.is_connected()
+
+
+def test_stop_ends_a_wait_behind_another_request(tmp_path):
+    script = _stub(tmp_path, "time.sleep(3600)")
+    transport = _transport(script, timeout=60)
+    first = threading.Thread(
+        target=lambda: _call_with_watchdog(
+            lambda: transport.send_request("tools/list"), limit=20
+        ),
+        daemon=True,
+    )
+    first.start()
+    time.sleep(0.5)  # the first request now holds the pipe
+    cancel = threading.Event()
+
+    def second():
+        set_tool_cancel_event(cancel)
+        try:
+            return transport.send_request("tools/call", {"name": "x"})
+        finally:
+            set_tool_cancel_event(None)
+
+    threading.Timer(0.5, cancel.set).start()
+    try:
+        box, elapsed = _call_with_watchdog(second)
+    finally:
+        transport.disconnect()
+
+    assert isinstance(box.get("exc"), ToolCancelled), box
+    assert elapsed < 5
+
+
+def test_disconnect_stops_the_servers_children(tmp_path):
+    psutil = pytest.importorskip("psutil")
+    child_pid_file = tmp_path / "child.pid"
+    script = tmp_path / "parent_server.py"
+    # Like npx: the process we start runs the real server as a child.
+    script.write_text(textwrap.dedent(f"""
+            import subprocess, sys, time
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"])
+            open({str(child_pid_file)!r}, "w").write(str(child.pid))
+            time.sleep(3600)
+            """))
+    transport = _transport(script)
+    deadline = time.monotonic() + 10
+    while not child_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    child_pid = int(child_pid_file.read_text())
+    assert psutil.pid_exists(child_pid)
+
+    transport.disconnect()
+
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(child_pid), "the server's child outlived disconnect"
+
+
+def test_a_server_that_misses_the_connect_deadline_is_stopped(tmp_path, monkeypatch):
+    from gaia.mcp.client import mcp_client_manager as mgr_mod
+
+    psutil = pytest.importorskip("psutil")
+    pid_file = tmp_path / "server.pid"
+    script = tmp_path / "never_initializes.py"
+    script.write_text(textwrap.dedent(f"""
+            import os, time
+            open({str(pid_file)!r}, "w").write(str(os.getpid()))
+            time.sleep(3600)
+            """))
+    monkeypatch.setattr(mgr_mod, "_CONNECT_TIMEOUT_S", 1.0, raising=False)
+
+    class _Config:
+        def get_servers(self):
+            return {"stuck": {"command": sys.executable, "args": ["-u", str(script)]}}
+
+    manager = mgr_mod.MCPClientManager(config=_Config())
+    manager.load_from_config()
+
+    assert "timed out" in manager._failed["stuck"]
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(pid), "a server that missed the deadline kept running"

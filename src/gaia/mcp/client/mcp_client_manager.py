@@ -15,6 +15,11 @@ from .mcp_client import MCPClient
 logger = get_logger(__name__)
 
 
+#: How long load_from_config waits for every server to connect; generous
+#: for legitimate servers. One still connecting then is stopped.
+_CONNECT_TIMEOUT_S = 10.0
+
+
 class MCPClientManager:
     """Manages multiple MCP client connections.
 
@@ -266,11 +271,15 @@ class MCPClientManager:
         # A hard timeout prevents a hanging stdio server from blocking agent
         # construction indefinitely — the underlying readline() has no OS-level
         # timeout, so we impose one here at the futures layer.
-        _CONNECT_TIMEOUT = 10.0  # seconds; generous for legitimate servers
+
+        # Every client started, so one still connecting at the deadline can
+        # be stopped rather than left running with its pipes open.
+        started: Dict[str, MCPClient] = {}
 
         def _connect_one(name, server_config):
             try:
                 client = MCPClient.from_config(name, server_config, debug=self.debug)
+                started[name] = client
                 if client.connect():
                     return name, client, None
                 return name, None, client.last_error
@@ -283,7 +292,7 @@ class MCPClientManager:
             for name, cfg in to_connect.items()
         }
         try:
-            for future in as_completed(futures, timeout=_CONNECT_TIMEOUT):
+            for future in as_completed(futures, timeout=_CONNECT_TIMEOUT_S):
                 name, client, error = future.result()
                 if client is not None:
                     self._clients[name] = client
@@ -296,12 +305,15 @@ class MCPClientManager:
             for future, server_name in futures.items():
                 if not future.done():
                     self._failed[server_name] = (
-                        f"Connection timed out after {_CONNECT_TIMEOUT:.0f}s"
+                        f"Connection timed out after {_CONNECT_TIMEOUT_S:.0f}s"
                     )
+                    client = started.get(server_name)
+                    if client is not None:
+                        client.disconnect()
                     logger.warning(
                         "MCP server '%s' did not respond within %.0fs; skipping",
                         server_name,
-                        _CONNECT_TIMEOUT,
+                        _CONNECT_TIMEOUT_S,
                     )
         finally:
             # wait=False: don't block on threads that are stuck in readline().

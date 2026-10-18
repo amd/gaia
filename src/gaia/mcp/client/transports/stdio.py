@@ -10,6 +10,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -34,9 +35,25 @@ _POLL_INTERVAL_S = 0.25
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
 
-# A tool call may run as long as the agent's own per-tool limit
-# (DEFAULT_TOOL_TIMEOUT in gaia.agents.base.agent).
-TOOL_CALL_TIMEOUT_S = 180
+# A tool call ends this much before the agent's own per-tool limit, so the
+# error the user sees names the MCP server instead of a generic tool timeout.
+_TOOL_CALL_MARGIN_S = 5
+
+# Lines read from the server and not yet consumed. A full queue stops the
+# reader, which back-pressures the server instead of growing without bound.
+_STDOUT_QUEUE_LINES = 10_000
+
+# Flags whose value is inline code, never a name worth printing.
+_INLINE_CODE_FLAGS = frozenset({"-c", "-e", "--eval", "-command", "-encodedcommand"})
+
+
+def tool_call_timeout() -> float:
+    """Seconds a ``tools/call`` may wait: the agent's per-tool limit, less a margin."""
+    # Imported here: gaia.agents imports gaia.mcp, not the other way round.
+    from gaia.agents.base.agent import tool_execution_timeout
+
+    return max(tool_execution_timeout() - _TOOL_CALL_MARGIN_S, 1.0)
+
 
 # JSON-RPC "method not found": the reply to a request this client can't serve.
 _METHOD_NOT_FOUND = -32601
@@ -152,13 +169,19 @@ class StdioTransport(MCPTransport):
         if not tokens:
             return "?"
         names = [os.path.basename(tokens[0])]
-        target = next(
-            (t for t in tokens[1:] if not t.startswith("-") and "=" not in t), None
-        )
-        if target is not None:
+        target = None
+        for token in tokens[1:]:
+            if token.lower() in _INLINE_CODE_FLAGS:
+                target = "<inline code>"
+                break
+            if not token.startswith("-") and "=" not in token:
+                target = token
+                break
+        if target is not None and target != "<inline code>":
             # ``@scope/server`` is a package name; a path is shown by its file.
             if not target.startswith("@"):
                 target = os.path.basename(target.rstrip("/\\")) or target
+        if target is not None:
             names.append(target)
         return " ".join(names)[:120]
 
@@ -169,7 +192,7 @@ class StdioTransport(MCPTransport):
         ``send_request`` waits on the queue instead. Draining stderr also stops
         a chatty server from filling the pipe and blocking mid-write.
         """
-        self._stdout_lines = queue.Queue()
+        self._stdout_lines = queue.Queue(maxsize=_STDOUT_QUEUE_LINES)
         self._stderr_tail = collections.deque(maxlen=_STDERR_TAIL_LINES)
         threading.Thread(
             target=self._pump_stdout,
@@ -271,6 +294,9 @@ class StdioTransport(MCPTransport):
                 # threads (e.g. after loading native extensions via
                 # LemonadeManager) crashes the child with SIGSEGV on macOS.
                 close_fds=False,
+                # Its own session on POSIX, so disconnect() can stop the
+                # children too (``npx`` runs the real server as one).
+                **({} if sys.platform == "win32" else {"start_new_session": True}),
                 **windows_hidden_popen_kwargs(),
             )
 
@@ -309,6 +335,9 @@ class StdioTransport(MCPTransport):
                 if stderr:
                     logger.debug(f"Server stderr before disconnect:\n{stderr}")
 
+            # npx and uvx run the real server as a child, which terminate()
+            # alone would leave running, holding our pipes open.
+            self._kill_children()
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
@@ -324,6 +353,31 @@ class StdioTransport(MCPTransport):
 
         finally:
             self._process = None
+
+    def _kill_children(self) -> None:
+        """Stop every process the server started, before stopping the server."""
+        pid = self._process.pid
+        if not isinstance(pid, int):  # a test double
+            return
+        try:
+            if sys.platform == "win32":
+                subprocess.run(  # nosec B603 B607 - fixed argv, our own child's pid
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    check=False,
+                    timeout=15,
+                    **windows_hidden_popen_kwargs(),
+                )
+            else:
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except (OSError, subprocess.SubprocessError) as e:
+            # Already gone, or unreachable; terminate()/kill() still follow.
+            logger.warning(
+                "Could not stop the children of MCP server '%s' (PID %s): %s",
+                self.label,
+                pid,
+                e,
+            )
 
     @staticmethod
     def _format_exit_code(exit_code: int) -> str:
@@ -409,7 +463,7 @@ class StdioTransport(MCPTransport):
             method: JSON-RPC method name
             params: Optional parameters dictionary
             timeout: Seconds to wait for the reply. Defaults to
-                ``self.timeout``, or ``TOOL_CALL_TIMEOUT_S`` for ``tools/call``
+                ``self.timeout``, or ``tool_call_timeout()`` for ``tools/call``
                 when that is longer.
 
         Returns:
@@ -434,17 +488,13 @@ class StdioTransport(MCPTransport):
         if timeout is not None:
             wait_s = timeout
         elif method == "tools/call":
-            wait_s = max(self.timeout, TOOL_CALL_TIMEOUT_S)
+            wait_s = max(self.timeout, tool_call_timeout())
         else:
             wait_s = self.timeout
         # One deadline covers waiting for the lock and for the reply.
         deadline = time.monotonic() + wait_s
 
-        if not self._request_lock.acquire(timeout=max(wait_s, 0)):
-            raise TimeoutError(
-                f"MCP server '{self.label}' was still busy with another request "
-                f"after {wait_s:g}s, so '{method}' was never sent."
-            )
+        self._take_request_lock(method, wait_s, deadline)
         try:
             request_id = self._request_id
             self._request_id += 1
@@ -458,7 +508,7 @@ class StdioTransport(MCPTransport):
             if self.debug:
                 logger.debug(f"Sending request: {json.dumps(request, indent=2)}")
 
-            self._write(proc, request)
+            self._write(proc, request, deadline)
             try:
                 response = self._await_reply(proc, request_id, method, wait_s, deadline)
             except (TimeoutError, ToolCancelled) as e:
@@ -472,17 +522,67 @@ class StdioTransport(MCPTransport):
         finally:
             self._request_lock.release()
 
-    def _write(self, proc: subprocess.Popen, message: Dict[str, Any]) -> None:
-        try:
-            proc.stdin.write(json.dumps(message) + "\n")
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError, ValueError) as e:
+    def _take_request_lock(self, method: str, wait_s: float, deadline: float) -> None:
+        """Wait for the request in flight to finish, honouring Stop and the deadline."""
+        while not self._request_lock.acquire(timeout=_POLL_INTERVAL_S):
+            if tool_cancelled():
+                raise ToolCancelled(
+                    f"Stopped waiting to send '{method}' to MCP server "
+                    f"'{self.label}': the tool call was cancelled."
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"MCP server '{self.label}' was still busy with another "
+                    f"request after {wait_s:g}s, so '{method}' was never sent."
+                )
+
+    def _write(
+        self,
+        proc: subprocess.Popen,
+        message: Dict[str, Any],
+        deadline: Optional[float] = None,
+        honour_cancel: bool = True,
+    ) -> None:
+        """Write one message; a server that stops reading can't block us for good.
+
+        The write runs on a helper thread because a pipe write can't time out.
+        One that doesn't finish by *deadline* has left a partial message on
+        the pipe, so the server is stopped: nothing after it could be framed.
+        """
+        payload = json.dumps(message) + "\n"
+        outcome: Dict[str, BaseException] = {}
+
+        def _send() -> None:
+            try:
+                proc.stdin.write(payload)
+                proc.stdin.flush()
+            except BaseException as e:  # noqa: BLE001 — re-raised below
+                outcome["error"] = e
+
+        writer = threading.Thread(target=_send, name="mcp-stdin", daemon=True)
+        writer.start()
+        end = time.monotonic() + self.timeout if deadline is None else deadline
+        while writer.is_alive():
+            writer.join(_POLL_INTERVAL_S)
+            cancelled = honour_cancel and tool_cancelled()
+            if writer.is_alive() and (cancelled or time.monotonic() >= end):
+                why = "cancelled" if cancelled else "timed out"
+                self.disconnect()
+                raise (ToolCancelled if why == "cancelled" else TimeoutError)(
+                    f"Writing to MCP server '{self.label}' {why}: it stopped "
+                    "reading its input, so it was stopped. Reconnect it."
+                )
+        error = outcome.get("error")
+        if error is None:
+            return
+        if isinstance(error, (BrokenPipeError, OSError, ValueError)):
             # Process likely died - include stderr in the error
             if proc.poll() is not None:
-                raise self._process_died_error() from e
+                raise self._process_died_error() from error
             raise RuntimeError(
                 f"MCP server '{self.label}' closed its input unexpectedly"
-            ) from e
+            ) from error
+        raise error
 
     def _cancel_on_server(
         self, proc: subprocess.Popen, request_id: int, reason: str
@@ -496,8 +596,10 @@ class StdioTransport(MCPTransport):
                     "method": "notifications/cancelled",
                     "params": {"requestId": request_id, "reason": reason[:200]},
                 },
+                deadline=time.monotonic() + 2,
+                honour_cancel=False,
             )
-        except RuntimeError as e:
+        except (RuntimeError, TimeoutError) as e:
             # The caller is already raising the reason it gave up.
             logger.warning(
                 "Could not cancel request %s on MCP server '%s': %s",
