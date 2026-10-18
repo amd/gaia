@@ -24,6 +24,8 @@ _PRELUDE = textwrap.dedent("""
         sys.stdout.flush()
     for line in sys.stdin:
         req = json.loads(line)
+        if "id" not in req:  # a notification, e.g. notifications/cancelled
+            continue
     """)
 
 
@@ -68,7 +70,7 @@ def test_server_that_never_replies_times_out_with_its_name(tmp_path):
     assert isinstance(box.get("exc"), TimeoutError), box
     assert elapsed < 5
     message = str(box["exc"])
-    assert "stub_server.py" in message
+    assert "python" in message and "stub_server.py" in message
     assert "tools/list" in message
     assert "1s" in message
 
@@ -192,3 +194,83 @@ def test_server_exit_mid_request_reports_its_stderr(tmp_path):
     assert isinstance(box.get("exc"), RuntimeError), box
     assert "exit code: 3" in str(box["exc"])
     assert "token expired" in str(box["exc"])
+
+
+def test_a_parse_error_without_an_id_is_reported_not_waited_out(tmp_path):
+    script = _stub(
+        tmp_path,
+        """
+        send({"jsonrpc": "2.0", "id": None,
+              "error": {"code": -32700, "message": "Parse error"}})
+        """,
+    )
+    transport = _transport(script, timeout=30)
+    try:
+        box, elapsed = _call_with_watchdog(lambda: transport.send_request("tools/list"))
+    finally:
+        transport.disconnect()
+
+    assert isinstance(box.get("exc"), RuntimeError), box
+    assert "Parse error" in str(box["exc"])
+    assert elapsed < 5
+
+
+def test_a_timed_out_request_is_cancelled_on_the_server(tmp_path):
+    log = tmp_path / "seen.jsonl"
+    # Logs every line it reads, notifications included, and never replies.
+    script = tmp_path / "silent_logger.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import sys
+            for line in sys.stdin:
+                with open({str(log)!r}, "a") as f:
+                    f.write(line)
+            """
+        )
+    )
+    transport = _transport(script, timeout=0.5)
+    try:
+        with pytest.raises(TimeoutError):
+            transport.send_request("slow")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "cancelled" not in log.read_text():
+            time.sleep(0.05)
+    finally:
+        transport.disconnect()
+
+    import json as _json
+
+    seen = [_json.loads(x) for x in log.read_text().splitlines()]
+    assert seen[-1]["method"] == "notifications/cancelled"
+    assert seen[-1]["params"]["requestId"] == seen[0]["id"]
+
+
+def test_tool_calls_get_the_agents_tool_budget_not_the_handshake_default():
+    t = StdioTransport("npx", args=["-y", "@scope/server"])
+    # No process: only the budget arithmetic is under test.
+    from gaia.mcp.client.transports import stdio
+
+    assert t.timeout < stdio.TOOL_CALL_TIMEOUT_S
+    assert stdio.TOOL_CALL_TIMEOUT_S == 180
+
+
+def test_disconnect_mid_request_reports_the_disconnect(tmp_path):
+    script = _stub(tmp_path, "time.sleep(3600)")
+    transport = _transport(script, timeout=30)
+    threading.Timer(0.5, transport.disconnect).start()
+
+    box, elapsed = _call_with_watchdog(lambda: transport.send_request("tools/list"))
+
+    assert isinstance(box.get("exc"), RuntimeError), box
+    assert "disconnected" in str(box["exc"]) or "died" in str(box["exc"])
+    assert elapsed < 10
+
+
+def test_the_error_label_names_the_server_without_its_arguments():
+    t = StdioTransport(
+        "C:/tools/npx.cmd", args=["-y", "@scope/server", "--token", "s3cret"]
+    )
+    assert t.label == "npx.cmd @scope/server"
+    legacy = StdioTransport("uvx my-server --api-key=s3cret")
+    assert "s3cret" not in legacy.label

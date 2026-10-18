@@ -34,6 +34,10 @@ _POLL_INTERVAL_S = 0.25
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
 
+# A tool call may run as long as the agent's own per-tool limit
+# (DEFAULT_TOOL_TIMEOUT in gaia.agents.base.agent).
+TOOL_CALL_TIMEOUT_S = 180
+
 # JSON-RPC "method not found": the reply to a request this client can't serve.
 _METHOD_NOT_FOUND = -32601
 
@@ -140,11 +144,23 @@ class StdioTransport(MCPTransport):
 
     @property
     def label(self) -> str:
-        """The server's command line, for naming it in errors."""
-        program = os.path.basename(self.command) if self.args else self.command
-        text = " ".join([program] + list(self.args or []))
-        # Keep the tail: the package or script name is what tells servers apart.
-        return text if len(text) <= 120 else "..." + text[-117:]
+        """The program and the package or script it runs, for errors.
+
+        Never the full command line: arguments can carry tokens.
+        """
+        tokens = [self.command] + list(self.args) if self.args else self.command.split()
+        if not tokens:
+            return "?"
+        names = [os.path.basename(tokens[0])]
+        target = next(
+            (t for t in tokens[1:] if not t.startswith("-") and "=" not in t), None
+        )
+        if target is not None:
+            # ``@scope/server`` is a package name; a path is shown by its file.
+            if not target.startswith("@"):
+                target = os.path.basename(target.rstrip("/\\")) or target
+            names.append(target)
+        return " ".join(names)[:120]
 
     def _start_readers(self) -> None:
         """Drain stdout into a queue and stderr into a tail buffer.
@@ -386,30 +402,42 @@ class StdioTransport(MCPTransport):
         Notifications and replies to earlier, timed-out requests are skipped;
         a request from the server gets a "method not found" error back so it
         doesn't wait on us. The wait ends early once the agent abandons the
-        tool call (``tool_cancelled()``).
+        tool call (``tool_cancelled()``), and a request given up on is
+        cancelled on the server with ``notifications/cancelled``.
 
         Args:
             method: JSON-RPC method name
             params: Optional parameters dictionary
-            timeout: Seconds to wait for the reply; defaults to ``self.timeout``
+            timeout: Seconds to wait for the reply. Defaults to
+                ``self.timeout``, or ``TOOL_CALL_TIMEOUT_S`` for ``tools/call``
+                when that is longer.
 
         Returns:
             dict: JSON-RPC response
 
         Raises:
-            RuntimeError: If not connected or process died
+            RuntimeError: If not connected, the process died, or the server
+                rejected the request without naming it
             TimeoutError: If the server doesn't reply in time
             ToolCancelled: If the agent stopped waiting for this tool call
             ValueError: If the server writes something other than JSON-RPC
         """
-        if self._process is None:
+        # One handle for the whole request: disconnect() may clear the attribute.
+        proc = self._process
+        if proc is None:
             raise RuntimeError("Transport not connected")
 
         # Check if process is still alive
-        if self._process.poll() is not None:
+        if proc.poll() is not None:
             raise self._process_died_error()
 
-        wait_s = self.timeout if timeout is None else timeout
+        if timeout is not None:
+            wait_s = timeout
+        elif method == "tools/call":
+            wait_s = max(self.timeout, TOOL_CALL_TIMEOUT_S)
+        else:
+            wait_s = self.timeout
+        # One deadline covers waiting for the lock and for the reply.
         deadline = time.monotonic() + wait_s
 
         if not self._request_lock.acquire(timeout=max(wait_s, 0)):
@@ -430,8 +458,12 @@ class StdioTransport(MCPTransport):
             if self.debug:
                 logger.debug(f"Sending request: {json.dumps(request, indent=2)}")
 
-            self._write(request)
-            response = self._await_reply(request_id, method, wait_s, deadline)
+            self._write(proc, request)
+            try:
+                response = self._await_reply(proc, request_id, method, wait_s, deadline)
+            except (TimeoutError, ToolCancelled) as e:
+                self._cancel_on_server(proc, request_id, str(e))
+                raise
 
             if self.debug:
                 logger.debug(f"Received response: {json.dumps(response, indent=2)}")
@@ -440,20 +472,47 @@ class StdioTransport(MCPTransport):
         finally:
             self._request_lock.release()
 
-    def _write(self, message: Dict[str, Any]) -> None:
+    def _write(self, proc: subprocess.Popen, message: Dict[str, Any]) -> None:
         try:
-            self._process.stdin.write(json.dumps(message) + "\n")
-            self._process.stdin.flush()
-        except (BrokenPipeError, OSError) as e:
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as e:
             # Process likely died - include stderr in the error
-            if self._process.poll() is not None:
+            if proc.poll() is not None:
                 raise self._process_died_error() from e
             raise RuntimeError(
                 f"MCP server '{self.label}' closed its input unexpectedly"
             ) from e
 
+    def _cancel_on_server(
+        self, proc: subprocess.Popen, request_id: int, reason: str
+    ) -> None:
+        """Tell the server to drop a request nobody is waiting for any more."""
+        try:
+            self._write(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": request_id, "reason": reason[:200]},
+                },
+            )
+        except RuntimeError as e:
+            # The caller is already raising the reason it gave up.
+            logger.warning(
+                "Could not cancel request %s on MCP server '%s': %s",
+                request_id,
+                self.label,
+                e,
+            )
+
     def _await_reply(
-        self, request_id: int, method: str, wait_s: float, deadline: float
+        self,
+        proc: subprocess.Popen,
+        request_id: int,
+        method: str,
+        wait_s: float,
+        deadline: float,
     ) -> Dict[str, Any]:
         while True:
             if tool_cancelled():
@@ -472,10 +531,13 @@ class StdioTransport(MCPTransport):
             try:
                 line = self._stdout_lines.get(timeout=min(remaining, _POLL_INTERVAL_S))
             except queue.Empty:
+                # A child still holding the pipe open hides EOF; poll as well.
+                if proc.poll() is not None and self._stdout_lines.empty():
+                    raise self._closed_error(proc, method)
                 continue
 
             if line is _EOF:
-                raise self._closed_error()
+                raise self._closed_error(proc, method)
             line = line.strip()
             if not line:
                 continue
@@ -494,8 +556,15 @@ class StdioTransport(MCPTransport):
                 )
 
             if "method" in message:
-                self._handle_server_message(message)
+                self._handle_server_message(proc, message)
                 continue
+            if message.get("id") is None and "error" in message:
+                # A parse error has no id to match; it answers what we just sent.
+                error = message["error"]
+                detail = error.get("message") if isinstance(error, dict) else error
+                raise RuntimeError(
+                    f"MCP server '{self.label}' rejected '{method}': {detail}"
+                )
             if message.get("id") != request_id:
                 logger.debug(
                     "MCP server '%s': dropping reply to id %r while waiting on %r",
@@ -506,7 +575,9 @@ class StdioTransport(MCPTransport):
                 continue
             return message
 
-    def _handle_server_message(self, message: Dict[str, Any]) -> None:
+    def _handle_server_message(
+        self, proc: subprocess.Popen, message: Dict[str, Any]
+    ) -> None:
         """Answer a server request with an error; log a notification."""
         if "id" not in message:
             logger.debug(
@@ -514,6 +585,7 @@ class StdioTransport(MCPTransport):
             )
             return
         self._write(
+            proc,
             {
                 "jsonrpc": "2.0",
                 "id": message["id"],
@@ -522,13 +594,18 @@ class StdioTransport(MCPTransport):
                     "message": "GAIA's MCP client does not support "
                     f"'{message['method']}'",
                 },
-            }
+            },
         )
 
-    def _closed_error(self) -> RuntimeError:
-        """The error for a server whose stdout reached EOF."""
+    def _closed_error(self, proc: subprocess.Popen, method: str) -> RuntimeError:
+        """The error for a server whose stdout reached EOF mid-request."""
+        if self._process is not proc:
+            return RuntimeError(
+                f"MCP server '{self.label}' was disconnected while answering "
+                f"'{method}'."
+            )
         try:
-            self._process.wait(timeout=1)
+            proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
             return RuntimeError(
                 f"MCP server '{self.label}' closed its output but is still "

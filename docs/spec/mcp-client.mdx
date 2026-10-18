@@ -1048,14 +1048,18 @@ def send_request(
     bounded and a chatty stderr can't block the server. Only the reply whose
     id matches is returned: notifications and late replies to timed-out
     requests are skipped, and a request from the server gets a JSON-RPC
-    "method not found" (-32601) error back. The wait also ends once the agent
-    abandons the tool call (`tool_cancelled()`).
+    "method not found" (-32601) error back, and an error reply with a null id
+    (a parse error) is raised at once. The wait also ends once the agent
+    abandons the tool call (`tool_cancelled()`); a request given up on is
+    cancelled on the server with `notifications/cancelled`. Errors name the
+    server by its program and package or script, never its full arguments.
 
     Args:
         method (str): JSON-RPC method name
         params (Dict[str, Any], optional): Parameters dictionary
         timeout (float, optional): Seconds to wait for the reply; defaults
-            to the transport's `timeout`
+            to the transport's `timeout`, or 180 s (the agent's per-tool
+            limit) for `tools/call` when that is longer
 
     Returns:
         Dict[str, Any]: JSON-RPC response
