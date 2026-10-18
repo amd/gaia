@@ -694,7 +694,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolLabel}?`,
                         message: isPathAccess
                             ? pathAccessQuestion(event.args, followUp)
-                            : `GAIA is asking before ${toolLabel}.`,
+                            : `GAIA needs your OK before ${toolLabel}.`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,
