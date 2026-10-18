@@ -115,21 +115,39 @@ def _response(status, body):
 
 
 def test_chat_retries_a_shared_cache_collision():
-    """The colliding request is sent again once the other one has finished,
-    instead of the turn failing as "conversation too long"."""
+    """The colliding request is sent again, unchanged and still under the
+    model's lease, instead of the turn failing as "conversation too long"."""
     client = lc.LemonadeClient(base_url="http://127.0.0.1:1/api/v1", verbose=False)
     client._retry_sleep = lambda _s: None
     ok = json.dumps({"choices": [{"message": {"content": "hi"}}]})
-    replies = [_response(500, SHARED_BODY), _response(200, ok)]
+    replies = iter([_response(500, SHARED_BODY), _response(200, ok)])
+    held = {"lease": False}
+    sent = []
+
+    @contextmanager
+    def lease(_model, **_kwargs):
+        held["lease"] = True
+        try:
+            yield
+        finally:
+            held["lease"] = False
+
+    def post(*_args, **kwargs):
+        sent.append((held["lease"], json.dumps(kwargs.get("json"), sort_keys=True)))
+        return next(replies)
+
     with (
-        patch.object(lc.requests, "post", side_effect=replies) as post,
+        patch.object(lc.requests, "post", side_effect=post),
+        patch.object(client, "_model_slot_lease", side_effect=lease),
         patch.object(lc.LemonadeClient, "_server_load_in_progress", return_value=None),
     ):
         result = client.chat_completions(
             MODEL, [{"role": "user", "content": "hi"}], auto_download=False
         )
     assert result["choices"][0]["message"]["content"] == "hi"
-    assert post.call_count == 2
+    assert len(sent) == 2
+    assert all(under_lease for under_lease, _ in sent)
+    assert sent[0][1] == sent[1][1]
     assert client.last_request_retries == 1
 
 
