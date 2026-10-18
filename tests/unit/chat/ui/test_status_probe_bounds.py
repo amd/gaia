@@ -70,3 +70,29 @@ def test_a_server_that_never_answers_is_reported_in_bounded_time(
     assert time.monotonic() - started < 5
     assert body["lemonade_probe"] == "timed_out"
     assert "did not answer" in body["lemonade_error"]
+
+
+@pytest.mark.allow_network
+def test_slow_extra_probes_do_not_make_a_running_server_look_down(
+    status_with, monkeypatch
+):
+    monkeypatch.setattr(system_mod, "_STATUS_PROBE_BUDGET_S", 0.5)
+
+    class _Ok:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"model_loaded": "Gemma-4-E4B-it-GGUF"}
+
+    async def get(url):
+        if url.endswith("/health"):
+            return _Ok()
+        await asyncio.sleep(30)
+
+    body = status_with(get).json()
+
+    assert body["lemonade_running"] is True
+    assert body["lemonade_probe"] == "ok"
+    assert body["lemonade_error"] is None
+    assert any("skipped" in w for w in body["probe_warnings"])

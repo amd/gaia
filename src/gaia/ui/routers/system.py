@@ -549,9 +549,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         cloud_model_provider(status.default_model_name)
     )
 
-    # Check Lemonade Server
-    # Use a generous timeout (10s) because when the LLM is handling many
-    # parallel requests it may take a while to respond to the health check.
+    # Check Lemonade Server. Each call has a generous timeout (the health
+    # check 10 s: a busy LLM answers it slowly); _STATUS_PROBE_BUDGET_S
+    # bounds them all together.
     import httpx
 
     async def _probe_lemonade() -> None:
@@ -797,15 +797,25 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         await asyncio.wait_for(_probe_lemonade(), _STATUS_PROBE_BUDGET_S)
         status.lemonade_probe = "ok" if status.lemonade_running else "error"
     except asyncio.TimeoutError:
-        logger.warning(
-            "system status: Lemonade did not answer within %gs",
-            _STATUS_PROBE_BUDGET_S,
-        )
-        status.lemonade_probe = "timed_out"
-        status.lemonade_error = (
-            f"Lemonade did not answer within {_STATUS_PROBE_BUDGET_S:g} s; "
-            "it may be busy loading a model."
-        )
+        if status.lemonade_running:
+            # Health answered; only the extra probes ran out of time.
+            status.lemonade_probe = "ok"
+            _probe_failed(
+                status,
+                "lemonade",
+                f"Some model-server details took over {_STATUS_PROBE_BUDGET_S:g} s "
+                "and were skipped",
+            )
+        else:
+            logger.warning(
+                "system status: Lemonade did not answer within %gs",
+                _STATUS_PROBE_BUDGET_S,
+            )
+            status.lemonade_probe = "timed_out"
+            status.lemonade_error = (
+                f"Lemonade did not answer within {_STATUS_PROBE_BUDGET_S:g} s; "
+                "it may be busy loading a model."
+            )
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
         # Nothing answered the connection: a confirmed outage, so keep the
         # actionable "not responding" banner rather than an ambiguous probe.
