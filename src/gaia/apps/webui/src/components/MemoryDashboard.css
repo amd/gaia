@@ -2002,5 +2002,10 @@
 }
 @media (max-width: 600px) {
     .mem-about-add { flex-wrap: wrap; }
+    .mem-about-add .mem-input { flex-basis: 100%; }
+    .mem-about-add .mem-select { flex: 1; }
     .mem-about-item { flex-direction: column; }
+    /* Four tabs don't fit a phone; let the bar scroll instead of clipping. */
+    .mem-tab-bar { overflow-x: auto; padding: 0 12px; }
+    .mem-tab-btn { flex-shrink: 0; white-space: nowrap; padding: 10px 12px; }
 }
