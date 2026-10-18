@@ -353,6 +353,9 @@ def writing_tool_registry(handler=None):
                     raise TurnStopped()
                 if tool_registry_lock.acquire(blocking=False):
                     break
+                # Time spent in line for the model isn't time someone held
+                # the setup lock: the limit restarts from here.
+                deadline = _time.monotonic() + _REGISTRY_WAIT_LIMIT_S
                 stepped_away = slot.step_away()
                 continue
             if handler is not None and handler.cancelled.is_set():

@@ -535,3 +535,59 @@ async def test_waiting_for_agent_setup_never_deadlocks_with_the_model_holder(
     assert handler_b.turn_slot.held
     handler_b.turn_slot.release()
     assert not queue.locked()
+
+
+async def test_time_spent_waiting_for_the_model_is_not_setup_time(monkeypatch):
+    """Back from a long wait in line, one brief collision on the setup lock
+    must not read as "another chat has been setting up for too long"."""
+    from gaia.ui.turn_queue import TurnSlot
+
+    monkeypatch.setattr(helpers, "_REGISTRY_WAIT_LIMIT_S", 1.0)
+    loop = asyncio.get_running_loop()
+    queue = TurnQueue()
+    monkeypatch.setattr(helpers, "tool_registry_lock", threading.RLock())
+    lock = helpers.tool_registry_lock
+    handler = SimpleNamespace(
+        turn_slot=TurnSlot(queue, "chat-b", loop),
+        cancelled=threading.Event(),
+        _emit=lambda _event: None,
+    )
+    await handler.turn_slot.acquire()
+
+    release_first = threading.Event()
+    held = threading.Event()
+
+    def other_build(wait_for):
+        with lock:
+            held.set()
+            wait_for.wait(10)
+
+    threading.Thread(target=other_build, args=(release_first,), daemon=True).start()
+    assert await asyncio.to_thread(held.wait, 5)
+
+    built, failure = threading.Event(), []
+
+    def chat_b_builds():
+        try:
+            with helpers.writing_tool_registry(handler):
+                built.set()
+        except Exception as exc:  # recorded for the assertion below
+            failure.append(exc)
+
+    threading.Thread(target=chat_b_builds, daemon=True).start()
+    await asyncio.sleep(0.2)
+    await queue.acquire("long-turn")  # B waits in line for 1.5 s, past the limit.
+    release_first.set()
+    await asyncio.sleep(1.5)
+    # Just as B comes back, another build briefly holds the lock.
+    held.clear()
+    release_second = threading.Event()
+    threading.Thread(target=other_build, args=(release_second,), daemon=True).start()
+    assert await asyncio.to_thread(held.wait, 5)
+    queue.release()
+    await asyncio.sleep(0.3)
+    release_second.set()
+
+    assert await asyncio.to_thread(built.wait, 5), failure
+    assert not failure
+    handler.turn_slot.release()
