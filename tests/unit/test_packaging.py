@@ -327,7 +327,7 @@ class TestAgentWheelExtras:
     """Regression guard for #2240.
 
     The gaia-agent-* wheels (chat, email, code, ...) aren't published to
-    PyPI yet (publish_agents.yml's publish job is gated off). An 'agents'
+    PyPI. An 'agents'
     extra -- or any 'agent-<id>' extra -- naming one of those packages
     makes that *whole* amd-gaia release unsatisfiable, so pip/uv silently
     backtrack past it to the newest older release that doesn't declare the

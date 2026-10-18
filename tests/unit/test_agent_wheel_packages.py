@@ -1,24 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Guards for the agent-wheel PyPI publish path (issue #1179).
+"""Guards for the agent-wheel list (``setup.py``'s ``AGENT_WHEEL_PACKAGES``).
 
-These tests do *not* touch the network or PyPI. They assert the static
-invariants that make dual distribution (R2 + PyPI) correct and drift-proof:
-
-* the production-agent list (``setup.py``'s ``AGENT_WHEEL_PACKAGES``) maps
-  cleanly to packages under ``hub/agents/<id>/python/`` (via
-  ``util/list_agent_packages.py``);
-* every such wheel declares the ``gaia-agent-<id>`` name and an ``amd-gaia``
-  framework dependency (issue #1179 scope item 3), pinned at the same floor the
-  agent manifest advertises as ``min_gaia_version``;
-* the publish workflow derives its matrix from that same list, so a new agent
-  added to ``AGENT_WHEEL_PACKAGES`` is published automatically with no second
-  list to sync. That list is a plain module-level constant rather than an
-  ``extras_require`` entry -- see #2240 and the module docstring on
-  ``util/list_agent_packages.py`` for why.
-
-The live dual-publish logic is covered by ``test_hub_publisher.py``; the CLI
-wiring by ``test_cli_agent.py``.
+These tests do *not* touch the network. They assert that the list read by
+``util/list_agent_packages.py`` (used by ``build_agent_package.yml`` and
+``util/publish_agents_to_hub.py``) maps cleanly to packages under
+``hub/agents/<id>/python/``, and that every such wheel declares the
+``gaia-agent-<id>`` name and an ``amd-gaia`` dependency pinned at the floor the
+agent manifest advertises as ``min_gaia_version``.
 """
 
 from __future__ import annotations
@@ -39,7 +28,6 @@ else:  # setup.py pins tomli for 3.10, which has no stdlib tomllib.
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UTIL_DIR = REPO_ROOT / "util"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish_agents.yml"
 
 # Infrastructure agents publish as wheels but are loaded by class-path from the
 # API server, not discovered via the gaia.agent registry entry point (#1102).
@@ -177,26 +165,6 @@ def test_pyproject_declares_gaia_agent_entry_point(packages):
         assert (
             'entry-points."gaia.agent"' in pyproject
         ), f'{p.dist_name}: missing [project.entry-points."gaia.agent"]'
-
-
-def test_publish_workflow_exists_and_uses_pypi_action():
-    """The CI workflow publishes via gh-action-pypi-publish using OIDC."""
-    assert WORKFLOW.exists(), "publish_agents.yml workflow is missing"
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "pypa/gh-action-pypi-publish" in text
-    # OIDC trusted publishing — no stored token (#1570). The action mints a
-    # short-lived id-token PyPI exchanges for an upload token.
-    assert "id-token: write" in text
-    # PyPI-native immutability rather than custom overwrite logic (#1179).
-    assert "skip-existing: true" in text
-    # Matrix is generated from the helper, not a hand-maintained second list.
-    assert "list_agent_packages.py --format matrix" in text
-
-
-def test_publish_workflow_only_publishes_on_tags():
-    """Publishing is gated on a v* tag; the build job runs on every push/PR."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "startsWith(github.ref, 'refs/tags/v')" in text
 
 
 def test_helper_matrix_format_matches_packages(packages):
