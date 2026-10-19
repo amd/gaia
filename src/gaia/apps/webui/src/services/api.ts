@@ -1133,6 +1133,18 @@ export async function openFileOrFolder(path: string, reveal: boolean = true): Pr
     return apiFetch('POST', '/files/open', { path, reveal });
 }
 
+/** Open a file in its default app. The server refuses scripts and programs. */
+export async function openFileInApp(path: string): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, launch: true });
+}
+
+/** Whether each path still exists and when it last changed (unchecked outside home). */
+export async function getFileStatus(paths: string[]): Promise<{
+    files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;
+}> {
+    return apiFetch('POST', '/files/status', { paths });
+}
+
 /** Upload a file (image/document) to the server. */
 export async function uploadFile(file: File): Promise<{
     filename: string;
