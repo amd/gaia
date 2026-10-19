@@ -58,8 +58,9 @@ turns; saved evidence remains intact. Switching to a model without native tool
 calling replays recorded calls and results as text.
 
 For Fireworks, AMD gateway, and catalog-discovered cloud models, history admission uses a conservative 64K
-budget, independent of local device settings and `GAIA_CTX_SIZE`; this is not
-a claim about the remote model’s actual context capacity. Claude uses its provider
+input budget, independent of local device settings and `GAIA_CTX_SIZE`; this is not
+a claim about the remote model’s actual context capacity. The answer is written into
+the provider's own window, so it takes nothing from those 64K. Claude uses its provider
 budget.
 
 With a cloud model selected, the model chip and the sidebar's location line name

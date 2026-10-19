@@ -284,8 +284,14 @@ def history_budget(agent: Any, query: str) -> int:
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
+    # A cloud model's 64K is an input budget: the reply is written into the
+    # provider's own, far larger window, so it takes nothing from history here.
     config = getattr(getattr(agent, "chat", None), "config", None)
-    output = getattr(config, "max_tokens", 8192)
+    output = (
+        0
+        if cloud and not getattr(agent, "_use_claude", False)
+        else getattr(config, "max_tokens", 8192)
+    )
     return min(ctx // 2, ctx - overhead - output - 2048)
 
 

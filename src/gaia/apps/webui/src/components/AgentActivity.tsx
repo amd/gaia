@@ -109,6 +109,11 @@ function getToolMeta(toolName?: string): ToolMeta {
     return TOOL_META[toolName] || DEFAULT_TOOL_META;
 }
 
+/** What the live line says while a tool runs: the step row's own wording, never the raw tool id. */
+export function toolActiveLabel(toolName?: string): string {
+    return getToolMeta(toolName).activeLabel;
+}
+
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
 function toolFallbackLabel(step: AgentStep): string {
     const meta = getToolMeta(step.tool);
