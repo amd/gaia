@@ -172,3 +172,50 @@ def test_a_real_exclusive_lock_raises_and_keeps_the_index(index_with_bookmark):
         holder.close()
 
     assert _bookmarks(index_with_bookmark) == ["keep me"]
+
+
+def test_damaged_table_pages_behind_an_intact_header_are_rebuilt(tmp_path):
+    db_path = tmp_path / "file_index.db"
+    service = FileSystemIndexService(db_path=str(db_path))
+    for i in range(200):
+        service.add_bookmark(str(tmp_path / f"b{i}"), label="x" * 50)
+    service.close_db()
+    checkpoint = sqlite3.connect(str(db_path))
+    checkpoint.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    checkpoint.close()
+    data = bytearray(db_path.read_bytes())
+    data[4096:] = b"\xab" * (len(data) - 4096)  # page 1 (header, schema) intact
+    db_path.write_bytes(bytes(data))
+
+    rebuilt = FileSystemIndexService(db_path=str(db_path))
+    try:
+        assert rebuilt.list_bookmarks() == []
+        assert rebuilt._check_integrity() is True
+    finally:
+        rebuilt.close_db()
+
+
+def _coded(cls, code):
+    exc = cls(f"sqlite error {code}")
+    exc.sqlite_errorcode = code
+    return exc
+
+
+@pytest.mark.parametrize(
+    "exc,corrupt",
+    [
+        (_coded(sqlite3.DatabaseError, 11), True),  # SQLITE_CORRUPT
+        (_coded(sqlite3.DatabaseError, 267), True),  # SQLITE_CORRUPT_VTAB
+        (_coded(sqlite3.DatabaseError, 26), True),  # SQLITE_NOTADB
+        (_coded(sqlite3.OperationalError, 5), False),  # SQLITE_BUSY
+        (_coded(sqlite3.OperationalError, 266), False),  # SQLITE_IOERR_READ
+        (_coded(sqlite3.OperationalError, 14), False),  # SQLITE_CANTOPEN
+        # The code decides, not the class.
+        (_coded(sqlite3.DatabaseError, 5), False),
+    ],
+    ids=["11", "267", "26", "5", "266", "14", "class-says-corrupt-code-says-busy"],
+)
+def test_corruption_is_decided_by_the_sqlite_error_code(exc, corrupt):
+    from gaia.filesystem.index import _is_corruption
+
+    assert _is_corruption(exc) is corrupt

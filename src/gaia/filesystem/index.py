@@ -207,8 +207,9 @@ class FileSystemIndexService(DatabaseMixin):
             )
             self._rebuild_db(resolved_path)
 
-        self._ensure_schema()
+        # Before the schema: damaged table pages fail there, before a rebuild.
         self._check_integrity()
+        self._ensure_schema()
 
         logger.info("FileSystemIndexService initialized: %s", resolved_path)
 

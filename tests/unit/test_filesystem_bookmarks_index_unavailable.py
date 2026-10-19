@@ -132,3 +132,82 @@ def test_an_agent_without_an_index_keeps_bookmarks_in_memory(config, tmp_path):
     assert "Bookmarked" in bookmark(action="add", path=str(tmp_path), label="t")
     assert str(tmp_path.resolve()) in agent._bookmarks
     assert '"t"' in bookmark(action="list")
+
+
+def _coded(cls, message, code):
+    exc = cls(message)
+    exc.sqlite_errorcode = code
+    return exc
+
+
+@pytest.mark.parametrize(
+    "exc,expect,never",
+    [
+        (_coded(sqlite3.OperationalError, "database is locked", 5), "try again", None),
+        (_coded(sqlite3.OperationalError, "locked", 6), "try again", None),
+        (
+            _coded(sqlite3.DatabaseError, "database disk image is malformed", 11),
+            "damaged",
+            "try again",
+        ),
+        (
+            _coded(sqlite3.OperationalError, "unable to open database file", 14),
+            "read and write",
+            "try again",
+        ),
+        (
+            _coded(sqlite3.OperationalError, "attempt to write a readonly db", 8),
+            "read and write",
+            "try again",
+        ),
+        (PermissionError("access denied"), "read and write", "try again"),
+    ],
+    ids=["busy", "locked", "corrupt", "cantopen", "readonly", "oserror"],
+)
+def test_the_advice_matches_why_the_index_wont_open(
+    monkeypatch, saved, exc, expect, never
+):
+    db_path, _ = saved
+
+    def fails(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(index_mod, "FileSystemIndexService", fails)
+    _, bookmark = _agent(_configured(db_path))
+
+    result = bookmark(action="list")
+
+    assert result.startswith("Error:")
+    assert str(db_path) in result
+    assert expect in result
+    if never:
+        assert never not in result
+
+
+def test_concurrent_calls_open_the_index_once(monkeypatch, saved):
+    import threading
+    import time
+
+    db_path, _ = saved
+    opened = []
+    real = FileSystemIndexService
+
+    def slow_open(*args, **kwargs):
+        time.sleep(0.2)
+        service = real(*args, **kwargs)
+        opened.append(service)
+        return service
+
+    monkeypatch.setattr(index_mod, "FileSystemIndexService", slow_open)
+    agent, _ = _agent(_configured(db_path))
+
+    threads = [threading.Thread(target=agent._bookmark_index) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    try:
+        assert len(opened) == 1
+    finally:
+        for service in opened:
+            service.close_db()

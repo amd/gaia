@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -101,6 +102,55 @@ class FileIndexUnavailableError(RuntimeError):
     """The configured file index exists but can't be opened right now."""
 
 
+# SQLite primary result codes (the low byte of an extended code).
+_SQLITE_PERM, _SQLITE_BUSY, _SQLITE_LOCKED, _SQLITE_READONLY = 3, 5, 6, 8
+_SQLITE_CORRUPT, _SQLITE_CANTOPEN, _SQLITE_NOTADB = 11, 14, 26
+
+
+def _sqlite_kind(exc: BaseException) -> str:
+    """``busy``, ``corrupt``, ``access`` or ``other`` for an open failure."""
+    if isinstance(exc, OSError):
+        return "access"
+    code = getattr(exc, "sqlite_errorcode", None)  # Python 3.11+
+    if code is not None:
+        primary = code & 0xFF
+        if primary in (_SQLITE_BUSY, _SQLITE_LOCKED):
+            return "busy"
+        if primary in (_SQLITE_CORRUPT, _SQLITE_NOTADB):
+            return "corrupt"
+        if primary in (_SQLITE_CANTOPEN, _SQLITE_READONLY, _SQLITE_PERM):
+            return "access"
+        return "other"
+    text = str(exc).lower()
+    if "locked" in text or "busy" in text:
+        return "busy"
+    if "malformed" in text or "not a database" in text:
+        return "corrupt"
+    if "unable to open" in text or "readonly" in text or "permission" in text:
+        return "access"
+    return "other"
+
+
+def _index_unavailable_message(db_path: str, exc: BaseException) -> str:
+    """A bookmark-tool error whose advice matches why the index won't open."""
+    head = f"Error: the file index at {db_path} can't be opened ({exc}). "
+    tail = " Nothing was changed."
+    kind = _sqlite_kind(exc)
+    if kind == "busy":
+        return head + "Another GAIA process is using it: try again in a moment." + tail
+    if kind == "corrupt":
+        return (
+            head + f"The file is damaged. Close GAIA and delete {db_path} (and any "
+            "-wal / -shm file beside it) to rebuild it; saved bookmarks in it "
+            "will be lost." + tail
+        )
+    if kind == "access":
+        return (
+            head + "Check that you can read and write this file and its folder." + tail
+        )
+    return head + "See the GAIA log for details." + tail
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -116,6 +166,9 @@ class FileSystemToolsMixin:
     _fs_index = None  # Optional FileSystemIndexService instance
     _path_validator = None  # Optional PathValidator instance
     _bookmarks: dict = None  # Per-instance; initialized in register_filesystem_tools()
+    _fs_index_open_lock = (
+        None  # Per-instance; initialized in register_filesystem_tools()
+    )
 
     def _bookmark_index(self):
         """The file index bookmarks live in, opening it if it failed earlier.
@@ -137,15 +190,15 @@ class FileSystemToolsMixin:
 
         from gaia.filesystem.index import FileSystemIndexService
 
-        try:
-            self._fs_index = FileSystemIndexService(db_path=db_path)
-        except (sqlite3.Error, OSError) as exc:
-            raise FileIndexUnavailableError(
-                f"Error: the file index at {db_path} can't be opened ({exc}), so "
-                "bookmarks can't be read or saved right now. Nothing was "
-                "changed. Another GAIA process may be using it: try again in "
-                "a moment."
-            ) from exc
+        with self._fs_index_open_lock or threading.Lock():
+            if self._fs_index is not None:
+                return self._fs_index
+            try:
+                self._fs_index = FileSystemIndexService(db_path=db_path)
+            except (sqlite3.Error, OSError) as exc:
+                raise FileIndexUnavailableError(
+                    _index_unavailable_message(db_path, exc)
+                ) from exc
         return self._fs_index
 
     def _validate_path(self, path: str) -> Path:
@@ -207,6 +260,8 @@ class FileSystemToolsMixin:
         # sentinel being shared across agents in the same process.
         if self._bookmarks is None:
             self._bookmarks = {}
+        if self._fs_index_open_lock is None:
+            self._fs_index_open_lock = threading.Lock()
 
         mixin = self  # Capture self for nested functions
 
