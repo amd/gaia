@@ -67,7 +67,10 @@ sessions:
       - user: "Big news: I accepted an offer at Brightline Health. I start May 1 as a staff engineer."
         assistant: "Congratulations, Maya! Want a checklist for wrapping up at Northwind?"
         extract:
+          # A careful model retires every fact the new job outdates, not just
+          # the one it rewrites; whether a real one does is the full suite's job.
           - {op: update, update_of: "works as a backend developer at Northwind", category: fact, content: "User works as a staff engineer at Brightline Health, starting May 1"}
+          - {op: update, update_of: "tech lead of the routing team at Northwind", category: fact, content: "User previously led the routing team at Northwind Logistics"}
       - user: "Yes please, and my last day at Northwind is April 24."
         assistant: "Checklist: hand over on-call, document the NATS plan, transfer repo ownership, say goodbye to Dale's team."
         extract:
@@ -225,4 +228,4 @@ probes:
     at: end
     kind: changed_fact
     stored: ["Toronto", "Brightline"]
-    not_stored: ["^User lives in Calgary$", "^User works as a backend developer at Northwind", "Calgary Marathon half"]
+    not_stored: ["^User lives in Calgary$", "^User works as a backend developer at Northwind", "Calgary Marathon half", "is tech lead of the routing team at Northwind"]

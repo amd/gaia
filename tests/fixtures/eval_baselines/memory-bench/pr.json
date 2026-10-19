@@ -561,6 +561,16 @@
       "key": "maya_moves_and_changes_jobs/no_stale_rows/not_stored:Calgary Marathon half"
     },
     {
+      "scenario": "maya_moves_and_changes_jobs",
+      "probe": "no_stale_rows",
+      "kind": "changed_fact",
+      "check": "not_stored",
+      "target": "is tech lead of the routing team at Northwind",
+      "passed": true,
+      "detail": "",
+      "key": "maya_moves_and_changes_jobs/no_stale_rows/not_stored:is tech lead of the routing team at Northwind"
+    },
+    {
       "scenario": "priya_work_documents_and_forgetting",
       "probe": "nothing_about_dan",
       "kind": "forgotten",
@@ -876,28 +886,28 @@
       "kind": "relationship",
       "check": "seen",
       "target": "Rina | vegetarian",
-      "passed": false,
+      "passed": true,
       "detail": "",
       "key": "sam_family_health/sister_is_vegetarian/seen:Rina | vegetarian"
     }
   ],
   "metrics": {
-    "shown_recall": 0.7179,
+    "shown_recall": 0.7436,
     "shown_clean": 1.0,
     "store_accuracy": 1.0,
     "answer_accuracy": null,
-    "overall": 0.8736
+    "overall": 0.8864
   },
   "by_kind": {
     "attribution": 1.0,
-    "changed_fact": 0.9412,
+    "changed_fact": 0.9429,
     "credential": 1.0,
     "current_fact": 1.0,
     "forgotten": 1.0,
     "injection": 1.0,
     "lesson": 1.0,
     "preference": 1.0,
-    "relationship": 0.5,
+    "relationship": 1.0,
     "reminder": 0.2,
     "scale": 0.6
   },
@@ -908,5 +918,6 @@
     "maya_moves_and_changes_jobs": 23,
     "priya_work_documents_and_forgetting": 5,
     "sam_family_health": 13
-  }
+  },
+  "warnings": {}
 }
