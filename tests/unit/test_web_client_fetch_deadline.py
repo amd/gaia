@@ -150,3 +150,29 @@ def test_deadline_is_a_requests_timeout_so_existing_handlers_catch_it():
     import requests
 
     assert issubclass(FetchDeadlineExceeded, requests.exceptions.Timeout)
+
+
+def test_a_timer_firing_after_the_fetch_ends_leaves_the_next_request_alone():
+    """cancel() cannot stop a timer callback already running."""
+    import threading as _threading
+
+    from gaia.web import client as client_mod
+
+    class FakeSocket:
+        shut = False
+
+        def shutdown(self, _how):
+            self.shut = True
+
+    with client_mod._Deadline(60, "http://example.test", "fetch") as deadline:
+        pass
+    next_request = FakeSocket()
+    with client_mod._HEADER_READS_LOCK:
+        client_mod._HEADER_READS[_threading.get_ident()] = next_request
+    try:
+        deadline._fire()
+    finally:
+        with client_mod._HEADER_READS_LOCK:
+            client_mod._HEADER_READS.pop(_threading.get_ident(), None)
+    assert next_request.shut is False
+    assert not deadline.fired.is_set()

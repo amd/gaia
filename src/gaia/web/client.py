@@ -132,6 +132,7 @@ class _Deadline:
         self._at = time.monotonic() + seconds
         self._thread_id = threading.get_ident()
         self._response = None
+        self._done = False
         self._timer = threading.Timer(seconds, self._fire)
         self._timer.daemon = True
 
@@ -141,6 +142,10 @@ class _Deadline:
 
     def __exit__(self, *_exc) -> None:
         self._timer.cancel()
+        # cancel() cannot stop a _fire already running; _done makes it a no-op,
+        # so it never touches a socket this thread's next request registered.
+        with _HEADER_READS_LOCK:
+            self._done = True
 
     def remaining(self) -> float:
         left = self._at - time.monotonic()
@@ -161,21 +166,31 @@ class _Deadline:
         )
 
     def _fire(self) -> None:
-        self.fired.set()
         with _HEADER_READS_LOCK:
+            if self._done:
+                return
+            self.fired.set()
             sock = _HEADER_READS.get(self._thread_id)
-        if sock is not None:
-            _shutdown_socket(sock)
-        response = self._response
-        if response is not None:
-            _abort_stream(response)
+            if sock is not None:
+                _shutdown_socket(sock)
+            response = self._response
+            if response is not None:
+                _abort_stream(response)
 
 
 def _cap_timeout(timeout, remaining: float):
-    """``timeout`` (a number or a ``(connect, read)`` pair) capped at ``remaining``."""
+    """``timeout`` (a number or a ``(connect, read)`` pair) capped at ``remaining``.
+
+    Any other form (a ``urllib3.Timeout``) is passed through; the deadline's
+    timer still bounds the fetch.
+    """
     if isinstance(timeout, tuple):
         return tuple(remaining if t is None else min(t, remaining) for t in timeout)
-    return remaining if timeout is None else min(timeout, remaining)
+    if timeout is None:
+        return remaining
+    if isinstance(timeout, (int, float)):
+        return min(timeout, remaining)
+    return timeout
 
 
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
