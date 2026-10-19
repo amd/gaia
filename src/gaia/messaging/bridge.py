@@ -27,6 +27,7 @@ and ``tests/unit/messaging/test_bridge.py`` pins its absence.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -77,6 +78,44 @@ DEFAULT_AGENT_BINARY = "gaia-agent"
 #: quiet model is ended by the LLM layer first. A running tool or a pending
 #: approval is not idle; each has its own deadline.
 DEFAULT_TURN_IDLE_SECONDS = 4500.0
+
+#: Sets the no-progress window, as it does for the Agent UI.
+TURN_IDLE_ENV = "GAIA_STREAM_TIMEOUT"
+_MAX_TURN_IDLE_SECONDS = 86400
+
+
+def turn_idle_limit_from_env() -> float:
+    """The no-progress window: ``GAIA_STREAM_TIMEOUT`` seconds, else 4500.
+
+    Same rules as the Agent UI: a whole number of seconds from 1 to 86400.
+
+    Raises:
+        ValueError: the variable is set to anything else.
+    """
+    raw = os.environ.get(TURN_IDLE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TURN_IDLE_SECONDS
+    remedy = (
+        f"Set it to a whole number of seconds from 1 to {_MAX_TURN_IDLE_SECONDS} "
+        f"(e.g. {TURN_IDLE_ENV}=1800), or unset it for the "
+        f"{DEFAULT_TURN_IDLE_SECONDS:.0f}s default."
+    )
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{TURN_IDLE_ENV}={raw!r} is not a whole number of seconds. {remedy}"
+        ) from e
+    if not 1 <= value <= _MAX_TURN_IDLE_SECONDS:
+        raise ValueError(f"{TURN_IDLE_ENV}={value} is out of range. {remedy}")
+    return float(value)
+
+
+#: How many times one channel restarts a wedged agent before giving up.
+MAX_AGENT_RESTARTS = 3
+
+#: Said when a channel has given up on its agent; adapters pass their own.
+DEFAULT_RESTART_HINT = "Restart the messaging bridge to serve messages again."
 
 #: How long a stopped turn's child gets to acknowledge the stop before it is
 #: treated as wedged and shut down.
@@ -221,11 +260,15 @@ class AgentChannel:
         env: Optional[Dict[str, str]] = None,
         spawn: Optional[Callable[..., Any]] = None,
         on_busy: Optional[Callable[[Turn, int], None]] = None,
-        idle_limit: float = DEFAULT_TURN_IDLE_SECONDS,
+        idle_limit: Optional[float] = None,
         cancel_grace: float = DEFAULT_CANCEL_GRACE_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         poll_seconds: float = _IDLE_POLL_SECONDS,
+        max_restarts: int = MAX_AGENT_RESTARTS,
+        restart_hint: str = DEFAULT_RESTART_HINT,
     ) -> None:
+        if idle_limit is None:
+            idle_limit = turn_idle_limit_from_env()
         for name, value in (
             ("idle_limit", idle_limit),
             ("cancel_grace", cancel_grace),
@@ -234,6 +277,9 @@ class AgentChannel:
             if value <= 0:
                 raise ValueError(f"{name} must be > 0 seconds, got {value}")
         self._idle_limit = idle_limit
+        self._max_restarts = max_restarts
+        self._restarts = 0
+        self._restart_hint = restart_hint
         self._cancel_grace = cancel_grace
         self._clock = clock
         self._poll_seconds = poll_seconds
@@ -294,13 +340,10 @@ class AgentChannel:
                 "rather than starting one twice."
             )
         self._proc = self._spawn()
-        self._reader = threading.Thread(
-            target=self._read_loop, name="gaia-bridge-reader", daemon=True
-        )
+        self._start_reader(self._proc)
         self._writer = threading.Thread(
             target=self._write_loop, name="gaia-bridge-writer", daemon=True
         )
-        self._reader.start()
         self._writer.start()
         log.info("Agent channel started: %s", " ".join(self._argv))
 
@@ -386,13 +429,13 @@ class AgentChannel:
     # ------------------------------------------------------------------
 
     def _write_line(self, line: str) -> None:
-        proc = self._proc
-        if proc is None or proc.stdin is None:
-            raise AgentChannelError(
-                "The agent child has no input stream — it was never started, "
-                "or it has already exited. Restart the adapter."
-            )
         with self._write_lock:
+            proc = self._proc
+            if proc is None or proc.stdin is None:
+                raise AgentChannelError(
+                    "The agent child has no input stream — it was never "
+                    "started, or it has already exited. Restart the adapter."
+                )
             try:
                 proc.stdin.write(line + "\n")
                 proc.stdin.flush()
@@ -472,28 +515,69 @@ class AgentChannel:
             # The reader sees the same dead pipe and ends the turn.
             log.warning("Could not send the stop to the agent: %s", e)
 
-    def _shut_down_wedged_child(self) -> None:
-        self._dead = (
-            "The agent stopped responding and was shut down, so this message "
-            "was not answered. Restart the adapter (for Slack, `gaia slack "
-            "start`) to serve messages again."
+    def _start_reader(self, proc: Any) -> None:
+        self._reader = threading.Thread(
+            target=self._read_loop, args=(proc,), name="gaia-bridge-reader", daemon=True
         )
-        log.error(
-            "Agent child did not end a stopped turn within %.0fs; shutting it "
-            "down. Messages are refused until the adapter is restarted.",
-            self._cancel_grace,
-        )
-        proc = self._proc
+        self._reader.start()
+
+    @staticmethod
+    def _stop_child(proc: Any) -> None:
         try:
             proc.terminate()
         except (OSError, AttributeError) as e:
             log.debug("Agent child already gone: %s", e)
         wait = getattr(proc, "wait", None)
-        if wait is not None:
+        if wait is None:
+            return
+        try:
+            wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
             try:
                 wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                log.error(
+                    "Agent child pid %s survived a kill; it may need ending by hand",
+                    getattr(proc, "pid", "?"),
+                )
+
+    def _shut_down_wedged_child(self) -> None:
+        """Replace a child that ignored a stop, a bounded number of times."""
+        wedged = self._proc
+        log.error(
+            "Agent child did not end a stopped turn within %.0fs; shutting it down",
+            self._cancel_grace,
+        )
+        self._stop_child(wedged)
+        if self._restarts >= self._max_restarts:
+            self._dead = (
+                f"The agent stopped responding {self._restarts + 1} times and "
+                f"was shut down, so this message was not answered. "
+                f"{self._restart_hint}"
+            )
+            log.error(
+                "Agent restarted %d times already; refusing messages until the "
+                "bridge is restarted",
+                self._restarts,
+            )
+            return
+        self._restarts += 1
+        try:
+            fresh = self._spawn()
+        except AgentChannelError as e:
+            self._dead = f"The agent could not be restarted: {e}"
+            log.error("Could not restart the agent child: %s", e)
+            return
+        # Swapped under the write lock so no line goes to the old child.
+        with self._write_lock:
+            self._proc = fresh
+        self._start_reader(fresh)
+        log.error(
+            "Restarted the agent child (%d of %d); its conversation starts over",
+            self._restarts,
+            self._max_restarts,
+        )
 
     def _finish_turn(self) -> None:
         with self._active_lock:
@@ -501,8 +585,7 @@ class AgentChannel:
             if self._depth:
                 self._depth -= 1
 
-    def _read_loop(self) -> None:
-        proc = self._proc
+    def _read_loop(self, proc: Any) -> None:
         stdout = getattr(proc, "stdout", None)
         if stdout is None:
             return
@@ -515,9 +598,13 @@ class AgentChannel:
                 line = raw.strip()
                 if not line:
                     continue
+                if proc is not self._proc:
+                    return  # a replaced child's late output belongs to no turn
                 self._handle_line(line)
         except (OSError, ValueError) as e:
             log.debug("Agent stdout closed: %s", e)
+        if proc is not self._proc:
+            return  # replaced; the new child's reader owns the turn now
         # The stream ended. If a turn was still running, it will never get its
         # terminal event from the child, so synthesize one — a turn that just
         # goes quiet is the failure mode the daemon relay exists to prevent.

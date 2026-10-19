@@ -121,7 +121,7 @@ The adapter deletes `~/.gaia/telegram.pid` when it exits. `stop` signals the rec
 - **No tool loop** — a Telegram session is a chat session, not an agent. There are no shell, file-write, or other action tools for a message to reach.
 - **Per-user sessions** — the adapter keeps one Agent SDK session per Telegram user ID, so conversation history stays separated between users. Sessions live in memory and are lost when the adapter restarts.
 - **Streaming replies** — responses stream back into the Telegram chat as the model generates them.
-- **Stuck replies are stopped** — the bot answers one message at a time, so a reply that stops streaming for 75 minutes is stopped, the text so far is kept, and your next message starts a new conversation.
+- **Stuck replies are stopped** — the bot answers one message at a time, so a reply that stops streaming for 75 minutes (`GAIA_STREAM_TIMEOUT` seconds, if set) is stopped and the text so far is kept. If it stopped mid-answer, your next message starts a new conversation.
 - **Attachments** — photos and files sent to the bot are saved to a temporary path so their contents can be read into the conversation.
 - **Local inference** — all model calls go through your local Lemonade backend; message content is processed on your machine.
 

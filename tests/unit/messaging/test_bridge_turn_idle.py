@@ -194,24 +194,80 @@ def test_running_tool_and_pending_approval_are_not_idle():
         ch.close()
 
 
-def test_child_that_ignores_the_stop_is_shut_down_and_queued_turns_fail_fast():
-    proc, clock, seen = FakeProc(), FakeClock(), []
-    ch = _channel(proc, clock, seen)
+def _restarting_channel(procs, clock, seen, max_restarts=3):
+    made = iter(procs)
+    ch = AgentChannel(
+        on_event=lambda event, turn: seen.append((event, turn.text)),
+        spawn=lambda: next(made),
+        idle_limit=LIMIT,
+        cancel_grace=GRACE,
+        clock=clock,
+        poll_seconds=0.01,
+        max_restarts=max_restarts,
+        restart_hint="Restart it with the right command.",
+    )
+    ch.start()
+    return ch
+
+
+def _wedge(proc, clock):
+    assert _wait_for(lambda: proc.stdin.lines)
+    clock.advance(LIMIT + 1)
+    assert _wait_for(lambda: _cancels(proc))
+    clock.advance(GRACE + 1)
+    assert _wait_for(lambda: proc.terminated)
+
+
+def test_a_child_that_ignores_the_stop_is_replaced_and_the_queue_moves_on():
+    wedged, fresh = FakeProc(), FakeProc()
+    clock, seen = FakeClock(), []
+    ch = _restarting_channel([wedged, fresh], clock, seen)
     try:
         ch.submit(Turn(text="first"))
         ch.submit(Turn(text="second"))
-        assert _wait_for(lambda: proc.stdin.lines)
+        _wedge(wedged, clock)
 
-        clock.advance(LIMIT + 1)
-        assert _wait_for(lambda: _cancels(proc))
-        clock.advance(GRACE + 1)
-        assert _wait_for(lambda: proc.terminated)
-
-        assert _wait_for(lambda: _errors(seen, "second"))
-        assert "restart" in _errors(seen, "second")[0]["detail"].lower()
-        assert not any("second" in line for line in proc.stdin.lines)
+        # The queued message goes to the new child, not to a dead channel.
+        assert _wait_for(lambda: any("second" in line for line in fresh.stdin.lines))
+        # Output the killed child flushed late belongs to no turn.
+        wedged.stdout.emit({"type": "final", "answer": "stale"})
+        fresh.stdout.emit({"type": "final", "answer": "fresh answer"})
+        assert _wait_for(lambda: [e for e, t in seen if t == "second"])
+        assert [e["answer"] for e, t in seen if t == "second"] == ["fresh answer"]
     finally:
         ch.close()
+
+
+def test_after_its_restarts_run_out_the_channel_fails_fast_with_the_hint():
+    wedged = FakeProc()
+    clock, seen = FakeClock(), []
+    ch = _restarting_channel([wedged], clock, seen, max_restarts=0)
+    try:
+        ch.submit(Turn(text="first"))
+        ch.submit(Turn(text="second"))
+        _wedge(wedged, clock)
+
+        assert _wait_for(lambda: _errors(seen, "second"))
+        assert (
+            "Restart it with the right command." in _errors(seen, "second")[0]["detail"]
+        )
+        assert not any("second" in line for line in wedged.stdin.lines)
+    finally:
+        ch.close()
+
+
+def test_gaia_stream_timeout_sets_the_window(monkeypatch):
+    import pytest
+
+    from gaia.messaging import bridge
+
+    monkeypatch.setenv("GAIA_STREAM_TIMEOUT", "120")
+    assert bridge.turn_idle_limit_from_env() == 120.0
+    ch = AgentChannel(on_event=lambda e, t: None, spawn=FakeProc)
+    assert ch._idle_limit == 120.0
+    monkeypatch.setenv("GAIA_STREAM_TIMEOUT", "soon")
+    with pytest.raises(ValueError, match="GAIA_STREAM_TIMEOUT"):
+        AgentChannel(on_event=lambda e, t: None, spawn=FakeProc)
 
 
 def test_idle_limit_must_be_positive():

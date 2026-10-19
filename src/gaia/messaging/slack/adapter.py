@@ -169,6 +169,15 @@ def inbox_dir() -> Path:
     return root / "slack" / "inbox"
 
 
+#: How to bring the bridge back once its agent has been given up on. A second
+#: `gaia slack start` while this one runs would open a second connection.
+SLACK_RESTART_HINT = (
+    "Stop the Slack bridge (Ctrl+C, or `gaia slack stop` if it runs in the "
+    "background), then start it again with `gaia slack start --allowed-users "
+    "<your member id>`."
+)
+
+
 class SlackAllowlistError(ValueError):
     """The adapter was asked to run without an allowlist.
 
@@ -376,6 +385,7 @@ class SlackAdapter:
             on_event=self._on_agent_event,
             argv=self._agent_argv,
             on_busy=self._on_busy,
+            restart_hint=SLACK_RESTART_HINT,
         )
         self._channel.start()
         if connect:

@@ -26,7 +26,7 @@ from typing import Dict, Optional, Set
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.mcp.ports import TELEGRAM_HEALTH_PORT
-from gaia.messaging.bridge import DEFAULT_TURN_IDLE_SECONDS, turn_idle_message
+from gaia.messaging.bridge import turn_idle_limit_from_env, turn_idle_message
 from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 log = get_logger(__name__)
@@ -146,8 +146,10 @@ class TelegramAdapter:
         self,
         token: str,
         allowed_users: Optional[Set[int]] = None,
-        idle_limit: float = DEFAULT_TURN_IDLE_SECONDS,
+        idle_limit: Optional[float] = None,
     ):
+        if idle_limit is None:
+            idle_limit = turn_idle_limit_from_env()
         if idle_limit <= 0:
             raise ValueError(f"idle_limit must be > 0 seconds, got {idle_limit}")
         #: Seconds a reply may go without a new chunk before it is stopped.
@@ -248,14 +250,23 @@ class TelegramAdapter:
         # Use an asyncio.Queue to bridge generator (blocking) -> async edits
         queue: asyncio.Queue = asyncio.Queue()
         stopped = threading.Event()
+        # The session this turn sends on, once it has one; guarded by
+        # _SESSIONS_LOCK together with `stopped`.
+        used: Dict[str, AgentSDK] = {}
 
         loop = asyncio.get_running_loop()
 
         def run_generation():
             stream = None
             try:
+                if stopped.is_set():
+                    return  # stopped while waiting for an executor thread
                 # Reuse per-user AgentSDK synchronously in thread
                 chat = get_or_create_session(user.id)
+                with _SESSIONS_LOCK:
+                    if stopped.is_set():
+                        return  # stopped while the session was being made
+                    used["chat"] = chat
                 full = ""
                 stream = chat.send_stream(user_input)
                 for chunk in stream:
@@ -295,20 +306,30 @@ class TelegramAdapter:
                     queue.get(), timeout=self._idle_limit
                 )
             except asyncio.TimeoutError:
-                stopped.set()
-                # The stuck generation still holds the session; the next message
-                # gets a fresh one rather than racing it on the same history.
                 with _SESSIONS_LOCK:
-                    _USER_SESSIONS.pop(user.id, None)
+                    stopped.set()
+                    chat = used.get("chat")
+                    # A generation stuck mid-send still holds its session; the
+                    # next message gets a fresh one rather than racing it on the
+                    # same history. One that never started touched nothing.
+                    dropped = chat is not None
+                    if dropped and _USER_SESSIONS.get(user.id) is chat:
+                        del _USER_SESSIONS[user.id]
                 log.warning(
                     "Telegram turn for user %s made no progress for %.0fs; "
-                    "stopped it and started a new session",
+                    "stopped it%s",
                     user.id,
                     self._idle_limit,
+                    " and started a new session" if dropped else "",
                 )
                 note = (
-                    f"{turn_idle_message(self._idle_limit)} The next message "
-                    "starts a new conversation. Send yours again to retry."
+                    turn_idle_message(self._idle_limit)
+                    + (
+                        " The next message starts a new conversation."
+                        if dropped
+                        else ""
+                    )
+                    + " Send yours again to retry."
                 )
                 text_chunk = f"{accumulated}\n\n{note}" if accumulated else note
                 done = True

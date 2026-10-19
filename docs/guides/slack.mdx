@@ -99,8 +99,10 @@ that ran.
   time, and you are told where you are in line.
 - **A turn that makes no progress for 75 minutes is stopped**, so a stuck answer cannot
   hold every later message. A running tool or an approval waiting on you does not count
-  as stuck. Send "continue" to pick up where it left off. If the agent does not stop when
-  asked, it is shut down and later messages say to restart the bridge.
+  as stuck. Send "continue" to pick up where it left off. `GAIA_STREAM_TIMEOUT` (seconds)
+  changes the window, as it does for the Agent UI. If the agent does not stop when asked,
+  it is restarted and its conversation starts over; after three restarts the bridge stops
+  answering and each message says how to restart it.
 - **If the agent asks you a question mid-answer**, the question is posted and that answer
   ends there — the bridge cannot pause for a reply. Answer with a normal message and the
   agent picks up from the same conversation.
