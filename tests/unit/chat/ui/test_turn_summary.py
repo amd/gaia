@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from gaia.llm.inference_location import InferenceLocation
-from gaia.ui._chat_helpers import _done_event, _agent_location, _turn_summary
+from gaia.ui._chat_helpers import _agent_location, _done_event, _turn_summary
 from gaia.ui.database import ChatDatabase
 from gaia.ui.sse_handler import SSEOutputHandler
-from gaia.ui.turn_summary import TurnLedger, upload_display_names
+from gaia.ui.turn_summary import TurnLedger, is_openable, upload_display_names
 from gaia.ui.utils import message_to_response, uploads_dir
 
 LOCAL = InferenceLocation("lemonade", "Gemma-4-E4B-it-GGUF", remote=False)
@@ -106,6 +106,68 @@ def test_document_passages_are_named_by_the_attached_file_not_the_upload_id():
         "passages": 3,
     }
     assert docs[1]["name"] == "plan.docx"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript://example.com/%0aalert(1)",
+        "JAVASCRIPT://example.com/x",
+        "data://example.com/text/html,<script>",
+        "file://server/share/doc.pdf",
+        "ftp://example.com/x",
+        "//example.com/no-scheme",
+    ],
+)
+def test_a_page_with_a_non_web_address_is_never_a_source(url):
+    ledger = TurnLedger()
+    _call(ledger, "fetch_page", {"url": "https://example.com/"}, {"url": url})
+    _call(ledger, "browser_open", {"url": url}, "Page: Trap")
+    assert ledger.summary(location=LOCAL)["pages"] == []
+
+
+def test_a_passage_two_queries_both_returned_is_counted_once():
+    ledger = TurnLedger()
+    doc = "C:/docs/plan.pdf"
+    same = {"source_file": doc, "page": 3, "content": "the budget is $4M"}
+    for query in ("budget", "how much money"):
+        _call(
+            ledger,
+            "query_specific_file",
+            {"file_path": doc, "query": query},
+            {"status": "success", "chunks": [same, {**same, "page": 4}]},
+        )
+    _call(
+        ledger,
+        "query_documents",
+        {"query": "budget"},
+        {"chunks": [{**same, "content": "a different passage"}, dict(same)]},
+    )
+    (entry,) = ledger.summary(location=LOCAL)["documents"]
+    assert entry["passages"] == 3
+    assert entry["pages"] == [3, 4]
+
+
+def test_passages_without_text_are_still_counted_and_odd_bodies_do_not_break():
+    ledger = TurnLedger()
+    doc = "C:/docs/plan.pdf"
+    chunks = [
+        {"source_file": doc},
+        {"source_file": doc},
+        {"source_file": doc, "content": ["not", "hashable"]},
+        {"source_file": doc, "chunk_index": 7},
+        {"source_file": doc, "chunk_index": 7},
+        {"source_file": "C:/docs/other.pdf", "page": 1, "content": "x"},
+        {"source_file": doc, "page": 1, "content": "x"},
+    ]
+    _call(ledger, "search_documents", {}, {"chunks": chunks})
+    docs = ledger.summary(location=LOCAL)["documents"]
+    assert [d["passages"] for d in docs] == [5, 1]
+
+
+@pytest.mark.parametrize("name", ["feed.xml", "FEED.XML", "page.html", "x.svg"])
+def test_types_that_can_open_in_a_browser_are_not_openable(name):
+    assert not is_openable(f"C:/out/{name}")
 
 
 def test_upload_display_names_reads_the_composer_link_labels():

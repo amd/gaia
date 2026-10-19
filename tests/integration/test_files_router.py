@@ -1158,7 +1158,7 @@ class TestFileOpen:
             assert mock_popen.call_args[0][0][-1] == target
 
     @pytest.mark.parametrize(
-        "name", ["build.py", "run.bat", "setup.exe", "page.html", "noext"]
+        "name", ["build.py", "run.bat", "setup.exe", "page.html", "feed.xml", "noext"]
     )
     @patch("subprocess.Popen")
     @patch("os.startfile", create=True)

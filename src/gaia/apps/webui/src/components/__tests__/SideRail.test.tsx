@@ -150,6 +150,21 @@ describe('SideRail', () => {
         expect(screen.getByText('duckduckgo.com, en.wikipedia.org')).toBeInTheDocument();
     });
 
+    it.each([
+        'javascript://example.com/%0aalert(1)',
+        'JavaScript:alert(1)',
+        'data:text/html,<script>alert(1)</script>',
+        'file:///C:/Windows/System32/calc.exe',
+        'vbscript:msgbox(1)',
+    ])('never makes a page with an unsafe address %s clickable', (url) => {
+        render(<SideRail messages={turn(summary({
+            pages: [{ url, title: 'Looks harmless', kind: 'page' }],
+        }))} />);
+        expect(screen.getByText('Looks harmless')).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Looks harmless/ })).not.toBeInTheDocument();
+        expect(rail().querySelector(`a[href="${url}"]`)).toBeNull();
+    });
+
     it('names document passages by file, with pages and counts', () => {
         render(<SideRail messages={turn(summary({
             documents: [{ name: 'kestrel-plan.pdf', path: 'C:/u/uploads/f27f.pdf', pages: [1, 2], passages: 3 }],

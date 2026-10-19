@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { safeUrlTransform } from '../utils/markdown';
 import type { Message, TurnSummary } from '../types';
 import './SideRail.css';
 
@@ -221,7 +222,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                     <li key={p.url} className="side-rail-item">
                         <Globe size={13} className="side-rail-item-icon" aria-hidden="true" />
                         <div className="side-rail-item-text">
-                            <a href={p.url} target="_blank" rel="noopener noreferrer" className="side-rail-link" title={p.url}>
+                            <a href={safeUrlTransform(p.url) || undefined} target="_blank" rel="noopener noreferrer" className="side-rail-link" title={p.url}>
                                 {p.title || hostOf(p.url)}
                                 <ExternalLink size={10} aria-hidden="true" />
                             </a>

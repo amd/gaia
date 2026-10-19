@@ -53,7 +53,7 @@ WRITE_TOOLS = frozenset(
 _SEARCH_HOST = "duckduckgo.com"
 
 #: File types the rail may hand to the default app: nothing that runs code,
-#: so no scripts or programs, and no HTML or SVG, which run script in a browser.
+#: so no scripts or programs, and no HTML, SVG or XML, which can open in a browser.
 OPENABLE_SUFFIXES = frozenset(
     {
         ".md",
@@ -63,7 +63,6 @@ OPENABLE_SUFFIXES = frozenset(
         ".json",
         ".yaml",
         ".yml",
-        ".xml",
         ".log",
         ".pdf",
         ".docx",
@@ -115,6 +114,15 @@ def _host(url: Any) -> Optional[str]:
     return host[4:] if host.startswith("www.") else host
 
 
+def _web_url(url: Any) -> bool:
+    """Whether *url* is an http(s) address the rail may link to."""
+    return (
+        isinstance(url, str)
+        and urlparse(url.strip()).scheme.lower() in ("http", "https")
+        and _host(url) is not None
+    )
+
+
 class TurnLedger:
     """Collects one turn's tool calls as the SSE handler sees them."""
 
@@ -150,7 +158,7 @@ class TurnLedger:
                 url = call["args"].get("url")
                 if isinstance(data, dict):
                     url = data.get("url") or url
-                if not isinstance(url, str) or not _host(url):
+                if not _web_url(url):
                     continue
                 title = data.get("title") if isinstance(data, dict) else None
                 if title is None and isinstance(data, str):
@@ -174,6 +182,7 @@ class TurnLedger:
 
     def _documents(self, display_names: Mapping[str, str]) -> List[Dict[str, Any]]:
         docs: Dict[str, Dict[str, Any]] = {}
+        seen: set = set()
         for call in self._finished():
             data = call["data"]
             if not call["success"] or not isinstance(data, dict):
@@ -195,8 +204,14 @@ class TurnLedger:
                         "passages": 0,
                     },
                 )
-                entry["passages"] += 1
                 page = chunk.get("page")
+                # Two queries in one turn often return the same passage.
+                body = chunk.get("content", chunk.get("chunk_index"))
+                body = body if isinstance(body, (str, int)) else None
+                key = (path, page if isinstance(page, int) else None, body)
+                if body is None or key not in seen:
+                    seen.add(key)
+                    entry["passages"] += 1
                 if isinstance(page, int) and page not in entry["pages"]:
                     entry["pages"].append(page)
         for entry in docs.values():
