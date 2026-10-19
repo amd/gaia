@@ -250,6 +250,57 @@ def test_a_scripting_slip_fails_the_replay_instead_of_passing_quietly(tmp_path):
     assert "no current memory matches it" in str(raised.value)
 
 
+@requires_faiss
+def test_a_scripted_update_matching_two_memories_fails_the_replay(tmp_path):
+    """A loose ``update_of`` must not quietly pick one of several memories."""
+    from gaia.eval.memory.harness import HashEmbedder, Replay
+
+    ambiguous = textwrap.dedent(GOOD).replace(
+        '      - user: "I live in Lisbon these days"\n'
+        '        assistant: "Lovely city."',
+        '      - user: "I live in Lisbon these days and work in Lisbon too"\n'
+        '        assistant: "Lovely city."\n'
+        "        extract:\n"
+        '          - {op: add, category: fact, content: "User lives in Lisbon"}\n'
+        '          - {op: add, category: fact, content: "User works at a bakery in '
+        'Lisbon"}\n'
+        '      - user: "Actually I moved my whole life over to Porto now"\n'
+        '        assistant: "Porto it is."\n'
+        "        extract:\n"
+        '          - {op: update, update_of: "Lisbon", category: fact, '
+        'content: "User lives in Porto"}',
+    )
+    scenario = load_scenario(_write(tmp_path, ambiguous))
+    replay = Replay(
+        scenario,
+        tmp_path,
+        chat_factory=lambda resolve: ScriptedChat(scenario, resolve),
+        embedder=HashEmbedder(),
+        strict=True,
+    )
+    with pytest.raises(RuntimeError, match="strict replay") as raised:
+        replay.run()
+    assert "matches 2 current memories" in str(raised.value)
+
+
+@pytest.mark.parametrize("suite", ["pr", None])
+def test_model_without_the_full_suite_is_refused(suite, capsys, monkeypatch):
+    """--model only steers the full suite; the pr suite must not ignore it."""
+    from gaia import cli
+
+    args = ["gaia", "eval", "memory", "--model", "Some-Model-GGUF"]
+    if suite:
+        args += ["--suite", suite]
+    monkeypatch.setattr("sys.argv", args)
+    monkeypatch.setattr(
+        runner, "run_suite", lambda *a, **k: pytest.fail("the suite ran")
+    )
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+    assert exited.value.code == 2
+    assert "--model applies only to --suite full" in capsys.readouterr().out
+
+
 def test_gating_one_scenario_compares_only_that_scenario():
     baseline = {
         "suite": "pr",

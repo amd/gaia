@@ -394,12 +394,21 @@ class Replay:
         self.chat = chat_factory(self._resolve)
 
     def _resolve(self, pattern: str) -> str:
-        """A scripted op's ``update_of``/``delete_of``: the matching memory's id."""
-        rows = active_rows(self.db, pattern)
+        """A scripted op's ``update_of``/``delete_of``: the matching memory's id.
+
+        Session summaries are not candidates; they repeat the facts they cover.
+        """
+        rows = [r for r in active_rows(self.db, pattern) if not r["session_summary"]]
         if not rows:
             raise RuntimeError(
                 f"memory bench ({self.scenario.id}): scripted op refers to "
                 f"{pattern!r}, but no current memory matches it"
+            )
+        if len(rows) > 1:
+            raise RuntimeError(
+                f"memory bench ({self.scenario.id}): scripted op refers to "
+                f"{pattern!r}, which matches {len(rows)} current memories; "
+                "it must match exactly one"
             )
         return rows[0]["id"]
 

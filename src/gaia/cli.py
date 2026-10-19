@@ -4015,6 +4015,12 @@ def _handle_eval_memory(args):
     from gaia.eval.memory import runner
     from gaia.eval.memory.scenario import load_scenarios
 
+    if args.model and args.suite != "full":
+        print(
+            f"--model applies only to --suite full; the {args.suite} suite runs "
+            "a scripted model. Drop --model, or add --suite full."
+        )
+        sys.exit(2)
     if args.list:
         for scenario in load_scenarios(args.scenario):
             print(
