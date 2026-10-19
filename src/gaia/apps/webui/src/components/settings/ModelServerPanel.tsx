@@ -81,7 +81,7 @@ export function ModelServerPanel() {
         if (!chat?.name) return;
         setReloading(true);
         try {
-            await api.loadModel(chat.name, chat.ctx_size ?? undefined);
+            if (!(await api.loadModelAskingFirst(chat.name, chat.ctx_size ?? undefined))) return;
             setNotice({ ok: true, text: `Reloading ${chat.name}. Reopen this panel in a moment to see its backend.` });
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
@@ -150,6 +150,7 @@ export function ModelServerPanel() {
                         : 'None loaded'}
                 />
             </div>
+            {info.embedding_note && <p className="settings-hint">{info.embedding_note}</p>}
             {info.system_info_error && <p className="settings-hint">{info.system_info_error}</p>}
 
             <div className="settings-field model-server-backend">

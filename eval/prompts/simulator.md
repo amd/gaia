@@ -134,8 +134,7 @@ Note: a turn where the agent gave no response at all (completeness=0) will also 
 
 ## PERFORMANCE DATA COLLECTION (mandatory)
 
-Every `send_message()` call returns a `stats` object with LLM inference metrics.
-Every assistant message from `get_messages()` includes a `stats` field.
+Every assistant message from `get_messages()` includes a `stats` field with LLM inference metrics.
 You MUST record these for every turn.
 
 **Fields to capture per turn:**
@@ -145,9 +144,8 @@ You MUST record these for every turn.
 - `output_tokens` (int): Completion token count
 
 **How to capture:**
-1. After each `send_message()`, check the response for a `stats` key and record the values
-2. In Phase 3 (`get_messages`), cross-reference persisted stats with what you recorded live
-3. If `stats` is missing or all zeros, record `null` — do NOT invent numbers
+1. After each turn, read the `stats` key of the last assistant message from `get_messages()` and record the values
+2. If `stats` is missing or all zeros, record `null` — do NOT invent numbers
 
 **Performance flags (informational — do NOT affect pass/fail):**
 - `no_stats`: stats missing or all zeros (Lemonade may be offline or using a non-Lemonade provider)

@@ -5,15 +5,25 @@
 #
 # Each Claude step reads CLAUDE_CODE_OAUTH_TOKEN_SECONDARY instead of
 # CLAUDE_CODE_OAUTH_TOKEN while the repo variable CLAUDE_ACCOUNT is "secondary".
-# This job probes the primary account every hour: out of quota -> switch to the
-# secondary (after proving it answers); answering again -> switch back. A bad
-# credential never switches anything — it fails here so a person fixes it.
-# See docs/reference/claude-ci-workflows.md.
+# It runs when a Claude job hits a wall, not on a clock: claude.yml dispatches it
+# when a call is refused before reaching a model, and the scheduled Claude
+# workflows below trigger it when they fail. It probes the primary account: out of
+# quota -> switch to the secondary (after proving it answers); answering again ->
+# switch back. A bad credential never switches anything; it fails here so a person
+# fixes it. See docs/reference/claude-ci-workflows.md.
 name: Claude Account Switch
 
 on:
-  schedule:
-    - cron: "17 * * * *"
+  # Only low-volume workflows belong here: GitHub records a run of this file for
+  # every completion of a listed workflow, failed or not. claude.yml completes
+  # ~1000 times a week, so it dispatches this file instead (request-account-switch).
+  workflow_run:
+    workflows:
+      - "Claude Nightly Audit"
+      - "Claude Security Audit"
+      - "Claude Weekly Doc Walkthrough"
+      - "Claude Auth Canary"
+    types: [completed]
   workflow_dispatch:
     inputs:
       account:
@@ -31,12 +41,17 @@ concurrency:
 
 jobs:
   switch:
-    if: github.repository == 'amd/gaia'
+    if: >-
+      github.repository == 'amd/gaia' &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
     env:
       CURRENT: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }}
       MODE: ${{ github.event.inputs.account || 'auto' }}
       HAS_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' }}
+      HAS_SWITCH_TOKEN: ${{ secrets.CLAUDE_ACCOUNT_SWITCH_TOKEN != '' }}
+      TRIGGER: ${{ github.event_name == 'workflow_run' && format('{0} failed', github.event.workflow_run.name) || format('dispatched by {0}', github.actor) }}
     steps:
       - name: Check out the repo for the probe classifier
         uses: actions/checkout@v7
@@ -51,8 +66,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # A schedule run's actor is whoever last touched the workflow, often a
-          # bot; the prompt is a fixed literal and the only tool is Read.
+          # The actor is often a bot (a dispatch from claude.yml is github-actions);
+          # the prompt is a fixed literal and the only tool is Read.
           allowed_bots: "*"
           prompt: |
             Reply with exactly the word: ok
@@ -112,6 +127,9 @@ jobs:
             echo "::error::The primary Claude account is out of quota and no secondary is configured, so Claude CI stays down until the limit resets. | WHAT TO DO: run 'claude setup-token' while signed in to the second account, then: gh secret set CLAUDE_CODE_OAUTH_TOKEN_SECONDARY --repo $GITHUB_REPOSITORY | WHERE TO LOOK: docs/reference/claude-ci-workflows.md"
             exit 1
           fi
+          if [ "$MODE" = "auto" ] && [ "$desired" = "secondary" ] && [ "$CURRENT" = "secondary" ]; then
+            echo "::warning::The primary Claude account is still out of quota${PRIMARY_RESET:+ (${PRIMARY_RESET})} and CI is already on the secondary. If Claude jobs are failing, the secondary is out too, and Claude CI is down until one limit resets."
+          fi
           echo "desired=$desired" >> "$GITHUB_OUTPUT"
           echo "Current account: $CURRENT. Desired: $desired."
           if [ "$desired" = "$CURRENT" ]; then action="no change"; else action="switch $CURRENT -> $desired"; fi
@@ -120,11 +138,13 @@ jobs:
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| Trigger | ${MODE} |"
+            echo "| Trigger | ${TRIGGER} |"
+            echo "| Mode | ${MODE} |"
             echo "| Current account | ${CURRENT} |"
             echo "| Primary probe | ${PRIMARY_VERDICT:-not probed (forced)} |"
             echo "| Primary limit resets | ${PRIMARY_RESET:-n/a} |"
             echo "| Secondary configured | ${HAS_SECONDARY} |"
+            echo "| CLAUDE_ACCOUNT_SWITCH_TOKEN set | ${HAS_SWITCH_TOKEN} |"
             echo "| Plan | ${action} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -171,7 +191,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Claude CI should move to the $DESIRED account, but CLAUDE_ACCOUNT_SWITCH_TOKEN is not set, so this job cannot change the variable. | WHAT TO DO: gh variable set CLAUDE_ACCOUNT --body $DESIRED --repo $GITHUB_REPOSITORY (or add a fine-grained token with Variables: write as CLAUDE_ACCOUNT_SWITCH_TOKEN) | WHERE TO LOOK: docs/reference/claude-ci-workflows.md"
+            echo "::error title=Claude account not switched::Claude CI should move from the $CURRENT account to the $DESIRED account, but the CLAUDE_ACCOUNT_SWITCH_TOKEN secret is not set and GITHUB_TOKEN cannot write repo variables. | WHAT TO DO NOW: gh variable set CLAUDE_ACCOUNT --body $DESIRED --repo $GITHUB_REPOSITORY | TO AUTOMATE IT: create a fine-grained token for $GITHUB_REPOSITORY with the 'Variables' repository permission set to 'Read and write', then gh secret set CLAUDE_ACCOUNT_SWITCH_TOKEN --repo $GITHUB_REPOSITORY | WHERE TO LOOK: docs/reference/claude-ci-workflows.md"
             exit 1
           fi
           gh variable set CLAUDE_ACCOUNT --body "$DESIRED" --repo "$GITHUB_REPOSITORY"

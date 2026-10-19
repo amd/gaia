@@ -44,7 +44,9 @@ def own_server(monkeypatch, tmp_path):
     return "http://localhost:51234/api/v1"
 
 
-def test_probe_sends_every_request_to_gaias_server_with_its_key(own_server, mocker):
+def test_probe_sends_every_request_to_gaias_server_with_its_key(
+    own_server, monkeypatch
+):
     calls = []
 
     def fake_get(url, timeout=None, headers=None):
@@ -53,7 +55,7 @@ def test_probe_sends_every_request_to_gaias_server_with_its_key(own_server, mock
             return _Resp({"data": [{"id": "Gemma-4-E4B-it-GGUF", "ctx_size": 65536}]})
         return _Resp({"version": "10.3.0"})
 
-    mocker.patch("requests.get", side_effect=fake_get)
+    monkeypatch.setattr("requests.get", fake_get)
 
     probe = server_mod._probe_lemonade()
 
@@ -79,12 +81,12 @@ _MODELS_OK = {"data": [{"id": "Gemma-4-E4B-it-GGUF"}]}
     ids=["models-is-a-list", "model-entry-not-a-dict", "health-is-a-list"],
 )
 def test_an_odd_body_is_reported_instead_of_crashing_init(
-    own_server, mocker, models_body, health_body, present
+    own_server, monkeypatch, models_body, health_body, present
 ):
     def fake_get(url, timeout=None, headers=None):
         return _Resp(models_body if url.endswith("/models") else health_body)
 
-    mocker.patch("requests.get", side_effect=fake_get)
+    monkeypatch.setattr("requests.get", fake_get)
 
     probe = server_mod._probe_lemonade()
 

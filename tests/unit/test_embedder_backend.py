@@ -17,6 +17,7 @@ from gaia.llm import lemonade_client
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDER_LLAMACPP_ARGS,
+    EMBEDDER_ON_CPU_WITH_ROCM,
     LemonadeClient,
     LemonadeClientError,
     manages_embedder_backend,
@@ -35,6 +36,7 @@ def fresh_state(monkeypatch):
     monkeypatch.setattr(lemonade_client, "_PINNED_BACKENDS", set())
     monkeypatch.setattr(lemonade_client, "_CPU_FALLBACK_EMBEDDERS", set())
     monkeypatch.setattr(lemonade_client.time, "sleep", lambda s: None)
+    monkeypatch.setattr(lemonade_client, "preferred_llamacpp_backend", lambda: None)
 
 
 def _recording_client(calls, default_backend="vulkan", failing_backends=()):
@@ -241,6 +243,111 @@ def test_chat_models_get_no_embedder_ubatch_or_backend(not_macos):
     client.load_model("Qwen3.6-35B-A3B-GGUF", prompt=False)
 
     assert _loads(calls) == [{"model_name": "Qwen3.6-35B-A3B-GGUF"}]
+
+
+# ── ROCm: the embedder runs on the CPU (#5267) ────────────────────────────
+# With the chat model and the embedder both on a ROCm GPU, an amdgpu driver
+# issue holds the GPU at 100% while idle, so on ROCm the embedder takes the CPU.
+
+
+@pytest.mark.parametrize("os_name", ["Linux", "Windows"])
+def test_on_rocm_the_embedder_loads_on_the_cpu_and_says_so(
+    monkeypatch, caplog, os_name
+):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: os_name)
+    calls = []
+    client = _recording_client(calls, default_backend="rocm")
+
+    with caplog.at_level(logging.INFO, logger=client.log.name):
+        client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    assert _loads(calls) == [
+        {
+            "model_name": DEFAULT_EMBEDDING_MODEL,
+            "llamacpp_backend": "cpu",
+            "llamacpp_args": EMBEDDER_LLAMACPP_ARGS,
+            "save_options": True,
+        }
+    ]
+    info = [r for r in caplog.records if EMBEDDER_ON_CPU_WITH_ROCM in r.getMessage()]
+    assert info and info[0].levelno == logging.INFO
+    assert "CPU backend instead" not in caplog.text
+
+
+def test_choosing_rocm_for_chat_also_moves_the_embedder_to_the_cpu(
+    not_macos, monkeypatch
+):
+    monkeypatch.setattr(lemonade_client, "preferred_llamacpp_backend", lambda: "rocm")
+    calls = []
+    client = _recording_client(calls, default_backend="vulkan")
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    assert [load["llamacpp_backend"] for load in _loads(calls)] == ["cpu"]
+
+
+@pytest.mark.parametrize(
+    "default_backend,preferred", [("vulkan", None), ("vulkan", "vulkan"), ("cpu", None)]
+)
+def test_without_rocm_the_embedder_request_is_unchanged(
+    not_macos, monkeypatch, caplog, default_backend, preferred
+):
+    monkeypatch.setattr(
+        lemonade_client, "preferred_llamacpp_backend", lambda: preferred
+    )
+    calls = []
+    client = _recording_client(calls, default_backend=default_backend)
+
+    with caplog.at_level(logging.INFO, logger=client.log.name):
+        client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    assert _loads(calls) == [
+        {
+            "model_name": DEFAULT_EMBEDDING_MODEL,
+            "llamacpp_backend": default_backend,
+            "llamacpp_args": EMBEDDER_LLAMACPP_ARGS,
+            "save_options": True,
+        }
+    ]
+    assert EMBEDDER_ON_CPU_WITH_ROCM not in caplog.text
+
+
+def test_macos_is_untouched_even_if_lemonade_reports_rocm(monkeypatch):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Darwin")
+    calls = []
+    client = _recording_client(calls, default_backend="rocm")
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    assert "llamacpp_backend" not in _loads(calls)[0]
+
+
+def test_on_rocm_a_cpu_failure_is_raised_and_never_tries_the_gpu(not_macos):
+    calls = []
+    client = _recording_client(calls, default_backend="rocm", failing_backends=("cpu",))
+
+    with pytest.raises(LemonadeClientError) as err:
+        client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False, load_retries=0)
+
+    assert [load["llamacpp_backend"] for load in _loads(calls)] == ["cpu"]
+    message = str(err.value)
+    assert "llama-server failed to start" in message
+    assert "ROCm" in message
+    assert "amd-gaia.ai/docs/reference/troubleshooting" in message
+    # Not the Vulkan cooperative-matrix remedy, which says to use the CPU.
+    assert "GGML_VK_DISABLE_COOPMAT" not in message
+
+
+def test_on_rocm_the_first_embedding_loads_the_embedder_on_the_cpu(not_macos):
+    calls = []
+    client = _recording_client(calls, default_backend="rocm")
+    # Keep a stopped GAIA Lemonade on this machine from redirecting the client.
+    client._follow_gaia_lemonade = lambda: None
+
+    client.embeddings("one", model=DEFAULT_EMBEDDING_MODEL)
+
+    assert [endpoint for endpoint, _ in calls] == ["system-info", "load", "embeddings"]
+    assert _loads(calls)[0]["llamacpp_backend"] == "cpu"
 
 
 def _options_after_write_config(tmp_path, existing):

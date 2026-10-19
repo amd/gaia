@@ -54,6 +54,9 @@ class SystemStatus(BaseModel):
     # Present when the Lemonade health/catalog query failed. This distinguishes
     # an unavailable server from a probe failure without inventing a verdict.
     lemonade_error: Optional[str] = None
+    # How the Lemonade probe ended: "ok", "down" (nothing answered the
+    # connection), "timed_out" (connected, no answer in time) or "error".
+    lemonade_probe: Optional[Literal["ok", "down", "timed_out", "error"]] = None
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
@@ -161,6 +164,8 @@ class ModelServerInfo(BaseModel):
     version: Optional[str] = None
     chat_model: Optional[LoadedModelInfo] = None
     embedding_model: Optional[LoadedModelInfo] = None
+    # One plain sentence when GAIA chose the embedder's backend for a reason.
+    embedding_note: Optional[str] = None
     default_backend: Optional[str] = None
     available_backends: List[BackendOption] = Field(default_factory=list)
     # The saved choice; None means Auto (Lemonade decides).

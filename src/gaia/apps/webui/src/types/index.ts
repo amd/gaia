@@ -500,6 +500,8 @@ export interface SystemStatus {
     lemonade_running: boolean;
     /** Present when the Lemonade health/catalog query failed. */
     lemonade_error?: string | null;
+    /** How the probe ended: nothing answered ("down"), connected but no answer in time ("timed_out"), an error answer ("error"), or "ok". */
+    lemonade_probe?: 'ok' | 'down' | 'timed_out' | 'error' | null;
     /** How to start Lemonade on this host, resolved server-side. */
     start_instruction?: string | null;
     /** Shell command, or null on hosts started from a GUI (tray / app). */

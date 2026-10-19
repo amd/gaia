@@ -317,6 +317,11 @@ All request and response bodies use Pydantic models from `gaia.ui.models`.
 class SystemStatus(BaseModel):
     """System readiness status returned by GET /api/system/status."""
     lemonade_running: bool = False
+    # Why Lemonade's state is unknown, when it is; None when the probe succeeded.
+    lemonade_error: Optional[str] = None
+    # How the Lemonade probe ended: "ok", "down" (nothing listening),
+    # "timed_out" (busy, or out of the 20 s probe budget), or "error".
+    lemonade_probe: Optional[Literal["ok", "down", "timed_out", "error"]] = None
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
@@ -452,6 +457,8 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "lemonade_running": true,
+      "lemonade_error": null,
+      "lemonade_probe": "ok",
       "model_loaded": "Qwen3.5-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
@@ -460,6 +467,8 @@ class AttachDocumentRequest(BaseModel):
       "version": "0.1.0"
     }
     ```
+
+    `lemonade_probe` tells clients why Lemonade is or isn't reachable: `ok`, `down` (nothing listening, so it needs starting), `timed_out` (running but busy, or the probes ran past their 20-second budget), or `error` (Lemonade answered with an error, or the probe failed some other way; see `lemonade_error`).
   </Accordion>
 
   <Accordion title="GET /api/health">
@@ -548,8 +557,11 @@ class AttachDocumentRequest(BaseModel):
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
     | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
+
+    The load takes the same model-slot lease and load lock a chat turn does, so it waits for another app's load instead of racing it. While a chat is answering, the request returns `409` (loading another model could cut that answer off); send it again with `"force": true` to load anyway.
 
     **Response (202):**
     ```json
