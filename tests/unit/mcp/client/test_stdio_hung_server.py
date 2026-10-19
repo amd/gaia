@@ -1506,6 +1506,8 @@ def test_a_database_key_is_not_a_credential(word):
         ("KEY_PREFIX", False),
         ("PASS_THROUGH", False),
         ("FIRST_PASS", False),
+        ("FIRST_PASSWORD", True),
+        ("MAX_SECRET", True),
     ],
 )
 def test_name_splitting_and_switches(name, secret):
@@ -1521,6 +1523,11 @@ def test_redaction_stays_linear_on_long_non_ascii_secrets():
         ("\u5bc6" * 200 + "Zq9v1234", ("\u4e2d\u6587" * 500_000)[:1_000_000]),
         ("Zq9v" + "\u5bc6" * 200 + "Ke7w", ("Zq9v" + "\u4e2d" * 900) * 1100),
         ("\u5bc6\u7801" * 6 + "Zq9v1234", "\u4e2d" * 1_000_000),
+        # A core that starts with a backslash or a quote, against a long run
+        # of backslashes: every position could start a match.
+        ("\\\\Zq9vKe7w", "\\" * 1_000_000),
+        ('"Zq9vKe7w', "\\" * 1_000_000),
+        ('\u00e9"Zq9vKe7w', "\\" * 1_000_000),
     ]
     for secret, text in cases:
         t = StdioTransport(sys.executable, args=["--api-key", secret])
@@ -1563,3 +1570,40 @@ def test_a_boolean_value_is_never_a_secret():
 def test_a_secret_starting_or_ending_in_non_ascii_goes_whole(secret, arrived):
     t = StdioTransport(sys.executable, args=["--api-key", secret])
     assert t.redact(f"x {arrived} y") == "x <redacted> y"
+
+
+def test_a_secret_starting_with_a_backslash_or_quote_is_still_found():
+    for secret, arrived in [
+        ("\\\\Zq9vKe7w", "\\\\\\\\\\\\\\\\Zq9vKe7w"),
+        ('"Zq9vKe7w', '\\\\\\"Zq9vKe7w'),
+    ]:
+        t = StdioTransport(sys.executable, args=["--api-key", secret])
+        assert t.redact(f"x {arrived} y") == "x <redacted> y", (secret, arrived)
+
+
+def test_stderr_lines_are_cleaned_whole_then_capped(tmp_path):
+    """A huge line can't stall redaction, and the cap can't cut a secret."""
+    secret = "Zq9vKe7wP2capped"
+    script = tmp_path / "huge_line.py"
+    # The secret straddles the cap, inside one 200 KB line.
+    script.write_text(
+        "import sys\n"
+        f"sys.stderr.write('x' * (8192 - 8) + {secret!r} + 'y' * 200_000 + '\\n')\n"
+        "sys.stderr.flush()\n"
+        "sys.exit(4)\n"
+    )
+    transport = StdioTransport(
+        sys.executable, args=["-u", str(script), "--api-key", secret]
+    )
+    try:
+        # Dies at once, but a loaded machine can let it outlast connect()'s check.
+        assert transport.connect()
+        transport._process.wait(timeout=30)
+        stderr = str(transport._process_died_error())
+    except RuntimeError as died:
+        stderr = str(died)
+    finally:
+        transport.disconnect()
+    assert "Zq9v" not in stderr and "capped" not in stderr
+    assert "[line cut]" in stderr
+    assert len(stderr) < 9000

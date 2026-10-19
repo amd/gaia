@@ -106,6 +106,25 @@ _KEY_KINDS = frozenset(
 )
 # ... or its first word makes it a count: MAX_TOKENS, --max-tokens.
 _COUNT_WORDS = frozenset({"max", "min", "num", "first"})
+# Words that name a secret whatever comes before them.
+_STRONG_WORDS = frozenset(
+    {
+        "secret",
+        "secrets",
+        "password",
+        "passwords",
+        "passwd",
+        "pwd",
+        "passphrase",
+        "pgpassword",
+        "credential",
+        "credentials",
+        "apikey",
+        "apitoken",
+        "authtoken",
+        "authorization",
+    }
+)
 # A switch's value says on or off; it is never the secret.
 _BOOLEANS = frozenset({"true", "false", "yes", "no", "on", "off", "0", "1"})
 # user:pass@ or TOKEN@ in a URL; the value of an Authorization or Bearer header.
@@ -128,7 +147,10 @@ def _words(name: str) -> List[str]:
 
 def _names_a_secret(name: str) -> bool:
     words = _words(name)
-    if not words or words[-1] in _QUALIFIER_WORDS or words[0] in _COUNT_WORDS:
+    if not words or words[-1] in _QUALIFIER_WORDS:
+        return False
+    # MAX_TOKENS and FIRST_PASS are counts; FIRST_PASSWORD is still a password.
+    if words[0] in _COUNT_WORDS and not any(word in _STRONG_WORDS for word in words):
         return False
     # A switch: --no-auth, --disable-auth, DISABLE_AUTH, NO_AUTH. NO_PROXY_TOKEN
     # is a token for NO_PROXY, so for a name "no" must be followed by one word.
@@ -199,7 +221,11 @@ def _core_pattern(core: str) -> "re.Pattern[str]":
         else:
             parts.append(re.escape(char))
             i += 1
-    return re.compile("".join(parts))
+    pattern = "".join(parts)
+    if core[0] in '\\"':
+        # Start at the first backslash of a run, or a long run is quadratic.
+        pattern = r"(?<!\\)" + pattern
+    return re.compile(pattern)
 
 
 def _extend_back(text: str, start: int, units: int) -> int:
@@ -267,6 +293,9 @@ _STARTUP_CHECK_SLICES = 5
 # starts a child and exits sooner than this can leave that child behind.
 _CHILD_SCAN_S = 0.5
 _CHILD_SCAN_MAX_S = 8.0
+
+# The longest stderr line kept: redaction runs over every kept line.
+_STDERR_LINE_CHARS = 8192
 
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
@@ -594,13 +623,16 @@ class StdioTransport(MCPTransport):
         finally:
             lines.put(_EOF)
 
-    @staticmethod
-    def _pump_stderr(stream, tail: collections.deque) -> None:
+    def _pump_stderr(self, stream, tail: collections.deque) -> None:
         try:
             while True:
                 line = stream.readline()
                 if not isinstance(line, str) or not line:
                     return
+                # Cleaned whole, so the cap can't cut a secret in two.
+                line = self.redact(line)
+                if len(line) > _STDERR_LINE_CHARS:
+                    line = line[:_STDERR_LINE_CHARS] + " [line cut]\n"
                 tail.append(line)
         except (OSError, ValueError) as e:
             logger.debug("MCP server stderr closed: %s", e)

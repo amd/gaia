@@ -1075,7 +1075,8 @@ def send_request(
       sort, partition, cache, enabled, ttl, endpoint, provider, uri,
       timeout, required, method, scope, prefix, through: `AUTH_MODE`,
       `KEY_ID`, `PASS_THROUGH`), the first word a count or order (max, min,
-      num, first: `MAX_TOKENS`, `FIRST_PASS`), the name a database's key
+      num, first: `MAX_TOKENS`, `FIRST_PASS`) and no word a strong one such
+      as password or secret (`FIRST_PASSWORD` counts), the name a database's key
       (sort, partition, primary, cache, foreign or composite before `KEY`:
       `SORT_KEY`), or a switch: `disable`/`enable` first,
       or `no` first in a flag (`--no-auth`) or a two-word name (`NO_AUTH`).
@@ -1094,7 +1095,8 @@ def send_request(
     case behind any run of backslashes. The search anchors on the secret's
     ASCII core and extends over its leading and trailing runs. A secret whose
     ASCII core has fewer than 4 letters or digits is matched only exactly, raw
-    or JSON-escaped. Overlapping matches are removed together. Values under 4
+    or JSON-escaped. Overlapping matches are removed together. Each stderr
+    line is cleaned whole as it is read, then kept to at most 8 KB. Values under 4
     characters, and booleans (true, false, yes, no, on, off, 0, 1), are not
     matched, and a secret echoed as a JSON number is out of scope. Because a
     non-ASCII run matches loosely, a secret mixing CJK and ASCII can also
