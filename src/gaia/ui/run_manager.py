@@ -324,6 +324,10 @@ class RunManager:
             return False
         if run.handler is not None:
             run.handler.cancelled.set()
+        else:
+            from gaia.ui.turn_queue import turn_queue
+
+            turn_queue.cancel(session_id)
         return True
 
 

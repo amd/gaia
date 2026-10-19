@@ -281,6 +281,27 @@ class TestErrors:
         assert "lemonade-server serve" not in message
         assert "Lemonade" in message
 
+    @pytest.mark.parametrize(
+        "body, shown",
+        [
+            ({"error": "Unauthorized: invalid API key"}, "invalid API key"),
+            ({"error": {"message": "bad provider", "type": "x"}}, "bad provider"),
+            ("plain text", "plain text"),
+            ([], ""),
+        ],
+    )
+    def test_any_error_body_becomes_a_gateway_error(self, manager, body, shown):
+        """Lemonade's 401 (a restarted server holds a new key) says
+        {"error": "<text>"}, not an object; reading it once crashed every cloud
+        turn's key replay with AttributeError."""
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=401, body=body),
+        ):
+            with pytest.raises(GatewayError, match="HTTP 401") as excinfo:
+                manager.status()
+        assert shown in str(excinfo.value)
+
     def test_404_on_a_cloud_route_points_at_the_version_requirement(self, manager):
         with patch(
             "gaia.llm.gateway.requests.request",

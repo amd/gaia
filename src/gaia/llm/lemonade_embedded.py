@@ -56,6 +56,7 @@ from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.terminal import (
     background_popen_kwargs,
+    popen_outliving_job,
     windows_hidden_popen_kwargs,
 )
 from gaia.version import LEMONADE_VERSION
@@ -1788,7 +1789,7 @@ class EmbeddedLemonade:
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
-            process = subprocess.Popen(
+            process = popen_outliving_job(
                 argv,
                 env=env,
                 stdout=logfile,

@@ -3,6 +3,8 @@
 
 /** Types shared across the GAIA Agent UI frontend. */
 
+import type { TurnSummaryResponse } from './api.gen';
+
 export interface Session {
     id: string;
     title: string;
@@ -31,6 +33,27 @@ export interface Session {
     inference_provider_name?: string | null;
     /** One sentence on where chat runs and what is sent there. */
     inference_description?: string | null;
+    /** Pinned to the top of the chat list. */
+    pinned?: boolean;
+    /** A turn finished since the chat was last opened. */
+    unread?: boolean;
+    /** How the last turn ended; null before the first. */
+    last_run_status?: 'done' | 'failed' | 'stopped' | null;
+    /** Who started the chat: a person, the eval runner, or a schedule. */
+    kind?: SessionKind;
+}
+
+export type SessionKind = 'chat' | 'eval' | 'scheduled';
+
+/** What a chat's running turn is paused on. */
+export type AwaitingUser = 'permission' | 'question';
+
+/** GET /api/chat/active: chats with a turn in flight. */
+export interface ActiveRuns {
+    session_ids: string[];
+    /** Chats waiting for the model, first to run next first. */
+    queued: string[];
+    awaiting_user: Record<string, AwaitingUser>;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -268,7 +291,12 @@ export interface Message {
     stopError?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
+    /** Sources, files and data flow of the turn, for the side rail (#5222). */
+    turnSummary?: TurnSummary;
 }
+
+/** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */
+export type TurnSummary = TurnSummaryResponse;
 
 /** One card instance transferred onto a finalized Message (issue #2108). */
 export interface RenderCardData {
@@ -679,6 +707,8 @@ export interface StreamEvent {
     tools_used?: number;
     /** Inference stats from the LLM backend (attached to done events). */
     stats?: InferenceStats;
+    /** Per-turn sources, files and data flow (attached to done events). */
+    turn_summary?: TurnSummary;
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */

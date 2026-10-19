@@ -46,6 +46,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
+from gaia.ui.turn_summary import TurnLedger
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -592,6 +593,8 @@ class SSEOutputHandler(OutputHandler):
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
+        # What this turn's tools used, wrote and contacted, for the side rail.
+        self.turn_ledger = TurnLedger()
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -712,6 +715,7 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
+        self.turn_ledger.tool_started(tool_name)
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -746,6 +750,7 @@ class SSEOutputHandler(OutputHandler):
         # so the frontend can show what the tool was called with.
         if title == "Arguments" and isinstance(data, dict):
             detail = _format_tool_args(self._last_tool_name, data)
+            self.turn_ledger.tool_args(data)
             self._emit(
                 {
                     "type": "tool_args",
@@ -769,6 +774,7 @@ class SSEOutputHandler(OutputHandler):
         summary = _summarize_tool_result(data)
         success = not tool_result_failed(data)
         self._last_tool_success = success
+        self.turn_ledger.tool_result(data, success)
         event = {
             "type": "tool_result",
             "title": title,
@@ -1850,6 +1856,16 @@ class SSEOutputHandler(OutputHandler):
                 f"Tool '{tool_name}' was denied by the user.",
             )
         return result
+
+    def waiting_on(self) -> Optional[str]:
+        """``"permission"`` or ``"question"`` while the turn is paused on the user."""
+        with self._confirm_lock:
+            if self._confirm_id is not None or self._relay_confirm_id is not None:
+                return "permission"
+        with self._user_input_lock:
+            if self._user_input_events:
+                return "question"
+        return None
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""

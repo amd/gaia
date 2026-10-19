@@ -501,7 +501,8 @@ describe('component stylesheets route colour through tokens', () => {
     it('has no colour literal outside index.css', () => {
         const offenders: string[] = [];
         for (const [path, source] of Object.entries(CSS_SOURCES)) {
-            if (path === INDEX_PATH) continue;
+            // palettes.css re-declares index.css tokens per palette; palettes.test.ts checks it.
+            if (path === INDEX_PATH || path === '/src/styles/palettes.css') continue;
             source
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .split(/\r?\n/)
@@ -528,6 +529,8 @@ describe('component stylesheets route colour through tokens', () => {
     const LITERAL_ALLOWED: Record<string, string> = {
         '/src/utils/logger.ts':
             'DevTools `%c` category palette -- never painted in the app',
+        '/src/utils/palette.ts':
+            'derives every token from the two colors a person picks, and previews each palette as a swatch before it applies',
         '/src/utils/theme.ts':
             '<meta name="theme-color"> has no cascade to read --bg-primary from; both values are pinned to it below',
     };
@@ -600,6 +603,8 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
             token: '--bg-primary',
             why: 'BrowserWindow backgroundColor is a main-process option, not CSS -- there is no cascade to read a custom property from',
         },
+        { path: '/main.cjs', literal: '#1A1917', token: '--bg-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
+        { path: '/main.cjs', literal: '#EFECE6', token: '--text-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
     ];
 
     it('reads the Electron sources, not an empty set', () => {
