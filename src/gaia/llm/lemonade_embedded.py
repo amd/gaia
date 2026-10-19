@@ -1196,6 +1196,7 @@ class EmbeddedLemonade:
         if recorded is not None and recorded.get("pid") == pid:
             self._clear_state()  # unless a start recorded a new server since
         if reap:
+            # Safe without the lock: a concurrent start's backends have a live anchor.
             self._reap_orphaned_backends()
         return stopped
 
