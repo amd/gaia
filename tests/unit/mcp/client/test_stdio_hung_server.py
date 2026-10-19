@@ -998,6 +998,45 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
 @pytest.mark.parametrize(
     "args,env,secret,forms",
     [
+        # A cp850 console: two bytes can decode to one character.
+        (
+            [],
+            {"API_KEY": "Zq9vßüKe7w", "STUB_CODEC": "cp850", "STUB_ERRORS": "strict"},
+            "Zq9vßüKe7w",
+            ["Zq9vßüKe7w", "Zq9v�Ke7w"],
+        ),
+        # A cp866 console: two bytes can decode to one character.
+        (
+            [],
+            {"API_KEY": "пароль2024Zq", "STUB_CODEC": "cp866", "STUB_ERRORS": "strict"},
+            "пароль2024Zq",
+            ["пароль2024Zq", "��\u0bab�2024Zq"],
+        ),
+        # A cp1251 console: two bytes can decode to one character.
+        (
+            [],
+            {
+                "API_KEY": "Zq9vпарольKe7w",
+                "STUB_CODEC": "cp1251",
+                "STUB_ERRORS": "strict",
+            },
+            "Zq9vпарольKe7w",
+            ["Zq9vпарольKe7w", "Zq9v������Ke7w"],
+        ),
+        # One character as two escapes (a surrogate pair in ASCII JSON).
+        (
+            [],
+            {"API_KEY": "Zq9v😀Ke7w", "STUB_ASCII": "1"},
+            "Zq9v😀Ke7w",
+            ["Zq9v😀Ke7w", "Zq9v\\\\ud83d\\\\ude00Ke7w"],
+        ),
+        # Uppercase hex in an escape.
+        (
+            [],
+            {"API_KEY": "Zq9véKe7w", "STUB_ASCII": "1", "STUB_UPPER_HEX": "1"},
+            "Zq9véKe7w",
+            ["Zq9véKe7w", "Zq9v\\\\u00E9Ke7w"],
+        ),
         # A backslash before a letter, escaped twice over.
         (
             [],
@@ -1100,6 +1139,11 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
         ),
     ],
     ids=[
+        "cp850",
+        "cp866",
+        "cp1251",
+        "surrogate-pair-json",
+        "uppercase-hex",
         "backslash-in-json-in-json",
         "latin1-euro",
         "ascii-replace",
@@ -1132,6 +1176,7 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
         codec = os.environ.get("STUB_CODEC", "cp1252")
         json_codec = os.environ.get("STUB_JSON_CODEC", "utf-8")
         double = os.environ.get("STUB_DOUBLE_JSON") == "1"
+        upper = os.environ.get("STUB_UPPER_HEX") == "1"
         for line in sys.stdin:
             req = json.loads(line)
             if req["method"] == "initialize":
@@ -1142,6 +1187,9 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
                 line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
                 if double:  # a JSON string holding a JSON string
                     line = json.dumps(line)
+                if upper:  # uppercase hex, as some encoders write it
+                    import re
+                    line = re.sub(r"u([0-9a-f]{4})", lambda m: "u" + m.group(1).upper(), line)
                 sys.stdout.flush()
                 sys.stdout.buffer.write((line + "\\n").encode(json_codec))
             else:  # a dict-key echo in an error, then cp1252 bytes on stderr
@@ -1368,6 +1416,7 @@ _SECRET_WORD_ROWS = [
     "apitoken",
     "pass",
     "pat",
+    "pgpassword",
 ]
 _QUALIFIER_ROWS = [
     "id",
@@ -1393,8 +1442,13 @@ _QUALIFIER_ROWS = [
     "provider",
     "uri",
     "timeout",
+    "required",
+    "method",
+    "scope",
+    "prefix",
+    "through",
 ]
-_COUNT_ROWS = ["max", "min", "num"]
+_COUNT_ROWS = ["max", "min", "num", "first"]
 _KEY_KIND_ROWS = ["sort", "partition", "primary", "cache", "foreign", "composite"]
 
 
@@ -1444,6 +1498,14 @@ def test_a_database_key_is_not_a_credential(word):
         ("API_KEY2", True),
         ("TOKEN2", True),
         ("apiKey2", True),
+        ("V2TOKEN", True),
+        ("PGPASSWORD", True),
+        ("AUTH_REQUIRED", False),
+        ("AUTH_METHOD", False),
+        ("TOKEN_SCOPE", False),
+        ("KEY_PREFIX", False),
+        ("PASS_THROUGH", False),
+        ("FIRST_PASS", False),
     ],
 )
 def test_name_splitting_and_switches(name, secret):
@@ -1451,3 +1513,53 @@ def test_name_splitting_and_switches(name, secret):
 
     check = _is_secret_flag if name.startswith("-") else _is_secret_name
     assert check(name) is secret
+
+
+def test_redaction_stays_linear_on_long_non_ascii_secrets():
+    """A 200-character non-ASCII run against 1 MB must not backtrack."""
+    cases = [
+        ("\u5bc6" * 200 + "Zq9v1234", ("\u4e2d\u6587" * 500_000)[:1_000_000]),
+        ("Zq9v" + "\u5bc6" * 200 + "Ke7w", ("Zq9v" + "\u4e2d" * 900) * 1100),
+        ("\u5bc6\u7801" * 6 + "Zq9v1234", "\u4e2d" * 1_000_000),
+    ]
+    for secret, text in cases:
+        t = StdioTransport(sys.executable, args=["--api-key", secret])
+        started = time.perf_counter()
+        t.redact(text)
+        took = time.perf_counter() - started
+        assert took < 0.25, f"{took:.2f}s for a {len(secret)}-character secret"
+
+
+def test_a_mostly_non_ascii_secret_never_erases_unrelated_text():
+    """Too few ASCII anchors: match it exactly, not as a loose pattern."""
+    t = StdioTransport(
+        sys.executable, args=["--api-key", "\u043f\u0430\u0440\u043e\u043b\u044c1"]
+    )
+    text = "unrelated ??????1 and \u0442\u0435\u043a\u0441\u04421 stay"
+    assert t.redact(text) == text
+    assert "<redacted>" in t.redact("leaked \u043f\u0430\u0440\u043e\u043b\u044c1")
+
+
+def test_a_boolean_value_is_never_a_secret():
+    t = StdioTransport(
+        sys.executable,
+        args=["--token", "true", "--api-key=false"],
+        env={"API_KEY": "yes"},
+    )
+    text = "verbose: true, cache: false, retry: yes"
+    assert t.redact(text) == text
+
+
+@pytest.mark.parametrize(
+    "secret,arrived",
+    [
+        ("пароль2024Zq", "пароль2024Zq"),
+        ("пароль2024Zq", "\u043f\u0430\u0440\u043e\u043b\u044c2024Zq"),
+        ("Zq2024пароль", "Zq2024пароль"),
+        ("Zq2024пароль", "Zq2024??????"),
+    ],
+    ids=["leading-raw", "leading-escaped", "trailing-raw", "trailing-replaced"],
+)
+def test_a_secret_starting_or_ending_in_non_ascii_goes_whole(secret, arrived):
+    t = StdioTransport(sys.executable, args=["--api-key", secret])
+    assert t.redact(f"x {arrived} y") == "x <redacted> y"

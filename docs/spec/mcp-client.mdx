@@ -1068,14 +1068,16 @@ def send_request(
     - env values whose name has a secret word: key, keys, apikey, token,
       tokens, secret, secrets, password, passwords, passwd, pwd, passphrase,
       credential, credentials, auth, authorization, authtoken, apitoken,
-      pass or pat. Names are split into words on `_`, `-`, `.`, camelCase,
+      pass, pat or pgpassword. Names are split into words on `_`, `-`, `.`, camelCase,
       acronyms and digits, so `APIToken`, `JWTSecret` and `API_KEY2` count.
       Not when the last word is a qualifier (id, mode, limit, file, path,
       type, url, name, size, count, length, region, parallelism, layout,
       sort, partition, cache, enabled, ttl, endpoint, provider, uri,
-      timeout: `AUTH_MODE`, `KEY_ID`), the first word a count (max, min,
-      num: `MAX_TOKENS`), the name a database's key (`SORT_KEY`,
-      `PARTITION_KEY`, `PRIMARY_KEY`), or a switch: `disable`/`enable` first,
+      timeout, required, method, scope, prefix, through: `AUTH_MODE`,
+      `KEY_ID`, `PASS_THROUGH`), the first word a count or order (max, min,
+      num, first: `MAX_TOKENS`, `FIRST_PASS`), the name a database's key
+      (sort, partition, primary, cache, foreign or composite before `KEY`:
+      `SORT_KEY`), or a switch: `disable`/`enable` first,
       or `no` first in a flag (`--no-auth`) or a two-word name (`NO_AUTH`).
       `NO_PROXY_TOKEN` still counts;
     - the value after a flag named the same way (`--api-key v`, `--token=v`,
@@ -1083,17 +1085,22 @@ def send_request(
     - `KEY=VALUE` where `KEY` is named the same way;
     - a URL's userinfo (`user:pass@` or `TOKEN@`), and an Authorization or
       Bearer header value inside an argument.
-    Each secret is found with one pattern. ASCII characters match themselves,
-    except that `\` and `"` may carry any number of escaping backslashes (JSON,
-    and JSON inside JSON). Each non-ASCII character matches itself; up to four
-    of `?`, `\ufffd` or any non-ASCII character (a code page's replacement, an
-    undecodable byte, mojibake); or a `\xNN`, `\uNNNN`, surrogate-pair or
-    `\UNNNNNNNN` escape behind any number of backslashes. A secret with fewer
-    than 4 ASCII letters or digits is matched only exactly, raw or
-    JSON-escaped. Overlapping matches are removed together. Values under 4
-    characters are not matched, and a secret echoed as a JSON number is out of
-    scope. A successful tool result is returned to the agent as the server
-    sent it; only errors and logs are cleaned. Debug logs of raw traffic
+    Each secret is found in linear time. ASCII characters match themselves,
+    except that a run of `\` and a `"` may carry any number of escaping
+    backslashes (JSON, and JSON inside JSON). Each run of k non-ASCII
+    characters matches 1 to 4k units, each a non-ASCII character or `?` (a
+    code page's replacement, an undecodable byte, mojibake, bytes a UTF-8
+    decode collapsed) or a `\xNN`, `\uNNNN` or `\UNNNNNNNN` escape in either
+    case behind any run of backslashes. The search anchors on the secret's
+    ASCII core and extends over its leading and trailing runs. A secret whose
+    ASCII core has fewer than 4 letters or digits is matched only exactly, raw
+    or JSON-escaped. Overlapping matches are removed together. Values under 4
+    characters, and booleans (true, false, yes, no, on, off, 0, 1), are not
+    matched, and a secret echoed as a JSON number is out of scope. Because a
+    non-ASCII run matches loosely, a secret mixing CJK and ASCII can also
+    remove up to four neighbouring CJK characters per secret character. A
+    successful tool result is returned to the agent as the server sent it;
+    only errors and logs are cleaned. Debug logs of raw traffic
     (`debug=True`) can still hold other server output.
     Writes are bounded too: a server that stops reading its input is stopped
     rather than left blocking the request, and waiting behind another request

@@ -3,6 +3,7 @@
 """Stdio transport for MCP protocol communication via subprocess."""
 
 import collections
+import functools
 import json
 import os
 import queue
@@ -13,7 +14,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import psutil
 
@@ -62,6 +63,7 @@ _SECRET_WORDS = frozenset(
         "apitoken",
         "pass",
         "pat",
+        "pgpassword",
     }
 )
 # ... unless its last word says the value is something else about the secret:
@@ -91,6 +93,11 @@ _QUALIFIER_WORDS = frozenset(
         "provider",
         "uri",
         "timeout",
+        "required",
+        "method",
+        "scope",
+        "prefix",
+        "through",
     }
 )
 # ... or it is a database's key: SORT_KEY, PARTITION_KEY, PRIMARY_KEY.
@@ -98,7 +105,9 @@ _KEY_KINDS = frozenset(
     {"sort", "partition", "primary", "cache", "foreign", "composite"}
 )
 # ... or its first word makes it a count: MAX_TOKENS, --max-tokens.
-_COUNT_WORDS = frozenset({"max", "min", "num"})
+_COUNT_WORDS = frozenset({"max", "min", "num", "first"})
+# A switch's value says on or off; it is never the secret.
+_BOOLEANS = frozenset({"true", "false", "yes", "no", "on", "off", "0", "1"})
 # user:pass@ or TOKEN@ in a URL; the value of an Authorization or Bearer header.
 _URL_USERINFO = re.compile(r"[a-zA-Z][\w+.-]*://([^/@\s]+)@")
 _AUTH_HEADER = re.compile(
@@ -143,58 +152,111 @@ def _is_secret_name(name: str) -> bool:
     return _names_a_secret(name)
 
 
-def _secret_pattern(secret: str) -> "re.Pattern[str]":
-    r"""One regex matching *secret* in every form it can reach GAIA's text in.
+# One character of a secret's non-ASCII run, as it can arrive: any non-ASCII
+# character or "?" (a code page's replacement, an undecodable byte, mojibake),
+# or a \xNN / \uNNNN / \UNNNNNNNN escape behind any run of backslashes.
+_RUN_UNIT = r"(?:[?\x80-\U0010ffff]|\\+(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8}))"
+_RUN_CHAR = re.compile(r"[?\x80-\U0010ffff]")
+_ESCAPE_BEFORE = re.compile(r"\\+(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})\Z")
+# A run of k non-ASCII characters can arrive as anything from one character
+# (bytes a UTF-8 decode collapsed) to four units per character (escapes).
+_UNITS_PER_CHAR = 4
 
-    Each ASCII character matches itself, except that ``\`` and ``"`` may carry
-    any number of escaping backslashes (JSON, and JSON inside JSON). Each
-    non-ASCII character matches itself, or up to four of ``?``, ``\ufffd`` or
-    any non-ASCII character (a code page's replacement, an undecodable byte,
-    mojibake), or a backslash escape behind any number of backslashes:
-    ``\xNN``, ``\uNNNN``, a ``\uD8xx\uDCxx`` surrogate pair, or
-    ``\UNNNNNNNN``, in either case. That one shape covers JSON, Python's
-    escapes, and any single-byte code page a server writes in.
 
-    A secret with fewer than 4 ASCII letters or digits is matched exactly
-    (raw or JSON-escaped): the loose form would match ordinary text in its
-    script.
+@functools.lru_cache(maxsize=256)
+def _run_after(units: int) -> "re.Pattern[str]":
+    return re.compile(f"{_RUN_UNIT}{{1,{units}}}")
+
+
+@functools.lru_cache(maxsize=256)
+def _core_pattern(core: str) -> "re.Pattern[str]":
+    """*core* (starting and ending in ASCII) as one linear-time pattern.
+
+    ASCII matches itself; a run of ``m`` backslashes matches ``m`` or more
+    (escaped once or many times), as does one before ``"``; a run of ``k``
+    non-ASCII characters is one bounded repetition of ``_RUN_UNIT``.
     """
-    if len(re.findall(r"[A-Za-z0-9]", secret)) < 4:
-        exact = {
+    parts = []
+    i = 0
+    while i < len(core):
+        char = core[i]
+        if ord(char) >= 128:
+            j = i
+            while j < len(core) and ord(core[j]) >= 128:
+                j += 1
+            parts.append(f"{_RUN_UNIT}{{1,{_UNITS_PER_CHAR * (j - i)}}}")
+            i = j
+        elif char == "\\":
+            j = i
+            while j < len(core) and core[j] == "\\":
+                j += 1
+            quote = j < len(core) and core[j] == '"'
+            parts.append(f"\\\\{{{j - i},}}" + ('"' if quote else ""))
+            i = j + (1 if quote else 0)
+        elif char == '"':
+            parts.append(r'\\*"')
+            i += 1
+        else:
+            parts.append(re.escape(char))
+            i += 1
+    return re.compile("".join(parts))
+
+
+def _extend_back(text: str, start: int, units: int) -> int:
+    """Move *start* back over up to *units* run units before it."""
+    for _ in range(units):
+        if start > 0 and _RUN_CHAR.match(text, start - 1):
+            start -= 1
+            continue
+        escape = _ESCAPE_BEFORE.search(text, max(0, start - 24), start)
+        if escape is None:
+            break
+        start = escape.start()
+    return start
+
+
+def _secret_spans(secret: str, text: str) -> List[Tuple[int, int]]:
+    """Where *secret* appears in *text*, in any form it can arrive in.
+
+    The search runs in linear time: it anchors on the secret's ASCII core,
+    with each inner non-ASCII run as one bounded repetition, then extends
+    over the leading and trailing non-ASCII runs by at most four units per
+    character. That covers JSON at any depth, Python's escapes and any
+    single-byte code page, including bytes a UTF-8 decode collapsed into
+    fewer characters.
+
+    A secret whose ASCII core has fewer than 4 letters or digits is matched
+    only exactly, raw or JSON-escaped: the loose form would match ordinary
+    text written in its script.
+    """
+    i = 0
+    while i < len(secret) and ord(secret[i]) >= 128:
+        i += 1
+    j = len(secret)
+    while j > i and ord(secret[j - 1]) >= 128:
+        j -= 1
+    lead, core, trail = i, secret[i:j], len(secret) - j
+    if len(re.findall(r"[A-Za-z0-9]", core)) < 4:
+        forms = {
             secret,
             json.dumps(secret)[1:-1],
             json.dumps(secret, ensure_ascii=False)[1:-1],
         }
-        return re.compile(
-            "|".join(re.escape(f) for f in sorted(exact, key=len, reverse=True))
+        exact = re.compile(
+            "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
         )
-    parts = []
-    for char in secret:
-        code = ord(char)
-        if char == "\\":
-            parts.append(r"\\+")
-        elif char == '"':
-            parts.append(r'\\*"')
-        elif code < 128:
-            parts.append(re.escape(char))
-        else:
-            escapes = []
-            if code < 0x100:
-                escapes.append(f"x{code:02x}")
-            if code < 0x10000:
-                escapes.append(f"u{code:04x}")
-            else:
-                high = 0xD800 + ((code - 0x10000) >> 10)
-                low = 0xDC00 + ((code - 0x10000) & 0x3FF)
-                escapes.append(f"u{high:04x}\\\\+u{low:04x}")
-            escapes.append(f"U{code:08x}")
-            alternatives = [
-                re.escape(char),
-                r"[?\x80-\U0010ffff]{1,4}",
-                *(r"\\+" + f"(?i:{escape})" for escape in escapes),
-            ]
-            parts.append("(?:" + "|".join(alternatives) + ")")
-    return re.compile("".join(parts))
+        return [m.span() for m in exact.finditer(text)]
+    spans = []
+    for match in _core_pattern(core).finditer(text):
+        start, end = match.span()
+        if lead:
+            start = _extend_back(text, start, _UNITS_PER_CHAR * lead)
+        if trail:
+            after = _run_after(_UNITS_PER_CHAR * trail).match(text, end)
+            if after:
+                end = after.end()
+        spans.append((start, end))
+    return spans
 
 
 # How long connect() watches for an immediate crash, and in how many steps.
@@ -372,7 +434,8 @@ class StdioTransport(MCPTransport):
     def _secrets(self) -> List[str]:
         """The known secret values in this server's launch config, longest first.
 
-        ``redact`` finds each one in any encoding (``_secret_pattern``).
+        ``redact`` finds each one in any encoding (``_secret_spans``). A
+        boolean (true, false, yes, no, on, off) is never a secret.
 
         Exactly these, and nothing guessed from a value's shape:
 
@@ -418,7 +481,11 @@ class StdioTransport(MCPTransport):
                 found.add(userinfo)
                 found.update(userinfo.split(":", 1))
             found.update(match.group(1) for match in _AUTH_HEADER.finditer(text))
-        return sorted((v for v in found if len(v) >= 4), key=len, reverse=True)
+        return sorted(
+            (v for v in found if len(v) >= 4 and v.lower() not in _BOOLEANS),
+            key=len,
+            reverse=True,
+        )
 
     def redact(self, text: str) -> str:
         """*text* from the server with this server's known secrets removed.
@@ -431,10 +498,10 @@ class StdioTransport(MCPTransport):
         """
         # Spans, merged, so two secrets that overlap leave no piece of either.
         spans = [
-            match.span()
+            span
             for secret in self._secrets()
-            for match in _secret_pattern(secret).finditer(text)
-            if match.end() > match.start()
+            for span in _secret_spans(secret, text)
+            if span[1] > span[0]
         ]
         if not spans:
             return text
