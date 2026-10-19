@@ -234,6 +234,39 @@ def test_an_abandoned_setup_call_still_releases_what_it_took():
     assert not lock.locked()
 
 
+def test_a_failed_release_of_an_abandoned_setup_is_logged(monkeypatch):
+    """A release that raises on its cleanup thread must reach the sidecar log."""
+    import asyncio
+
+    logged = threading.Event()
+    messages = []
+
+    class _Logger:
+        def exception(self, msg, *args):
+            messages.append(msg)
+            logged.set()
+
+    monkeypatch.setattr(server_mod, "logger", _Logger())
+
+    def broken_release(_result):
+        raise RuntimeError("lock already released")
+
+    async def cancelled_request():
+        task = asyncio.ensure_future(
+            server_mod._off_loop(lambda: time.sleep(0.2), on_abandon=broken_release)
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.5)
+
+    asyncio.run(cancelled_request())
+
+    assert logged.wait(timeout=5)
+    assert "abandoned" in messages[0]
+
+
 # ---------------------------------------------------------------------------
 # The window between finding a session and taking its turn
 # ---------------------------------------------------------------------------

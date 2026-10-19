@@ -901,10 +901,17 @@ async def _off_loop(
     except asyncio.CancelledError:
         if on_abandon is not None:
 
+            def _release(result: Any) -> None:
+                try:
+                    on_abandon(result)
+                except Exception:  # pylint: disable=broad-except
+                    # A failed release leaks a lock or agent; leave a trace.
+                    logger.exception("Releasing an abandoned /query setup failed")
+
             def _cleanup(done: "asyncio.Future") -> None:
                 failed = done.cancelled() or done.exception() is not None
                 threading.Thread(
-                    target=on_abandon,
+                    target=_release,
                     args=(None if failed else done.result(),),
                     name="query-setup-cleanup",
                     daemon=True,
