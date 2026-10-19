@@ -63,6 +63,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
@@ -329,7 +330,9 @@ EXTRACTION_TOOL_RECORD_DETAIL_CHARS = 2000
 _EXTRACTION_GROUNDS = frozenset({"user"})
 
 
-def _copied_from_material(content: str, user_input: str, material: str) -> bool:
+def _copied_from_material(
+    content: str, user_input: str, material: str, prior: str = ""
+) -> bool:
     """Whether a proposed memory restates what the turn read, not what the user said.
 
     The extractor labels ops "user" even when it lifted them from a PDF
@@ -339,8 +342,13 @@ def _copied_from_material(content: str, user_input: str, material: str) -> bool:
     lends a few such words to a real fact, so a memory resting on several of
     the user's own words is kept unless the borrowed ones outnumber them two
     to one.
+
+    *prior* is the memory an update replaces. Its words count on neither
+    side: an answer that echoes it back ("I moved your dentist appointment to
+    Friday") does not make a short correction look borrowed, and a borrowed
+    addition to it still has to rest on the user's own words.
     """
-    words = content_stems(content)
+    words = content_stems(content) - content_stems(prior)
     from_user = words & content_stems(user_input)
     from_material = (words - from_user) & content_stems(material)
     return len(from_material) >= 2 and (
@@ -1998,8 +2006,18 @@ class MemoryMixin(ProceduralMemoryMixin):
                         str(op.get("content", ""))[:80],
                     )
                     continue
+                prior = ""
+                if op_type == "update":
+                    prior = next(
+                        (
+                            str(item.get("content", ""))
+                            for item in existing_items
+                            if item.get("id") == op.get("knowledge_id")
+                        ),
+                        "",
+                    )
                 if op_type in ("add", "update") and _copied_from_material(
-                    str(op.get("content", "")), user_input, material
+                    str(op.get("content", "")), user_input, material, prior
                 ):
                     logger.info(
                         "[MemoryMixin] not stored: proposed memory restates what "
@@ -3345,6 +3363,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         upcoming/overdue items) is injected per-turn by prepending it to the
         user message.
         """
+        # A turn that failed before it opened must not backdate this one.
+        self._pre_turn_spans = None
         # First, so a running extraction gives up the model before this turn
         # makes any call of its own.
         self._note_user_turn_started()
@@ -3360,7 +3380,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             # Run deferred LLM startup tasks on first real query (after self.chat exists)
             if getattr(self, "_memory_post_init_pending", False):
                 self._memory_post_init_pending = False
-                self._run_memory_post_init()
+                with turn_metrics.pre_turn_span(self, "memory_post_init"):
+                    self._run_memory_post_init()
 
             # Save original so _after_process_query stores the clean user text
             self._original_user_input = user_input
@@ -3373,10 +3394,12 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Recall procedures for this goal (#887 RECALL) from the clean goal,
             # not the augmented message; the dynamic context below carries it.
-            self._refresh_recalled_skills(user_input)
+            with turn_metrics.pre_turn_span(self, "skill_recall"):
+                self._refresh_recalled_skills(user_input)
 
             # Prepend dynamic context to the user message
-            dynamic = self.get_memory_dynamic_context()
+            with turn_metrics.pre_turn_span(self, "memory_context"):
+                dynamic = self.get_memory_dynamic_context()
             augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
 
             return super().process_query(augmented, **kwargs)
@@ -3466,30 +3489,34 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Log to tool_history
         try:
-            if getattr(self, "_memory_store", None) is not None and not getattr(
-                self, "_incognito", False
-            ):
-                self._memory_store.log_tool_call(
-                    session_id=self.memory_session_id,
-                    tool_name=tool_name,
-                    args=tool_args,
-                    result_summary=result_summary,
-                    success=not is_error,
-                    error=error_msg,
-                    duration_ms=duration_ms,
-                )
+            with turn_metrics.span("memory_tool_log", tool=tool_name):
+                if getattr(self, "_memory_store", None) is not None and not getattr(
+                    self, "_incognito", False
+                ):
+                    self._memory_store.log_tool_call(
+                        session_id=self.memory_session_id,
+                        tool_name=tool_name,
+                        args=tool_args,
+                        result_summary=result_summary,
+                        success=not is_error,
+                        error=error_msg,
+                        duration_ms=duration_ms,
+                    )
 
-                # Auto-store novel errors as knowledge
-                if is_error and error_msg:
-                    self._auto_store_error(tool_name, error_msg, tool_args, result)
-                    self._note_failure(tool_name, tool_args, error_msg, result)
-                elif not is_error and check_was_executed(result):
-                    # It worked. Retire what this same operation was blamed for,
-                    # so a fixed bug stops being replayed into every prompt.
-                    self._forget_errors_for_operation(tool_name, tool_args)
-                    self._learn_from_success(tool_name, tool_args)
+                    # Auto-store novel errors as knowledge
+                    if is_error and error_msg:
+                        self._auto_store_error(tool_name, error_msg, tool_args, result)
+                        self._note_failure(tool_name, tool_args, error_msg, result)
+                    elif not is_error and check_was_executed(result):
+                        # It worked. Retire what this same operation was blamed for,
+                        # so a fixed bug stops being replayed into every prompt.
+                        self._forget_errors_for_operation(tool_name, tool_args)
+                        self._learn_from_success(tool_name, tool_args)
         except Exception as e:
-            logger.debug("[MemoryMixin] tool logging failed: %s", e)
+            # Bookkeeping must never fail the tool, but a broken store must show.
+            logger.warning(
+                "[MemoryMixin] logging %s to tool_history failed: %s", tool_name, e
+            )
 
         return result
 

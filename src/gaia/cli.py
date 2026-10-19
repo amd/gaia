@@ -2589,6 +2589,64 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
         "or <tmp>/gaia-bench, shared with `gaia eval tasks`)",
     )
 
+    # Long-horizon memory benchmark: gaia eval memory
+    memory_eval_parser = eval_subparsers.add_parser(
+        "memory",
+        help="Memory over months of chats: changing facts, forgets, lessons, injection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval memory --suite pr
+  gaia eval memory --suite pr --gate tests/fixtures/eval_baselines/memory-bench/pr.json
+  gaia eval memory --suite full --scenario maya_moves_and_changes_jobs
+  gaia eval memory --list
+
+Each scenario is one person's chats over weeks or months, replayed through the
+real memory pipeline on a simulated clock: a fresh agent per chat, extraction
+after every turn, consolidation of old chats, explicit remember/forget calls,
+tool mistakes that should become lessons. Probes then check what the agent is
+shown, and what is stored, at points in time.
+
+`pr` is offline and deterministic (a scripted model and a hashed embedder), so
+it gates PRs: a check that passes in the baseline must still pass. `full` uses
+the local model for extraction, consolidation and answers, with the real
+embedder; it needs Lemonade and takes the machine-wide eval lock.
+""",
+    )
+    memory_eval_parser.add_argument(
+        "--suite",
+        choices=["pr", "full"],
+        default="pr",
+        help="Which suite (default: pr)",
+    )
+    memory_eval_parser.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        help="Run only this scenario id (repeatable)",
+    )
+    memory_eval_parser.add_argument(
+        "--model",
+        default=None,
+        help="full suite: chat model (default: GAIA's default chat model)",
+    )
+    memory_eval_parser.add_argument(
+        "--gate", default=None, help="Baseline results.json to gate against"
+    )
+    memory_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/memory-<suite>-<time>)",
+    )
+    memory_eval_parser.add_argument(
+        "--list", action="store_true", help="List the scenarios and exit"
+    )
+    memory_eval_parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Keep the replayed memory databases for inspection",
+    )
+
     # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
     tasks_eval_parser = eval_subparsers.add_parser(
         "tasks",
@@ -3977,6 +4035,58 @@ def _handle_eval_retrieval(args):
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
     if failed:
+        sys.exit(1)
+
+
+def _handle_eval_memory(args):
+    """gaia eval memory — see gaia.eval.memory.runner."""
+    from gaia.eval.memory import runner
+    from gaia.eval.memory.scenario import load_scenarios
+
+    if args.model and args.suite != "full":
+        print(
+            f"--model applies only to --suite full; the {args.suite} suite runs "
+            "a scripted model. Drop --model, or add --suite full."
+        )
+        sys.exit(2)
+    if args.list:
+        for scenario in load_scenarios(args.scenario):
+            print(
+                f"{scenario.id:42} {len(scenario.sessions):3} chats  "
+                f"{len(scenario.probes):3} probes  {scenario.title}"
+            )
+        return
+    out_dir = Path(
+        args.out or f"eval/results/memory-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+    )
+    if args.suite == "full":
+        from gaia.eval.eval_lock import exclusive_eval
+
+        with exclusive_eval(f"gaia eval memory --suite {args.suite}"):
+            result = runner.run_suite(
+                args.suite,
+                only=args.scenario,
+                model=args.model,
+                keep_workdir=args.keep_work,
+            )
+    else:
+        result = runner.run_suite(
+            args.suite, only=args.scenario, keep_workdir=args.keep_work
+        )
+    gated = None
+    if args.gate:
+        baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
+        gated = runner.gate(result, baseline)
+    runner.write_outputs(result, out_dir, gated)
+    print((out_dir / "report.md").read_text(encoding="utf-8"))
+    print(f"[OUTPUT] {(out_dir / 'results.json').resolve()}")
+    if gated is not None and not gated.passed:
+        print(
+            f"[GATE] FAILED: {len(gated.regressions)} regression(s), "
+            f"{len(gated.missing_checks)} baseline check(s) no longer run. "
+            "See report.md; if a change is intended, replace the baseline with "
+            "this run's results.json in the same PR."
+        )
         sys.exit(1)
 
 
@@ -5408,6 +5518,11 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Long-horizon memory benchmark: gaia eval memory
+        if getattr(args, "eval_command", None) == "memory":
+            _handle_eval_memory(args)
             return
 
         # Retrieval benchmarks: gaia eval retrieval [--component rag|code]

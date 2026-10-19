@@ -40,6 +40,7 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base import turn_metrics
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
@@ -1950,6 +1951,15 @@ class Agent(abc.ABC):
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
+    # The sealed recorder, kept until process_query returns so post-answer
+    # work (memory writes) is timed too.
+    _sealed_turn_recorder: Optional[Any] = None
+    # The thread's recorder before this turn's, restored when it ends, so a
+    # nested turn does not cut off the one around it.
+    _outer_turn_recorder: Optional[Any] = None
+    # (name, start, end) perf_counter spans a mixin timed before the turn
+    # opened — e.g. memory recall — folded into the next record.
+    _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
 
@@ -2689,6 +2699,8 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.turn_metrics import TurnRecorder, turn_log_path
 
+        pre_spans = self._pre_turn_spans or []
+        self._pre_turn_spans = None
         if turn_log_path() is None:
             return None
         try:
@@ -2705,10 +2717,21 @@ Do NOT wrap conversational replies in JSON.
                 ),
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
+                started=min((t0 for _, t0, _ in pre_spans), default=None),
+                prompt_fragments={
+                    origin: len(text)
+                    for text, origin in (self._mixin_prompt_origins or {}).items()
+                    # A subclass may filter a fragment out of the final prompt.
+                    if text in self.system_prompt
+                },
             )
+            for name, t0, t1 in pre_spans:
+                recorder.add_span(name, t0, t1, {})
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("could not start turn record: %s", e)
             return None
+        self._outer_turn_recorder = turn_metrics.current()
+        turn_metrics.activate(recorder)
         chat = getattr(self, "chat", None)
         if chat is not None:
             chat.turn_recorder = recorder
@@ -2730,6 +2753,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = None
         if recorder is None:
             return None
+        self._sealed_turn_recorder = recorder
         try:
             record = recorder.finish(answer=answer or "", steps=steps_taken)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
@@ -8613,6 +8637,24 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
             self._detach_step_timer()
+            self._flush_post_turn_record()
+            # Spans a mixin parked for a turn that never opened must not
+            # backdate the next one.
+            self._pre_turn_spans = None
+
+    def _flush_post_turn_record(self) -> None:
+        """Write the post-answer spans and stop routing waits to this turn."""
+        recorder = self._sealed_turn_recorder
+        self._sealed_turn_recorder = None
+        if recorder is not None and turn_metrics.current() is recorder:
+            turn_metrics.activate(self._outer_turn_recorder)
+        self._outer_turn_recorder = None
+        if recorder is None:
+            return
+        try:
+            recorder.write_post()
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("could not write post-turn record: %s", e)
 
     #: How a mid-turn follow-up is framed for the model. It is the user
     #: speaking, so it goes in as a user message — but unlabelled, a user
@@ -9008,9 +9050,10 @@ Do NOT wrap conversational replies in JSON.
                 from gaia.agents.base.artifacts import store_for
 
                 # Only the sent list changes; ``conversation`` keeps every result.
-                self._pending_eviction = self._context_evictor.evict(
-                    messages, steps_taken, store_for(self)
-                )
+                with turn_metrics.span("context_evict"):
+                    self._pending_eviction = self._context_evictor.evict(
+                        messages, steps_taken, store_for(self)
+                    )
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -9893,7 +9936,8 @@ Do NOT wrap conversational replies in JSON.
             # 1000+ char arguments. Don't fail the whole turn: log the error,
             # nudge the model to retry with simpler args, and continue the loop.
             try:
-                parsed = self._parse_llm_response(response)
+                with turn_metrics.span("parse_response"):
+                    parsed = self._parse_llm_response(response)
                 # Budget is consecutive: a clean parse gives the retries back.
                 parse_failures = 0
                 markup_retries = 0
@@ -11713,7 +11757,8 @@ Do NOT wrap conversational replies in JSON.
         # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
         if hasattr(self, "_after_process_query"):
             try:
-                self._after_process_query(user_input, result.get("result", ""))
+                with turn_metrics.span("after_process_query"):
+                    self._after_process_query(user_input, result.get("result", ""))
             except Exception as e:
                 logger.warning(f"Post-query hook failed: {e}")
 
