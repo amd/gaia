@@ -892,6 +892,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -1793,6 +1794,17 @@
         "default": 0,
         "title": "Output Tokens",
         "type": "integer"
+      },
+      "place": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Place"
       },
       "retried": {
         "anyOf": [
@@ -3940,6 +3952,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {

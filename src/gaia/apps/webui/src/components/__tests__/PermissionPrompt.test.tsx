@@ -43,6 +43,21 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
     });
 
+    it('words the question and the always option without tool names', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'write_file',
+            toolLabel: 'writing file',
+            toolArgs: { file_path: '/home/u/prompt-test.txt', content: 'hi' },
+            alwaysScope: 'write_file on prompt-test.txt',
+            alwaysLabel: 'writing prompt-test.txt',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const dialog = screen.getByRole('alertdialog');
+        expect(screen.getByRole('heading')).toHaveTextContent('Allow writing file?');
+        expect(screen.getByRole('button', { name: 'Always allow writing prompt-test.txt in this chat' })).toBeInTheDocument();
+        expect(dialog).not.toHaveTextContent('write_file on');
+    });
+
     it("shows a relayed agent's summary when the call came without args", () => {
         const summary = `Run 'write_file' with file_path="notes.md"?`;
         useNotificationStore.getState().addNotification(request({ tool: 'write_file', toolArgs: undefined, summary }));

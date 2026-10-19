@@ -249,6 +249,8 @@ export interface InferenceStats {
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
+    /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
+    place?: string | null;
 }
 
 /** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
@@ -825,6 +827,10 @@ export interface StreamEvent {
     confirm_id?: string;
     /** What "always allow" would grant for this call; absent means it is not offered. */
     always_scope?: string;
+    /** `always_scope` in plain words, e.g. "editing notes.txt" (for permission_request events). */
+    always_label?: string;
+    /** The tool in plain words, e.g. "writing file" (for permission_request events). */
+    tool_label?: string;
     /** What the call does: read, write, execute, or destructive (for permission_request events). */
     risk?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
