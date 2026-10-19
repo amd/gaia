@@ -491,6 +491,9 @@ class AgentStepResponse(BaseModel):
     success: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
+    planNarrations: Optional[List[str]] = None
+    currentStep: Optional[int] = None
+    narration: Optional[str] = None
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
