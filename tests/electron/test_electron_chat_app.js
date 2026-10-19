@@ -959,7 +959,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain('aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}');
+      expect(sidebarContent).toContain("? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`");
+      expect(sidebarContent).toContain(': `Delete ${session.title}`}');
       expect(sidebarContent).toContain('<nav className="sb-list" aria-label="Recent chats">');
     });
 

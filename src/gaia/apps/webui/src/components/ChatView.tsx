@@ -26,11 +26,13 @@ import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
 import { RetryWithMenu } from './RetryWithMenu';
-import { AnswerComparison, type ComparisonState } from './AnswerComparison';
+import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SideRail } from './SideRail';
 import { useAttachments } from '../hooks/useAttachments';
+import { useAnswerComparison } from '../hooks/useAnswerComparison';
+import { useContextUsage } from '../hooks/useContextUsage';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
@@ -324,18 +326,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const queuedSendPendingRef = useRef(false);
     const streamingRef = useRef(isStreaming);
     streamingRef.current = isStreaming;
-    const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
-    const [contextUnavailable, setContextUnavailable] = useState<string | null>(null);
-    const [comparison, setComparison] = useState<{
-        messageId: number;
-        state: ComparisonState;
-        keeping: 'original' | 'retry' | null;
-    } | null>(null);
-    const comparing = comparison?.state.status === 'running';
-    const comparingRef = useRef(false);
-    comparingRef.current = comparing;
-    const comparisonRef = useRef(comparison);
-    comparisonRef.current = comparison;
     // Set briefly after a queued send found the chat still busy, so it waits before trying again.
     const queueHold = useChatStore((s) => !!s.queueHolds[sessionId]);
 
@@ -487,28 +477,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
 
-    useEffect(() => {
-        setComparison(null);
-        setContextUsage(null);
-        setContextUnavailable(null);
-        userStoppedRef.current = false;
-    }, [sessionId]);
+    useEffect(() => { userStoppedRef.current = false; }, [sessionId]);
 
-    const refreshContext = useCallback(() => {
-        api.getContextUsage(sessionId)
-            .then((r) => {
-                if (isStale()) return;
-                if (r.available) {
-                    setContextUsage(r);
-                    setContextUnavailable(null);
-                } else {
-                    setContextUsage(null);
-                    setContextUnavailable(r.reason);
-                }
-            })
-            .catch((err) => log.chat.error(`Could not measure the context for session=${sessionId}`, err));
-    }, [sessionId, isStale]);
-    useEffect(() => { refreshContext(); }, [refreshContext]);
+    const { contextUsage, contextUnavailable, refreshContext, showContextUsage } = useContextUsage(sessionId, isStale);
+    const { comparison, comparing, comparingRef, handleRetryWith, handleKeepAnswer, handleCloseComparison, closeForNewTurn } =
+        useAnswerComparison({ sessionId, isStreaming, isStale, setMessages, refreshContext });
 
     // Abort active stream and clean up timers when component unmounts / session changes
     useEffect(() => {
@@ -668,15 +641,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 attach.clear();
             }
 
-            // A new turn moves the chat on, so an open comparison keeps the original answer.
-            const open = comparisonRef.current;
-            if (open) {
-                if (open.state.status === 'ready') {
-                    api.chooseRetry(sessionId, open.messageId, 'original')
-                        .catch((err) => log.chat.error('Could not close the answer comparison', err));
-                }
-                setComparison(null);
-            }
+            closeForNewTurn();
 
             // Optimistic user message
             const userMsg: Message = {
@@ -868,8 +833,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
                 if (event.type === 'context_usage') {
-                    setContextUsage(event as unknown as ContextUsage);
-                    setContextUnavailable(null);
+                    showContextUsage(event as unknown as ContextUsage);
                     return;
                 }
                 // The agent emits nothing while it blocks on the user, so the next event ends the wait.
@@ -1557,72 +1521,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
             });
     }, [queue, isStreaming, sessionId, setQueue]);
 
-    const handleRetryWith = useCallback((message: Message, model: string) => {
-        if (isStreaming || comparingRef.current) return;
-        log.chat.info(`Retrying message ${message.id} with ${model}`);
-        setComparison({ messageId: message.id, state: { status: 'running', model }, keeping: null });
-        api.retryWith(sessionId, message.id, model)
-            .then((result) => {
-                if (isStale()) return;
-                setComparison((c) => (c && c.messageId === message.id
-                    ? { ...c, state: { status: 'ready', result } }
-                    : c));
-            })
-            .catch((err) => {
-                log.chat.error(`Retry with ${model} failed`, err);
-                if (isStale()) return;
-                setComparison((c) => (c && c.messageId === message.id
-                    ? { ...c, state: { status: 'failed', model, error: err instanceof Error ? err.message : String(err) } }
-                    : c));
-            });
-    }, [sessionId, isStreaming, isStale]);
-
-    const handleKeepAnswer = useCallback(async (which: 'original' | 'retry') => {
-        if (!comparison) return;
-        const { messageId } = comparison;
-        setComparison({ ...comparison, keeping: which });
-        try {
-            const kept = await api.chooseRetry(sessionId, messageId, which);
-            if (isStale()) return;
-            if (kept.kept === 'retry') {
-                const s = kept.stats;
-                setMessages(useChatStore.getState().messages.map((m) => (m.id === messageId
-                    ? {
-                        ...m,
-                        content: kept.content,
-                        stats: {
-                            tokens_per_second: s.tokens_per_second ?? 0,
-                            time_to_first_token: s.time_to_first_token ?? 0,
-                            input_tokens: s.input_tokens ?? 0,
-                            output_tokens: s.output_tokens ?? 0,
-                            model: s.model,
-                            retried: true,
-                            seconds: s.seconds,
-                        },
-                    }
-                    : m)));
-                refreshContext();
-            }
-            setComparison(null);
-        } catch (err) {
-            log.chat.error('Could not keep the chosen answer', err);
-            if (isStale()) return;
-            setComparison((c) => (c ? {
-                ...c,
-                keeping: null,
-                state: { status: 'failed', model: c.state.status === 'ready' ? c.state.result.model : c.state.model, error: err instanceof Error ? err.message : String(err) },
-            } : c));
-        }
-    }, [comparison, sessionId, setMessages, isStale, refreshContext]);
-
-    const handleCloseComparison = useCallback(() => {
-        // Closing a finished comparison keeps the original answer.
-        if (comparison?.state.status === 'ready') {
-            void handleKeepAnswer('original');
-            return;
-        }
-        setComparison(null);
-    }, [comparison, handleKeepAnswer]);
 
     // Retry the last question after a connector was connected (#2119). Resends
     // the last user message, which also drops the stale connector-error reply.
