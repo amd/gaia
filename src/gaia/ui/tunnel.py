@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import psutil
+
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = logging.getLogger(__name__)
@@ -282,6 +284,10 @@ def _parse_ngrok_error(stderr_text: str) -> str:
     return f"ngrok failed to start: {first_line[:300]}"
 
 
+class _StaleNgrokError(RuntimeError):
+    """A stale GAIA ngrok agent is running and cannot be stopped."""
+
+
 class TunnelManager:
     """Manages an ngrok tunnel for mobile access.
 
@@ -401,22 +407,17 @@ class TunnelManager:
         await self._fetch_public_ip()
 
         # Kill any stale ngrok processes (free tier only allows 1)
-        await self._kill_stale_ngrok()
+        try:
+            await self._kill_stale_ngrok()
+        except _StaleNgrokError as exc:
+            self._error = str(exc)
+            logger.error("Tunnel start aborted: a stale ngrok could not be stopped")
+            return self.get_status()
 
         # Generate auth token
         self._token = str(uuid.uuid4())
 
-        # Build ngrok command. --log=stdout --log-format=logfmt makes
-        # ngrok emit structured logs to stdout/stderr so we can surface
-        # meaningful errors instead of staring at a hung process.
-        base_args = [
-            "http",
-            "--log=stdout",
-            "--log-format=logfmt",
-        ]
-        if self.domain:
-            base_args += ["--domain", self.domain]
-        cmd = [ngrok_path, *base_args, str(self.port)]
+        cmd = [ngrok_path, *self._ngrok_args()]
 
         logger.info("Starting ngrok: %s", " ".join(cmd))
 
@@ -531,36 +532,63 @@ class TunnelManager:
 
         return None
 
-    async def _kill_stale_ngrok(self) -> None:
-        """Kill any stale ngrok processes (free tier only allows 1 session).
+    def _is_our_tunnel(self, tunnel: dict) -> bool:
+        """Whether an ngrok API tunnel forwards to this server's port.
 
-        Uses exact-process-name matching (``pkill -x`` / ``taskkill /im``) on
-        purpose: a broader ``pkill -f ngrok`` would match command lines like
-        ``vim ngrok.md`` or ``python ngrok_client.py``, including the user's
-        own unrelated work. Exact match still catches every legitimate
-        ``ngrok`` agent process — the only thing the free-tier session-limit
-        cleanup actually needs to clear.
+        The user's own ngrok may answer on :4040 too; never hand out its URL.
         """
-        try:
-            if platform.system() == "Windows":
-                subprocess.run(
-                    ["taskkill", "/f", "/im", "ngrok.exe"],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                    **windows_hidden_popen_kwargs(),
-                )
-            else:
-                subprocess.run(
-                    ["pkill", "-x", "ngrok"],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                )
-            # Brief pause to let the process fully die
-            await asyncio.sleep(0.5)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            logger.debug("Could not clear stale ngrok processes: %s", e)
+        addr = str((tunnel.get("config") or {}).get("addr") or "")
+        return addr == str(self.port) or addr.endswith(f":{self.port}")
+
+    def _ngrok_args(self) -> list:
+        """ngrok's arguments for this tunnel, after the executable.
+
+        ``--log=stdout --log-format=logfmt`` makes ngrok emit structured logs so
+        we can surface meaningful errors instead of staring at a hung process.
+        It also marks the agent as GAIA's: see :meth:`_kill_stale_ngrok`.
+        """
+        args = ["http", "--log=stdout", "--log-format=logfmt"]
+        if self.domain:
+            args += ["--domain", self.domain]
+        return [*args, str(self.port)]
+
+    async def _kill_stale_ngrok(self) -> None:
+        """Kill ngrok agents GAIA started for this tunnel (free tier allows 1).
+
+        Matches by exact argument list and kills by PID, so the user's own
+        ngrok tunnels are never touched. If one of those holds the free-tier
+        session, ngrok's own error (ERR_NGROK_108) tells the user to stop it.
+        """
+        if self._process is not None:
+            await self.stop()
+        stale = await asyncio.to_thread(self._find_stale_gaia_ngrok)
+        for proc in stale:
+            logger.info("Stopping a stale GAIA ngrok agent (pid %d)", proc.pid)
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as exc:
+                raise _StaleNgrokError(
+                    f"A stale GAIA ngrok agent (pid {proc.pid}) holds the tunnel "
+                    "but GAIA is not allowed to stop it. End it in Task Manager "
+                    "(or `kill` it), then start the tunnel again."
+                ) from exc
+        if stale:
+            await asyncio.to_thread(psutil.wait_procs, stale, 3)
+
+    def _find_stale_gaia_ngrok(self) -> list:
+        """ngrok processes whose arguments are exactly this tunnel's."""
+        expected = self._ngrok_args()
+        stale = []
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            name = (proc.info.get("name") or "").lower()
+            if name not in ("ngrok", "ngrok.exe"):
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            if cmdline[1:] == expected:
+                stale.append(proc)
+        return stale
 
     async def _fetch_public_ip(self) -> None:
         """Fetch the server's public IP (for ngrok interstitial password)."""
@@ -650,7 +678,9 @@ class TunnelManager:
                         data = resp.json()
                         tunnels = data.get("tunnels", [])
                         for tunnel in tunnels:
-                            if tunnel.get("proto") == "https":
+                            if tunnel.get("proto") == "https" and self._is_our_tunnel(
+                                tunnel
+                            ):
                                 url = tunnel.get("public_url")
                                 if url:
                                     return url
