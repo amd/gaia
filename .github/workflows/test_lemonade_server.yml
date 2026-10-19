@@ -52,8 +52,8 @@ concurrency:
 jobs:
   test-lemonade-server:
     name: Lemonade Server Smoke Test (${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }})
-    # Strix Point: its models fit there, and the 128 GB Halo pool stays free for the evals.
-    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
+    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:

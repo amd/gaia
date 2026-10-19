@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import platform
+import queue
 import re
 import signal
 import socket
@@ -83,7 +84,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
-from gaia.utils import perf_trace
+from gaia.utils import awake_clock, perf_trace
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -756,6 +757,66 @@ def _forget_fitted_ctx(url: str, model_id: str) -> None:
             del _FITTED_CTX_CACHE[key]
 
 
+def _abort_stream(response: Optional["requests.Response"]) -> None:
+    """End a streaming response's blocked read from another thread.
+
+    ``response.close()`` would wait on the lock the blocked read holds.
+    ``shutdown()`` ends the read on Linux; on Windows only releasing the
+    socket does, which closing the ``SocketIO`` under the reader (not the
+    locked buffer around it) does. The reader then fails with an I/O error.
+    """
+    socket_io = getattr(
+        getattr(getattr(getattr(response, "raw", None), "_fp", None), "fp", None),
+        "raw",
+        None,
+    )
+    sock = getattr(socket_io, "_sock", None)
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass  # already shut down or reset: the close below still applies
+    socket_io.close()
+
+
+def _lines_unless_stopped(
+    response: "requests.Response", is_stopped: Callable[[], bool]
+) -> Iterator[bytes]:
+    """``response.iter_lines()``, read on a worker so Stop is seen within
+    ``_STOP_CHECK_SECONDS`` even where hanging up does not wake a blocked read.
+
+    The worker closes *response* when its read ends; the caller must not,
+    since closing waits on the lock that read holds. Read errors are
+    re-raised here, on the caller's thread.
+    """
+    lines: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
+
+    def read() -> None:
+        try:
+            for line in response.iter_lines():
+                lines.put(("line", line))
+            lines.put(("end", None))
+        except BaseException as e:  # pylint: disable=broad-except
+            lines.put(("error", e))  # re-raised on the caller's thread below
+        finally:
+            response.close()
+
+    threading.Thread(target=read, name="gaia-pull-read", daemon=True).start()
+    while True:
+        try:
+            kind, value = lines.get(timeout=_STOP_CHECK_SECONDS)
+        except queue.Empty:
+            if is_stopped():
+                return
+            continue
+        if kind == "end":
+            return
+        if kind == "error":
+            raise value
+        yield value
+
+
 def fit_ctx_to_free_memory(
     model: Optional[str], ctx: int, base_url: Optional[str] = None
 ) -> int:
@@ -1102,6 +1163,8 @@ PROBE_TIMEOUT = (3.05, 5.0)
 SYSTEM_INFO_TIMEOUT = (3.05, 15.0)
 #: ``/models``; with ``show_all`` it lists the whole catalog.
 CATALOG_TIMEOUT = (3.05, 30.0)
+#: Shortest timeout ``create_lemonade_client`` gives a load of an on-disk model.
+_MIN_LOAD_SECONDS = 60.0
 #: Seconds between status probes while a busy server is waited for.
 _BUSY_POLL_SECONDS = 5.0
 #: Longest Stop goes unseen while a status probe made during a wait runs.
@@ -3777,6 +3840,17 @@ class LemonadeClient:
         # Handle string errors
         if isinstance(error, str):
             result["message"] = error
+            # "Request failed with status 404: {...}" carries Lemonade's own body.
+            brace = error.find("{")
+            if brace >= 0:
+                try:
+                    body = json.loads(error[brace:])
+                except ValueError:
+                    return result
+                if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                    result["type"] = body["error"].get("type")
+                    result["code"] = body["error"].get("code")
+                    result["is_structured"] = True
             return result
 
         # Handle dict responses
@@ -3831,6 +3905,8 @@ class LemonadeClient:
             error_type_lower = error_type.lower()
             if error_type_lower in ["not_found", "model_not_found", "model_not_loaded"]:
                 return True
+        if str(error_info.get("code") or "").lower() == "model_not_found":
+            return True
 
         # Fallback to string matching for unstructured errors
         error_message = error_info.get("message") or ""
@@ -3986,7 +4062,8 @@ class LemonadeClient:
         return ModelCallRetrier(
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
-            clock=self._retry_clock or time.monotonic,
+            # A request the PC slept through still has its retry budget.
+            clock=self._retry_clock or awake_clock.monotonic,
             rng=self._retry_rng,
             server_loading=(
                 self._server_load_in_progress
@@ -4039,7 +4116,7 @@ class LemonadeClient:
             StreamCancelledError: Stop was pressed during the wait.
         """
         limit = RetryPolicy.from_env().load_wait
-        clock = self._retry_clock or time.monotonic
+        clock = self._retry_clock or awake_clock.monotonic
         sleep = self._retry_sleep or time.sleep
         is_cancelled = current_cancel_check()
         listener = current_retry_listener()
@@ -5832,10 +5909,11 @@ class LemonadeClient:
 
         if not checkpoint:
             # A user. model Lemonade has not seen needs its registration on the
-            # first pull; every caller that pulls by name alone gets it here.
+            # first pull, under its user. name even when asked for without it.
             mr = find_model_requirement(model_name)
             registration = mr.pull_kwargs() if mr else {}
             if registration:
+                model_name = mr.model_id
                 checkpoint = registration["checkpoint"]
                 recipe = recipe or registration["recipe"]
                 mmproj = mmproj or registration["mmproj"]
@@ -5868,14 +5946,82 @@ class LemonadeClient:
         connect_timeout = 30
         read_timeout = PULL_IDLE_TIMEOUT_S
 
-        try:
-            response = requests.post(
+        response = None
+        reading = False
+        is_cancelled = current_cancel_check()
+        stopped = threading.Event()
+        finished = threading.Event()
+
+        def stop_watch() -> None:
+            # A silent pull blocks in a read for up to PULL_IDLE_TIMEOUT_S;
+            # closing the response is the only way to end that read early.
+            while not finished.wait(_STOP_CHECK_SECONDS):
+                if is_cancelled():
+                    stopped.set()
+                    _abort_stream(response)
+                    return
+
+        def cancelled() -> ModelDownloadCancelledError:
+            return ModelDownloadCancelledError(
+                f"Download of {model_name} stopped at your request."
+            )
+
+        def send() -> "requests.Response":
+            return requests.post(
                 url,
                 json=request_data,
                 headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=(connect_timeout, read_timeout),
                 stream=True,
             )
+
+        def send_unless_stopped() -> "requests.Response":
+            """``send()`` on a worker, so Stop is not held up while Lemonade
+            sits on the request before sending headers.
+
+            After a Stop in that window the worker's POST stays open until
+            headers arrive (then it is closed at once) or its read timeout
+            (``PULL_IDLE_TIMEOUT_S``) ends it: bounded, and off the caller's
+            thread.
+            """
+            outcome: Dict[str, Any] = {}
+            answered = threading.Event()
+            # Whoever runs second under this lock closes the response: the
+            # worker if Stop came first, the caller if the answer did.
+            handoff = threading.Lock()
+
+            def run() -> None:
+                try:
+                    reply = send()
+                    with handoff:
+                        outcome["response"] = reply
+                        if stopped.is_set():
+                            reply.close()
+                except BaseException as e:  # pylint: disable=broad-except
+                    outcome["error"] = e  # re-raised on the caller's thread
+                finally:
+                    answered.set()
+
+            threading.Thread(target=run, name="gaia-pull-send", daemon=True).start()
+            while not answered.wait(_STOP_CHECK_SECONDS):
+                if is_cancelled():
+                    with handoff:
+                        stopped.set()
+                        if "response" in outcome:
+                            outcome["response"].close()
+                    raise cancelled()
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome["response"]
+
+        try:
+            if is_cancelled is None:
+                response = send()
+            else:
+                response = send_unless_stopped()
+                threading.Thread(
+                    target=stop_watch, name="gaia-pull-stop", daemon=True
+                ).start()
 
             if response.status_code == 401:
                 raise LemonadeAuthError(
@@ -5893,8 +6039,19 @@ class LemonadeClient:
             event_type = None
             received_complete = False
 
+            if is_cancelled is None:
+                lines = response.iter_lines()
+            else:
+                reading = True
+
+                def stop_seen() -> bool:
+                    if is_cancelled():
+                        stopped.set()
+                    return stopped.is_set()
+
+                lines = _lines_unless_stopped(response, stop_seen)
             try:
-                for line_bytes in response.iter_lines():
+                for line_bytes in lines:
                     if not line_bytes:
                         continue
 
@@ -5904,6 +6061,8 @@ class LemonadeClient:
                         event_type = line[6:].strip()
                     elif line.startswith("data:"):
                         data_str = line[5:].strip()
+                        if stopped.is_set() or (is_cancelled and is_cancelled()):
+                            raise cancelled()
                         try:
                             data = json.loads(data_str)
                             data["event"] = event_type or "progress"
@@ -5922,15 +6081,37 @@ class LemonadeClient:
                             self.log.warning(f"Failed to parse SSE data: {data_str}")
                             continue
             except requests.exceptions.ChunkedEncodingError:
+                if stopped.is_set():
+                    raise cancelled() from None
                 if not received_complete:
                     raise
+            except (AttributeError, OSError, ValueError) as e:
+                # What a read raises once the watcher closed the response.
+                if stopped.is_set():
+                    raise cancelled() from None
+                if isinstance(e, OSError):
+                    message = f"Failed to install {model_name}: connection lost ({e})"
+                    self.log.error(message)
+                    raise LemonadeClientError(message) from e
+                raise
+            if stopped.is_set():
+                raise cancelled()
 
             self.log.info(f"Installed {model_name} successfully via streaming")
 
         except requests.exceptions.RequestException as e:
+            if stopped.is_set():
+                raise cancelled() from e
             message = f"Failed to install {model_name}: {e}"
             self.log.error(message)
-            raise LemonadeClientError(message)
+            raise LemonadeClientError(message) from e
+        finally:
+            finished.set()
+            # Also on an early close (Stop): hanging up is what cancels the pull.
+            if reading:
+                _abort_stream(response)  # the reader closes it once its read ends
+            elif response is not None:
+                response.close()
 
     def delete_model(
         self,
@@ -6731,10 +6912,22 @@ class LemonadeClient:
 
         Raises:
             LemonadeClientError: if the stream emits an ``error`` event.
+            ModelDownloadCancelledError: Stop was pressed (see
+                :func:`gaia.llm.retry.model_retry_notices`).
         """
         download_complete = False
         last_logged_percent = -10  # Log at 0%, 10%, 20%, ...
-        for event in self.pull_model_stream(model_name=model_name):
+        is_cancelled = current_cancel_check()
+        events = self.pull_model_stream(model_name=model_name)
+        for event in events:
+            if is_cancelled is not None and is_cancelled():
+                # Closing the stream hangs up, which cancels Lemonade's pull.
+                close = getattr(events, "close", None)
+                if close is not None:
+                    close()
+                raise ModelDownloadCancelledError(
+                    f"Download of {model_name} stopped at your request."
+                )
             event_type = event.get("event")
             if event_type == "progress":
                 percent = event.get("percent", 0)
@@ -6847,6 +7040,10 @@ class LemonadeClient:
                 "Send chat requests through Lemonade; select its provider in "
                 "the TUI provider settings if it is not connected."
             )
+        mr = find_model_requirement(model_name)
+        if mr and mr.pull_kwargs():
+            # Load under the user. name an auto-download registers it as.
+            model_name = mr.model_id
         with self._model_slot_lease(model_name):
             response = self._load_model_leased(
                 model_name,
@@ -7042,7 +7239,19 @@ class LemonadeClient:
                         self.model = model_name
                         return response
 
+                except ModelDownloadCancelledError:
+                    # Stop is the user's choice, not a failed resume: never
+                    # go on to delete the model.
+                    raise
                 except Exception as resume_error:
+                    # A resume that failed while Stop was pressed (a timeout
+                    # racing it) is still a Stop: check before deleting.
+                    stop_pressed = current_cancel_check()
+                    if stop_pressed is not None and stop_pressed():
+                        raise ModelDownloadCancelledError(
+                            f"Repair of {model_name} stopped at your request; "
+                            "the model was left as it is."
+                        ) from resume_error
                     self.log.warning(
                         f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
                     )
@@ -7092,6 +7301,8 @@ class LemonadeClient:
                             f"Fresh download did not complete for '{model_name}'"
                         )
 
+                    except ModelDownloadCancelledError:
+                        raise
                     except Exception as fresh_error:
                         self.log.error(
                             f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"
@@ -8231,53 +8442,41 @@ def create_lemonade_client(
                         f"Attempting to pull model '{model_name}' before loading..."
                     )
 
+                    # Streamed: progress is logged, a silent server ends it after
+                    # PULL_IDLE_TIMEOUT_S, and Stop hangs up (which cancels it).
                     try:
-                        # Try to pull the model first
-                        pull_result = client.pull_model(
-                            model_name, timeout=300
-                        )  # 5 min timeout for download
-                        client.log.info(f"Successfully pulled model: {pull_result}")
-                    except Exception as pull_error:
-                        client.log.warning(
-                            f"Failed to pull model '{model_name}': {pull_error}"
-                        )
-                        client.log.info(
-                            "Proceeding with load anyway - server may auto-install"
+                        finished = client._consume_pull_stream(model_name, "download")
+                    except ModelDownloadCancelledError:
+                        raise
+                    except LemonadeClientError as pull_error:
+                        raise LemonadeClientError(
+                            f"Failed to load {model_name}: could not download it "
+                            f"from {client.base_url} ({pull_error}). Check the "
+                            "model name and your connection, or run `gaia init` "
+                            "to install it."
+                        ) from pull_error
+                    if not finished:
+                        raise LemonadeClientError(
+                            f"Failed to load {model_name}: the download from "
+                            f"{client.base_url} did not finish (the server ended "
+                            "it without reporting completion). Run the command "
+                            "again to resume it, or check the Lemonade server log."
                         )
                 else:
                     client.log.info(
                         f"Model '{model_name}' found in registry, proceeding with load"
                     )
 
-            # Now attempt to load the model
-            client.load_model(model_name, timeout=60)
-        except Exception as e:
-            # Extract detailed error information
-            error_details = str(e)
-            client.log.error(f"Failed to load {model_name}: {error_details}")
-
-            # Try to get more details about available models for debugging
-            try:
-                models_response = client.list_models()
-                available_models = [
-                    model.get("id", "unknown")
-                    for model in models_response.get("data", [])
-                ]
-                client.log.error(f"Available models: {available_models}")
-                client.log.error(f"Attempted to load: {model_name}")
-                if available_models:
-                    client.log.error(
-                        "Consider using one of the available models instead"
-                    )
-            except Exception as list_error:
-                client.log.error(f"Could not list available models: {list_error}")
-
-            # Include both original error and context in the raised exception
-            enhanced_message = f"Failed to load {model_name}: {error_details}"
-            if "available_models" in locals() and available_models:
-                enhanced_message += f" (Available models: {available_models})"
-
-            raise LemonadeClientError(enhanced_message)
+            # GAIA_LLM_LOAD_WAIT, floored at the time a load alone needs: 0
+            # means "don't wait on a busy server", not "no time to load".
+            load_timeout = max(RetryPolicy.from_env().load_wait, _MIN_LOAD_SECONDS)
+            client.load_model(model_name, timeout=load_timeout)
+        except ModelDownloadCancelledError:
+            raise
+        except LemonadeClientError as e:
+            # Re-raised as is: callers branch on its type (auth, memory, disk).
+            client.log.error(f"Failed to load {model_name}: {e}")
+            raise
 
     return client
 

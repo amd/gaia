@@ -2279,7 +2279,7 @@ class TestWebuiBuildGatesInitCompletion(_HubInstallWiringTestBase):
             rc = cmd.run()
 
         mock_verify.assert_called_once()
-        mock_config_cls.load.return_value.save.assert_called_once()
+        mock_config_cls.update.assert_called_once()
         self.assertNotEqual(rc, 0)
 
     def test_toolchain_absent_still_returns_zero(self):

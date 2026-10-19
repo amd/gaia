@@ -12,6 +12,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the status probe; each turn records its server compute, its non-model time,
   and what filled the gaps between model calls. `GET /v1/gaia/debug/turns`
   returns the last records while recording is on (off the versioned contract).
+- **A context overflow no longer throws away the evidence.** A task that read
+  many documents used to fill a 32K–64K window, after which the overflow retry
+  dropped every older result and the answer was built on whatever was left
+  (#2780). The retry now keeps each result whole behind a handle the model can
+  re-read, and retries only when the request will then fit.
+- **Token counts no longer undercount when the tokenizer data can't load.** On
+  an offline or locked-down machine the counter fell back to characters ÷ 4.28,
+  which undercounts JSON and CJK text, so history that should take half the
+  window could fill it (#5066). It now warns and counts at least one token per
+  three UTF-8 bytes.
 - **A turn queued for the model says so on the stream.** When another process
   or request is using the model, `/query` now sends `status` events with
   `phase: "model_queue"` every ~2 s, carrying a `queue` object with the turn's

@@ -64,7 +64,10 @@ from gaia.agents.base.context_eviction import (
     evict_keep_from_env,
     evict_min_batch_from_env,
     evict_threshold_from_env,
+    overflow_numbers,
+    request_tokens,
     resolve_context_eviction,
+    shrink_for_overflow,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -167,6 +170,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
@@ -545,7 +549,10 @@ class TurnCancel(threading.Event):
 
 
 class _UserWaitClock:
-    """Time a tool body spends blocked on the user, which its timeout excludes."""
+    """Time a tool body spends blocked on the user, which its timeout excludes.
+
+    Read on the same awake clock as the tool's timeout.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -554,15 +561,15 @@ class _UserWaitClock:
 
     def begin(self) -> None:
         with self._lock:
-            self._open.append(time.monotonic())
+            self._open.append(awake_clock.monotonic())
 
     def end(self) -> None:
         with self._lock:
-            self._done += time.monotonic() - self._open.pop()
+            self._done += awake_clock.monotonic() - self._open.pop()
 
     def waited(self) -> float:
         """Seconds waited so far, including a question still on screen."""
-        now = time.monotonic()
+        now = awake_clock.monotonic()
         with self._lock:
             return self._done + sum(now - started for started in self._open)
 
@@ -2498,6 +2505,8 @@ Do NOT wrap conversational replies in JSON.
         )
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, int]] = None
+        # What the last overflow shrink put away.
+        self._last_overflow_items: List[Dict[str, Any]] = []
 
         chat_config = AgentConfig(
             model=model_id or resolve_default_chat_model(),
@@ -5850,10 +5859,11 @@ Do NOT wrap conversational replies in JSON.
         )
         worker.start()
         # Time spent on a question the body raised (e.g. path access) is the
-        # user's, not the tool's: abandoning there strands a live prompt.
-        started = time.monotonic()
+        # user's, not the tool's: abandoning there strands a live prompt. Time
+        # the PC sleeps is nobody's: the awake clock leaves it out.
+        started = awake_clock.monotonic()
         while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - time.monotonic()
+            remaining = started + timeout + user_wait.waited() - awake_clock.monotonic()
             if remaining <= 0:
                 break
             worker.join(min(remaining, 0.5))
@@ -7595,62 +7605,115 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _shrink_messages_for_overflow(
-        self, messages: List[Dict[str, Any]]
+        self, messages: List[Dict[str, Any]], store=None
     ) -> List[Dict[str, Any]]:
-        """Aggressively shrink the messages array after a context-overflow.
+        """The sent list after the backend refused it as too long.
 
-        Strategy: keep the original user query, keep recent assistant tool_calls
-        and the LATEST tool result intact, but replace older tool-result
-        contents with a short stub. This preserves the structural shape of
-        the conversation (so the model can still reason about what tools have
-        been called) while dropping the bulk of the bytes.
-
-        Used by ``process_query``'s LLM-call retry loop when the model
-        reports ``exceed_context_size``. Returns a new list — the caller
-        must rebind ``messages``.
+        Every older tool result is put away (archived whole, re-readable via
+        ``read_tool_output``); a large result from the latest step keeps a
+        head preview and a handle to the rest, since it is often the one that
+        overflowed (#2780). Refusals, user and assistant turns stay; verbose
+        assistant text is clipped. Returns a new list — the caller must rebind
+        ``messages``.
         """
         if not messages:
             return messages
-        first = messages[0]  # user query
-        rest = messages[1:]
-        # Find indices of tool-result entries
-        tool_indices = [i for i, m in enumerate(rest) if m.get("role") == "tool"]
-        keep_intact = set(tool_indices[-1:]) if tool_indices else set()
-        shrunk_rest: List[Dict[str, Any]] = []
-        for i, m in enumerate(rest):
-            if m.get("role") == "tool" and i not in keep_intact:
-                # Replace bulky tool result with a stub — the model only
-                # needs to know SOMETHING was returned at this point.
-                shrunk_rest.append(
-                    {
-                        "role": "tool",
-                        "name": m.get("name", "unknown"),
-                        "tool_call_id": m.get("tool_call_id", "stub"),
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "[tool result omitted — context "
-                                    "overflow recovery; see latest result]"
-                                ),
-                            }
-                        ],
-                    }
-                )
-            elif (
+        from gaia.agents.base.artifacts import store_for
+
+        shrunk, self._last_overflow_items = shrink_for_overflow(
+            messages, store if store is not None else store_for(self)
+        )
+        clipped: List[Dict[str, Any]] = []
+        for m in shrunk:
+            if (
                 m.get("role") == "assistant"
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought, but keep the
-                # rest of the turn — dropping ``tool_calls`` here orphans the
-                # tool results that follow it.
-                shrunk = dict(m)
-                shrunk["content"] = m["content"][:800] + "... (truncated)"
-                shrunk_rest.append(shrunk)
+                # Keep ``tool_calls``: dropping them orphans the results after.
+                clipped.append({**m, "content": m["content"][:800] + "... (truncated)"})
             else:
-                shrunk_rest.append(m)
-        return self._with_overflow_note([first] + shrunk_rest)
+                clipped.append(m)
+        return self._with_overflow_note(clipped)
+
+    def _shrink_for_overflow_retry(
+        self, messages: List[Dict[str, Any]], error_text: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """``(shrunk messages, report)``; the report says whether a retry fits.
+
+        A retry is worth it only when the shrink freed more than the request
+        was over by, or, with no numbers in the error, a tenth of the prompt.
+        Retrying a request that cannot fit only repeats the refusal (#2780).
+        """
+        from gaia.agents.base.artifacts import ArtifactStore
+
+        system_prompt, tools = self.system_prompt, self._openai_tools
+        before = request_tokens(messages, system_prompt, tools)
+        # Sized in a throwaway store first: nothing is archived for a retry that won't run.
+        # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
+        trial = self._shrink_messages_for_overflow(messages, ArtifactStore())
+        after = request_tokens(trial, system_prompt, tools)
+        freed = max(0, before - after)
+        report: Dict[str, Any] = {
+            "freed_tokens_est": freed,
+            "evicted_results": len(self._last_overflow_items),
+        }
+        numbers = overflow_numbers(error_text)
+        if numbers is not None:
+            requested, available = numbers
+            # Freed is in our tokens; the backend counted in its own.
+            projected = (
+                requested - int(freed * requested / before) if before else requested
+            )
+            report.update(
+                requested_tokens=requested,
+                available_tokens=available,
+                projected_tokens=projected,
+                fits=projected <= int(available * 0.95),
+            )
+        else:
+            report["fits"] = before > 0 and freed >= before * 0.1
+        shrunk = (
+            self._shrink_messages_for_overflow(messages) if report["fits"] else trial
+        )
+        return shrunk, report
+
+    def _retry_after_overflow_shrink(
+        self, messages: List[Dict[str, Any]], error: BaseException, step: int
+    ) -> bool:
+        """Shrink *messages* in place for one retry; False when it still cannot fit."""
+        shrunk, report = self._shrink_for_overflow_retry(messages, str(error))
+        if not report["fits"]:
+            self.error_history.append(
+                {
+                    "step": step,
+                    "error": str(error),
+                    "type": "llm_context_overflow_unrecoverable",
+                    **report,
+                }
+            )
+            logger.warning(
+                "Context overflow: putting older results away frees ~%d tokens, "
+                "not enough for the request to fit (%s); not retrying",
+                report["freed_tokens_est"],
+                report,
+            )
+            return False
+        messages[:] = shrunk
+        self.error_history.append(
+            {
+                "step": step,
+                "error": str(error),
+                "type": "llm_context_overflow_trimmed",
+                **report,
+            }
+        )
+        logger.warning(
+            "Context overflow: put %d results away (~%d tokens freed); retrying once",
+            report["evicted_results"],
+            report["freed_tokens_est"],
+        )
+        return True
 
     def _with_overflow_note(
         self, messages: List[Dict[str, Any]]
@@ -9520,21 +9583,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop (streaming) — "
-                                "shrunk messages to %d entries and retrying",
-                                len(messages),
-                            )
                             _retried_after_trim_stream = True
-                            continue
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9725,25 +9778,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim:
-                            # Aggressive shrink: keep all message slots so the
-                            # model still sees its tool-call history, but cap
-                            # any single tool-result content to 500 chars and
-                            # drop all-but-last-2 tool results entirely.
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop — shrunk messages "
-                                "to %d entries and retrying once",
-                                len(messages),
-                            )
                             _retried_after_trim = True
-                            continue  # retry with smaller payload
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue  # retry with smaller payload
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation

@@ -288,7 +288,7 @@ Start a fresh memory session. Generates a new session ID and applies confidence 
 def reset_memory_session(self) -> None
 ```
 
-Confidence decay multiplies the confidence of items not accessed in 30+ days by 0.9. This is called once per session start to keep knowledge fresh.
+Confidence decay multiplies the confidence of items not accessed in 30+ days by 0.9, at most once a month per item and not within a month of its last confirmation. It is checked once per session start to keep knowledge fresh.
 
 ### Properties
 
@@ -347,7 +347,7 @@ Combines vector similarity (FAISS) and keyword matching (FTS5 BM25) via Reciproc
 3. FTS5 BM25 search: top-K × 4 candidates (oversample)
 4. Deduplicate by ID, apply RRF weights: `0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)`
 5. Return the top-K results by fused score
-6. Bump confidence +0.02 and increment `use_count` on recalled items
+6. Bump confidence +0.02 and increment `use_count` on the results returned — not on every candidate, and not at all with `count_as_use=False`, which extraction's lookup of what is already known passes. A lookup nobody asked for must not make an old memory look more trusted every turn, or stale facts out-rank new ones in the system prompt
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -390,8 +390,8 @@ Sends the conversation turn and existing memory to the LLM, which returns a JSON
 
 | Operation | Description | Required fields |
 |-----------|-------------|-----------------|
-| `add` | New knowledge not already in memory | `op`, `category`, `content`, `grounded`, optional: `entity`, `domain`, `confidence` (default 0.4) |
-| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, `grounded`, optional: `entity`, `domain`, `category` (an update naming `system`/`profile`/`permission` is dropped) |
+| `add` | New knowledge not already in memory | `op`, `category`, `content`, `grounded`, optional: `entity`, `domain`, `due_at` (a dated plan, filed as a `reminder`), `confidence` (default 0.4) |
+| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, `grounded`, optional: `entity`, `domain`, `category` (an update naming `system`/`profile`/`permission` is dropped), `due_at` (moves a reminder; without it, a reworded reminder keeps its date) |
 | `delete` | Remove item contradicted or invalidated | `op`, `knowledge_id`, `reason`, `grounded` |
 | `noop` | Information already captured — not included in output | — |
 
@@ -450,7 +450,7 @@ Distills old conversation sessions into durable knowledge before they age out at
 1. Take the oldest 20 turns with `consolidated_at IS NULL` — one window (`get_unconsolidated_turns()`)
 2. Call LLM with consolidation prompt → returns summary + extracted knowledge
 3. Store summary as `knowledge(category="note", source="consolidation", domain="session:{id[:8]}")`
-4. Store each extracted item via `store()` (normal dedup applies; `system`/`profile`/`permission` items are dropped, and so is an item whose words come from the assistant's lines rather than the user's, or one the user forgot after the window was said)
+4. Store each extracted item via `store()` (normal dedup applies; `system`/`profile`/`permission` items are dropped, and so is an item whose words come from the assistant's lines rather than the user's, one the user forgot after the window was said, one a current memory already says (`is_current`, whatever its entity tag), and one the user changed after the window (`changed_since`) — an old chat states what was true then)
 5. Mark exactly that window's turns with `consolidated_at = now` — only after steps 2–4 succeed. A failed window stays unmarked and is retried next run
 6. Repeat until complete or a budget is reached: ten windows per session, five model calls total, or ten seconds elapsed across the run. An in-flight call finishes; remaining windows resume next run
 
@@ -601,7 +601,7 @@ def search(
 ) -> List[Dict]:
 ```
 
-Pure FTS5 keyword search with BM25 ranking. Uses AND semantics by default; if zero results, falls back to OR. Bumps confidence +0.02 on each recalled item. Filters on `superseded_by IS NULL` to return only current/active items.
+Pure FTS5 keyword search with BM25 ranking. Uses AND semantics by default; if zero results, falls back to OR. Bumps confidence +0.02 on each recalled item unless `count_as_use=False`. Filters on `superseded_by IS NULL` to return only current/active items.
 
 The `time_from` and `time_to` parameters add temporal filtering on `created_at`, narrowing results before BM25 ranking.
 
@@ -709,15 +709,15 @@ def apply_confidence_decay(
 ) -> int:                   # Returns number of entries decayed
 ```
 
-Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days. Called once per session start via `reset_memory_session()`.
+Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days, at most once per `days_threshold` (tracked in `decayed_at`) and not within `days_threshold` of its last confirmation. It never moves `updated_at`, which the agent is shown as "last confirmed" and which orders memories newest first. Called once per session start via `reset_memory_session()`.
 
 #### update_confidence()
 
 ```python
-def update_confidence(self, knowledge_id: str, delta: float) -> None
+def update_confidence(self, knowledge_id: str, delta: float, *, confirmed: bool = False) -> None
 ```
 
-Adjust confidence by `delta`, clamped to [0.0, 1.0]. Used internally by reconciliation (+0.05 reinforce, +0.1 contradict newer, -0.1 weaken) and hybrid search (+0.02 per recall for vector-only results).
+Adjust confidence by `delta`, clamped to [0.0, 1.0]. Used internally by reconciliation (+0.05 reinforce, +0.1 contradict newer, -0.1 weaken). `updated_at` moves only with `confirmed=True` — a lesson whose fix just worked again; a reconciliation nudge is not a confirmation.
 
 #### delete_by_source()
 
