@@ -48,7 +48,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
-from gaia.utils.awake_clock import shared as _sleep_clock
+from gaia.utils import awake_clock as _awake_clock
 
 from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
@@ -1748,12 +1748,12 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
 
 
 def _turn_clock() -> float:
-    """``_time.monotonic()`` without the time the PC spent asleep.
+    """Seconds on a clock that stops while the PC sleeps.
 
     A turn on a PC that sleeps for longer than the no-progress limit must not
     be stopped the moment it wakes: the model slept too.
     """
-    return _time.monotonic() - _sleep_clock().slept
+    return _awake_clock.monotonic()
 
 
 class _TurnIdleClock:

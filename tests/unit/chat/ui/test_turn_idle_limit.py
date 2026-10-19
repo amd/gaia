@@ -33,17 +33,31 @@ USER_STOP_WORDS = "stopped before it finished"
 
 
 class _Clock:
-    """A monotonic clock the agent thread moves forward by hand."""
+    """The PC's clocks, which the agent thread moves forward by hand.
+
+    ``monotonic`` counts sleep, as ``time.monotonic`` does on Windows;
+    ``awake`` does not. :meth:`advance` is awake time, :meth:`sleep` is not.
+    """
 
     def __init__(self):
         self._now = 1000.0
+        self._awake = 1000.0
         self._lock = threading.Lock()
 
     def monotonic(self):
         with self._lock:
             return self._now
 
+    def awake(self):
+        with self._lock:
+            return self._awake
+
     def advance(self, seconds):
+        with self._lock:
+            self._now += seconds
+            self._awake += seconds
+
+    def sleep(self, seconds):
         with self._lock:
             self._now += seconds
 
@@ -77,15 +91,11 @@ class _ScriptedAgent:
 
 @pytest.fixture
 def clock():
-    from gaia.utils.awake_clock import AwakeClock
-
     fake = _Clock()
     fake_time = SimpleNamespace(monotonic=fake.monotonic, time=fake.monotonic)
-    # A jump of the fake clock stands for awake time here, never for sleep.
-    never_sleeps = AwakeClock(fake.monotonic, gap=float("inf"))
     with (
         patch.object(helpers, "_time", fake_time),
-        patch.object(helpers, "_sleep_clock", lambda: never_sleeps),
+        patch.object(helpers, "_awake_clock", SimpleNamespace(monotonic=fake.awake)),
     ):
         yield fake
 
@@ -509,16 +519,8 @@ def test_non_streaming_tool_ends_on_its_result_like_the_sse_handler():
 
 @pytest.fixture
 def sleeping_pc(clock):
-    """The turn's sleep clock watches the fake clock, so a jump reads as sleep.
-
-    In the tests above a jump stands for silent awake time; here it is the PC
-    sleeping, which is what a jump between two one-second reads looks like.
-    """
-    from gaia.utils.awake_clock import AwakeClock
-
-    watcher = AwakeClock(clock.monotonic)
-    with patch.object(helpers, "_sleep_clock", lambda: watcher):
-        yield clock
+    """The same clocks; :meth:`_Clock.sleep` moves only ``time.monotonic``."""
+    return clock
 
 
 EIGHT_HOURS = 8 * 60 * 60
@@ -531,7 +533,7 @@ async def test_a_turn_the_pc_slept_through_carries_on_after_waking(
     def script(agent):
         agent.console.print_info("started")
         _wait_until_read(agent.console)
-        sleeping_pc.advance(EIGHT_HOURS)
+        sleeping_pc.sleep(EIGHT_HOURS)
         time.sleep(0.5)  # the loop looks at the clock after waking
         agent.console.print_info("still going after the sleep")
         _wait_until_read(agent.console)
@@ -553,7 +555,7 @@ async def test_a_non_streaming_turn_the_pc_slept_through_carries_on(
 ):
     def script(agent):
         agent.console.print_info("started")
-        sleeping_pc.advance(EIGHT_HOURS)
+        sleeping_pc.sleep(EIGHT_HOURS)
         time.sleep(0.5)
         agent.console.print_info("still going after the sleep")
         return "Finished after the PC woke up."
@@ -570,14 +572,10 @@ async def test_silence_after_waking_still_stops_the_turn(runtime, sleeping_pc):
     def script(agent):
         agent.console.print_info("started")
         _wait_until_read(agent.console)
-        sleeping_pc.advance(EIGHT_HOURS)
+        sleeping_pc.sleep(EIGHT_HOURS)
         time.sleep(0.5)
-        # Awake again, and silent past the window, in steps the clock counts.
-        for _ in range(40):
-            sleeping_pc.advance(4)
-            time.sleep(0.25)
-            if agent._cancel_event.is_set():
-                break
+        # Awake again, and silent past the window.
+        sleeping_pc.advance(30)
         return agent.wait_for_cancel()
 
     agent = _ScriptedAgent(script)

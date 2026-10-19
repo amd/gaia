@@ -2,35 +2,31 @@
 # SPDX-License-Identifier: MIT
 """A PC that sleeps mid-answer does not wake up to a "the model stalled" error.
 
-On Windows the monotonic clock keeps counting while the machine sleeps. Every
-silence limit measured with it (the 120 s stream idle limit, the socket read
-deadline behind it, the Agent UI's no-progress limit) used to fire the moment
-the PC woke from a long enough sleep, though the local model server had slept
-too and was about to carry on. These tests jump a fake clock by hours between
-two polls, which is what a sleep looks like to the process, and check that a
-genuinely silent server is still caught.
+On Windows ``time.monotonic()`` keeps counting while the machine sleeps. Every
+limit measured with it (the 120 s stream idle limit, the socket read deadline
+behind it, the retry budget, a tool's time limit) used to fire the moment the
+PC woke from a long enough sleep, though the local model server had slept too
+and was about to carry on. These tests stand in for such a PC: its
+``time.monotonic`` jumps by hours during a sleep while the awake clock does
+not, and the code under test runs with its default clocks.
 """
 
+import importlib
 import threading
 import time
 
 import httpcore
 import pytest
+import requests
 
 from gaia.llm.retry import StreamStalledError
-from gaia.llm.stream_watchdog import (
-    ByteActivity,
-    StallLimits,
-    _AbortableStream,
-    watch_stream,
-)
+from gaia.utils import awake_clock
 
 IDLE = 120.0
-LIMITS = StallLimits(first_output=IDLE, idle=IDLE, remote=False)
 EIGHT_HOURS = 8 * 60 * 60.0
 
 
-class FakeClock:
+class _Clock:
     def __init__(self):
         self.now = 1000.0
         self._lock = threading.Lock()
@@ -44,16 +40,49 @@ class FakeClock:
             self.now += seconds
 
 
-def _poll_until(predicate, timeout=5.0):
-    end = time.monotonic() + timeout
-    while not predicate():
-        assert time.monotonic() < end, "condition not reached"
-        time.sleep(0.01)
+class SleepingPC:
+    """``time.monotonic`` as Windows has it (counts sleep), and the awake clock."""
+
+    def __init__(self):
+        self.monotonic = _Clock()
+        self.awake = _Clock()
+
+    def sleep(self, seconds):
+        self.monotonic.advance(seconds)
+
+    def run(self, seconds):
+        self.monotonic.advance(seconds)
+        self.awake.advance(seconds)
 
 
-def test_a_stream_that_sleeps_with_the_pc_carries_on_after_waking():
-    raw = FakeClock()
-    activity = ByteActivity(clock=raw)
+@pytest.fixture
+def pc():
+    """The PC's clocks, with the stream watchdog reloaded to read them.
+
+    Reloaded so default clock arguments bind the stand-ins, whichever clock
+    the module uses by default; that way these tests fail on any version that
+    measures a limit on ``time.monotonic``. The swap lasts only this test, and
+    nothing in this module starts a thread that outlives it.
+    """
+    import gaia.llm.stream_watchdog as watchdog
+
+    machine = SleepingPC()
+    real_monotonic, real_awake = time.monotonic, awake_clock.monotonic
+    time.monotonic, awake_clock.monotonic = machine.monotonic, machine.awake
+    machine.watchdog = importlib.reload(watchdog)
+    try:
+        yield machine
+    finally:
+        time.monotonic, awake_clock.monotonic = real_monotonic, real_awake
+        importlib.reload(watchdog)
+
+
+def _limits(watchdog, idle=IDLE):
+    return watchdog.StallLimits(first_output=idle, idle=idle, remote=False)
+
+
+def test_a_stream_that_sleeps_with_the_pc_carries_on_after_waking(pc):
+    wd = pc.watchdog
     resume = threading.Event()
     reached_silence = threading.Event()
 
@@ -63,16 +92,16 @@ def test_a_stream_that_sleeps_with_the_pc_carries_on_after_waking():
         assert resume.wait(10)
         yield "lo"
 
-    stream = watch_stream(
-        produce, limits=LIMITS, activity=activity, is_output=bool, clock=raw
+    stream = wd.watch_stream(
+        produce, limits=_limits(wd), activity=wd.ByteActivity(), is_output=bool
     )
     got = [next(stream)]
     assert reached_silence.wait(5)
 
     def sleep_then_wake():
         time.sleep(0.3)  # the consumer is polling the silence now
-        raw.advance(EIGHT_HOURS)
-        time.sleep(0.6)  # it polls again: the first look after waking
+        pc.sleep(EIGHT_HOURS)
+        time.sleep(0.6)  # it polls again after waking
         resume.set()
 
     waker = threading.Thread(target=sleep_then_wake)
@@ -82,18 +111,10 @@ def test_a_stream_that_sleeps_with_the_pc_carries_on_after_waking():
     assert got == ["Hel", "lo"]
 
 
-class SteadyClock(FakeClock):
-    """Awake time: every read is one second later, so there is never a gap."""
-
-    def __call__(self):
-        with self._lock:
-            self.now += 1.0
-            return self.now
-
-
-def test_a_server_that_goes_silent_while_awake_is_still_cut_off():
-    raw = SteadyClock()
-    activity = ByteActivity(clock=raw)
+def test_a_server_silent_while_the_process_was_paused_is_still_cut_off(pc):
+    """Awake but not running (a VM pause, a stalled thread) is not sleep: the
+    silence counts, all at once."""
+    wd = pc.watchdog
     never = threading.Event()
 
     def produce():
@@ -101,12 +122,15 @@ def test_a_server_that_goes_silent_while_awake_is_still_cut_off():
         never.wait(10)
         yield "never"
 
-    short = StallLimits(first_output=10.0, idle=10.0, remote=False)
-    stream = watch_stream(
-        produce, limits=short, activity=activity, is_output=bool, clock=raw
+    stream = wd.watch_stream(
+        produce,
+        limits=_limits(wd, idle=10.0),
+        activity=wd.ByteActivity(),
+        is_output=bool,
     )
     try:
         assert next(stream) == "Hel"
+        pc.run(30.0)  # one jump, longer than the limit, with the PC awake
         with pytest.raises(StreamStalledError):
             next(stream)
     finally:
@@ -134,57 +158,101 @@ class _QuietSocket(httpcore.NetworkStream):
         pass
 
 
-def test_a_socket_read_spanning_a_sleep_does_not_time_out():
-    raw = FakeClock()
+def test_a_socket_read_spanning_a_sleep_does_not_time_out(pc):
+    wd = pc.watchdog
 
     def on_read(n):
         if n == 3:
-            raw.advance(EIGHT_HOURS)  # the PC slept during this slice
+            pc.sleep(EIGHT_HOURS)
         return b"data" if n == 5 else None
 
-    stream = _AbortableStream(_QuietSocket(on_read), ByteActivity(clock=raw), clock=raw)
+    stream = wd._AbortableStream(_QuietSocket(on_read), wd.ByteActivity())
     assert stream.read(1024, timeout=150.0) == b"data"
 
 
-def test_a_socket_read_still_times_out_on_a_silent_server():
-    raw = FakeClock()
+def test_a_socket_read_still_times_out_on_a_silent_server(pc):
+    wd = pc.watchdog
 
     def on_read(_n):
-        raw.advance(1.0)
+        pc.run(1.0)
         return None
 
-    stream = _AbortableStream(_QuietSocket(on_read), ByteActivity(clock=raw), clock=raw)
+    stream = wd._AbortableStream(_QuietSocket(on_read), wd.ByteActivity())
     with pytest.raises(httpcore.ReadTimeout):
         stream.read(1024, timeout=150.0)
 
 
-def test_a_request_the_pc_slept_through_keeps_its_retry_budget():
+def test_a_request_the_pc_slept_through_keeps_its_retry_budget(pc):
     """A connection the sleep dropped is retried, not given up on as overdue."""
-    import requests
+    from gaia.llm.lemonade_client import LemonadeClient
 
-    from gaia.llm.retry import ModelCallRetrier, RetryPolicy
-    from gaia.utils.awake_clock import AwakeClock
-
-    raw = FakeClock()
+    client = LemonadeClient(base_url="http://127.0.0.1:1/api/v1")
+    client._retry_sleep = lambda _s: None
     attempts = []
 
     def call():
-        attempts.append(raw.now)
+        attempts.append(1)
         if len(attempts) == 1:
-            raw.advance(EIGHT_HOURS)
+            pc.sleep(EIGHT_HOURS)
             raise requests.exceptions.ConnectionError("connection reset")
         return "ok"
 
-    retrier = ModelCallRetrier(
-        RetryPolicy(deadline=120.0), sleep=lambda _s: None, clock=AwakeClock(raw)
-    )
-    assert retrier.call(call) == "ok"
+    assert client._model_retrier().call(call) == "ok"
     assert len(attempts) == 2
 
 
-def test_lemonade_requests_measure_their_retry_budget_in_awake_time():
-    from gaia.llm.lemonade_client import LemonadeClient
-    from gaia.utils.awake_clock import monotonic
+def test_a_tool_the_pc_slept_through_is_not_timed_out(pc):
+    """A tool's 180 s limit, like every other limit, leaves the sleep out."""
+    from gaia.agents.base.agent import Agent
 
-    client = LemonadeClient(base_url="http://127.0.0.1:1/api/v1")
-    assert client._model_retrier()._clock is monotonic
+    class _Host:
+        def _bounded_tool_timeout(self, _name, _args):
+            return 180.0
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow_tool():
+        started.set()
+        assert release.wait(10)
+        return "done"
+
+    def sleep_mid_tool():
+        assert started.wait(5)
+        time.sleep(0.2)
+        pc.sleep(EIGHT_HOURS)
+        time.sleep(0.8)  # the limit is checked after waking
+        release.set()
+
+    waker = threading.Thread(target=sleep_mid_tool)
+    waker.start()
+    try:
+        assert Agent._call_tool_bounded(_Host(), slow_tool, {}, "slow_tool") == "done"
+    finally:
+        release.set()
+        waker.join()
+
+
+def test_a_tool_that_overruns_while_awake_is_still_timed_out(pc):
+    from gaia.agents.base.agent import Agent, ToolExecutionTimeout
+
+    class _Host:
+        def _bounded_tool_timeout(self, _name, _args):
+            return 5.0
+
+    started, release = threading.Event(), threading.Event()
+
+    def stuck_tool():
+        started.set()
+        release.wait(10)
+
+    def overrun():
+        assert started.wait(5)
+        time.sleep(0.2)  # after the limit's clock started
+        pc.run(6.0)
+
+    threading.Thread(target=overrun).start()
+    try:
+        with pytest.raises(ToolExecutionTimeout):
+            Agent._call_tool_bounded(_Host(), stuck_tool, {}, "stuck_tool")
+    finally:
+        release.set()

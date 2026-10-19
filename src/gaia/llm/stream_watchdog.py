@@ -27,7 +27,6 @@ import contextvars
 import queue
 import ssl
 import threading
-import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 
@@ -40,7 +39,7 @@ from gaia.llm.retry import (
     current_cancel_check,
     stream_idle_timeout,
 )
-from gaia.utils.awake_clock import AwakeClock
+from gaia.utils import awake_clock
 
 T = TypeVar("T")
 
@@ -74,22 +73,19 @@ def stall_limits(*, remote: bool, request_budget: float) -> StallLimits:
 
 
 class ByteActivity:
-    """When a stream last received anything, and how to cut it off."""
+    """When a stream last received anything, and how to cut it off.
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic):
-        self._clock = clock
-        self._lock = threading.Lock()
-        self.last = clock()
+    Times are read from *clock*, by default :func:`awake_clock.monotonic`, so
+    time the PC spends asleep never counts as silence.
+    """
+
+    def __init__(self, clock: Optional[Callable[[], float]] = None):
+        self.clock = clock or awake_clock.monotonic
+        self.last = self.clock()
         self._aborted = threading.Event()
 
     def touch(self) -> None:
-        with self._lock:
-            self.last = self._clock()
-
-    def excuse(self, seconds: float) -> None:
-        """Do not count *seconds* the process spent asleep as silence."""
-        with self._lock:
-            self.last = min(self.last + seconds, self._clock())
+        self.last = self.clock()
 
     @property
     def aborted(self) -> bool:
@@ -114,19 +110,14 @@ class _AbandonedStream(httpcore.ReadError):
 class _AbortableStream(httpcore.NetworkStream):
     """A connection whose reads wait in short slices and stop once aborted."""
 
-    def __init__(
-        self,
-        inner: httpcore.NetworkStream,
-        activity: ByteActivity,
-        clock: Callable[[], float] = time.monotonic,
-    ):
+    def __init__(self, inner: httpcore.NetworkStream, activity: ByteActivity):
+        # Deadlines are read on the activity's clock, so they skip sleep too.
         self._inner = inner
         self._activity = activity
-        self._clock = clock
 
     def read(self, max_bytes: int, timeout: Optional[float] = None) -> bytes:
         # Time the PC spends asleep during the read does not use up its timeout.
-        awake = AwakeClock(self._clock)
+        awake = self._activity.clock
         deadline = None if timeout is None else awake() + timeout
         while True:
             if self._activity.aborted:
@@ -164,7 +155,7 @@ class _AbortableStream(httpcore.NetworkStream):
         timeout: Optional[float] = None,
     ) -> httpcore.NetworkStream:
         tls = self._inner.start_tls(ssl_context, server_hostname, timeout)
-        return _AbortableStream(tls, self._activity, self._clock)
+        return _AbortableStream(tls, self._activity)
 
     def get_extra_info(self, info: str) -> Any:
         return self._inner.get_extra_info(info)
@@ -266,17 +257,14 @@ def watch_stream(
     limits: StallLimits,
     activity: ByteActivity,
     is_output: Callable[[T], bool],
-    clock: Callable[[], float] = time.monotonic,
 ) -> Iterator[T]:
     """Yield from ``produce()``, raising :class:`StreamStalledError` once it
     has been silent longer than *limits* allow, and
     :class:`StreamCancelledError` when Stop is pressed while it is silent.
 
     *activity* must be the one fed by the connection ``produce`` reads from;
-    every item ``produce`` yields counts as activity too. *clock* must be the
-    one *activity* reads. Time the PC spends asleep is not counted as silence:
-    this loop reads the clock every fraction of a second and treats a jump as
-    sleep (see :class:`~gaia.utils.awake_clock.AwakeClock`).
+    every item ``produce`` yields counts as activity too. Silence is measured
+    on *activity*'s clock, so time the PC spends asleep is not counted.
     """
     handoff: "queue.Queue[tuple]" = queue.Queue()
     stop = threading.Event()
@@ -302,14 +290,9 @@ def watch_stream(
     is_cancelled = current_cancel_check()
     seen_output = False
     finished = False
-    awake = AwakeClock(clock)
-    excused = 0.0
+    clock = activity.clock
     try:
         while True:
-            slept = awake.slept
-            if slept > excused:
-                activity.excuse(slept - excused)
-                excused = slept
             try:
                 kind, value = handoff.get_nowait()
             except queue.Empty:

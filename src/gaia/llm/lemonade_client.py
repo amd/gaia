@@ -76,7 +76,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
-from gaia.utils.awake_clock import monotonic as awake_monotonic
+from gaia.utils import awake_clock
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -3656,7 +3656,7 @@ class LemonadeClient:
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
             # A request the PC slept through still has its retry budget.
-            clock=self._retry_clock or awake_monotonic,
+            clock=self._retry_clock or awake_clock.monotonic,
             rng=self._retry_rng,
             log=self.log,
             classify=classify,
