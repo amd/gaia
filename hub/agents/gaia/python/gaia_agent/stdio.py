@@ -1038,10 +1038,7 @@ LOG_PATH_ENV = "GAIA_AGENT_LOG"
 
 
 #: How a turn that never finished reads in the session transcript.
-INTERRUPTED_NOTE = (
-    "This turn was interrupted before it finished: the TUI closed or the agent "
-    "stopped."
-)
+INTERRUPTED_NOTE = "This answer was interrupted when GAIA closed."
 
 
 def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -318,6 +318,11 @@ class SessionHistory(list):
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
         )
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(turns)")}
+        if "owner" not in columns:
+            # The process running a stand-in turn (gaia.utils.process_owner);
+            # NULL once the turn is recorded.
+            self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
         self._db.commit()
         self._cuts = CutReporter()
         self._pending: Optional[int] = None
@@ -327,16 +332,25 @@ class SessionHistory(list):
         even if the process is killed before the turn ends.
 
         The next :meth:`record` replaces it; :meth:`discard_pending` drops it.
+        It is marked as this process's, so a process sharing the file leaves a
+        turn that is still running out of its model view.
         """
+        from gaia.utils.process_owner import current_owner
+
         with self._db:
             cursor = self._db.execute(
-                "INSERT INTO turns(messages) VALUES (?)",
-                (json.dumps(messages, ensure_ascii=False),),
+                "INSERT INTO turns(messages, owner) VALUES (?, ?)",
+                (json.dumps(messages, ensure_ascii=False), current_owner()),
             )
         self._pending = cursor.lastrowid
 
     def keep_pending(self) -> None:
         """Leave the stand-in as the turn's entry: it never finished."""
+        if self._pending is not None:
+            with self._db:
+                self._db.execute(
+                    "UPDATE turns SET owner = NULL WHERE id = ?", (self._pending,)
+                )
         self._pending = None
 
     def discard_pending(self) -> None:
@@ -351,12 +365,14 @@ class SessionHistory(list):
         """Persist a complete turn without modifying its native tool IDs."""
         payload = json.dumps(messages, ensure_ascii=False)
         with self._db:
+            replaced = 0
             if self._pending is not None:
-                self._db.execute(
-                    "UPDATE turns SET messages = ? WHERE id = ?",
+                replaced = self._db.execute(
+                    "UPDATE turns SET messages = ?, owner = NULL WHERE id = ?",
                     (payload, self._pending),
-                )
-            else:
+                ).rowcount
+            if not replaced:
+                # No stand-in (or another process cleared the session since).
                 self._db.execute("INSERT INTO turns(messages) VALUES (?)", (payload,))
         self._pending = None
 
@@ -367,13 +383,16 @@ class SessionHistory(list):
         on_cut: Optional[Callable[[HistoryCut], None]] = None,
     ) -> None:
         """Rebuild the bounded view for the currently selected model."""
-        # The running turn's stand-in is for the transcript, not the model.
+        from gaia.utils.process_owner import owner_is_gone
+
+        # A running turn's stand-in, ours or another live process's, is for
+        # the transcript, not the model; a dead owner's never finished.
         turns = [
-            json.loads(row[0])
-            for row in self._db.execute(
-                "SELECT messages FROM turns WHERE id IS NOT ? ORDER BY id",
-                (self._pending,),
+            json.loads(messages)
+            for row_id, messages, owner in self._db.execute(
+                "SELECT id, messages, owner FROM turns ORDER BY id"
             )
+            if row_id != self._pending and (owner is None or owner_is_gone(owner))
         ]
         if (
             hasattr(agent, "_uses_native_tool_calls")

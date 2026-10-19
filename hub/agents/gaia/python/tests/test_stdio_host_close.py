@@ -22,7 +22,7 @@ from gaia.agents.base.history import SessionHistory
 from gaia.ui.sse_handler import SSEOutputHandler
 
 STOPPED = "The request was stopped before it finished."
-CUT_SHORT = "was interrupted before it finished"
+CUT_SHORT = "was interrupted when GAIA closed"
 
 
 class _Agent:

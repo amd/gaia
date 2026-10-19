@@ -481,10 +481,10 @@ confirmation prompt *while* a turn is in flight, toggles full access or
 ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
 "always" grants, history and the permission mode survive a cancel. When stdin
 closes mid-turn (the host has gone), the running turn is cancelled and saved in
-the session history as interrupted: "This turn was interrupted before it
-finished: the TUI closed or the agent stopped." The question is saved when the
-turn starts, so it survives even if the host kills the process before the turn
-ends.
+the session history as interrupted: "This answer was interrupted when GAIA
+closed." The question is saved when the turn starts, so it survives even if the
+host kills the process before the turn ends. Another process sharing the
+history file leaves a turn that is still running out of its model view.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
