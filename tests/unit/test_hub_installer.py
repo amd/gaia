@@ -1842,3 +1842,39 @@ def test_a_failed_binary_FIRST_install_is_still_cleared(tmp_path, monkeypatch):
 
     assert read_sentinel("demo", tmp_path) is None
     assert not (tmp_path / "demo").exists()
+
+
+# ---------------------------------------------------------------------------
+# A pip run that never finishes releases the install slot
+# ---------------------------------------------------------------------------
+
+
+def test_hung_pip_fails_the_install_and_frees_the_slot(tmp_path, monkeypatch):
+    """uv waits on another session's cache lock with no limit; the install must not."""
+    import sys
+
+    hang = [sys.executable, "-c", "import time; time.sleep(60)"]
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [hang])
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
+    manifest = _manifest()
+
+    def attempt():
+        return install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            install_root=tmp_path,
+            active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+        )
+
+    with pytest.raises(InstallError, match="did not finish within 1s"):
+        attempt()
+    assert not installer.is_installing("demo")
+    assert installer.get_install_status("demo")["status"] == "failed"
+    assert read_sentinel("demo", tmp_path) is None
+
+    # A retry gets the same honest error, not "already in progress".
+    with pytest.raises(InstallError, match="did not finish") as retry:
+        attempt()
+    assert not isinstance(retry.value, InstallInProgressError)

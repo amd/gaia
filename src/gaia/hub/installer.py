@@ -417,6 +417,26 @@ def _download_and_verify(
 # ---------------------------------------------------------------------------
 
 
+#: Longest one pip/uv install may run. A wheel and its dependencies install in
+#: well under this; past it the child is almost always parked on a cache lock
+#: another ``uv`` process holds, which uv waits on with no limit of its own.
+PIP_TIMEOUT_SECONDS = 900.0
+
+
+def _pip_frontends() -> List[List[str]]:
+    return [
+        ["uv", "pip", "install"],
+        [sys.executable, "-m", "uv", "pip", "install"],
+        [sys.executable, "-m", "pip", "install"],
+    ]
+
+
+def _output_tail(output: Any, limit: int = 500) -> str:
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    return (output or "").strip()[-limit:]
+
+
 def _default_run_pip(args: List[str]) -> None:
     """Install ``args`` via pip, trying frontends in order until one works.
 
@@ -425,15 +445,12 @@ def _default_run_pip(args: List[str]) -> None:
     venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
     ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
     still installs the wheel instead of hard-failing. Raises InstallError
-    only if every frontend fails.
+    if every frontend fails, or as soon as one runs past
+    ``PIP_TIMEOUT_SECONDS`` -- a frontend that hangs is not handed to the next,
+    which would wait on the same lock.
     """
-    frontends = [
-        ["uv", "pip", "install"],
-        [sys.executable, "-m", "uv", "pip", "install"],
-        [sys.executable, "-m", "pip", "install"],
-    ]
     attempts: List[str] = []
-    for frontend in frontends:
+    for frontend in _pip_frontends():
         cmd = [*frontend, *args]
         try:
             proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
@@ -441,10 +458,22 @@ def _default_run_pip(args: List[str]) -> None:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=PIP_TIMEOUT_SECONDS,
             )
         except FileNotFoundError:
             attempts.append(f"{frontend[0]} (not found on PATH)")
             continue
+        except subprocess.TimeoutExpired as e:
+            # subprocess.run has already killed the child.
+            output = _output_tail(e.stderr) or _output_tail(e.output)
+            raise InstallError(
+                f"'{' '.join(frontend)}' did not finish within "
+                f"{PIP_TIMEOUT_SECONDS:.0f}s, so the install was stopped and "
+                "nothing was installed. It is most likely waiting for a "
+                "package-cache lock held by another install (another GAIA "
+                "session, or a uv/pip command in a terminal). Let that finish, "
+                "then retry." + (f"\nLast output: {output}" if output else "")
+            ) from e
         if proc.returncode == 0:
             return
         attempts.append(
