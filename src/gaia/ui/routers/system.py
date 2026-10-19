@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    _is_local_url,
     cloud_model_provider,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
@@ -489,6 +490,10 @@ def _loaded_chat_entry(
     return chat[0] if chat else None
 
 
+# Most the Lemonade probes in /api/system/status may take together.
+_STATUS_PROBE_BUDGET_S = 20.0
+
+
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
@@ -535,12 +540,12 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         cloud_model_provider(status.default_model_name)
     )
 
-    # Check Lemonade Server
-    # Use a generous timeout (10s) because when the LLM is handling many
-    # parallel requests it may take a while to respond to the health check.
-    try:
-        import httpx
+    # Check Lemonade Server. Each call has a generous timeout (the health
+    # check 10 s: a busy LLM answers it slowly); _STATUS_PROBE_BUDGET_S
+    # bounds them all together.
+    import httpx
 
+    async def _probe_lemonade() -> None:
         # Failures of the supplementary probes below: transport, bad JSON, or
         # an unexpected payload shape.
         probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
@@ -776,17 +781,64 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             break
                 else:
                     status.lemonade_error = "Lemonade health query failed"
+
+    # The probes run one after another, each with its own timeout; this
+    # bounds them together so the endpoint always answers.
+    try:
+        await asyncio.wait_for(_probe_lemonade(), _STATUS_PROBE_BUDGET_S)
+        status.lemonade_probe = "ok" if status.lemonade_running else "error"
+        if status.lemonade_running:
+            _probe_ok("lemonade")
+    except asyncio.TimeoutError:
+        if status.lemonade_running:
+            # Health answered; only the extra probes ran out of time.
+            status.lemonade_probe = "ok"
+            _probe_failed(
+                status,
+                "lemonade",
+                f"Some model-server details took over {_STATUS_PROBE_BUDGET_S:g} s "
+                "and were skipped",
+            )
+        else:
+            logger.warning(
+                "system status: Lemonade did not answer within %gs",
+                _STATUS_PROBE_BUDGET_S,
+            )
+            status.lemonade_probe = "timed_out"
+            status.lemonade_error = (
+                f"Lemonade did not answer within {_STATUS_PROBE_BUDGET_S:g} s; "
+                "it may be busy loading a model."
+            )
     except httpx.ConnectError as exc:
-        # Nothing listening is a confirmed outage; preserve the actionable
-        # "not responding" banner rather than calling it an ambiguous probe.
+        # Refused: nothing is listening, a confirmed outage, so keep the
+        # actionable "not responding" banner rather than an ambiguous probe.
         logger.debug("system status: Lemonade is not running: %s", exc)
         status.lemonade_running = False
+        status.lemonade_probe = "down"
+    except httpx.ConnectTimeout as exc:
+        status.lemonade_running = False
+        if _is_local_url(resolve_lemonade_base_url()):
+            # A local server that is up but not accepting (full backlog,
+            # wedged) times out the same way; say busy, never "start it".
+            logger.warning("system status: local Lemonade is not accepting: %s", exc)
+            status.lemonade_probe = "timed_out"
+            status.lemonade_error = "Lemonade is not accepting connections right now"
+        else:
+            logger.debug("system status: remote Lemonade is not reachable: %s", exc)
+            status.lemonade_probe = "down"
+    except httpx.TimeoutException as exc:
+        # Connected, then no answer in time: busy, not down.
+        logger.warning("system status: Lemonade did not answer in time: %s", exc)
+        status.lemonade_running = False
+        status.lemonade_probe = "timed_out"
+        status.lemonade_error = "Lemonade did not answer in time"
     except config_errors as exc:
         # Which server to probe is unknown until the config is fixed.
         status.config_error = str(exc)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("system status: Lemonade health query failed: %s", exc)
         status.lemonade_running = False
+        status.lemonade_probe = "error"
         status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
