@@ -16,6 +16,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which undercounts JSON and CJK text, so history that should take half the
   window could fill it (#5066). It now warns and counts at least one token per
   three UTF-8 bytes.
+- **A turn queued for the model says so on the stream.** When another process
+  or request is using the model, `/query` now sends `status` events with
+  `phase: "model_queue"` every ~2 s, carrying a `queue` object with the turn's
+  place in line, who holds the model and how long it has waited, then one
+  `granted` update. A turn queued this way leases ahead of background work, and
+  `/query/{run_id}/cancel` takes it out of the queue. Before, the stream went
+  silent for the whole wait, so a client could not tell a queued turn from a
+  dead one.
 - **A turn cut short by closing the TUI is saved as interrupted.** The session
   history got a turn only once it ended, so closing the TUI mid-turn saved it
   as an ordinary "stopped" answer, or, if the TUI had to kill the agent, lost

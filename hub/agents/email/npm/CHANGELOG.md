@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **A request waiting for the model says so.** When another GAIA process or
+  request is using the local model, `/v1/email/query` now streams a `status`
+  every ~2 s with `phase: "model_queue"` and the request's place in line, who
+  holds the model and how long it has waited. Before, the stream went silent
+  for the whole wait. The request also goes ahead of background work, and
+  cancelling the run takes it out of the queue.
 - **A scheduled send or snooze cut off mid-fire no longer stays stuck.** If
   the agent crashed while firing one, the job stayed "firing" forever and was
   never reported. About 10 minutes later, a send is now marked failed with the

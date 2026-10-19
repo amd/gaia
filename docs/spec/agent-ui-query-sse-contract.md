@@ -175,7 +175,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, phase?, words?, chars?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
+| `status` | `{message, phase?, words?, chars?, queue?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
 | `token` | `{delta}` | stream assistant text |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
@@ -200,7 +200,8 @@ indistinguishable from a dead one.
     "message": { "type": "string" },
     "phase":   { "type": "string" },   // optional, §4.4
     "words":   { "type": "integer" },  // with phase "reasoning"
-    "chars":   { "type": "integer" }   // with phase "tool_call"
+    "chars":   { "type": "integer" },  // with phase "tool_call"
+    "queue":   { "type": "object" }    // with phase "model_queue", §4.4
   } }
 
 // token
@@ -346,6 +347,16 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
 | `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
 | `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
+| `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
+
+`model_queue` is the one phase sent on a timer: the steady updates are what let a
+receiver tell a queued turn from a dead one. Its `queue` object has `event`
+(`queued`, then `granted`), `scope` (`daemon` for another process, `process` for
+another request in the same agent), `position` and `queue_length` (1-based),
+`holder` and `holder_model` (who holds the model, for what), `held_for_s` and
+`waited_s`. Fields the wait cannot know are omitted. Show it as the live line
+("Waiting for the model — `<holder>` is using it, #2 of 3 in line (14s)"); a
+wait has no deadline of its own unless the user set `GAIA_MODEL_LEASE_WAIT_S`.
 
 A phase lasts until the next phase, `token`, `tool_call` or `tool_result`. A
 receiver that shows narration separately should treat a phased `status` as

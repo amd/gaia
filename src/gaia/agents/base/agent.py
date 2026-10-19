@@ -149,6 +149,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -9498,6 +9499,10 @@ Do NOT wrap conversational replies in JSON.
                             f"*Technical details: {str(e)}*"
                         )
                         break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        cancelled_by_console = True
+                        break
                     except Exception as e:
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
@@ -9677,6 +9682,11 @@ Do NOT wrap conversational replies in JSON.
                             f"Please make sure Lemonade Server is running.\n\n"
                             f"*Technical details: {str(e)}*"
                         )
+                        break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        self.console.stop_progress()
+                        cancelled_by_console = True
                         break
                     except Exception as e:
                         self.console.stop_progress()

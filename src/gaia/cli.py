@@ -4364,6 +4364,7 @@ def _handle_schedule(args):
             print(
                 f"{s.name}  [{state}]  cron={s.cron!r}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
+                + (f"  missed={s.missed_count}" if s.missed_count else "")
             )
         return
 
@@ -4374,8 +4375,24 @@ def _handle_schedule(args):
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
         print(f"sink:       {s.sink}  args={s.sink_args}")
         print(f"enabled:    {s.enabled}")
-        print(f"created_at: {s.created_at}")
+        from datetime import datetime as _datetime
+
+        def _local(stamp):
+            # Local time, like next_fire.
+            return _datetime.fromisoformat(stamp).astimezone().isoformat()
+
+        print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
+        if s.missed_count:
+            runs = "run" if s.missed_count == 1 else "runs"
+            count = (
+                f"at least {s.missed_count}" if s.missed_at_least else s.missed_count
+            )
+            print(
+                f"missed:     {count} {runs} in all while the PC was off or "
+                "asleep, or the schedule daemon wasn't running "
+                f"(latest due {_local(s.last_missed)})"
+            )
         return
 
     if action == "remove":
@@ -4568,6 +4585,14 @@ def main():
                     )
                     sys.exit(2)
 
+            try:
+                from gaia.stream_timeout import stream_timeout_from_env
+
+                stream_timeout_from_env()
+            except ValueError as e:
+                # A bad GAIA_STREAM_TIMEOUT: the remedy, not a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
             try:
                 run_telegram(
                     token=args.token,
