@@ -1633,6 +1633,8 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
+| `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
+| `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
 
 ### Full access
 
@@ -3229,6 +3231,14 @@ server's memory when GAIA is not in use:
   finds the server gone mid-request has the daemon start it again and sends
   the request once more, so the turn still answers. A stream already under way
   is not replayed.
+- **A server that is briefly not answering is waited for.** A request, a
+  `/model` switch, or a CLI command such as `gaia llm` that finds GAIA's server
+  unreachable shows "Reconnecting to the model server…" and waits up to 60
+  seconds while the daemon brings it back, then carries on. A new agent session
+  waits the same way while it starts, but only logs the message. If the server
+  is not back by then, the request fails with an
+  error that says so and points at `gaia daemon status`. A Lemonade you run
+  yourself, or one `LEMONADE_BASE_URL` names, is never waited on.
 - **`gaia daemon stop` stops the server, whoever started it,** including the one
   first-time setup starts. If the daemon is not running, it still stops GAIA's
   server.

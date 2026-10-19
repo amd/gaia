@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools import search_scope
@@ -1335,6 +1336,7 @@ class FileSearchToolsMixin:
                         )
                     return {**refusal, "operation": "write_file"}
 
+                before_change(resolved_path, "write_file")
                 # Create backup of existing file before overwriting
                 if path_validator is not None and resolved_path.exists():
                     backup_path = path_validator.create_backup(str(resolved_path))
@@ -1749,6 +1751,7 @@ class FileSearchToolsMixin:
                     )
                 )
 
+                before_change(resolved_path, "edit_file")
                 # Write updated content
                 _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
