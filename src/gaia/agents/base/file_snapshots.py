@@ -286,6 +286,13 @@ class TurnRecorder:
             if not self.has_changes:
                 return
             self._manifest["message_id"] = message_id
+            path = self.dir / MANIFEST
+            if self._closed and path.is_file():
+                # Re-read: a tool abandoned at its time limit may have noted a late write.
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+                manifest["message_id"] = message_id
+                _write_json_atomic(path, manifest)
+                return
             self._save()
 
 
@@ -636,15 +643,15 @@ def restore_turn(
     shutil.rmtree(rollback_dir, ignore_errors=True)
 
     kept_dirs = []
-    for entry in entries:
-        for folder in reversed(entry.get("created_dirs") or []):
-            path = Path(folder)
-            if not path.is_dir():
-                continue
-            try:
-                path.rmdir()
-            except OSError:
-                kept_dirs.append(folder)
+    created = {d for e in entries for d in (e.get("created_dirs") or [])}
+    for folder in sorted(created, key=lambda d: len(Path(d).parts), reverse=True):
+        path = Path(folder)
+        if not path.is_dir():
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            kept_dirs.append(folder)
 
     m["restored_at"] = _now_iso()
     _write_json_atomic(turn.dir / MANIFEST, m)

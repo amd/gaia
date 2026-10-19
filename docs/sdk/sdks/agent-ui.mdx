@@ -806,7 +806,7 @@ Deleting a chat deletes its copies.
   <Accordion title="PUT /api/settings/undo">
     Set `retention_days` (1–365) and `max_mb` (10–100000), then remove history
     past the new limits. Turns older than the time limit go first, then the
-    oldest until the total fits; the newest turn is always kept.
+    oldest until the total fits. The size limit never removes the newest turn.
   </Accordion>
 </AccordionGroup>
 

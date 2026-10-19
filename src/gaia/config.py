@@ -163,7 +163,7 @@ class GaiaConfig:
         undo_retention_days: Keep the copies that let a turn's file changes be
             undone for this many days.
         undo_max_mb: Keep at most this many megabytes of those copies; the
-            oldest turns go first. The newest turn is always kept.
+            oldest turns go first. The size limit never removes the newest turn.
     """
 
     profile: str = "chat"

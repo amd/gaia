@@ -47,7 +47,7 @@ export function UndoHistorySettings() {
             <span className="settings-label">Undo history</span>
             <p className="settings-hint">
                 Before GAIA changes a file it keeps a copy, so you can undo a turn. Copies older than the
-                time limit, or past the space limit (oldest first), are deleted. The latest turn is always kept.
+                time limit, or past the space limit (oldest first), are deleted. The space limit never deletes the latest turn.
             </p>
             {settings && (
                 <>

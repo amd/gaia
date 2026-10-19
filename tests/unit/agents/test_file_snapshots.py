@@ -524,3 +524,132 @@ class TestReviewFixes:
         assert (item["before_size"], item["after_size"]) == (50, 500)
         fs.restore_turn(SID, rec.turn_id, root=root)
         assert target.read_bytes() == b"a" * 50
+
+
+class TestSecondReviewFixes:
+    def test_nested_new_folders_from_separate_files_are_all_removed(self, root, work):
+        outer = work / "new" / "a.txt"
+        inner = work / "new" / "sub" / "deeper" / "b.txt"
+        with _record(root) as rec:
+            fs.before_change(outer)
+            outer.parent.mkdir()
+            outer.write_text("a", encoding="utf-8")
+            fs.before_change(inner)
+            inner.parent.mkdir(parents=True)
+            inner.write_text("b", encoding="utf-8")
+        result = fs.restore_turn(SID, rec.turn_id, root=root)
+        assert not (work / "new").exists()
+        assert result["kept_folders"] == []
+
+    def test_nested_new_folders_recorded_inner_first_are_all_removed(self, root, work):
+        inner = work / "new" / "sub" / "b.txt"
+        sibling = work / "new" / "a.txt"
+        with _record(root) as rec:
+            fs.before_change(inner)
+            inner.parent.mkdir(parents=True)
+            inner.write_text("b", encoding="utf-8")
+            fs.before_change(sibling)
+            sibling.write_text("a", encoding="utf-8")
+        result = fs.restore_turn(SID, rec.turn_id, root=root)
+        assert not (work / "new").exists()
+        assert result["kept_folders"] == []
+
+    def test_outer_folder_holding_a_user_file_is_kept_inner_removed(self, root, work):
+        inner = work / "new" / "sub" / "b.txt"
+        with _record(root) as rec:
+            fs.before_change(inner)
+            inner.parent.mkdir(parents=True)
+            inner.write_text("b", encoding="utf-8")
+        (work / "new" / "user.txt").write_text("mine", encoding="utf-8")
+        result = fs.restore_turn(SID, rec.turn_id, root=root)
+        assert not (work / "new" / "sub").exists()
+        assert (work / "new" / "user.txt").read_text(encoding="utf-8") == "mine"
+        assert result["kept_folders"] == [str(work / "new")]
+
+    def test_link_after_a_late_write_keeps_the_incomplete_mark(self, root, work):
+        target = work / "a.txt"
+        target.write_text("v0", encoding="utf-8")
+        with _record(root) as rec:
+            fs.before_change(target)
+            target.write_text("turn", encoding="utf-8")
+        # An abandoned tool writes between the turn ending and the link.
+        rec.capture(work / "late.txt", "write_file")
+        rec.note_untracked("shell", "rm -rf build")
+        rec.link_message(7)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["message_id"] == 7
+        assert turn["incomplete"] is True
+        assert len(turn["untracked"]) == 2
+        assert all("after the turn ended" in u["detail"] for u in turn["untracked"])
+
+    def test_link_after_undo_does_not_forget_the_undo(self, root, work):
+        target = work / "a.txt"
+        target.write_text("v0", encoding="utf-8")
+        with _record(root) as rec:
+            fs.before_change(target)
+            target.write_text("turn", encoding="utf-8")
+        fs.restore_turn(SID, rec.turn_id, root=root)
+        rec.link_message(9)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["message_id"] == 9
+        assert turn["restored_at"] is not None
+
+    def test_link_on_a_turn_without_changes_writes_nothing(self, root):
+        with _record(root) as rec:
+            pass
+        rec.link_message(3)
+        assert not rec.dir.exists()
+
+    def test_failed_copy_of_timings_does_not_fail_transcription(
+        self, root, work, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from gaia.agents.tools import audio_tools
+
+        def refuse(path, tool=None):
+            raise fs.SnapshotError("disk full")
+
+        monkeypatch.setattr(audio_tools, "before_change", refuse)
+        transcript = SimpleNamespace(
+            duration=1.0,
+            segments=[SimpleNamespace(start=0.0, end=1.0, text="hi")],
+        )
+        destination = work / "t.md"
+        audio_tools._write_timings(destination, transcript)
+        assert not audio_tools.timings_path_for(destination).exists()
+
+    def test_mcp_client_has_no_module_level_agent_import(self):
+        import ast
+
+        import gaia.mcp.client.mcp_client as mcp_client
+
+        tree = ast.parse(Path(mcp_client.__file__).read_text(encoding="utf-8"))
+        top = [
+            n.module if isinstance(n, ast.ImportFrom) else a.name
+            for n in tree.body
+            if isinstance(n, (ast.Import, ast.ImportFrom))
+            for a in (n.names if isinstance(n, ast.Import) else [n])
+        ]
+        assert not [m for m in top if m and m.startswith("gaia.agents")]
+
+    @pytest.mark.parametrize(
+        "annotations, expected",
+        [({}, True), ({"readOnlyHint": True}, False), ({"readOnlyHint": "yes"}, True)],
+    )
+    def test_mcp_tool_still_marks_the_turn_after_the_lazy_import(
+        self, root, monkeypatch, annotations, expected
+    ):
+        from unittest.mock import MagicMock
+
+        from gaia.mcp.client.mcp_client import MCPClient, MCPTool
+
+        client = MCPClient("srv", transport=MagicMock())
+        monkeypatch.setattr(client, "call_tool", lambda name, args: {"ok": True})
+        tool = MCPTool("lookup", "", {}, annotations)
+        with _record(root) as rec:
+            assert client.create_tool_wrapper(tool)() == {"ok": True}
+        marked = rec.dir.exists() and any(
+            u["kind"] == "mcp" for u in fs.list_turns(SID, root=root)[0]["untracked"]
+        )
+        assert marked is expected
