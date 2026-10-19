@@ -50,10 +50,38 @@ def test_the_fallback_never_counts_less_than_utf8_bytes_over_three(no_tiktoken, 
     assert turn_metrics.count_tokens(text) >= len(text.encode("utf-8")) / 3
 
 
-def test_the_real_tokenizer_is_used_when_it_loads(monkeypatch):
+class _StrictEncoding:
+    """Stands in for cl100k: CI can't download its data, and it rejects surrogates."""
+
+    def encode(self, text, disallowed_special=()):
+        text.encode("utf-8")
+        return text.split()
+
+
+@pytest.fixture
+def stub_tiktoken(monkeypatch):
+    import tiktoken
+
+    monkeypatch.setattr(tiktoken, "get_encoding", lambda _name: _StrictEncoding())
     monkeypatch.setattr(turn_metrics, "_TOKENIZER", None)
-    assert turn_metrics._tokenizer().name == "tiktoken:cl100k_base"
-    monkeypatch.setattr(turn_metrics, "_TOKENIZER", None)
+    yield
+    turn_metrics._TOKENIZER = None
+
+
+def test_the_real_tokenizer_is_used_when_it_loads(stub_tiktoken, caplog):
+    with caplog.at_level(logging.WARNING, logger=turn_metrics.__name__):
+        assert turn_metrics._tokenizer().name == "tiktoken:cl100k_base"
+        assert turn_metrics.count_tokens("three plain words") == 3
+    assert "overcount" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "text", ["bad \udc80 bytes", "\ud83d alone"], ids=["low", "high"]
+)
+def test_the_tokenizer_retries_lone_surrogates_as_replacement_chars(
+    stub_tiktoken, text
+):
+    assert turn_metrics.count_tokens(text) == len(text.split())
 
 
 @pytest.mark.parametrize(
