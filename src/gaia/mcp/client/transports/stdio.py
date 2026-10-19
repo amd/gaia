@@ -37,17 +37,20 @@ _POLL_INTERVAL_S = 0.25
 # What counts as a known secret in a server's launch config. Server output
 # is cleaned of exactly these values; nothing else is guessed at.
 #
-# A name holds a secret when its LAST word is one of these, matched whole:
-# API_KEY, GITHUB_TOKEN, CLIENT_SECRET, PROXY_AUTHORIZATION, --accessToken.
-# Not MAX_TOKENS, TOKENIZERS_PARALLELISM, AUTH_MODE, --token-limit,
-# --primary-key-id or AUTHOR.
+# A name holds a secret when any of its words, matched whole, is one of
+# these: API_KEY, API_KEY_2, SECRET_KEY_BASE, API_TOKENS, PROXY_AUTHORIZATION,
+# --accessToken.
 _SECRET_WORDS = frozenset(
     {
         "key",
+        "keys",
         "apikey",
         "token",
+        "tokens",
         "secret",
+        "secrets",
         "password",
+        "passwords",
         "passwd",
         "pwd",
         "passphrase",
@@ -57,6 +60,31 @@ _SECRET_WORDS = frozenset(
         "authorization",
     }
 )
+# ... unless its last word says the value is something else about the secret:
+# AUTH_MODE, KEY_ID, TOKEN_FILE, --token-limit, TOKENIZERS_PARALLELISM.
+_QUALIFIER_WORDS = frozenset(
+    {
+        "id",
+        "mode",
+        "limit",
+        "file",
+        "path",
+        "type",
+        "url",
+        "name",
+        "size",
+        "count",
+        "length",
+        "region",
+        "parallelism",
+        "layout",
+        "sort",
+        "partition",
+        "cache",
+    }
+)
+# ... or its first word makes it a count: MAX_TOKENS, --max-tokens.
+_COUNT_WORDS = frozenset({"max", "min", "num"})
 # user:pass@ or TOKEN@ in a URL; the value of an Authorization or Bearer header.
 _URL_USERINFO = re.compile(r"[a-zA-Z][\w+.-]*://([^/@\s]+)@")
 _AUTH_HEADER = re.compile(
@@ -73,12 +101,16 @@ def _words(name: str) -> List[str]:
 
 def _names_a_secret(name: str) -> bool:
     words = _words(name)
-    # --no-auth switches something off; it takes no value.
-    return bool(words) and words[-1] in _SECRET_WORDS and words[0] != "no"
+    if not words or words[-1] in _QUALIFIER_WORDS or words[0] in _COUNT_WORDS:
+        return False
+    # --no-auth and --disable-auth switch something off; they take no value.
+    if name.startswith("-") and words[0] in ("no", "disable"):
+        return False
+    return any(word in _SECRET_WORDS for word in words)
 
 
 def _is_secret_flag(flag: str) -> bool:
-    """``--api-key``, ``--accessToken``: the flag's last word names a secret."""
+    """``--api-key``, ``--accessToken``: a flag whose name holds a secret."""
     return flag.startswith("-") and _names_a_secret(flag)
 
 
@@ -103,15 +135,13 @@ def _encodings(secret: str) -> List[str]:
         secret.encode("ascii", "backslashreplace").decode("ascii"),
     }
     forms = set(escaped)
-    # Any of those, written in a code page (a Windows server's default).
+    # Any of those, written in cp1252 (a Windows server's default). "replace"
+    # also gives the strict bytes whenever every character fits; latin-1
+    # differs from cp1252 only in C1 control characters.
     for form in escaped:
-        for codepage in ("cp1252", "latin-1"):
-            for errors in ("strict", "replace", "backslashreplace"):
-                try:
-                    written = form.encode(codepage, errors)
-                except UnicodeEncodeError:
-                    continue
-                forms.add(written.decode("utf-8", errors="replace"))
+        for errors in ("replace", "backslashreplace"):
+            written = form.encode("cp1252", errors)
+            forms.add(written.decode("utf-8", errors="replace"))
     return [form for form in forms if form]
 
 
@@ -292,11 +322,12 @@ class StdioTransport(MCPTransport):
 
         Exactly these, and nothing guessed from a value's shape:
 
-        - the value of an env var whose name ends in a secret word
-          (``API_KEY``, ``GITHUB_TOKEN``, ``PROXY_AUTHORIZATION``; the words
-          are ``_SECRET_WORDS``, matched whole after splitting on ``_``,
-          ``-``, ``.`` and camelCase, so ``MAX_TOKENS`` and ``AUTH_MODE``
-          are not);
+        - the value of an env var whose name holds a secret word
+          (``API_KEY``, ``SECRET_KEY_BASE``, ``PROXY_AUTHORIZATION``; the
+          words are ``_SECRET_WORDS``, matched whole after splitting on
+          ``_``, ``-``, ``.`` and camelCase), unless its last word is a
+          qualifier (``AUTH_MODE``, ``KEY_ID``) or its first a count
+          (``MAX_TOKENS``);
         - the value after a flag named the same way, in ``--api-key v`` and
           ``--api-key=v`` forms (``--accessToken`` too; not ``--max-tokens``,
           ``--token-limit`` or ``--no-auth``);

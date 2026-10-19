@@ -1065,9 +1065,11 @@ def send_request(
     or env. Text the server sends back (stderr, errors, a validation error's
     schema, results in debug logs) is cleaned of the known secret values in
     its launch config, and of nothing else:
-    - env values whose name ends in a secret word, matched whole (key, token,
-      secret, password, credential, auth, authorization: `GITHUB_TOKEN`,
-      `PROXY_AUTHORIZATION`), so `MAX_TOKENS` and `AUTH_MODE` are left alone;
+    - env values whose name has a secret word, matched whole (key, token,
+      secret, password, credential, auth, authorization, and plurals:
+      `API_KEY_2`, `SECRET_KEY_BASE`, `PROXY_AUTHORIZATION`), unless the last
+      word is a qualifier such as id, mode, limit, file or path (`AUTH_MODE`,
+      `KEY_ID`) or the first a count (`MAX_TOKENS`);
     - the value after a flag named the same way (`--api-key v`, `--token=v`,
       `--accessToken v`), so `--max-tokens=4096` and `--token-limit` are not;
     - `KEY=VALUE` where `KEY` is named the same way;

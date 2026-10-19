@@ -997,6 +997,24 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
 @pytest.mark.parametrize(
     "args,env,secret,forms",
     [
+        # stderr as Python's ASCII backslash escapes.
+        (
+            [],
+            {
+                "API_KEY": "Zq9vé😀Ke7w",
+                "STUB_CODEC": "ascii",
+                "STUB_ERRORS": "backslashreplace",
+            },
+            "Zq9vé😀Ke7w",
+            ["Zq9vé😀Ke7w", "Zq9v\\xe9\\U0001f600Ke7w"],
+        ),
+        # A Node-style JSON line written in cp1252.
+        (
+            [],
+            {"API_KEY": 'Zq9v"€Ke7w', "STUB_ASCII": "0", "STUB_JSON_CODEC": "cp1252"},
+            'Zq9v"€Ke7w',
+            ['Zq9v"€Ke7w', 'Zq9v\\"�Ke7w'],
+        ),
         (
             ["--url", "https://bob:hunter2222@db.example/x"],
             {},
@@ -1046,6 +1064,8 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
         ),
     ],
     ids=[
+        "ascii-backslash",
+        "json-in-cp1252",
         "url-userinfo",
         "bearer-header",
         "json-ascii",
@@ -1068,6 +1088,8 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
         secret = sys.argv[-1]
         ascii_only = os.environ.get("STUB_ASCII", "1") == "1"
         errors = os.environ.get("STUB_ERRORS", "replace")
+        codec = os.environ.get("STUB_CODEC", "cp1252")
+        json_codec = os.environ.get("STUB_JSON_CODEC", "utf-8")
         for line in sys.stdin:
             req = json.loads(line)
             if req["method"] == "initialize":
@@ -1077,12 +1099,12 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
                 # UTF-8 bytes, as Node writes them whatever the console code page.
                 line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
                 sys.stdout.flush()
-                sys.stdout.buffer.write((line + "\\n").encode("utf-8"))
+                sys.stdout.buffer.write((line + "\\n").encode(json_codec))
             else:  # a dict-key echo in an error, then cp1252 bytes on stderr
                 sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
                     "error": {"code": 1, "message": {secret: secret}}}) + "\\n")
                 sys.stdout.flush()
-                sys.stderr.buffer.write(secret.encode("cp1252", errors))
+                sys.stderr.buffer.write(secret.encode(codec, errors))
                 sys.stderr.flush()
                 sys.exit(3)
             sys.stdout.flush()
@@ -1235,3 +1257,47 @@ def test_a_null_id_error_reply_is_cleaned(tmp_path):
 
     assert "rejected 'initialize'" in client.last_error
     assert secret not in client.last_error
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "API_KEY_PRIMARY",
+        "API_KEY_2",
+        "OPENAI_API_KEY_V2",
+        "SECRET_KEY_BASE",
+        "STRIPE_SECRET_KEY_LIVE",
+        "CLIENT_SECRET_VALUE",
+        "PRIVATE_KEY_PEM",
+        "API_TOKENS",
+        "SECRETS",
+        "NO_PROXY_TOKEN",
+        "PROXY_AUTHORIZATION",
+        "NPM_AUTH",
+    ],
+)
+def test_every_shape_of_secret_name_is_cleaned(name):
+    secret = "Zq9vKe7wP2value"
+    t = StdioTransport(
+        sys.executable, args=["-u", "srv.py", f"{name}={secret}"], env={name: secret}
+    )
+    assert secret not in t.redact(f"failed: {secret}")
+    t = StdioTransport(sys.executable, args=["-u", "srv.py"], env={name: secret})
+    assert secret not in t.redact(f"failed: {secret}")
+
+
+def test_a_switch_off_flag_takes_no_value():
+    """--no-auth and --disable-auth are switches; what follows is an argument."""
+    t = StdioTransport(
+        sys.executable,
+        args=[
+            "-u",
+            "srv.py",
+            "--no-auth",
+            "workspace_alpha",
+            "--disable-auth",
+            "beta_dir",
+        ],
+    )
+    text = "serving workspace_alpha and beta_dir"
+    assert t.redact(text) == text
