@@ -115,3 +115,18 @@ def test_malformed_integrity_result_is_still_rebuilt(monkeypatch, index_with_boo
         assert service.list_bookmarks() == []
     finally:
         service.close_db()
+
+
+def test_a_real_exclusive_lock_raises_and_keeps_the_index(index_with_bookmark):
+    holder = sqlite3.connect(str(index_with_bookmark))
+    holder.execute("PRAGMA journal_mode=DELETE")
+    holder.execute("PRAGMA locking_mode=EXCLUSIVE")
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            FileSystemIndexService(db_path=str(index_with_bookmark))
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert _bookmarks(index_with_bookmark) == ["keep me"]

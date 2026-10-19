@@ -168,15 +168,12 @@ class FileSystemIndexService(DatabaseMixin):
         )
         self.init_db(resolved_path)
 
-        # WAL + integrity check in a single try so corruption of the on-disk
-        # file (power loss, truncation) doesn't throw out of ``__init__``
-        # before ``_check_integrity`` has a chance to rebuild. Without this,
-        # the line below used to raise ``sqlite3.DatabaseError`` on the very
-        # first startup after a bad shutdown.
+        # A file that is not a database fails here; rebuild rather than raise.
         try:
             self._db.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
             # Locked, or an AV/backup tool holding the file: not corruption.
+            self.close_db()
             raise
         except sqlite3.DatabaseError as exc:
             logger.warning(
@@ -255,6 +252,7 @@ class FileSystemIndexService(DatabaseMixin):
                 return True
         except sqlite3.OperationalError:
             # Locked or I/O failure — deleting would destroy a healthy index.
+            self.close_db()
             raise
         except sqlite3.DatabaseError as exc:
             logger.error("Integrity check failed: %s", exc)
