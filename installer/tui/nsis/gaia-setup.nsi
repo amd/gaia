@@ -11,8 +11,9 @@
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
 ;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
-;                under the "GAIA Terminal Hub" identity the TUI-only setup used,
-;                so upgrading from it replaces it in place.
+;                shown as "GAIA Terminal UI". Its registry keys and folder keep
+;                the TUI-only setup's "Terminal Hub" ids, so upgrading from it
+;                replaces it in place.
 ;
 ; No suite-level Installed-apps entry is written: each component is removed from
 ; its own entry, so nothing here can be left orphaned.
@@ -85,13 +86,15 @@ Unicode true
 !endif
 
 !define SETUP_NAME        "GAIA"
-; The terminal component's identity -- its Installed-apps entry and shortcuts.
-; Unchanged from the TUI-only setup so an upgrade lands on the same entry.
-!define PRODUCT_NAME      "GAIA Terminal Hub"
+; The terminal component's display name -- its Installed-apps entry and shortcuts.
+!define PRODUCT_NAME      "GAIA Terminal UI"
+; The display name earlier setups used; its shortcuts are removed on upgrade.
+!define LEGACY_PRODUCT_NAME "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
 !define DOCS_URL          "https://amd-gaia.ai/docs"
 !define INSTALL_DOCS_URL  "https://amd-gaia.ai/docs/guides/install"
+; Kept from the TUI-only setup so an upgrade lands on the same Installed-apps entry.
 !define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
@@ -137,7 +140,8 @@ OutFile "${OUTFILE}"
 RequestExecutionLevel user
 ; NOT "...\Programs\GAIA": that is byte-for-byte where the Agent UI's
 ; electron-builder setup lands (productName "GAIA", perMachine false), and its
-; uninstaller removes $INSTDIR recursively.
+; uninstaller removes $INSTDIR recursively. The legacy folder and registry
+; names are kept until an upgrade can migrate them (#5204).
 InstallDir "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
 InstallDirRegKey HKCU "Software\GAIA\TerminalHub" "InstallDir"
 ShowInstDetails show
@@ -422,7 +426,7 @@ Section "-Lemonade" SecLemonade
   ; its own.
 SectionEnd
 
-Section "Desktop app (Agent UI)" SecUI
+Section "GAIA Agent UI (desktop app)" SecUI
   ; Extracted only now, inside the section, so a terminal-only install never
   ; unpacks it.
   SetOutPath "$PLUGINSDIR"
@@ -457,7 +461,7 @@ Section "Desktop app (Agent UI)" SecUI
     /SD IDOK
 SectionEnd
 
-Section "Terminal (TUI)" SecMain
+Section "GAIA Terminal UI (terminal)" SecMain
   SetOutPath "$INSTDIR"
 
   File "${PAYLOAD_DIR}\${TUI_EXE}"
@@ -713,6 +717,10 @@ Section "-Terminal profile" SecTerminalProfile
       DetailPrint "Shortcuts run gaia-tui in the default console because the Windows Terminal profile could not be written."
     ${EndIf}
   ${EndIf}
+  ; Shortcuts under the old name would sit beside the new ones after an upgrade.
+  Delete "$SMPROGRAMS\GAIA\${LEGACY_PRODUCT_NAME}.lnk"
+  Delete "$SMPROGRAMS\GAIA\Uninstall ${LEGACY_PRODUCT_NAME}.lnk"
+  Delete "$DESKTOP\${LEGACY_PRODUCT_NAME}.lnk"
   CreateDirectory "$SMPROGRAMS\GAIA"
   CreateShortcut "$SMPROGRAMS\GAIA\${PRODUCT_NAME}.lnk" "$LaunchExe" "$LaunchArgs" "$INSTDIR\gaia.ico" 0
   CreateShortcut "$SMPROGRAMS\GAIA\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\Uninstall.exe"
@@ -777,8 +785,8 @@ SectionEnd
 ; ─── Component selection ───────────────────────────────────────────────────
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "The GAIA desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu, and starts with Windows (turn that off in the app's tray menu)."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "gaia-tui: the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal Hub shortcut to the desktop and Start menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu, and starts with Windows (turn that off in the app's tray menu)."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-tui): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 !macro RefuseUsage MSG
@@ -1045,8 +1053,11 @@ Section "Uninstall"
 
   Delete "$SMPROGRAMS\GAIA\${PRODUCT_NAME}.lnk"
   Delete "$SMPROGRAMS\GAIA\Uninstall ${PRODUCT_NAME}.lnk"
+  Delete "$SMPROGRAMS\GAIA\${LEGACY_PRODUCT_NAME}.lnk"
+  Delete "$SMPROGRAMS\GAIA\Uninstall ${LEGACY_PRODUCT_NAME}.lnk"
   RMDir  "$SMPROGRAMS\GAIA"
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
+  Delete "$DESKTOP\${LEGACY_PRODUCT_NAME}.lnk"
 
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "Software\GAIA\TerminalHub"

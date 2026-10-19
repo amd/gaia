@@ -22,6 +22,9 @@ from gaia.agents.base.memory_store import (
     USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
 )
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
+from gaia.agents.base.memory_store import (
+    is_about_user,
+)
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -46,17 +49,6 @@ def _log_server_error(context: str, exc: Exception) -> str:
 
 # Safe defaults returned when the data-layer lacks v2 methods.
 # Defined once here so memory_stats() doesn't repeat the literals.
-_DEFAULT_EMBEDDING_STATS: Dict = {
-    "total_items": 0,
-    "with_embedding": 0,
-    "without_embedding": 0,
-    "coverage_pct": 0.0,
-}
-_DEFAULT_RECONCILIATION_STATS: Dict = {
-    "last_run": None,
-    "pairs_checked": 0,
-    "contradictions_found": 0,
-}
 
 # ---------------------------------------------------------------------------
 # Pydantic Models
@@ -288,33 +280,21 @@ def close_store() -> None:
 def memory_stats() -> Dict:
     """Aggregate stats for dashboard header cards.
 
-    Includes v2 embedding coverage and reconciliation stats when the
-    data layer supports them.
+    Includes embedding coverage, or ``embedding: null`` and an
+    ``embedding_error`` when it could not be read.
     """
     store = _get_store()
     stats = store.get_stats()
 
-    # v2: embedding coverage stats
-    # AttributeError → method not on store yet; Exception → graceful degrade
-    # but log at warning so real bugs aren't swallowed silently.
+    # A failed coverage query is reported as such, never as zero coverage.
     try:
         stats["embedding"] = store.get_embedding_coverage()
-    except AttributeError:
-        logger.debug("[memory router] get_embedding_coverage not available yet")
-        stats["embedding"] = _DEFAULT_EMBEDDING_STATS.copy()
-    except Exception as exc:
-        logger.warning("[memory router] embedding coverage failed: %s", exc)
-        stats["embedding"] = _DEFAULT_EMBEDDING_STATS.copy()
-
-    # v2: reconciliation stats
-    try:
-        stats["reconciliation"] = store.get_reconciliation_stats()
-    except AttributeError:
-        logger.debug("[memory router] get_reconciliation_stats not available yet")
-        stats["reconciliation"] = _DEFAULT_RECONCILIATION_STATS.copy()
-    except Exception as exc:
-        logger.warning("[memory router] reconciliation stats failed: %s", exc)
-        stats["reconciliation"] = _DEFAULT_RECONCILIATION_STATS.copy()
+    except sqlite3.Error as exc:
+        cid = _log_server_error("embedding coverage failed", exc)
+        stats["embedding"] = None
+        stats["embedding_error"] = (
+            f"Search-index coverage could not be read — see server logs (id={cid})."
+        )
 
     return stats
 
@@ -361,6 +341,11 @@ def list_knowledge(
     order: str = Query("desc", pattern="^(asc|desc)$"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    about_user: bool = Query(
+        False,
+        description="Only entries about the user — no tool lessons, session "
+        "summaries, errors or system facts.",
+    ),
 ) -> Dict:
     """Paginated, filterable, searchable knowledge entries.
 
@@ -405,6 +390,7 @@ def list_knowledge(
         include_superseded=include_superseded,
         time_from=time_from,
         time_to=time_to,
+        about_user=about_user,
     )
 
 
@@ -502,8 +488,17 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
 
 @router.delete("/api/memory/knowledge/{knowledge_id}")
 def delete_knowledge(knowledge_id: str) -> Dict:
-    """Delete a knowledge entry from the dashboard."""
-    success = _get_store().delete(knowledge_id, allow_privileged=True)
+    """Delete an entry; one about the user is also recorded as forgotten.
+
+    Forgotten, it is not learned again from old chats. A tool lesson or
+    session summary is the agent's own record, so deleting it forgets nothing.
+    """
+    store = _get_store()
+    item = store.get_item(knowledge_id)
+    if item is None:
+        raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    remove = store.forget if is_about_user(item) else store.delete
+    success = remove(knowledge_id, allow_privileged=True)
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     return {"status": "deleted", "knowledge_id": knowledge_id}
@@ -1069,13 +1064,19 @@ def reinitialize_memory() -> Dict:
         store = _get_store()
         cleared = store.clear_all()
 
-        system_context = {"stored": 0}
+        # Memory is already wiped, so a discovery failure is reported in the
+        # response rather than failing the whole call.
         try:
             system_context = _do_system_context_refresh()
         except Exception as exc:
-            logger.warning(
-                "[memory router] reinitialize: system context failed: %s", exc
-            )
+            cid = _log_server_error("reinitialize: system discovery failed", exc)
+            system_context = {
+                "stored": 0,
+                "error": (
+                    "Memory was cleared, but system discovery failed — see "
+                    f"server logs (id={cid})."
+                ),
+            }
 
         logger.info(
             "[memory router] reinitialize complete: cleared=%s, system=%s",
@@ -1700,42 +1701,35 @@ def commit_discovery(body: DiscoveryCommit) -> Dict:
 def commit_inference(body: InferenceCommit) -> Dict:
     """Store approved inference insights, replacing old inferred entries.
 
-    Insights are validated as ``KnowledgeCreate`` before the old inferred
-    profile is cleared, so a malformed batch never wipes it.
+    The old inferred profile is replaced in one transaction, so a failed save
+    leaves it exactly as it was.
 
     Returns ``{stored: int}``.
     """
-    store = _get_store()
-    # Delete old inferred facts before storing new batch
     try:
-        store.delete_by_source("inferred")
-    except Exception as exc:
-        logger.warning(
-            "[memory router] commit-inference: failed to delete old inferred facts: %s",
-            exc,
+        ids = _get_store().replace_by_source(
+            "inferred",
+            [
+                {
+                    "category": "profile",
+                    "content": insight.content.strip(),
+                    "context": "global",
+                    "sensitive": False,
+                    "confidence": insight.confidence,
+                    "domain": insight.domain or "general",
+                }
+                for insight in body.insights
+            ],
+            allow_privileged=True,  # inference writes the user's profile
         )
-        raise HTTPException(500, f"Failed to clear old inferred profile: {exc}")
-    stored = 0
-    try:
-        for insight in body.insights:
-            store.store(
-                allow_privileged=True,  # inference writes the user's profile
-                category="profile",
-                content=insight.content.strip(),
-                source="inferred",
-                context="global",
-                sensitive=False,
-                confidence=insight.confidence,
-                domain=insight.domain or "general",
-            )
-            stored += 1
     except Exception as exc:
         cid = _log_server_error("commit-inference failed", exc)
         raise HTTPException(
             500,
-            f"Stored {stored} of {len(body.insights)} insights, then failed "
+            "Saving the profile failed and the previous one was kept "
             f"— see server logs (id={cid}).",
         ) from exc
+    stored = len(ids)
     logger.info("[memory router] commit-inference: stored %d insights", stored)
     return {"stored": stored}
 

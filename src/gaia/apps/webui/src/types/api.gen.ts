@@ -585,6 +585,7 @@ export interface KnowledgeUpdate {
 }
 export interface LoadModelRequest {
   ctx_size?: number | null;
+  force?: boolean;
   model_name: string;
 }
 /**
@@ -651,6 +652,7 @@ export interface ModelServerInfo {
   chat_model?: LoadedModelInfo | null;
   default_backend?: string | null;
   embedding_model?: LoadedModelInfo | null;
+  embedding_note?: string | null;
   error?: string | null;
   owner: string;
   port?: number | null;
@@ -863,6 +865,7 @@ export interface SystemStatus {
   init_tasks?: InitTaskInfo[];
   initialized?: boolean;
   lemonade_error?: string | null;
+  lemonade_probe?: ("ok" | "down" | "timed_out" | "error") | null;
   lemonade_running?: boolean;
   lemonade_url?: string | null;
   lemonade_version?: string | null;
