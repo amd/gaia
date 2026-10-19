@@ -166,7 +166,7 @@ No memories stored yet. Start building your knowledge base by remembering what t
 - Includes items from every context when the active context is `global` (the default), otherwise `global` + the active context
 - Excludes items where `sensitive=1`
 - Excludes items where `superseded_by IS NOT NULL` (only current/active items)
-- Covers preferences, facts, skills, errors, reminders and notes; lessons have their own section. A reminder whose due day has passed is left to the upcoming/overdue path, and a reminder shows its due date
+- Covers preferences, facts, skills, errors, reminders and notes; lessons have their own section, and session summaries (consolidation notes) are left out because their dated history would contradict newer facts — they stay recallable. A reminder whose due day has passed is left to the upcoming/overdue path, and a reminder shows its due date
 - Most recently confirmed first (the store is read in that order, not by confidence), so a fact that changed outranks the one it replaced
 - No per-category limit: the categories take turns, one item each, until the 4000-char cap (`STABLE_MEMORY_PROMPT_CHARS`, instructions included) is full. An item too long for what is left is skipped whole, and a closing line says how many were left out so the model knows to `recall` them
 - Confidence scores are not shown, so the model doesn't discount a true fact that was extracted rather than stated
