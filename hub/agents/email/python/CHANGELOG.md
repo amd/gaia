@@ -18,7 +18,9 @@ contract version is tracked separately as
   startup). A lease with no renewal for 10 minutes, still unrenewed two minutes
   later, is recovered. A scheduled send is marked `failed` with the reason and
   never run a second time, because it may already have gone out. A snooze is
-  re-queued, since putting a message back in the inbox twice is harmless.
+  re-queued, since putting a message back in the inbox twice is harmless; a
+  snooze moved onto the daemon clock carries `"rerunnable": true` so the daemon
+  re-queues it too.
   `list_scheduled_jobs` now also returns `failed`: the jobs that failed in the
   last 7 days, with the error, so the user hears about a send that did not go
   out. A driver that was alive after all (two schedulers on one database, a

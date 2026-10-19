@@ -159,7 +159,7 @@ class DaemonClock:
             outcome = store.recover_claim(db, job, now=now)
             if outcome == "requeued":
                 log.warning(
-                    "daemon clock: recurring job %s stopped renewing its lease "
+                    "daemon clock: job %s stopped renewing its lease "
                     "while firing; re-queued it",
                     job["job_id"],
                 )

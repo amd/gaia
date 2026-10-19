@@ -96,6 +96,37 @@ def test_one_shot_job_left_firing_by_a_crash_fails_loudly_not_rerun(tmp_path):
     assert "interrupted while firing" in job["error"]
 
 
+def test_a_rerunnable_one_shot_left_firing_is_requeued_and_fires_again(tmp_path):
+    path = tmp_path / "clock.db"
+    db = _db(path)
+    jid = store.register_job(
+        db,
+        source="t",
+        kind=KIND_ONE_SHOT,
+        fire_at=100.0,
+        payload={"rerunnable": True},
+    )
+    assert store.claim_job(db, job_id=jid, now=100.0) is not None
+
+    calls = []
+    clock = _clock(path, {KIND_ONE_SHOT: lambda job, _db: calls.append(job["job_id"])})
+    assert clock.fire_due(now=100.0 + STALE + 1) == {"fired": [], "failed": []}
+    out = clock.fire_due(now=100.0 + STALE + 1 + CONFIRM)
+    assert out == {"fired": [jid], "failed": []}
+    assert calls == [jid]
+    assert store.get_job(_db(path), job_id=jid)["status"] == STATUS_FIRED
+
+
+def test_a_truthy_but_not_true_rerunnable_flag_still_fails(tmp_path):
+    db = _db(tmp_path / "clock.db")
+    jid = store.register_job(
+        db, source="t", kind=KIND_ONE_SHOT, fire_at=100.0, payload={"rerunnable": "yes"}
+    )
+    assert store.claim_job(db, job_id=jid, now=100.0) is not None
+    stale = store.find_stale_firing(db, now=100.0 + STALE + 1, stale_after=STALE)
+    assert store.recover_claim(db, stale[0], now=100.0 + STALE + 1) == "failed"
+
+
 def test_a_live_holder_that_renews_after_a_wake_up_keeps_its_job(tmp_path):
     """After sleep/resume every lease looks hours old; a live holder's next
     heartbeat must clear it before anyone recovers it."""

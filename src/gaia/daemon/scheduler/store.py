@@ -333,9 +333,10 @@ def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
     """Move on from an abandoned lease. Returns ``"requeued"``, ``"failed"``,
     or None if the lease changed since ``job`` was read (it is alive).
 
-    A recurring row goes back to ``pending`` and fires on the next pass. A
-    one-shot row is marked ``failed``: its executor may already have taken
-    effect (an email sent), so running it again is not safe. If the holder
+    A recurring row, or a one-shot whose payload sets ``"rerunnable": True``,
+    goes back to ``pending`` and fires on the next pass. Any other one-shot row
+    is marked ``failed``: its executor may already have taken effect (an email
+    sent), so running it again is not safe. If the holder
     turns out to be alive, its own outcome still lands (``superseded_claim``).
     """
     claim_id, claimed = job["claim_id"], job["claimed_at"]
@@ -346,7 +347,8 @@ def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
         )
     )
     when = "at an unknown time" if claimed is None else f"at {claimed:.0f}"
-    if job["kind"] == KIND_RECURRING and job["interval_seconds"]:
+    recurring = job["kind"] == KIND_RECURRING and job["interval_seconds"]
+    if recurring or job["payload"].get("rerunnable") is True:
         values: Dict[str, Any] = {
             "status": STATUS_PENDING,
             "claimed_at": None,

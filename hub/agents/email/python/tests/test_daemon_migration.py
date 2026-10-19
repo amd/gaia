@@ -81,6 +81,29 @@ def test_one_shot_jobs_migrate_exactly_once(tmp_path):
     assert ledger == {j1, j2}
 
 
+def test_a_stuck_snooze_on_the_daemon_is_requeued_and_a_stuck_send_fails(tmp_path):
+    db = _make_db(tmp_path)
+    send = schedule_store.create_job(
+        db, kind=schedule_store.KIND_SCHEDULED_SEND, due_at=100.0, mailbox="a@x"
+    )
+    snooze = schedule_store.create_job(
+        db, kind=schedule_store.KIND_SNOOZE, due_at=100.0, mailbox="a@x"
+    )
+    migrate_email_clocks(db)
+    by_source = {
+        r["source_job_id"]: r["daemon_job_id"]
+        for r in daemon_store.list_ledger(db, source=SOURCE_ONE_SHOT)
+    }
+    for daemon_id in by_source.values():
+        assert daemon_store.claim_job(db, job_id=daemon_id, now=100.0) is not None
+
+    outcomes = {
+        job["job_id"]: daemon_store.recover_claim(db, job, now=10_000.0)
+        for job in daemon_store.find_stale_firing(db, now=10_000.0, stale_after=600.0)
+    }
+    assert outcomes == {by_source[send]: "failed", by_source[snooze]: "requeued"}
+
+
 def test_new_job_between_passes_migrates_once(tmp_path):
     """Transition window: legacy clock adds a job mid-migration."""
     db = _make_db(tmp_path)
