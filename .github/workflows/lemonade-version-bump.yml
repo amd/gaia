@@ -408,10 +408,10 @@ jobs:
       # Fail loudly: a silent failure here means the pin quietly goes stale. Fires on ANY
       # step failure (detection included), and tailors the message to which phase broke so
       # the issue never claims the PR failed when detection was the thing that died.
-      - name: File a tracking issue on failure
+      - name: Compose the failure issue
+        id: failmsg
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET: ${{ steps.detect.outputs.target_version }}
           SHOULD_BUMP: ${{ steps.detect.outputs.should_bump }}
         run: |
@@ -435,12 +435,32 @@ jobs:
 
           cc @kovtcharov-amd"
           fi
+          {
+            echo "title=$TITLE"
+            echo "body<<GAIA_AUTO_ISSUE_EOF"
+            echo "$BODY"
+            echo "GAIA_AUTO_ISSUE_EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          # One rolling issue for either failure type — match the shared title prefix.
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search 'in:title "Lemonade version-bump"' --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
-          else
-            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label bug --label devops
-          fi
+      - name: File a tracking issue on failure
+        if: failure()
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          # One rolling issue for either failure type.
+          key: lemonade-version-bump/failure
+          legacy-title-prefix: "⚠️ Lemonade version-bump"
+          title: ${{ steps.failmsg.outputs.title || '⚠️ Lemonade version-bump run failed' }}
+          body: ${{ steps.failmsg.outputs.body || format('The Lemonade version-bump workflow failed in run {0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          labels: |
+            bug
+            devops
+          assignees: kovtcharov-amd
+
+      - name: Close the tracking issue once a run succeeds
+        if: success()
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: lemonade-version-bump/failure
+          legacy-title-prefix: "⚠️ Lemonade version-bump"

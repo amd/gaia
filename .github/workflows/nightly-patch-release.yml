@@ -90,20 +90,17 @@ jobs:
           echo "Previous release: $PREV"
           echo "prev_tag=$PREV" >> "$GITHUB_OUTPUT"
 
-          file_or_update_issue() {
-            # $1 = fixed issue title (dedup key), $2 = body. Edits the existing open issue's
-            # body in place rather than commenting, because these conditions can recur every
-            # night for weeks (e.g. a wide feature-scope backlog) — a growing comment thread
-            # would be pure noise. Actual RUN FAILURES (handled separately, in the draft job)
-            # still use gh issue comment: those are rare and a timeline of them has value.
-            local title="$1" body="$2" existing
-            existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-              --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
-            if [ -n "$existing" ]; then
-              gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body" --label devops
-            fi
+          record_condition() {
+            # $1 = condition key, $2 = issue title, $3 = body. The steps after this one
+            # file or edit the condition's issue (edited in place, because a condition can
+            # recur every night for weeks) and close the issues of conditions that cleared.
+            {
+              echo "condition_key=release-check/$1"
+              echo "condition_title=$2"
+              echo "condition_body<<GAIA_AUTO_ISSUE_EOF"
+              echo "$3"
+              echo "GAIA_AUTO_ISSUE_EOF"
+            } >> "$GITHUB_OUTPUT"
           }
 
           # Guard 1b: a hotfix tag (vX.Y.Z.W) as the latest release is genuinely ambiguous —
@@ -112,7 +109,7 @@ jobs:
           if ! echo "$PREV" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Latest release $PREV is a hotfix-shaped tag — next-version computation is ambiguous."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
-            file_or_update_issue \
+            record_condition hotfix-tag \
               "Release check: latest tag is hotfix-shaped, next version is ambiguous" \
               "The nightly patch-release check found that the latest release tag is \`$PREV\` (hotfix-shaped, 4 segments). Nightly automation does not guess whether the next release should be another hotfix digit or the next \`vX.Y.Z+1\` — run the \`gaia-release\` skill manually to decide.
 
@@ -168,7 +165,7 @@ jobs:
           if [ "$MAIN_VERSION" = "$TARGET_BARE" ]; then
             echo "main's __version__ ($MAIN_VERSION) already equals the naive next patch — a release for $TARGET may already be merged but not tagged."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
-            file_or_update_issue \
+            record_condition staged-not-tagged \
               "Release check: $TARGET already staged on main, not tagged" \
               "\`src/gaia/version.py\` on \`main\` already declares \`$MAIN_VERSION\`, matching the next patch after \`$PREV\` — but no \`$TARGET\` tag exists. This looks like a release whose notes/version-bump PR merged, but Phase 3+ (pre-tag verification, tagging) of \`gaia-release\` was never finished.
 
@@ -179,7 +176,7 @@ jobs:
           elif [ "$MAIN_VERSION" != "$PREV_BARE" ]; then
             echo "main's __version__ ($MAIN_VERSION) matches neither $PREV_BARE nor the naive next patch $TARGET_BARE — unexpected state."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
-            file_or_update_issue \
+            record_condition version-mismatch \
               "Release check: version.py on main doesn't match any expected version" \
               "\`src/gaia/version.py\` on \`main\` declares \`$MAIN_VERSION\`, which matches neither the last tagged release (\`$PREV_BARE\`) nor the naive next patch (\`$TARGET_BARE\`). Nightly automation won't guess a target version from this — check what changed \`__version__\` and resolve manually before the next run.
 
@@ -226,7 +223,7 @@ jobs:
 
           $(echo "$CI" | jq -r '.bad[] | "  - " + .')"
             fi
-            file_or_update_issue \
+            record_condition ci-not-green \
               "Release check: main's CI is not green, nightly release drafting is paused" \
               "Nightly patch-release drafting is on hold until \`main\` reports green push CI.
 
@@ -268,7 +265,7 @@ jobs:
           if [ "$FEAT_COUNT" -ge 3 ] || [ "$BREAKING_COUNT" -gt 0 ]; then
             echo "Pending commits look minor/major-shaped ($FEAT_COUNT feats, $BREAKING_COUNT breaking) — needs a human version-bump decision."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
-            file_or_update_issue \
+            record_condition minor-major-pending \
               "Release check: minor/major-shaped changes pending on main" \
               "The nightly patch-release check found **$COMMIT_COUNT** commits on \`main\` since \`$PREV\` that look minor/major-shaped, not patch-safe (last checked: run https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID):
 
@@ -283,6 +280,29 @@ jobs:
 
           echo "Will draft a patch release: $PREV -> $TARGET ($COMMIT_COUNT commits, $FEAT_COUNT feats)"
           echo "should_draft=true" >> "$GITHUB_OUTPUT"
+
+      - name: File or update the release-check issue
+        if: steps.scope.outputs.condition_key != ''
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          update: edit
+          key: ${{ steps.scope.outputs.condition_key }}
+          title: ${{ steps.scope.outputs.condition_title }}
+          body: ${{ steps.scope.outputs.condition_body }}
+          labels: devops
+
+      # Each guard's issue describes a state main is in tonight. Once the check reaches
+      # a different verdict, the other guards' issues are stale, so close them.
+      - name: Close release-check issues whose condition cleared
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key-prefix: release-check/
+          except-key: ${{ steps.scope.outputs.condition_key }}
+          legacy-title-prefix: "Release check: "
+          except-title: ${{ steps.scope.outputs.condition_title }}
+          note: "No longer applies: the nightly patch-release check reached a different verdict in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; the check reopens a new issue if this comes back."
 
   draft:
     needs: check
@@ -422,14 +442,29 @@ jobs:
   # check-runs erroring) is just as silent-by-default as `draft` failing, since only `draft`
   # had a failure handler before. One shared job covers both, `if: always()` so it still runs
   # when `draft` never started (should_draft stayed false, or `check` itself failed).
+  # A later run with no failure closes the issue.
   notify-on-failure:
     needs: [check, draft]
-    if: always() && (needs.check.result == 'failure' || needs.draft.result == 'failure')
+    if: >-
+      always() && needs.check.result != 'skipped' &&
+      needs.check.result != 'cancelled' && needs.draft.result != 'cancelled'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      FAILED: ${{ needs.check.result == 'failure' || needs.draft.result == 'failure' }}
     steps:
-      - name: File a tracking issue
+      - name: Check out the auto-issue action
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions/auto-issue
+          persist-credentials: false
+
+      - name: Compose the failure issue
+        id: failmsg
+        if: env.FAILED == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHECK_RESULT: ${{ needs.check.result }}
           DRAFT_RESULT: ${{ needs.draft.result }}
           TARGET: ${{ needs.check.outputs.target_version }}
@@ -455,11 +490,32 @@ jobs:
           cc @kovtcharov-amd"
           fi
 
-          # One rolling issue for either failure type — match the shared title prefix.
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search 'in:title "Nightly patch-release"' --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label bug --label devops
-          fi
+          {
+            echo "title=$TITLE"
+            echo "body<<GAIA_AUTO_ISSUE_EOF"
+            echo "$BODY"
+            echo "GAIA_AUTO_ISSUE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: File a tracking issue
+        if: env.FAILED == 'true'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          # One rolling issue for either failure type.
+          key: nightly-patch-release/failure
+          legacy-title-prefix: "⚠️ Nightly patch-release"
+          title: ${{ steps.failmsg.outputs.title || '⚠️ Nightly patch-release run failed' }}
+          body: ${{ steps.failmsg.outputs.body || format('The nightly patch-release workflow failed in run {0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          labels: |
+            bug
+            devops
+          assignees: kovtcharov-amd
+
+      - name: Close the tracking issue once a run succeeds
+        if: env.FAILED != 'true'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: nightly-patch-release/failure
+          legacy-title-prefix: "⚠️ Nightly patch-release"
