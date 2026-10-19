@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Check the pinned embeddable checksums against the live upstream release.
+"""Check the pinned Lemonade checksums against the live upstream release.
 
 GAIA verifies the embeddable Lemonade download against SHA-256 digests pinned
 in ``gaia.llm.lemonade_embedded.EMBEDDABLE_SHA256``. Pins are only worth
@@ -23,6 +23,7 @@ import urllib.request
 
 import pytest
 
+from gaia.installer.lemonade_installer import INSTALLER_SHA256
 from gaia.llm.lemonade_embedded import _ASSET_TEMPLATES, EMBEDDABLE_SHA256
 from gaia.version import LEMONADE_VERSION
 
@@ -98,5 +99,23 @@ def test_pinned_digest_matches_the_published_asset(published_digests, template):
     )
     assert pinned == published_digests[name], (
         f"Pinned digest for '{name}' is stale. Update EMBEDDABLE_SHA256 to "
+        f"'{published_digests[name]}'."
+    )
+
+
+@pytest.mark.parametrize("key", sorted(INSTALLER_SHA256))
+def test_pinned_installer_digest_matches_the_published_asset(published_digests, key):
+    """Every installer download_installer() can fetch is pinned to the real digest."""
+    tag, name = key.split("/", 1)
+    assert tag == f"v{LEMONADE_VERSION}", (
+        f"INSTALLER_SHA256 pins {key}, but GAIA installs v{LEMONADE_VERSION}. "
+        "Re-pin every installer asset for the new version."
+    )
+    assert name in published_digests, (
+        f"Release v{LEMONADE_VERSION} publishes no asset named '{name}' (or no "
+        f"digest for it). Published: {sorted(published_digests)}"
+    )
+    assert INSTALLER_SHA256[key] == published_digests[name], (
+        f"Pinned digest for '{key}' is stale. Update INSTALLER_SHA256 to "
         f"'{published_digests[name]}'."
     )

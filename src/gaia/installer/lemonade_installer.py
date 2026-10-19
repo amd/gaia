@@ -8,6 +8,7 @@ Handles detection, download, and installation of Lemonade Server
 from GitHub releases for Windows, Linux, and macOS.
 """
 
+import hashlib
 import logging
 import ntpath
 import os
@@ -18,7 +19,6 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -43,6 +43,20 @@ GITHUB_RELEASE_TAG_BASE = "https://github.com/lemonade-sdk/lemonade/releases/tag
 
 # Upstream .deb assets carry a distro infix: lemonade-server_<ver>-debian13_<arch>.deb
 LINUX_DEB_DISTRO_TAG = "debian13"
+
+# SHA-256 of every installer asset GAIA downloads for LEMONADE_VERSION, keyed by
+# its path under GITHUB_RELEASE_BASE, as the GitHub release API publishes them.
+# The MSI names carry no version, so the key does. Bumping LEMONADE_VERSION
+# without refreshing these makes download_installer() fail loudly;
+# tests/integration/test_lemonade_embeddable_assets.py checks them against the
+# live release.
+INSTALLER_SHA256 = {
+    "v2026.40.0/lemonade.msi": "e10bc07d69e668338bf01e1a599b4f6e684bf7d217f14cb3744668291bd8bbf0",
+    "v2026.40.0/lemonade-server-minimal.msi": "95ad5b18eba1c1b42228ebceefcdd2eb949d2dde6bb5405141e2cbc169260d66",
+    "v2026.40.0/lemonade-server_2026.40.0-debian13_amd64.deb": "823596e7d1036cc254b93dcfe76ea3690d0a1003bf738dc16be588a376664729",
+    "v2026.40.0/lemonade-server_2026.40.0-debian13_arm64.deb": "ea9e91b3eb69a2986201431a4bc6134bd46d5413479b7cc6256992decaad0522",
+    "v2026.40.0/Lemonade-2026.40.0-Darwin.pkg": "0502d82967b1281580074a622380b1bb03fcbd8faf54466a568e811ebd99485f",
+}
 
 # platform.machine() varies by OS/libc for the same hardware.
 DEB_ARCH_BY_MACHINE = {
@@ -147,6 +161,18 @@ class InstallResult:
 
 # msiexec exit codes for a successful install that still needs a reboot.
 _MSI_SUCCESS_REBOOT_REQUIRED = (3010, 1641)
+
+
+class _DownloadIntegrityError(Exception):
+    """A downloaded installer is truncated or fails its checksum."""
+
+
+def discard_download(path: Path) -> None:
+    """Delete an installer :meth:`LemonadeInstaller.download_installer` returned."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        log.warning("Could not delete the downloaded installer %s: %s", path, e)
 
 
 class LemonadeInstaller:
@@ -451,7 +477,11 @@ class LemonadeInstaller:
 
     def download_installer(self, dest_dir: Optional[str] = None) -> Path:
         """
-        Download the Lemonade installer.
+        Download the Lemonade installer to a file no other download shares.
+
+        The file is checked against the length the server sent and the pinned
+        SHA-256 in :data:`INSTALLER_SHA256` before it is returned, and removed
+        if either check fails. The caller deletes it once it is done with it.
 
         Args:
             dest_dir: Destination directory (uses temp dir if not specified)
@@ -460,39 +490,43 @@ class LemonadeInstaller:
             Path to downloaded installer
 
         Raises:
-            RuntimeError: If download fails
+            RuntimeError: If download fails, is truncated, fails its checksum,
+                or the version has no pinned checksum
         """
+        url = self.get_download_url()
+        release_key = url[len(GITHUB_RELEASE_BASE) + 1 :]
+        expected_sha256 = INSTALLER_SHA256.get(release_key)
+        if expected_sha256 is None:
+            raise RuntimeError(
+                f"No pinned SHA-256 for the Lemonade installer {release_key}. "
+                "GAIA only runs an installer it can verify; the pins in "
+                "INSTALLER_SHA256 (src/gaia/installer/lemonade_installer.py) "
+                f"cover Lemonade {LEMONADE_VERSION}. Add the digest from "
+                f"{self.release_page_url} to use v{self.target_version}."
+            )
         # Pre-flight the asset so an upstream rename fails here — with the URL and
         # where to find the real asset list — instead of mid-download.
-        url = self.get_download_url()
         try:
             self.verify_download_url(url)
         except LemonadeAssetError as e:
             if e.definitive:
                 raise
             log.warning("Could not pre-flight %s; downloading anyway: %s", url, e)
-        filename = self.get_installer_filename()
+        filename = Path(self.get_installer_filename())
 
-        if dest_dir:
-            dest_path = Path(dest_dir) / filename
-        else:
-            dest_path = Path(tempfile.gettempdir()) / filename
+        # A name of its own: two installs at once never write one file, and a
+        # file a previous run left locked is never in the way.
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{filename.stem}-",
+            suffix=filename.suffix,
+            dir=dest_dir or tempfile.gettempdir(),
+        )
+        os.close(fd)
+        dest_path = Path(tmp_name)
 
         self._print_status(f"Downloading from {url}")
 
         try:
-            # Remove existing file if it exists (may be locked from previous attempt)
-            if dest_path.exists():
-                try:
-                    dest_path.unlink()
-                    log.debug(f"Removed existing installer at {dest_path}")
-                except PermissionError:
-                    # File is locked, use a unique filename instead
-                    suffix = Path(filename).suffix
-                    unique_name = f"lemonade_{uuid.uuid4().hex[:8]}{suffix}"
-                    dest_path = Path(tempfile.gettempdir()) / unique_name
-                    log.debug(f"Using unique filename: {dest_path}")
-
             # Create request with User-Agent header
             request = urllib.request.Request(
                 url, headers={"User-Agent": "GAIA-Installer/1.0"}
@@ -503,6 +537,7 @@ class LemonadeInstaller:
                 total_size = int(response.headers.get("content-length", 0))
                 downloaded = 0
                 chunk_size = 8192
+                digest = hashlib.sha256()
 
                 with open(dest_path, "wb") as f:
                     while True:
@@ -510,15 +545,34 @@ class LemonadeInstaller:
                         if not chunk:
                             break
                         f.write(chunk)
+                        digest.update(chunk)
                         downloaded += len(chunk)
 
                         if self.progress_callback:
                             self.progress_callback(downloaded, total_size)
 
+            if total_size and downloaded != total_size:
+                raise _DownloadIntegrityError(
+                    f"Download of {url} ended after {downloaded} of {total_size} "
+                    "bytes. The connection dropped mid-transfer; retry the "
+                    "install."
+                )
+            actual = digest.hexdigest()
+            if actual != expected_sha256:
+                raise _DownloadIntegrityError(
+                    f"The Lemonade installer from {url} failed its SHA-256 check: "
+                    f"expected {expected_sha256}, got {actual}. The download is "
+                    "corrupt or was altered in transit (a proxy rewriting it?). "
+                    f"Retry, or download it by hand from {self.release_page_url}."
+                )
             self._print_status(f"Downloaded to {dest_path}")
             return dest_path
 
+        except _DownloadIntegrityError as e:
+            dest_path.unlink(missing_ok=True)
+            raise RuntimeError(str(e)) from e
         except urllib.error.HTTPError as e:
+            dest_path.unlink(missing_ok=True)
             if e.code == 404:
                 raise LemonadeAssetError(
                     self._missing_asset_error(url, "was not found (HTTP 404)"),
@@ -526,14 +580,17 @@ class LemonadeInstaller:
                 ) from e
             raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}")
         except urllib.error.URLError as e:
+            dest_path.unlink(missing_ok=True)
             raise RuntimeError(f"Download failed: {e.reason}")
         except (ConnectionError, TimeoutError) as e:
+            dest_path.unlink(missing_ok=True)
             # http.client.RemoteDisconnected escapes URLError - see do_open().
             raise RuntimeError(
                 f"Download of {url} dropped mid-transfer: {e}. This is usually a "
                 f"transient network failure - retry the install."
             ) from e
         except Exception as e:
+            dest_path.unlink(missing_ok=True)
             raise RuntimeError(f"Download failed: {e}")
 
     def install(
@@ -1219,13 +1276,16 @@ class LemonadeInstaller:
                         cmd.extend(["/qn", "/norestart"])
 
                     log.debug(f"Running: {' '.join(cmd)}")
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=300,
-                        check=False,
-                    )
+                    try:
+                        result = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=300,
+                            check=False,
+                        )
+                    finally:
+                        discard_download(msi_path)
 
                     if result.returncode == 0:
                         return InstallResult(

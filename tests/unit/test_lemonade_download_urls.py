@@ -137,7 +137,9 @@ class TestVerifyDownloadUrl:
 
         assert list(tmp_path.iterdir()) == []
 
-    def test_head_rejection_falls_through_to_the_real_download(self, tmp_path):
+    def test_head_rejection_falls_through_to_the_real_download(
+        self, tmp_path, monkeypatch
+    ):
         """A proxy that 403s HEAD must not block a GET that would succeed."""
         installer = _installer("Linux", "x86_64")
         url = installer.get_download_url()
@@ -165,8 +167,131 @@ class TestVerifyDownloadUrl:
                 raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
             return _Response()
 
+        _pin(monkeypatch, installer, b"deb-bytes")
         with patch("urllib.request.urlopen", side_effect=_urlopen):
             dest = installer.download_installer(dest_dir=str(tmp_path))
 
         assert calls == ["HEAD", "GET"]
         assert dest.read_bytes() == b"deb-bytes"
+
+
+class _Stream:
+    """A GET response that serves *payload* but may claim another length."""
+
+    status = 200
+
+    def __init__(self, payload: bytes, claimed_length=None, chunk=4096):
+        self._payload = payload
+        self._chunk = chunk
+        length = len(payload) if claimed_length is None else claimed_length
+        self.headers = {"content-length": str(length)}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, size):
+        size = min(size, self._chunk)
+        chunk, self._payload = self._payload[:size], self._payload[size:]
+        return chunk
+
+
+def _serve(payload, claimed_length=None):
+    def _urlopen(request, timeout=None):
+        if request.get_method() == "HEAD":
+            return _Stream(b"")
+        return _Stream(payload, claimed_length)
+
+    return patch("urllib.request.urlopen", side_effect=_urlopen)
+
+
+def _release_key(installer) -> str:
+    return installer.get_download_url().split("/releases/download/", 1)[1]
+
+
+def _pin(monkeypatch, installer, payload):
+    import hashlib
+
+    from gaia.installer import lemonade_installer as mod
+
+    # getattr: lets the same test show the unpinned behaviour of older builds.
+    monkeypatch.setitem(
+        getattr(mod, "INSTALLER_SHA256", {}),
+        _release_key(installer),
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+
+class TestDownloadIntegrity:
+    """A truncated, corrupt or shared download never reaches the installer."""
+
+    def test_every_supported_asset_has_a_pinned_checksum(self):
+        from gaia.installer.lemonade_installer import INSTALLER_SHA256
+
+        for system, machine, minimal, _asset in SUPPORTED_TARGETS:
+            key = _release_key(_installer(system, machine, minimal))
+            assert key in INSTALLER_SHA256, f"no pinned SHA-256 for {key}"
+
+    def test_truncated_download_fails_and_leaves_no_file(self, tmp_path, monkeypatch):
+        installer = _installer("Windows", "AMD64")
+        payload = b"m" * 10_000
+        _pin(monkeypatch, installer, payload)
+        with _serve(payload[:6_000], claimed_length=len(payload)):
+            with pytest.raises(RuntimeError, match="6000 of 10000 bytes"):
+                installer.download_installer(dest_dir=str(tmp_path))
+        assert list(tmp_path.iterdir()) == []
+
+    def test_checksum_mismatch_fails_and_leaves_no_file(self, tmp_path, monkeypatch):
+        installer = _installer("Windows", "AMD64")
+        _pin(monkeypatch, installer, b"the real installer")
+        with _serve(b"a tampered installer"):
+            with pytest.raises(RuntimeError, match="SHA-256"):
+                installer.download_installer(dest_dir=str(tmp_path))
+        assert list(tmp_path.iterdir()) == []
+
+    def test_unpinned_version_refuses_before_downloading(self, tmp_path):
+        from gaia.installer.lemonade_installer import LemonadeInstaller
+
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("platform.machine", return_value="AMD64"),
+        ):
+            installer = LemonadeInstaller(target_version="1.2.3")
+        with patch("urllib.request.urlopen") as urlopen:
+            with pytest.raises(RuntimeError, match="No pinned SHA-256"):
+                installer.download_installer(dest_dir=str(tmp_path))
+        urlopen.assert_not_called()
+
+    def test_concurrent_downloads_never_share_a_file(self, tmp_path, monkeypatch):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        installer = _installer("Windows", "AMD64")
+        payload = bytes(range(256)) * 400
+        _pin(monkeypatch, installer, payload)
+        both_streaming = threading.Barrier(2, timeout=30)
+
+        class _Lockstep(_Stream):
+            def read(self, size):
+                chunk = super().read(size)
+                if chunk:
+                    both_streaming.wait()
+                return chunk
+
+        def _urlopen(request, timeout=None):
+            if request.get_method() == "HEAD":
+                return _Stream(b"")
+            return _Lockstep(payload, chunk=1024)
+
+        def _download(_):
+            return installer.download_installer(dest_dir=str(tmp_path))
+
+        with patch("urllib.request.urlopen", side_effect=_urlopen):
+            with ThreadPoolExecutor(2) as pool:
+                paths = list(pool.map(_download, range(2)))
+
+        assert paths[0] != paths[1]
+        assert all(p.read_bytes() == payload for p in paths)
+        assert all(p.suffix == ".msi" for p in paths)

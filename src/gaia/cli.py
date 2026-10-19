@@ -5757,7 +5757,10 @@ Let me know your answer!
     # Handle install command
     if args.action == "install":
         if args.lemonade:
-            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.installer.lemonade_installer import (
+                LemonadeInstaller,
+                discard_download,
+            )
             from gaia.version import LEMONADE_VERSION
 
             installer = LemonadeInstaller()
@@ -5797,7 +5800,11 @@ Let me know your answer!
                     print("Downloading Lemonade Server...")
                     installer_path = installer.download_installer()
                     print("Installing...")
-                result = installer.install(installer_path, silent=args.silent)
+                try:
+                    result = installer.install(installer_path, silent=args.silent)
+                finally:
+                    if installer_path is not None:
+                        discard_download(installer_path)
 
                 if result.success:
                     # Verify installation
