@@ -4,6 +4,7 @@
 """One visible line for the model: FIFO, place in line, withdraw (#5226)."""
 
 import asyncio
+import concurrent.futures
 import threading
 
 import pytest
@@ -164,3 +165,32 @@ async def test_slot_stops_waiting_to_come_back_once_the_turn_is_stopped():
 async def test_a_slot_not_held_has_nothing_to_step_away_from():
     slot = TurnSlot(TurnQueue(), "a", asyncio.get_running_loop())
     assert await asyncio.to_thread(slot.step_away) is False
+
+
+async def test_a_stalled_event_loop_raises_the_builtin_timeout(monkeypatch):
+    # Before 3.11 concurrent.futures.TimeoutError is its own class; callers
+    # catch the builtin, so a stalled hand-back must surface as that.
+    class _OldFuturesTimeout(Exception):
+        pass
+
+    monkeypatch.setattr(concurrent.futures, "TimeoutError", _OldFuturesTimeout)
+
+    def stalled_result(self, timeout=None):
+        raise _OldFuturesTimeout()
+
+    monkeypatch.setattr(concurrent.futures.Future, "result", stalled_result)
+    slot = TurnSlot(TurnQueue(), "a", asyncio.get_running_loop())
+    with pytest.raises(TimeoutError, match="did not answer") as info:
+        slot.step_away()
+    assert isinstance(info.value.__cause__, _OldFuturesTimeout)
+
+
+async def test_a_loop_that_never_runs_the_hand_back_times_out(monkeypatch):
+    monkeypatch.setattr(TurnSlot, "_LOOP_CALL_TIMEOUT_S", 0.05)
+    other = asyncio.new_event_loop()  # Never run: the hand-back never happens.
+    try:
+        slot = TurnSlot(TurnQueue(), "a", other)
+        with pytest.raises(TimeoutError, match="turn a"):
+            await asyncio.to_thread(slot.step_away)
+    finally:
+        other.close()

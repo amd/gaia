@@ -4,7 +4,6 @@
 """What the chat list needs from the backend (#5221): which chats wait on
 the user, how each last turn ended, unread, pin, and eval/scheduled kind."""
 
-import asyncio
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -161,22 +160,21 @@ def test_a_plain_api_turn_that_raises_records_failed(client):
     assert client.get(f"/api/sessions/{sid}").json()["last_run_status"] == "failed"
 
 
-def test_a_plain_api_turn_refused_before_it_ran_records_nothing():
-    from gaia.ui.turn_queue import TurnQueue
+def test_a_plain_api_turn_stopped_before_it_ran_records_nothing():
+    from gaia.ui.turn_queue import TurnCancelled, TurnQueue
 
     app = create_app(db_path=":memory:")
     sid = app.state.db.create_session(title="Mine")["id"]
     queue = TurnQueue()
 
-    async def _refused(awaitable, timeout):  # noqa: ARG001
-        awaitable.close()
-        raise asyncio.TimeoutError
+    async def _stopped_in_line(owner, *args, **kwargs):  # noqa: ARG001
+        raise TurnCancelled(owner)
 
     with (
         patch("gaia.ui.routers.chat.turn_queue", queue),
-        patch("gaia.ui.routers.chat.asyncio.wait_for", _refused),
+        patch.object(queue, "acquire", _stopped_in_line),
     ):
-        assert _send_plain(TestClient(app), sid).status_code == 429
+        assert _send_plain(TestClient(app), sid).status_code == 409
     row = app.state.db.get_session(sid)
     assert row["last_run_status"] is None and not row["unread"]
 

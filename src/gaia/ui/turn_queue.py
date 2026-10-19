@@ -274,7 +274,15 @@ class TurnSlot:
                 done.set_exception(exc)
 
         self._loop.call_soon_threadsafe(run)
-        return done.result(timeout=self._LOOP_CALL_TIMEOUT_S)
+        try:
+            return done.result(timeout=self._LOOP_CALL_TIMEOUT_S)
+        except concurrent.futures.TimeoutError as exc:
+            # A separate class from the builtin before Python 3.11.
+            raise TimeoutError(
+                f"The chat server's event loop did not answer within "
+                f"{self._LOOP_CALL_TIMEOUT_S:g} s while turn {self._owner} "
+                "handed back the model"
+            ) from exc
 
 
 def ordinal(n: int) -> str:
