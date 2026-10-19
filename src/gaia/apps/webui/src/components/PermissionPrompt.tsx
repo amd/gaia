@@ -58,6 +58,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
+    // Shell scopes are already the command itself, so only file and skill grants carry a label.
+    const scopeText = notification.alwaysLabel ?? scope;
+    const scopeNode = notification.alwaysLabel ?? <code>{scope}</code>;
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -122,7 +125,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
                         {notification.tool === PATH_ACCESS_TOOL
                             ? notification.title
-                            : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
+                            : notification.toolLabel
+                                ? <>Allow {notification.toolLabel}?</>
+                                : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
                     </h2>
                     {detail && riskNote && <pre className="perm-card-pre perm-card-exact">{detail}</pre>}
                     {detail && !riskNote && <p className="perm-card-detail"><code>{detail}</code></p>}
@@ -152,7 +157,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
             {suggestAlways && !expired && (
                 <p className="perm-card-hint">
                     You've allowed this {repeats === 1 ? 'once' : `${repeats} times`} already.
-                    {' '}Always allow stops asking about <code>{scope}</code> in this chat.
+                    {' '}Always allow stops asking about {scopeNode} in this chat.
                 </p>
             )}
             {expired ? (
@@ -169,9 +174,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
-                            aria-label={`Always allow ${scope} in this chat`}
+                            aria-label={`Always allow ${scopeText} in this chat`}
                         >
-                            Always allow <code>{scope}</code> in this chat
+                            Always allow {scopeNode} in this chat
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>

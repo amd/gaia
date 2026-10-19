@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // The website, the Agent UI and the TUI are claimed to paint the same status
-// hues, and the Agent UI and the TUI the same copper. Nothing enforced that
+// hues. Nothing enforced that
 // claim, so the two ambers drifted apart (#e3b341 here vs #E5B567 there) while
 // every contrast test on both sides stayed green — each value clears its floor,
 // they just are not the same colour.
@@ -90,11 +90,8 @@ function readGoTokens(source: string): Map<string, string[]> {
   return out;
 }
 
-/** TUI token → the Agent UI role carrying the same literal. */
-const APP_AND_TUI: Array<[string, string]> = [
-  ['Accent', '--accent'],
-  ['AccentFillBG', '--accent-fill'],
-];
+/** TUI tokens whose literals are pinned below. */
+const TUI_ACCENT = ['Accent', 'AccentFillBG'];
 
 const website = readFileSync(WEBSITE_TOKENS, 'utf8');
 const agentUi = readFileSync(AGENT_UI_TOKENS, 'utf8');
@@ -117,22 +114,16 @@ describe('status hues are one set of literals across both surfaces', () => {
   });
 });
 
-// The TUI cannot import a stylesheet, so its copper is a hand-typed Go literal.
-// A retune that lands in the app and misses the terminal is invisible to every
-// contrast test on both. This suite already reads both files, so it holds the
-// pair even though the website no longer wears the copper.
-describe('the copper is one literal in the Agent UI and the TUI', () => {
+// The Agent UI moved to brass; the TUI keeps copper until a brass exists that
+// survives 256-colour rounding (the light brass lands on the TUI's warning
+// entry). See "The Agent UI's palette" in
+// docs/spec/gaia-design-language.mdx. Until then the accents are deliberately
+// unequal, so this pins the TUI's copper on its own: a retune there must be a
+// decision, not a drift.
+describe('the TUI keeps its copper', () => {
   it('can still parse theme.go', () => {
-    // A rename or a reshaped declaration must fail here, not skip every pair.
-    expect([...tui.keys()]).toEqual(
-      expect.arrayContaining(APP_AND_TUI.map(([goToken]) => goToken)),
-    );
-  });
-
-  it.each(APP_AND_TUI)('%s equals %s', (goToken, appToken) => {
-    // Order is light-then-dark in both files; a mode-invariant role collapses.
-    const expected = [...new Set(tui.get(goToken)!)];
-    expect(readValues(agentUi, appToken), `${appToken} drifted from the TUI`).toEqual(expected);
+    // A rename or a reshaped declaration must fail here, not skip the pin.
+    expect([...tui.keys()]).toEqual(expect.arrayContaining(TUI_ACCENT));
   });
 
   it('is still burnished copper and its dark counterpart', () => {
