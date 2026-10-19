@@ -133,10 +133,8 @@
 }
 
 .tunnel-url-area label {
-    font-size: 11px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     color: var(--text-muted);
 }
 
@@ -198,10 +196,8 @@ button.copy-url-btn.copied {
 
 .tunnel-password-hint label {
     display: block;
-    font-size: 10px;
+    font-size: var(--fs-label);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
     color: var(--accent-yellow);
     margin-bottom: 6px;
 }
