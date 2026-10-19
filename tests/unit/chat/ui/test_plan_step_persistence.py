@@ -120,3 +120,43 @@ def test_each_saved_call_keeps_its_plain_line(monkeypatch):
 
     tools = [s for s in steps if s.type == "tool"]
     assert [t.narration for t in tools] == ["Reading file: notes.txt"]
+
+
+def _bare_plan(handler, current_step):
+    handler._emit(
+        {
+            "type": "plan",
+            "steps": ["read_file — file_path='a.txt'", "read_file — file_path='b.txt'"],
+            "current_step": current_step,
+        }
+    )
+
+
+def test_resent_plan_fills_in_plain_lines_the_first_copy_lacked(monkeypatch):
+    def script(handler):
+        _bare_plan(handler, 0)
+        _call(handler, "a.txt")
+        handler.print_plan(PLAN, 1)
+        _call(handler, "b.txt")
+
+    steps = _run_turn(monkeypatch, script)
+
+    plans = [s for s in steps if s.type == "plan"]
+    assert len(plans) == 1
+    assert plans[0].currentStep == 1
+    assert plans[0].planNarrations == ["Reading file: a.txt", "Reading file: b.txt"]
+
+
+def test_resent_plan_without_plain_lines_keeps_the_saved_ones(monkeypatch):
+    def script(handler):
+        handler.print_plan(PLAN, 0)
+        _call(handler, "a.txt")
+        _bare_plan(handler, 1)
+        _call(handler, "b.txt")
+
+    steps = _run_turn(monkeypatch, script)
+
+    plans = [s for s in steps if s.type == "plan"]
+    assert len(plans) == 1
+    assert plans[0].currentStep == 1
+    assert plans[0].planNarrations == ["Reading file: a.txt", "Reading file: b.txt"]

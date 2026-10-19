@@ -3317,6 +3317,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
+        last_event_at = _time.monotonic()
 
         def _blocked_policy_steps():
             return [
@@ -3376,7 +3377,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                _idle.progressed(_time.monotonic())
+                last_event_at = _time.monotonic()
+                _idle.progressed(last_event_at)
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -3495,6 +3497,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     if same_plan is not None:
                         same_plan["currentStep"] = event.get("current_step")
+                        if event.get("step_narrations"):
+                            same_plan["planNarrations"] = event["step_narrations"]
                     else:
                         step_id += 1
                         for s in captured_steps:
@@ -3588,7 +3592,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # into a single updating step on the frontend. A running tool
                 # shows its own timer, so the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
-                    elapsed = int(idle_cycles * 0.2)
+                    elapsed = int(_time.monotonic() - last_event_at)
                     status_evt = json.dumps(
                         {
                             "type": "status",
