@@ -462,7 +462,7 @@ describe('Chat App Integration', () => {
 
     it('should render the empty-chat screen (NewChat) when no session is active', () => {
       expect(appContent).toMatch(
-        /currentSessionId \? \(\s*<ChatView[^>]*\/>\s*\) : \(\s*<NewChat onSend=\{startChat\} \/>/
+        /currentSessionId \? \(\s*<ChatView[^>]*\/>\s*\) : \(\s*<NewChat [^>]*onSend=\{startChat\}[^>]*\/>/
       );
     });
 
@@ -684,7 +684,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should pass prompt handler to child components', () => {
-      expect(appContent).toContain('<NewChat onSend={startChat} />');
+      expect(appContent).toMatch(/<NewChat [^>]*onSend=\{startChat\}[^>]*\/>/);
     });
 
     it('should use useCallback for memoized handlers', () => {

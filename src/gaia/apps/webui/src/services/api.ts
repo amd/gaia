@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ContextUsage, ChatPerformance, RetryResult, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ContextUsage, ChatPerformance, RetryResult, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -254,6 +254,21 @@ export async function getSetupStatus(): Promise<SetupRunStatus> {
     return apiFetch('GET', '/setup/status');
 }
 
+/** The Lemonade, chat model and download setup will use. Loads nothing. */
+export async function getSetupPlan(): Promise<SetupPlan> {
+    return apiFetch('GET', '/setup/plan');
+}
+
+/** Pick setup's chat model before it starts; returns the new plan. */
+export async function chooseSetupChatModel(modelId: string): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/chat-model', { model_id: modelId });
+}
+
+/** A new chat's task cards and working folder. */
+export async function getStartScreen(): Promise<StartScreen> {
+    return apiFetch('GET', '/onboarding/start');
+}
+
 // -- Which Lemonade Server GAIA uses ---------------------------------------------
 
 export async function getLemonadeTarget(): Promise<LemonadeTarget> {
@@ -261,7 +276,8 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
 }
 
 /** A Lemonade the user already runs on this PC, or null. */
-export async function detectLemonade(): Promise<{ found: LemonadeFound | null }> {
+/** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
+export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
     return apiFetch('GET', '/lemonade/detect');
 }
 
