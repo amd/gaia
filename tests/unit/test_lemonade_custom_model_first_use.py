@@ -39,6 +39,15 @@ def test_current_not_found_reply_is_recognised(client):
     assert client._is_model_error(NOT_REGISTERED)
 
 
+def test_not_found_code_is_matched_case_insensitively(client):
+    assert client._is_model_error(
+        LemonadeClientError(
+            'Request failed with status 404: {"error":{"code":"MODEL_NOT_FOUND",'
+            '"message":"gone","type":"invalid_request_error"}}'
+        )
+    )
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -47,6 +56,11 @@ def test_current_not_found_reply_is_recognised(client):
             'Request failed with status 400: {"error":{"code":"bad_request",'
             '"message":"ctx_size must be positive","type":"invalid_request_error"}}'
         ),
+        LemonadeClientError('Request failed with status 404: {"error":{"code":"model'),
+        LemonadeClientError(
+            'Request failed with status 404: {"error":"model_not_found_in_cache"}'
+        ),
+        LemonadeClientError('Request failed with status 404: ["model_not_found"]'),
     ],
 )
 def test_other_failures_are_not_mistaken_for_a_missing_model(client, error):
