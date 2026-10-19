@@ -479,6 +479,8 @@ if role == "write":
         data = {"chunks": [str(i) * 2000], "full_text": "", "metadata": {}}
         signer._save_cache(cache_path, data)
         i += 1
+        # Back-to-back relocking starves a polling reader; no real writer does that.
+        time.sleep(0.005)
     finished()
 else:
     while not others_finished():
