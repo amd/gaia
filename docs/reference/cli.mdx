@@ -1394,6 +1394,17 @@ the bridge refuses any request whose `Origin` is not loopback (`localhost`,
 clients, n8n — are unaffected. To allow a browser app on another origin, list
 it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
+##### Concurrent requests and limits
+
+Each request runs on its own thread, so `/health` and `/status` answer while a
+`/llm` or `/chat` call waits on a busy model. Calls to the same tool take turns:
+`/chat` shares one conversation. A queued caller waits for the call ahead of it,
+which can run 15 minutes or more, so give clients such as n8n a generous HTTP
+timeout. A client that stops sending its headers or body
+for 30 s gets **408**. A request body over 1 MiB gets **413**; raise the limit with
+`GAIA_MCP_MAX_BODY_BYTES` (bytes). A request with any `Transfer-Encoding`
+(chunked or other) gets **411**; send a plain `Content-Length` body instead.
+
 ##### Authentication
 
 The bridge is **unauthenticated by default**. Anything that can reach the port
@@ -3252,6 +3263,14 @@ Before stopping anything, GAIA checks that the process is its own server: the
 `lemond` binary under `~/.gaia/lemonade/dist/`, on the recorded port, with the
 recorded API key. A process that reused the recorded pid, or a Lemonade you
 run yourself, is never killed.
+
+If GAIA's server crashes, or is killed without its child processes, its
+model servers (`llama-server` and the like) can keep running and holding
+their memory. GAIA stops them the next time it starts its server, or when it
+finds the server gone. It stops a process only when it runs from
+`~/.gaia/lemonade/cache/bin` and the process that started it has exited. A
+tool from that folder that you run yourself, such as `llama-bench`, is left
+alone while the shell that started it is open.
 
 The daemon never installs Lemonade, never restarts a server that is slow to
 answer while its owner is running (it may be loading a model), and never

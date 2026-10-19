@@ -120,20 +120,43 @@ describe("taskbar flash", () => {
 });
 
 describe("tray badge for chats that need you", () => {
+  const newTray = () => new TrayManager(createMockWindow(), { reopenWindow: jest.fn() });
+  const idle = {
+    backendConnected: true,
+    modelServerRunning: true,
+    model: null,
+    waitingOnModel: null,
+    running: [],
+    needsYou: [],
+    recent: [],
+  };
+
   test("counts chats beside unread notifications in the tooltip", async () => {
-    const tray = new TrayManager(createMockWindow());
+    const tray = newTray();
     tray.create();
+    tray.setActivity(idle);
     new NotificationService(createMockWindow(), null, tray);
     await electronMock.ipcMain.simulateInvoke("notification:attention", 2);
-    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith("GAIA — 2 chats need you");
+    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith("GAIA — idle · 2 chats need you");
     tray.setNotificationCount(1);
-    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith("GAIA — 2 chats need you, 1 unread notification");
+    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith(
+      "GAIA — idle · 2 chats need you · 1 unread notification"
+    );
     await electronMock.ipcMain.simulateInvoke("notification:attention", 0);
-    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith("GAIA — 1 unread notification");
+    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith("GAIA — idle · 1 unread notification");
+  });
+
+  test("a needs-you state already names the chat, so the count is not repeated", async () => {
+    const tray = newTray();
+    tray.create();
+    tray.setActivity({ ...idle, needsYou: [{ id: "a", title: "Trip plan", reason: "approval" }] });
+    new NotificationService(createMockWindow(), null, tray);
+    await electronMock.ipcMain.simulateInvoke("notification:attention", 1);
+    expect(tray.tray.setToolTip).toHaveBeenLastCalledWith("GAIA — 'Trip plan' needs your approval");
   });
 
   test("rejects a bad count, and fails loudly with no tray", async () => {
-    const tray = new TrayManager(createMockWindow());
+    const tray = newTray();
     expect(() => tray.setAttentionCount(-1)).toThrow(TypeError);
     expect(() => tray.setAttentionCount(1.5)).toThrow(TypeError);
     new NotificationService(createMockWindow(), null, null);
@@ -166,7 +189,11 @@ describe("keep-awake", () => {
 describe("preload ↔ main channel contract", () => {
   test("every new channel the preload invokes is registered by a service", () => {
     const preload = fs.readFileSync(path.join(WEBUI, "preload.cjs"), "utf8");
-    new NotificationService(createMockWindow(), null, new TrayManager(createMockWindow()));
+    new NotificationService(
+      createMockWindow(),
+      null,
+      new TrayManager(createMockWindow(), { reopenWindow: jest.fn() })
+    );
     new KeepAwake();
     for (const channel of ["notification:show", "notification:flash", "notification:attention", "power:keep-awake"]) {
       expect(preload).toContain(`"${channel}"`);

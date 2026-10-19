@@ -113,7 +113,7 @@ class TestEnsureModelLoaded:
         """
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
-        mock_status.side_effect = Exception("Connection failed")
+        mock_status.side_effect = LemonadeClientError("Connection failed")
         mock_list.return_value = {"data": []}
 
         # Execute - the probe error is swallowed; the load still runs.

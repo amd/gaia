@@ -2347,6 +2347,7 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeUnresponsiveError,
                 cloud_model_provider,
                 resolve_ctx_size,
             )
@@ -2358,7 +2359,10 @@ Do NOT wrap conversational replies in JSON.
 
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
-                LemonadeClient(base_url=base_url, verbose=False).health_check()
+                try:
+                    LemonadeClient(base_url=base_url, verbose=False).health_check()
+                except LemonadeUnresponsiveError:
+                    LemonadeManager.report_busy(base_url, quiet=silent_mode)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -5107,6 +5111,10 @@ Do NOT wrap conversational replies in JSON.
                     prop["description"] = desc
                 if param_info.get("enum"):
                     prop["enum"] = list(param_info["enum"])
+                if prop["type"] == "array":
+                    # gpt-oss's chat template reads ``items`` on every array;
+                    # without it Lemonade answers every request with HTTP 500.
+                    prop["items"] = dict(param_info.get("items") or {})
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)

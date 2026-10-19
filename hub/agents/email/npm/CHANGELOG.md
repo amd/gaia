@@ -12,6 +12,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
   holds the model and how long it has waited. Before, the stream went silent
   for the whole wait. The request also goes ahead of background work, and
   cancelling the run takes it out of the queue.
+- **A scheduled send or snooze cut off mid-fire no longer stays stuck.** If
+  the agent crashed while firing one, the job stayed "firing" forever and was
+  never reported. About 10 minutes later, a send is now marked failed with the
+  reason (it is still never sent twice) and listed when you ask for your
+  scheduled jobs, and a snooze runs again and brings the message back to the
+  inbox. A send another copy of the agent is still sending is left alone while that copy keeps checking in. If one is marked failed and then does go out, it changes to sent, so check your Sent folder before scheduling it again.
 
 - **A bulk archive, label, star or mark-read that changed nothing now says it
   failed.** When every message in the batch failed, the agent used to report

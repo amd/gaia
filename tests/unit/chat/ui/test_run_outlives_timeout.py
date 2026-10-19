@@ -88,7 +88,9 @@ async def test_non_streaming_timeout_holds_session_until_worker_exits(runtime):
     state = http_request.app.state
     sid, agent = _seed(db)
 
-    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 0.1):
+    # A roomy limit until the agent is running, so the stop can't fire before
+    # the turn reaches it (the pre-flight then ends a stopped turn early).
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 60):
         task = asyncio.create_task(
             chat.send_message(
                 ChatRequest(session_id=sid, message="hi", stream=False),
@@ -98,6 +100,7 @@ async def test_non_streaming_timeout_holds_session_until_worker_exits(runtime):
         )
         try:
             assert await asyncio.to_thread(agent.started.wait, 5)
+            helpers._STREAM_TIMEOUT_SECONDS = 0.1  # Now it goes idle.
             await asyncio.sleep(0.4)
 
             assert not task.done()
