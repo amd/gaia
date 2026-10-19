@@ -14,11 +14,27 @@ on:
         value: ${{ jobs.discover-apps.outputs.has_apps }}
   push:
     branches: [main]
+    paths:
+      - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/electron/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-electron-apps.yml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/electron/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-electron-apps.yml'
   merge_group:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -32,9 +48,6 @@ jobs:
       has_apps: ${{ steps.discover.outputs.has_apps }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Discover Electron apps
         id: discover

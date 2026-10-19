@@ -492,7 +492,7 @@ class TurnTracker:
         }
 
     def footer(self) -> Dict[str, Any]:
-        """The token footer under an answer (MessageBubble ``msg-stats``)."""
+        """The exact numbers behind the footer under an answer (``AnswerStats``)."""
         latency_ms = int(round(self.elapsed_s() * 1000)) if not self.live else None
         stats = self.done_stats or {}
         parts: List[str] = []

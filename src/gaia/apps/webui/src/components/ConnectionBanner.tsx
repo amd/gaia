@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
+import { modelServerHealth } from '../services/statusPoll';
 import './ConnectionBanner.css';
 
 /**
@@ -13,7 +14,27 @@ import './ConnectionBanner.css';
  * the required model is not downloaded, the wrong model is loaded, or the
  * context window is too small. Provides clear messaging and actionable hints.
  */
-export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
+/** A retry that says it is checking until the check answers. */
+function RetryButton({ onRetry, label }: { onRetry: () => void | Promise<void>; label: string }) {
+    const [checking, setChecking] = useState(false);
+    const run = () => {
+        setChecking(true);
+        Promise.resolve(onRetry()).finally(() => setChecking(false));
+    };
+    return (
+        <button className="connection-banner__retry" onClick={run} disabled={checking}>
+            {checking ? 'Checking…' : label}
+        </button>
+    );
+}
+
+export function ConnectionBanner({ onRetry, backendSlow = false, backendError = null }: {
+    onRetry?: () => void | Promise<void>;
+    /** Status requests keep timing out: the backend is busy, not gone. */
+    backendSlow?: boolean;
+    /** The backend answered the status request with this HTTP error. */
+    backendError?: string | null;
+}) {
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
 
@@ -206,11 +227,43 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         Check that GAIA is still running, then retry.
                     </span>
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Retry
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Retry" />}
+            </div>
+        );
+    }
+
+    // Case 1a: the backend answers, but with an error.
+    if (backendError) {
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <AlertTriangle size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    GAIA's backend answered with an error ({backendError}).{' '}
+                    <span className="connection-banner__hint">
+                        It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.
+                    </span>
+                </div>
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+            </div>
+        );
+    }
+
+    // Case 1b: the backend answers, but too slowly to read its status.
+    if (backendSlow) {
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <AlertTriangle size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    GAIA is slow to answer.{' '}
+                    <span className="connection-banner__hint">
+                        It may be busy with another chat or app. GAIA keeps checking.
+                    </span>
+                </div>
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
             </div>
         );
     }
@@ -227,40 +280,34 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     GAIA settings could not be loaded.{' '}
                     <span className="connection-banner__hint">{systemStatus.config_error}</span>
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
             </div>
         );
     }
 
     // Case 2: Backend is up but Lemonade Server is not running
     if (systemStatus && !systemStatus.lemonade_running) {
-        const queryFailed = Boolean(systemStatus.lemonade_error);
+        // Listening but failing its health check is often just busy; the backend can't yet say which.
+        const unresponsive = modelServerHealth(systemStatus) === 'unresponsive';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    {queryFailed
-                        ? `Could not read the model server's status: ${systemStatus.lemonade_error}`
+                    {unresponsive
+                        ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
                         : 'The model server stopped responding.'}{' '}
                     {systemStatus.start_command ? (
                         <span className="connection-banner__hint">
-                            To start it by hand, run <code>{systemStatus.start_command}</code>
+                            {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
+                            <code>{systemStatus.start_command}</code>
                         </span>
                     ) : systemStatus.start_instruction && (
                         <span className="connection-banner__hint">{systemStatus.start_instruction}</span>
                     )}
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
@@ -292,11 +339,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         Reload it with a larger context in Settings → Advanced.
                     </span>
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
-                    </button>
-                )}
+                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}

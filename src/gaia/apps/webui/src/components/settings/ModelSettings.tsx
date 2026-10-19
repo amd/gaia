@@ -6,6 +6,10 @@ import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore, shortModelName } from '../../stores/modelStore';
+import { CloudPrices } from './CloudPrices';
+import { SpendingLimit } from './SpendingLimit';
+import { formatPrice } from './cloudPrice';
+import './CloudSpending.css';
 import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 
 function keyStatus(p: ProviderInfo): string {
@@ -207,6 +211,13 @@ export function ModelSettings() {
                         </div>
                     )}
 
+                    {provider.remote && !connected && (
+                        <div className="settings-field">
+                            <span className="settings-label">Prices</span>
+                            <CloudPrices provider={provider.id} />
+                        </div>
+                    )}
+
                     {provider.remote && (
                         <form
                             className="settings-field"
@@ -296,6 +307,9 @@ export function ModelSettings() {
                                                     {shortModelName(m.id)}
                                                     {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
                                                 </span>
+                                                {provider.remote && (
+                                                    <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
+                                                )}
                                                 {m.evidence && <span className="model-row-meta">Measured: {m.evidence}</span>}
                                                 {m.context_length && (
                                                     <span className="model-row-meta">Context {m.context_length.toLocaleString()} tokens</span>
@@ -318,6 +332,8 @@ export function ModelSettings() {
                             </ul>
                         </div>
                     )}
+
+                    {provider.remote && <SpendingLimit />}
                 </section>
             )}
         </div>
