@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Distribution template for the GAIA terminal hub, rendered and handed to
+  Distribution template for the GAIA Terminal UI, rendered and handed to
   productbuild by build-pkg.sh.
 
   Placeholders are substituted by build-pkg.sh. Every value it injects is
@@ -18,7 +18,7 @@
   would reset it to root:wheel and break Homebrew on an Intel Mac.
 -->
 <installer-gui-script minSpecVersion="2">
-    <title>GAIA Terminal Hub @VERSION@</title>
+    <title>GAIA Terminal UI @VERSION@</title>
 
     <!-- macOS 11 Big Sur is the floor: it is the first release with arm64
          support, so a single minimum covers both slices we ship. -->
@@ -55,7 +55,7 @@
     </choices-outline>
 
     <choice id="@DOCS_IDENTIFIER@"
-            title="GAIA Terminal Hub licence"
+            title="GAIA Terminal UI licence"
             description="Installs LICENSE.md into /usr/local/share/doc/gaia-tui."
             visible="false"
             selected="true"
@@ -64,7 +64,7 @@
     </choice>
 
     <choice id="@PKG_IDENTIFIER@"
-            title="GAIA Terminal Hub"
+            title="GAIA Terminal UI"
             description="Installs the gaia-tui and gaia-agent command-line tools into /usr/local/bin."
             visible="false"
             selected="true"

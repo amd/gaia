@@ -22,6 +22,9 @@ on:
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
       - 'util/test_lane_allowlist.yml'
+      # Every test session runs the root conftest; this checks it left no daemon.
+      - 'conftest.py'
+      - 'util/check_no_daemons.py'
       - 'installer/tui/**'
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -50,6 +53,9 @@ on:
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
       - 'util/test_lane_allowlist.yml'
+      # Every test session runs the root conftest; this checks it left no daemon.
+      - 'conftest.py'
+      - 'util/check_no_daemons.py'
       - 'installer/tui/**'
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -218,11 +224,11 @@ jobs:
           echo ""
           pytest tests/integration/test_web_client_live_sni.py -v --tb=short --timeout=300
 
-      - name: Run embedded Lemonade checksum pinning test
+      - name: Run Lemonade checksum pinning test
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          echo "=== Verifying embedded Lemonade SHA-256 pins against live upstream ==="
+          echo "=== Verifying Lemonade SHA-256 pins (embeddable + installers) against live upstream ==="
           echo "Catches a stale executable digest before embedded install reaches users"
           echo ""
           pytest tests/integration/test_lemonade_embeddable_assets.py -v --tb=short
@@ -234,7 +240,12 @@ jobs:
           echo "=== Running Daemon Integration Tests ==="
           echo "Real python -m gaia.daemon lifecycle + sidecar supervision (#2142)"
           echo ""
-          pytest tests/integration/test_daemon.py tests/integration/test_daemon_sidecars.py -v --tb=short
+          pytest tests/integration/test_daemon.py tests/integration/test_daemon_sidecars.py \
+            tests/integration/test_daemon_lifetime.py -v --tb=short
+
+      - name: Check no GAIA daemon outlived the tests
+        if: ${{ !cancelled() }}
+        run: python util/check_no_daemons.py
 
       - name: Unit test summary
         if: always()
@@ -416,6 +427,10 @@ jobs:
         # down beside other workers, and on Windows a timeout kills the worker.
         run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
 
+      - name: Check no GAIA daemon outlived the tests
+        if: ${{ !cancelled() }}
+        run: python util/check_no_daemons.py
+
   # GAIA is Windows/NPU-first; this is the only hosted Windows run of the suite.
   unit-tests-windows:
     name: Unit Tests (Windows, py3.12)
@@ -460,3 +475,14 @@ jobs:
         # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
         # down beside other workers, and on Windows a timeout kills the worker.
         run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+
+      - name: Run daemon lifetime integration tests (Windows)
+        shell: bash
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        # Windows is where a deleted test home lingers, held open by the log.
+        run: pytest tests/integration/test_daemon_lifetime.py -v --tb=short --timeout=300
+
+      - name: Check no GAIA daemon outlived the tests
+        if: ${{ !cancelled() }}
+        run: python util/check_no_daemons.py

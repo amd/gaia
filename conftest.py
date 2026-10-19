@@ -168,8 +168,42 @@ def _keep_ssl_unpatched() -> None:
     tls._injected = True
 
 
+#: Ties every daemon a test starts, directly or through a ``gaia`` subprocess,
+#: to this pytest process: it exits once this process is gone, even when the
+#: run is killed before any teardown runs. Mirrors gaia.daemon.lifetime.
+_EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
+
+#: The developer's real GAIA home, read before any test patches ``Path.home``.
+_REAL_GAIA_HOME = Path.home() / ".gaia"
+
+_REAL_HOME_MESSAGE = (
+    "This test would {action} the GAIA in your real home, {home}: it would "
+    "start, stop or unload the Lemonade Server your own GAIA is using. Point "
+    "it at a tmp folder instead: set GAIA_HOME (a daemon also needs "
+    "GAIA_DAEMON_HOME) with monkeypatch.setenv, or use the mock_home fixture. "
+    "A test that only needs a model server tries to start one when yours is "
+    "stopped: start it first with `gaia daemon start`."
+)
+
+
+def _is_real_gaia_home(path: Path) -> bool:
+    real = os.path.normcase(str(_REAL_GAIA_HOME.resolve()))
+    candidate = os.path.normcase(str(Path(path).resolve()))
+    return candidate == real or candidate.startswith(real + os.sep)
+
+
+def _child_gaia_home(env) -> Path:
+    """The GAIA home a process started with *env* resolves (see gaia_home())."""
+    override = env.get("GAIA_HOME", "").strip()
+    if override:
+        return Path(os.path.expandvars(os.path.expanduser(override)))
+    user_home = env.get("USERPROFILE" if os.name == "nt" else "HOME")
+    return (Path(user_home) if user_home else _REAL_GAIA_HOME.parent) / ".gaia"
+
+
 _prepend_source_roots()
 _isolate_gaia_state()
+os.environ[_EXIT_WITH_PID_ENV] = str(os.getpid())
 
 
 def pytest_sessionstart(session):  # noqa: D103 — pytest hook
@@ -205,3 +239,175 @@ def _isolate_tool_registry_per_module():
 @pytest.fixture(autouse=True)
 def _isolate_tool_registry_per_test():
     yield from _restore_tool_registry()
+
+
+def pytest_configure(config):  # noqa: D103 — pytest hook
+    config.addinivalue_line(
+        "markers",
+        "embedded_start: let LemonadeManager.start_embedded_if_stopped run "
+        "(its own dependencies must be mocked)",
+    )
+
+
+_REAL_START_EMBEDDED = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_embedded_lemonade_start():
+    """Keep ensure_ready() from starting a daemon for GAIA's own Lemonade.
+
+    Building an agent runs ensure_ready(), and on a machine where ``gaia init``
+    installed GAIA's server it would spawn a daemon that owns the real
+    ~/.gaia server: the source of the daemons test runs left behind (#5293).
+    Session scope also covers class- and module-scoped fixtures that build
+    agents. Opt a test out with @pytest.mark.embedded_start.
+    """
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    _REAL_START_EMBEDDED["method"] = LemonadeManager.__dict__[
+        "start_embedded_if_stopped"
+    ]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            LemonadeManager,
+            "start_embedded_if_stopped",
+            classmethod(lambda cls: False),
+        )
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _allow_embedded_start(request, monkeypatch):
+    if not request.node.get_closest_marker("embedded_start"):
+        return
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    monkeypatch.setattr(
+        LemonadeManager, "start_embedded_if_stopped", _REAL_START_EMBEDDED["method"]
+    )
+
+
+#: EmbeddedLemonade methods that act on a server; none may reach the real home.
+_EMBEDDED_ACTIONS = (
+    "install",
+    "install_backend",
+    "claim",
+    "start",
+    "stop",
+    "unload_models",
+    "uninstall",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _guard_real_gaia_home():
+    """Fail a test that would act on the developer's real ``~/.gaia`` Lemonade.
+
+    Covers both ways a test reaches it: an ``EmbeddedLemonade`` built on the
+    real home, and a daemon spawned without ``GAIA_HOME`` -- that daemon owns,
+    and on shutdown stops, the real home's server.
+    """
+    from gaia.daemon import client
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    def _guard_method(name, real):
+        def guarded(self, *args, **kwargs):
+            if _is_real_gaia_home(self.root):
+                pytest.fail(
+                    _REAL_HOME_MESSAGE.format(
+                        action=f"EmbeddedLemonade.{name}()", home=_REAL_GAIA_HOME
+                    ),
+                    pytrace=False,
+                )
+            return real(self, *args, **kwargs)
+
+        return guarded
+
+    real_spawn = client._spawn_and_wait
+
+    def guarded_spawn(*args, **kwargs):
+        home = _child_gaia_home(os.environ)
+        if _is_real_gaia_home(home):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(action="start a daemon for", home=home),
+                pytrace=False,
+            )
+        return real_spawn(*args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        for name in _EMBEDDED_ACTIONS:
+            mp.setattr(
+                EmbeddedLemonade,
+                name,
+                _guard_method(name, getattr(EmbeddedLemonade, name)),
+            )
+        mp.setattr(client, "_spawn_and_wait", guarded_spawn)
+        yield
+
+
+#: How long a daemon may take to finish a shutdown a test already asked for.
+_DAEMON_EXIT_GRACE_SECONDS = 15.0
+
+
+def _session_daemons():
+    """``(process, environ)`` for each live daemon this pytest process started."""
+    import psutil
+
+    from gaia.daemon.strays import is_daemon_cmdline
+
+    mine = str(os.getpid())
+    found = []
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        if not is_daemon_cmdline(proc.info["cmdline"] or []):
+            continue
+        try:
+            env = proc.environ()
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue  # another user's, or gone: not one this session started
+        if env.get(_EXIT_WITH_PID_ENV) == mine:
+            found.append((proc, env))
+    return found
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_daemon_outlives_the_session():
+    """Fail the run if a daemon a test started is still alive at its end.
+
+    Each one is named with its home and the test that started it, then
+    stopped, so a leak is reported once instead of piling up on the machine.
+    """
+    yield
+    if importlib.util.find_spec("psutil") is None:
+        return  # without psutil no daemon could have started (DAEMON_DEPS)
+    import time
+
+    import psutil
+
+    deadline = time.monotonic() + _DAEMON_EXIT_GRACE_SECONDS
+    leaked = _session_daemons()
+    while leaked and time.monotonic() < deadline:
+        time.sleep(0.5)
+        leaked = _session_daemons()
+    if not leaked:
+        return
+    from gaia.daemon.strays import DaemonProcess, stop_daemon
+
+    lines = []
+    for proc, env in leaked:
+        home = env.get("GAIA_DAEMON_HOME") or env.get("GAIA_HOME") or "~/.gaia"
+        test = env.get("PYTEST_CURRENT_TEST", "(started outside a test)")
+        try:
+            stopped = stop_daemon(DaemonProcess(proc.pid, proc.create_time(), None))
+        except psutil.NoSuchProcess:
+            stopped = True
+        note = "" if stopped else " -- would not stop, kill it by pid"
+        lines.append(f"  pid {proc.pid}, home {home}, started by {test}{note}")
+    pytest.fail(
+        f"{len(leaked)} GAIA daemon(s) started during this test session were "
+        "still running at its end, and have been killed:\n"
+        + "\n".join(lines)
+        + "\nStop the daemon in the test's teardown, in a finally "
+        "(gaia.daemon.client.request_shutdown, then wait_until_gone), or mock "
+        "the daemon boundary if the test does not need a real one.",
+        pytrace=False,
+    )

@@ -616,7 +616,9 @@ def test_install_tui_fails_when_the_hub_is_unreachable(tmp_path):
     result, installed = _run_install_tui(tmp_path, "http://127.0.0.1:1")
 
     assert result.returncode != 0
-    assert "Could not fetch the terminal hub manifest" in result.stdout + result.stderr
+    assert (
+        "Could not fetch the GAIA Terminal UI manifest" in result.stdout + result.stderr
+    )
     assert not installed.exists()
 
 

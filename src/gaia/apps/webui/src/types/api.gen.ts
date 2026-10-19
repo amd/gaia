@@ -543,6 +543,7 @@ export interface InferenceCommitItem {
 export interface InferenceStatsResponse {
   input_tokens?: number;
   output_tokens?: number;
+  place?: string | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -583,6 +584,7 @@ export interface KnowledgeUpdate {
 }
 export interface LoadModelRequest {
   ctx_size?: number | null;
+  force?: boolean;
   model_name: string;
 }
 /**
@@ -862,6 +864,7 @@ export interface SystemStatus {
   init_tasks?: InitTaskInfo[];
   initialized?: boolean;
   lemonade_error?: string | null;
+  lemonade_probe?: ("ok" | "down" | "timed_out" | "error") | null;
   lemonade_running?: boolean;
   lemonade_url?: string | null;
   lemonade_version?: string | null;
