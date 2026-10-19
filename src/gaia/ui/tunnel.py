@@ -211,6 +211,8 @@ def _unrecovered_port_conflict(text: str) -> bool:
         i
         for i, line in enumerate(lines)
         if "address already in use" in line or "bind: address already" in line
+        # Windows: WSAEADDRINUSE
+        or "only one usage of each socket address" in line
     ]
     if not conflicts:
         return False
@@ -220,21 +222,8 @@ def _unrecovered_port_conflict(text: str) -> bool:
     )
 
 
-def _parse_ngrok_error(stderr_text: str) -> str:
-    """Translate ngrok stderr/stdout into a user-friendly error message.
-
-    Detects the most common failure modes (missing authtoken, session
-    limit reached, network issues) and returns instructions the user
-    can act on.  Falls back to the first line of raw output if nothing
-    matches.
-    """
-    text = (stderr_text or "").strip()
-    if not text:
-        return (
-            "ngrok exited without output. Try running the command manually to "
-            "see the error: ngrok http 4200"
-        )
-
+def _known_ngrok_error(text: str) -> Optional[str]:
+    """The hint for a recognised ngrok failure in ``text``, else None."""
     low = text.lower()
 
     # ERR_NGROK_107: authtoken is well-formed but rejected (revoked,
@@ -302,7 +291,26 @@ def _parse_ngrok_error(stderr_text: str) -> str:
             "intercepting TLS. Fix the clock / disable the proxy and retry."
         )
 
-    # Fallback: first non-empty line, truncated.
+    return None
+
+
+def _parse_ngrok_error(stderr_text: str) -> str:
+    """Translate ngrok stderr/stdout into a user-friendly error message.
+
+    Detects the most common failure modes (missing authtoken, session
+    limit reached, network issues) and returns instructions the user
+    can act on.  Falls back to the first line of raw output if nothing
+    matches.
+    """
+    text = (stderr_text or "").strip()
+    if not text:
+        return (
+            "ngrok exited without output. Try running the command manually to "
+            "see the error: ngrok http 4200"
+        )
+    known = _known_ngrok_error(text)
+    if known:
+        return known
     first_line = next((ln for ln in text.splitlines() if ln.strip()), text)
     return f"ngrok failed to start: {first_line[:300]}"
 
@@ -316,15 +324,20 @@ def _logfmt_field(line: str, key: str) -> Optional[str]:
     return m.group(1).strip('"') if m else None
 
 
-def _terminate_tree(process, grace: float) -> None:
+def _terminate_tree(process, grace: float, handle=None) -> None:
     """End ``process`` and everything it started.
 
     ngrok may run through a wrapper (``ngrok.cmd``, a package-manager shim);
     ending only the wrapper leaves the real agent running with our pipes.
+    ``handle`` is the ``psutil.Process`` taken at spawn: it knows the
+    process's start time, so a reused pid is never walked for children.
     """
-    pid = getattr(process, "pid", None)
     try:
-        children = psutil.Process(pid).children(recursive=True) if pid else []
+        children = (
+            handle.children(recursive=True)
+            if handle is not None and handle.is_running()
+            else []
+        )
     except psutil.NoSuchProcess:
         children = []
     process.terminate()
@@ -353,14 +366,28 @@ def _terminate_tree(process, grace: float) -> None:
         )
 
 
-def _shut_down(process, readers: list, grace: float) -> None:
+def _process_handle(process):
+    """A ``psutil.Process`` for our child, or None.
+
+    Only taken while the child is unreaped: until then its pid can't be reused.
+    """
+    pid = getattr(process, "pid", None)
+    if pid is None or process.poll() is not None:
+        return None
+    try:
+        return psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return None
+
+
+def _shut_down(process, readers: list, grace: float, handle=None) -> None:
     """Stop ngrok, then close only the pipes whose reader has finished.
 
     Closing a pipe a reader is blocked on waits for that reader's lock, which
     would hang until the process holding the pipe's other end exits.
     """
     try:
-        _terminate_tree(process, grace)
+        _terminate_tree(process, grace, handle)
     except (OSError, psutil.Error, subprocess.SubprocessError) as exc:
         logger.warning("Error stopping ngrok: %s", exc)
     for pipe, reader in readers:
@@ -412,6 +439,7 @@ class TunnelManager:
         self._output: deque = deque(maxlen=2000)
         self._output_lock = threading.Lock()
         self._readers: list = []
+        self._handle = None  # psutil.Process for self._process, taken at spawn
         # ngrok pids GAIA couldn't inspect; named if GAIA's agent then fails.
         self._uninspectable: list = []
 
@@ -526,6 +554,7 @@ class TunnelManager:
                 stdin=subprocess.PIPE,
                 **windows_hidden_popen_kwargs(),
             )
+            self._handle = _process_handle(self._process)
             self._start_output_readers()
 
             # Poll ngrok's local API to get the tunnel URL
@@ -587,8 +616,10 @@ class TunnelManager:
         if self._process:
             logger.info("Stopping ngrok tunnel...")
             process, readers = self._process, self._readers
+            handle = self._handle or _process_handle(process)
+            self._handle = None
             self._process = None
-            await asyncio.to_thread(_shut_down, process, readers, 5.0)
+            await asyncio.to_thread(_shut_down, process, readers, 5.0, handle)
 
         self._url = None
         self._started_at = None
@@ -633,6 +664,9 @@ class TunnelManager:
         """The user-facing reason GAIA's agent failed, naming any ngrok it
         couldn't inspect when that one may be holding the session or port."""
         message = _parse_ngrok_error(output)
+        return self._name_uninspectable(message)
+
+    def _name_uninspectable(self, message: str) -> str:
         if self._uninspectable and message in (
             _NGROK_SESSION_LIMIT_HINT,
             _NGROK_PORT_CONFLICT_HINT,
@@ -865,7 +899,9 @@ class TunnelManager:
         stderr = ""
         try:
             if self._process and self._process.poll() is None:
-                await asyncio.to_thread(_terminate_tree, self._process, 2.0)
+                await asyncio.to_thread(
+                    _terminate_tree, self._process, 2.0, self._handle
+                )
                 stderr = await asyncio.to_thread(self._drain_ngrok_output)
                 # See note above: do NOT log captured stderr content (CodeQL's
                 # clear-text-logging rule). Length-only is a safe diagnostic.
@@ -876,13 +912,14 @@ class TunnelManager:
         except Exception as e:
             logger.debug("Error terminating timed-out ngrok: %s", e)
 
-        if stderr:
-            self._error = self._explain_exit(stderr)
+        known = _known_ngrok_error(stderr) if stderr else None
+        if known:
+            self._error = self._name_uninspectable(known)
         else:
             self._error = (
-                "ngrok started but didn't open a public tunnel within 15s. "
-                "Common causes: authtoken rejected, network blocked, or "
-                "ngrok servers unreachable. Run 'ngrok http 4200' manually "
-                "to see the real error."
+                f"GAIA's ngrok agent didn't open a public tunnel within "
+                f"{timeout:.0f}s. Check your internet connection and ngrok "
+                "authtoken, then retry. To see ngrok's own error, run "
+                f"`ngrok http {self.port}` in a terminal."
             )
         return None

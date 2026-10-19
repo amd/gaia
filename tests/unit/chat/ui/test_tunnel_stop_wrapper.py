@@ -21,7 +21,8 @@ from pathlib import Path
 import psutil
 import pytest
 
-from gaia.ui.tunnel import TunnelManager
+from gaia.ui import tunnel as tunnel_mod
+from gaia.ui.tunnel import TunnelManager, _parse_ngrok_error
 
 # Starts a long-lived child that inherits stdout/stderr, records its pid,
 # then waits like a wrapper does.
@@ -102,3 +103,107 @@ async def test_a_failed_agent_output_is_drained_off_the_event_loop(monkeypatch):
     await manager._poll_ngrok_api(timeout=0.2, interval=0.05)
 
     assert seen and seen[0] != threading.get_ident()
+
+
+class _Fake:
+    """A stand-in ngrok process that never touches a real pid."""
+
+    pid = None
+    stdout = stderr = None
+
+    def __init__(self, exit_code=None):
+        self._exit_code = exit_code
+
+    def poll(self):
+        return self._exit_code
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+async def test_the_event_loop_keeps_serving_while_ngrok_is_stopped(monkeypatch):
+    def slow_shut_down(*_args, **_kwargs):
+        time.sleep(0.6)
+
+    monkeypatch.setattr(tunnel_mod, "_shut_down", slow_shut_down)
+    manager = TunnelManager(port=4200)
+    manager._process = _Fake()
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    beat = asyncio.create_task(ticker())
+    try:
+        await manager.stop()
+    finally:
+        beat.cancel()
+
+    assert ticks >= 5, f"the loop ticked {ticks} times during a 0.6 s stop"
+
+
+async def test_a_timeout_with_no_known_error_explains_the_timeout(monkeypatch):
+    monkeypatch.setattr(tunnel_mod, "_terminate_tree", lambda *_a, **_k: None)
+    manager = TunnelManager(port=4200)
+    manager._process = _Fake(exit_code=None)
+    monkeypatch.setattr(
+        manager,
+        "_drain_ngrok_output",
+        lambda: 't=1 lvl=info msg="open config file" path=C:\\ngrok.yml err=nil',
+    )
+
+    assert await manager._poll_ngrok_api(timeout=0.2, interval=0.05) is None
+
+    assert manager._error.startswith("GAIA's ngrok agent didn't open")
+    assert "`ngrok http 4200`" in manager._error
+    assert "open config file" not in manager._error
+
+
+async def test_a_timeout_with_a_known_error_still_names_it(monkeypatch):
+    monkeypatch.setattr(tunnel_mod, "_terminate_tree", lambda *_a, **_k: None)
+    manager = TunnelManager(port=4200)
+    manager._process = _Fake(exit_code=None)
+    monkeypatch.setattr(
+        manager, "_drain_ngrok_output", lambda: "authentication failed: ERR_NGROK_108"
+    )
+
+    await manager._poll_ngrok_api(timeout=0.2, interval=0.05)
+
+    assert manager._error == tunnel_mod._NGROK_SESSION_LIMIT_HINT
+
+
+def test_a_reused_pid_is_never_walked_for_children():
+    class _StaleHandle:
+        def is_running(self):
+            return False  # the start time no longer matches: pid reused
+
+        def children(self, recursive=False):
+            raise AssertionError("walked the children of a reused pid")
+
+    tunnel_mod._terminate_tree(_Fake(exit_code=0), 0.1, _StaleHandle())
+
+
+def test_no_handle_is_taken_for_an_already_reaped_child():
+    class _Reaped(_Fake):
+        pid = 4242
+
+    assert tunnel_mod._process_handle(_Reaped(exit_code=0)) is None
+
+
+def test_the_windows_bind_error_is_a_port_conflict():
+    output = (
+        'lvl=eror msg="failed to start web service" err="listen tcp '
+        "127.0.0.1:4040: bind: Only one usage of each socket address "
+        '(protocol/network address/port) is normally permitted."'
+    )
+
+    assert _parse_ngrok_error(output) == tunnel_mod._NGROK_PORT_CONFLICT_HINT
