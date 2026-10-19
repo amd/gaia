@@ -15,8 +15,6 @@ function step(tool: string, active = false, success = true): AgentStep {
 it.each([
     ['search_web', 'Searched web'],
     ['request_user_input', 'Asked you'],
-    ['recall', 'Recalled memory'],
-    ['remember', 'Saved to memory'],
     ['find_files', 'Found files'],
     ['search_past_conversations', 'Searched past chats'],
 ])('names the GAIA agent\'s %s step instead of "Used tool"', (tool, label) => {
@@ -24,6 +22,31 @@ it.each([
 
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText('Used tool')).toBeNull();
+});
+
+it.each(['remember', 'recall', 'update_memory', 'forget'])(
+    'keeps a successful %s step out of the activity list',
+    (tool) => {
+        const steps = [step(tool), { ...step('find_files'), id: 2 }];
+        render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
+
+        expect(screen.getByText('Found files')).toBeInTheDocument();
+        expect(screen.queryByText(/memory/i)).toBeNull();
+    },
+);
+
+it('shows nothing when memory was the only activity', () => {
+    const { container } = render(
+        <AgentActivity steps={[step('remember')]} isActive={false} variant="summary" />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+});
+
+it('still shows a memory step that failed', () => {
+    render(<AgentActivity steps={[step('remember', false, false)]} isActive={false} variant="summary" />);
+
+    expect(screen.getByText(/memory/i)).toBeInTheDocument();
 });
 
 it.each([
@@ -56,4 +79,11 @@ it('names a running GAIA agent step in the present tense', () => {
     render(<AgentActivity steps={[step('request_user_input', true)]} isActive={true} variant="inline" />);
 
     expect(screen.getByText('Asking you')).toBeInTheDocument();
+});
+
+it('counts only the steps it shows when memory steps are hidden', () => {
+    const steps = [step('remember'), { ...step('find_files'), id: 2 }];
+    render(<AgentActivity steps={steps} isActive={false} variant="summary" agentStepCount={2} />);
+
+    expect(screen.getByText(/^1 step\b/)).toBeInTheDocument();
 });

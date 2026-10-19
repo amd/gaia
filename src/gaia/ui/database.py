@@ -150,7 +150,20 @@ CREATE TABLE IF NOT EXISTS schedule_results (
     error       TEXT
 );
 
+-- One row per cloud chat turn; usd is NULL when the model has no known price.
+CREATE TABLE IF NOT EXISTS cloud_spend (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    month         TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    usd           REAL
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_cloud_spend_month ON cloud_spend(month);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
@@ -285,6 +298,7 @@ class ChatDatabase:
         self._add_column("messages", "model_messages", "TEXT")
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
+        self._add_column("messages", "turn_summary", "TEXT")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -564,19 +578,22 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -588,6 +605,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -612,6 +630,7 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -625,6 +644,7 @@ class ChatDatabase:
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             if msg_id is not None:
@@ -636,8 +656,9 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -649,6 +670,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -711,6 +733,16 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("turn_summary"):
+                try:
+                    msg["turn_summary"] = json.loads(msg["turn_summary"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Message %s has an unreadable turn summary: %s",
+                        msg.get("id"),
+                        exc,
+                    )
+                    msg["turn_summary"] = None
             messages.append(msg)
 
         return messages
@@ -1081,6 +1113,35 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    # ── Cloud spending ────────────────────────────────────────────────
+
+    def add_cloud_spend(
+        self,
+        month: str,
+        model: str,
+        provider: str,
+        input_tokens: Optional[int],
+        output_tokens: Optional[int],
+        usd: Optional[float],
+    ) -> None:
+        """Record one cloud chat turn; *usd* None when its price is unknown."""
+        with self._transaction():
+            self._conn.execute(
+                "INSERT INTO cloud_spend (month, model, provider, input_tokens, "
+                "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
+                (month, model, provider, input_tokens, output_tokens, usd),
+            )
+
+    def cloud_spend_for_month(self, month: str) -> List[Dict]:
+        """Every cloud turn recorded in *month* (``YYYY-MM``)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE month = ? ORDER BY id",
+                (month,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Settings ──────────────────────────────────────────────────────
 

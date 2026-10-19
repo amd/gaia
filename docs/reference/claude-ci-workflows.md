@@ -73,8 +73,11 @@ tracking issue with fix steps — turning a silent multi-week outage into a noti
 ## 7. `claude-account-switch.yml` — second subscription when the first runs out
 
 Every Claude step reads `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` instead of
-`CLAUDE_CODE_OAUTH_TOKEN` while the repo variable `CLAUDE_ACCOUNT` is `secondary`. Hourly,
-this probes the primary account with the canary's probe:
+`CLAUDE_CODE_OAUTH_TOKEN` while the repo variable `CLAUDE_ACCOUNT` is `secondary`. It runs
+when Claude hits a wall, not on a clock: `claude.yml` dispatches it when a review, reply or
+triage call is refused before reaching a model, and the nightly audit, security audit, doc
+walkthrough and auth canary trigger it when they fail. It probes the primary account with the
+canary's probe:
 
 - **Out of quota:** it checks the secondary account answers, then sets `CLAUDE_ACCOUNT=secondary`.
 - **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary`.
@@ -95,11 +98,14 @@ gh secret set CLAUDE_CODE_OAUTH_TOKEN_SECONDARY --repo amd/gaia
 gh secret set CLAUDE_ACCOUNT_SWITCH_TOKEN --repo amd/gaia
 ```
 
-Without `CLAUDE_ACCOUNT_SWITCH_TOKEN` the job still detects the outage and fails with the
-command to run by hand. Force an account with
-`gh workflow run claude-account-switch.yml -f account=secondary` (or `primary`), or set the
-variable directly: `gh variable set CLAUDE_ACCOUNT --body secondary`. The switch can lag up to
-an hour behind the primary running out; jobs in that window fail as they did before.
+Without `CLAUDE_ACCOUNT_SWITCH_TOKEN` the job still probes, and when a switch is needed it fails
+once with the `gh variable set` command to run by hand. When no switch is needed it stays green.
+Force an account with `gh workflow run claude-account-switch.yml -f account=secondary` (or
+`primary`), or set the variable directly: `gh variable set CLAUDE_ACCOUNT --body secondary`.
+
+Moving back to the primary happens only when a run's probe gets a clean answer from it. While CI
+is on a working secondary, nothing triggers a run, so it stays there until a Claude job is refused
+again or someone dispatches the workflow.
 
 ---
 
