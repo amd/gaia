@@ -2044,6 +2044,11 @@
         ],
         "title": "Ctx Size"
       },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
       "model_name": {
         "title": "Model Name",
         "type": "string"
@@ -2320,6 +2325,17 @@
             "type": "null"
           }
         ]
+      },
+      "embedding_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Embedding Note"
       },
       "error": {
         "anyOf": [
@@ -3392,6 +3408,23 @@
           }
         ],
         "title": "Lemonade Error"
+      },
+      "lemonade_probe": {
+        "anyOf": [
+          {
+            "enum": [
+              "ok",
+              "down",
+              "timed_out",
+              "error"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Probe"
       },
       "lemonade_running": {
         "default": false,

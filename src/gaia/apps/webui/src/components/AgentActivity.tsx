@@ -90,6 +90,13 @@ const TOOL_META: Record<string, ToolMeta> = {
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };
 
+// Memory works in the background: its steps show only when they fail.
+const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+
+function isBackgroundStep(step: AgentStep): boolean {
+    return step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '');
+}
+
 const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
@@ -202,6 +209,7 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     let seenPlan = false;
 
     steps.forEach((step, rawIdx) => {
+        if (isBackgroundStep(step)) return;
         const prev = result[result.length - 1];
 
         if (seenPlan && (step.type === 'thinking' || step.type === 'status')) {
@@ -387,7 +395,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     const rowCount = displaySteps
         .filter((s) => s.type !== 'status')
         .reduce((n, s) => n + (s.count ?? 1), 0);
-    const stepCount = agentStepCount && agentStepCount > 0
+    // The agent's own count includes the hidden memory steps, so it would disagree with the list.
+    const stepCount = agentStepCount && agentStepCount > 0 && !steps.some(isBackgroundStep)
         ? agentStepCount
         : rowCount || displaySteps.length;
     const runningTool = isActive ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active) : undefined;
@@ -561,7 +570,8 @@ export function linkifyPaths(text: string): React.ReactNode {
     // A quoted path ('C:\My Docs\a.txt') runs to its closing quote, spaces
     // included, and the quotes stay outside the link. An unquoted one
     // (C:\...\file.ext, (C:\Users\...)) stops at whitespace or punctuation.
-    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
+    // The lookbehind keeps the "s:/" in "https://" from reading as a drive.
+    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|(?<![\w/\\])[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;

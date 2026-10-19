@@ -1991,6 +1991,11 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
         action="store_true",
         help="Kill Lemonade server (port 13305)",
     )
+    kill_parser.add_argument(
+        "--daemons",
+        action="store_true",
+        help="List running GAIA daemons and stop those whose home folder is gone",
+    )
 
     # Add LLM app command
     llm_parser = subparsers.add_parser(
@@ -4813,6 +4818,8 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
+        if args.daemons:
+            sys.exit(kill_stray_daemons())
         if args.lemonade:
             # Use lemonade-server stop for graceful shutdown
             try:
@@ -4858,9 +4865,10 @@ Let me know your answer!
             print("     --lemonade        stop Lemonade Server (port 13305)")
             print("     --port <number>   kill the GAIA/Lemonade process")
             print("                       listening on <number>")
+            print("     --daemons         list GAIA daemons, stop orphaned ones")
             print(
-                "   Both target a port. A stray GAIA process that is not "
-                "holding a port must be killed by PID."
+                "   A stray GAIA process that is none of these must be killed "
+                "by PID."
             )
             sys.exit(1)
         return
@@ -5749,7 +5757,10 @@ Let me know your answer!
     # Handle install command
     if args.action == "install":
         if args.lemonade:
-            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.installer.lemonade_installer import (
+                LemonadeInstaller,
+                discard_download,
+            )
             from gaia.version import LEMONADE_VERSION
 
             installer = LemonadeInstaller()
@@ -5790,6 +5801,11 @@ Let me know your answer!
                     installer_path = installer.download_installer()
                     print("Installing...")
                 result = installer.install(installer_path, silent=args.silent)
+                # A failed install keeps the file: its retry hint names it.
+                if installer_path is not None and result.success:
+                    discard_download(installer_path)
+                elif installer_path is not None:
+                    print(f"   The downloaded installer is kept at {installer_path}")
 
                 if result.success:
                     # Verify installation
@@ -5823,6 +5839,63 @@ Let me know your answer!
     log.error(f"Unknown action specified: {args.action}")
     parser.print_help()
     return
+
+
+def kill_stray_daemons() -> int:
+    """``gaia kill --daemons``: list every GAIA daemon, stop the orphaned ones.
+
+    Orphaned means its home folder or instance.json is gone, so no client can
+    reach it. The daemon of this shell's own home is never stopped here; use
+    ``gaia daemon stop`` for that.
+
+    Returns:
+        The exit code: 1 if an orphaned daemon would not stop.
+    """
+    from gaia.daemon import paths, strays
+    from gaia.daemon.instance import read_instance
+
+    daemons = strays.find_daemons()
+    if not daemons:
+        print("No GAIA daemons are running.")
+        return 0
+    own_home = paths.host_dir()
+    # By pid too: an older daemon may not have honoured the GAIA_HOME it inherited.
+    own = read_instance()
+    orphaned = []
+    print(f"GAIA daemons running: {len(daemons)}")
+    for daemon in daemons:
+        if own is not None and own.pid in daemon.pids:
+            home, state = str(own_home), "this home, left running"
+        elif daemon.home is None:
+            home, state = "(home unknown: cannot read its environment)", "left running"
+        elif strays.same_home(daemon.home, own_home):
+            home, state = str(daemon.home), "this home, left running"
+        elif daemon.is_orphaned():
+            home, state = str(daemon.home), "orphaned"
+            orphaned.append(daemon)
+        else:
+            home, state = str(daemon.home), "left running"
+        print(
+            f"  pid {daemon.pid:<7} up {strays.format_age(daemon.age_seconds):<8} "
+            f"{state:<24} {home}"
+        )
+    if not orphaned:
+        print("No orphaned daemons to stop.")
+        return 0
+    failed = []
+    for daemon in orphaned:
+        if strays.stop_daemon(daemon):
+            print(f"✅ Stopped orphaned daemon pid {daemon.pid} ({daemon.home})")
+        else:
+            failed.append(daemon)
+            print(f"❌ Daemon pid {daemon.pid} ({daemon.home}) did not exit")
+    if failed:
+        print(
+            "   Kill the remaining pid(s) with your OS task manager, then re-run "
+            "`gaia kill --daemons`."
+        )
+        return 1
+    return 0
 
 
 def kill_process_by_port(port):
@@ -7104,7 +7177,7 @@ def _handle_memory_status():
                     "(re-embeds up to 100 per start),"
                 )
                 print(
-                    "      or use Rebuild Embeddings in the Memory Dashboard (gaia chat --ui)"
+                    "      or use Rebuild Embeddings on the Memory page's Advanced tab (gaia chat --ui)"
                 )
 
         # Conversations section
@@ -9383,6 +9456,8 @@ def _print_embedded_status(manager):
     print(f"Installed: {'yes' if status.installed else 'no'} ({manager.dist_dir})")
     if status.running:
         print(f"Running:   yes on {status.base_url} (pid {status.pid})")
+        if status.busy:
+            print("           busy loading or swapping a model; requests wait for it")
     elif status.unresponsive_pid:
         print(
             f"Running:   process {status.unresponsive_pid} is up on port "

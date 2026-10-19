@@ -106,9 +106,9 @@
     display: grid;
     /* grid-template-rows trick for smooth height animation */
     grid-template-rows: 1fr;
-    transition: grid-template-rows 350ms var(--ease),
-                opacity 300ms var(--ease),
-                margin-top 350ms var(--ease);
+    transition: grid-template-rows var(--duration-slow) var(--ease),
+                opacity var(--duration-slow) var(--ease),
+                margin-top var(--duration-slow) var(--ease);
     opacity: 1;
     margin-top: 6px;
 }
@@ -134,7 +134,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: flowSlideDown 300ms var(--ease);
+    animation: flowSlideDown var(--duration-slow) var(--ease);
 }
 
 @keyframes flowSlideDown {
@@ -152,7 +152,7 @@
     font-family: var(--font-sans);
     color: var(--text-secondary);
     line-height: 1.5;
-    animation: thoughtSlideIn 250ms var(--ease);
+    animation: thoughtSlideIn var(--duration) var(--ease);
 }
 
 @keyframes thoughtSlideIn {
@@ -225,7 +225,7 @@
     background: var(--accent);
     vertical-align: text-bottom;
     margin-left: 1px;
-    animation: cursorBlink 600ms steps(2, start) infinite;
+    animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
 }
 
 /* @keyframes cursorBlink is defined globally in index.css */
@@ -238,7 +238,7 @@
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     transition: border-color var(--duration-fast) var(--ease);
-    animation: toolSlideIn 250ms var(--ease) both;
+    animation: toolSlideIn var(--duration) var(--ease) both;
 }
 
 @keyframes toolSlideIn {
@@ -246,11 +246,11 @@
     to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.flow-tool:nth-child(1) { animation-delay: 0ms; }
-.flow-tool:nth-child(2) { animation-delay: 80ms; }
-.flow-tool:nth-child(3) { animation-delay: 160ms; }
-.flow-tool:nth-child(4) { animation-delay: 240ms; }
-.flow-tool:nth-child(5) { animation-delay: 320ms; }
+.flow-tool:nth-child(1) { animation-delay: 0s; }
+.flow-tool:nth-child(2) { animation-delay: var(--stagger); }
+.flow-tool:nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
+.flow-tool:nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
+.flow-tool:nth-child(5) { animation-delay: calc(var(--stagger) * 4); }
 
 .flow-tool.active {
     border-color: color-mix(in srgb, var(--accent) 25%, transparent);
@@ -287,11 +287,11 @@
 
 /* Smooth transition for spinner → checkmark/error icon swap */
 .flow-tool-left > svg {
-    transition: transform 200ms var(--ease), color 200ms var(--ease);
+    transition: transform var(--duration) var(--ease), color var(--duration) var(--ease);
     flex-shrink: 0;
 }
 .flow-tool-left > svg:not(.flow-tool-spinner) {
-    animation: toolStatusPop 250ms var(--ease);
+    animation: toolStatusPop var(--duration) var(--ease);
 }
 
 @keyframes toolStatusPop {
@@ -307,7 +307,7 @@
 }
 
 .flow-tool-spinner {
-    animation: spin 1s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
     flex-shrink: 0;
     color: var(--accent);
 }
@@ -445,7 +445,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: detailExpand 250ms var(--ease);
+    animation: detailExpand var(--duration) var(--ease);
     overflow: hidden;
     border-top: 1px solid var(--border-light);
 }
@@ -461,7 +461,7 @@
     border-radius: var(--radius-xs);
     background: color-mix(in srgb, var(--accent-yellow) 4%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-yellow) 12%, transparent);
-    animation: fadeIn 100ms var(--ease);
+    animation: fadeIn var(--duration-fast) var(--ease);
 }
 
 [data-theme="dark"] .flow-plan {
@@ -556,7 +556,7 @@
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--danger);
-    animation: errorSlideIn 300ms var(--ease);
+    animation: errorSlideIn var(--duration-slow) var(--ease);
 }
 
 @keyframes errorSlideIn {
@@ -575,7 +575,7 @@
     background: color-mix(in srgb, var(--accent-yellow) 6%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-yellow) 22%, transparent);
     font-family: var(--font-mono);
-    animation: errorSlideIn 300ms var(--ease);
+    animation: errorSlideIn var(--duration-slow) var(--ease);
 }
 
 [data-theme="dark"] .flow-policy-alert {
@@ -752,7 +752,7 @@
     cursor: pointer;
     border-radius: 0;
     padding: 0 2px;
-    transition: background 100ms var(--ease);
+    transition: background var(--duration-fast) var(--ease);
     text-decoration: underline;
     text-decoration-style: dashed;
 }

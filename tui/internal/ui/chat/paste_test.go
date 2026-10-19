@@ -268,7 +268,7 @@ func TestSuccessfulImagePasteInsertsThePath(t *testing.T) {
 // A path with a space (the common case: %TEMP% usually contains the Windows
 // profile directory name) must be quoted the same way Windows Terminal
 // already quotes a dropped file's path — see quotePathForComposer and
-// docs/guides/terminal-hub.mdx's drag-and-drop section.
+// docs/guides/tui.mdx's drag-and-drop section.
 func TestImagePasteQuotesAPathWithASpace(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
