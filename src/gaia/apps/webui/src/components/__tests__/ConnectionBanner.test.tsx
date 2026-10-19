@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { useChatStore } from '../../stores/chatStore';
@@ -29,10 +29,16 @@ describe('the model server is down', () => {
         expect(container).not.toHaveTextContent('lemonade-server serve');
     });
 
-    it('says why the status could not be read', () => {
-        useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_error: 'connection refused' } as SystemStatus });
-        render(<ConnectionBanner />);
-        expect(screen.getByText(/Could not read the model server's status: connection refused/)).toBeInTheDocument();
+    it('calls a model server whose health check failed busy, not stopped, and keeps the reason and remedy', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: false, lemonade_error: 'Lemonade health query failed', start_command: '/usr/bin/lemond',
+        } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent('The model server is not answering (Lemonade health query failed)');
+        expect(container).toHaveTextContent('may be busy');
+        expect(container).not.toHaveTextContent('stopped responding');
+        expect(container).toHaveTextContent('If it stays this way, restart it:');
+        expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });
 });
 
@@ -60,5 +66,27 @@ describe('an unreadable config is surfaced, not hidden', () => {
         expect(screen.getByRole('alert')).toHaveTextContent('GAIA settings could not be loaded.');
         expect(screen.getByText(message)).toBeInTheDocument();
         expect(screen.queryByLabelText('Dismiss')).toBeNull();
+    });
+});
+
+describe('checking again', () => {
+    it('shows that a check is running until it answers', async () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
+        let finish!: () => void;
+        render(<ConnectionBanner onRetry={() => new Promise<void>((r) => { finish = r; })} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+        const busy = screen.getByRole('button', { name: 'Checking…' });
+        expect(busy).toBeDisabled();
+        await act(async () => { finish(); });
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    });
+});
+
+describe('a slow backend', () => {
+    it('says GAIA is slow, not that the connection was lost', () => {
+        useChatStore.setState({ systemStatus: null });
+        render(<ConnectionBanner backendSlow />);
+        expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
+        expect(screen.queryByText(/Lost the connection/)).toBeNull();
     });
 });
