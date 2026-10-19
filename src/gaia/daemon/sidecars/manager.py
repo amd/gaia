@@ -106,8 +106,7 @@ def _version_tuple(version: str) -> tuple:
         raise SidecarSpawnError(
             f"cannot parse sidecar binary version '{version}' for secret-delivery "
             "negotiation. Expected a dotted numeric version (e.g. '0.6.0') — "
-            "reinstall the agent from the Agent Hub if its install metadata is "
-            "corrupt."
+            "reinstall the agent if its install metadata is corrupt."
         ) from e
 
 
@@ -387,9 +386,9 @@ class AgentSidecarManager:
                     f"Cannot start the {self.spec.display_name} agent: no verified "
                     f"sidecar binary is available in user mode. {e}\n"
                     "Fix it one of these ways:\n"
-                    f"  * Install '{self.spec.agent_id}' from the Agent Hub — run "
-                    f"`gaia agent install {self.spec.agent_id}` (or click Install "
-                    "in the Agent UI). It downloads and verifies the binary and "
+                    f"  * Install '{self.spec.agent_id}' — run "
+                    f"`{fetch.install_command(self.spec.agent_id)}` (or click "
+                    "Install in the Agent UI). It downloads and verifies the binary and "
                     "records the install this resolver reads.\n"
                     f"  * Or, from a GAIA source checkout, set "
                     f"{self.spec.mode_env_var}=dev to run the agent from source.\n"
@@ -601,7 +600,7 @@ class AgentSidecarManager:
                 "sidecar: the installed binary's version is unknown (no version "
                 "in the hub install sentinel or binaries.lock.json). Refusing to "
                 "guess which leg the binary understands — reinstall the agent "
-                "from the Agent Hub so its install metadata records a version."
+                "so its install metadata records a version."
             )
         if _version_tuple(version) >= _version_tuple(spec.secret_file_min_version):
             return (

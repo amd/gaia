@@ -142,13 +142,39 @@ icon: "bug"
       it with `LEMONADE_BASE_URL`.
     - **`exited immediately` / `did not answer`** — the server started but failed. Its own
       error is in `~/.gaia/lemonade/lemond.log`.
+    - **`could not bind port …: it was taken by another program first`** — another
+      program took each port GAIA picked before the server could bind it. GAIA tries three
+      ports, and logs each retry. Free a port and start it there with
+      `gaia lemonade embedded start --port <port>`. With `--port`, the error reads
+      **`it is in use by another program`** instead, and GAIA does not try another port.
+    - **`busy loading or swapping a model; requests wait for it`** in
+      `gaia lemonade embedded status` — its health check is slow while a model loads or
+      unloads. It is working: don't stop it.
+    - **`is running but not answering on port …`** — the server answers nothing, or its
+      model backends have done no work for over 5 minutes. Check
+      `~/.gaia/lemonade/lemond.log`; if it shows no progress, run
+      `gaia lemonade embedded stop`, then start it again.
 
     To start over with a fresh copy, run `gaia init --force-reinstall`.
   </Accordion>
 
-  <Accordion title="gaia init can't install the GAIA agent from the Agent Hub" icon="store">
-    `gaia init` installs the GAIA agent from the Agent Hub (`https://hub.amd-gaia.ai`, or
-    `GAIA_HUB_URL`). If the hub can't be reached, setup finishes everything else, then
+  <Accordion title="GAIA says the Lemonade Server is stuck or not answering" icon="hourglass">
+    A Lemonade Server that is loading or swapping a model answers its health check
+    slowly, so GAIA waits for it rather than calling it down. It reports one of these
+    only when the server answers nothing, or its model backends have done no work at all
+    for 5 minutes. Waiting longer will not help.
+
+    - **`GAIA's Lemonade Server … is running but stuck`** or **`Embedded Lemonade … is
+      running but not answering`** — GAIA's own server. Check
+      `~/.gaia/lemonade/lemond.log` for what it was doing. If it shows no progress, run
+      `gaia lemonade embedded stop`, then start it again (or run `gaia init`).
+    - **`… is stuck rather than loading a model`** — the Lemonade you installed. Restart
+      it with the command the error names, then retry.
+  </Accordion>
+
+  <Accordion title="gaia init can't install the GAIA agent" icon="store">
+    `gaia init` installs the GAIA agent from GAIA's download server (`https://hub.amd-gaia.ai`, or
+    `GAIA_HUB_URL`). If the server can't be reached, setup finishes everything else, then
     reports the setup incomplete and exits with code 1. The Agent UI setup shows the same
     error instead of "GAIA is ready".
 
@@ -156,7 +182,7 @@ icon: "bug"
       root certificate in the system certificate store (IT usually can).
     - **Anything else**: check your internet connection, proxy settings, or `GAIA_HUB_URL`.
 
-    Then run `gaia hub install gaia`. The full error is in `~/.gaia/gaia.log`.
+    Then run `gaia init` again. The full error is in `~/.gaia/gaia.log`.
   </Accordion>
 </AccordionGroup>
 
@@ -452,6 +478,17 @@ error. To run the chat model in the cloud instead, see
     ```
   </Accordion>
 
+  <Accordion title="gpt-oss answers nothing after reading a file or page" icon="file-lines">
+    gpt-oss reads `<|channel|>`, `<|message|>` and similar markers as its own reply
+    structure, so a file or web page containing them used to leave the reply empty, or
+    make the model server return an error. GAIA now breaks those markers up (`< |channel|>`)
+    before gpt-oss sees them, in every message and in the arguments of its earlier tool
+    calls, so the text still reads the same. Other models get the text unchanged. One
+    trade-off: gpt-oss sees `< |channel|>`, so an edit it asks for that quotes those exact
+    characters will not match the file; ask for that edit on another model. If an answer
+    is still empty, report it with `gaia diagnostics`.
+  </Accordion>
+
   <Accordion title="Wrong model version installed" icon="code-branch">
     Force re-download to get the latest version:
     ```bash
@@ -538,6 +575,8 @@ error. To run the chat model in the cloud instead, see
     - Use `--stats` to monitor progress
     - Larger documents take more time
     - Consider chunking very large documents
+
+    When another model or app is using the GPU or CPU the embedding model runs on, indexing waits for it. A document still indexing says how long the embedding model has taken on its current batch. Each batch of 25 chunks gets one 300-second wait and is not resent after a timeout, so busy hardware doesn't get the same work queued again. A batch still unanswered after that fails with `did not answer within 300s; the GPU or CPU it runs on is likely busy`. Index the document again once the other work finishes.
   </Accordion>
 
   <Accordion title="Context not being used" icon="brain">

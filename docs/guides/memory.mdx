@@ -48,7 +48,7 @@ Memory is on by default, in the terminal UI and the Agent UI alike. Turning it o
 ### Via the Agent UI (recommended)
 
 1. Launch the Agent UI: `gaia chat --ui`
-2. Open the Memory Dashboard.
+2. Open **Memory** in the sidebar, then the **Advanced** tab.
 3. Use the toggle next to *Memory*. The agent picks up the change on its next message -- no restart needed.
 
 ### Via the API (for headless / scripted setups)
@@ -67,7 +67,7 @@ curl http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
 
-While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory Dashboard's knowledge browser) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
+While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory page) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
 <Note>
   While memory is on, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
@@ -221,7 +221,7 @@ Agent: "You have a busy afternoon. By the way, your online course
 
 ### forget
 
-Removes a specific memory entry by ID.
+Removes a specific memory entry by ID. GAIA won't learn it again from the old conversations that mentioned it. If you tell GAIA again later, it learns it again.
 
 ```
 You: "Forget what you know about the old deployment process"
@@ -323,7 +323,7 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | System prompt | Included | **Never included** |
 | `recall` results | Returned | Returned for any filtered call -- a bare `recall()` skips them |
 | Tool history args | Full args logged | Args redacted to keys only |
-| Memory Dashboard | Normal display | Content blurred until clicked |
+| Memory page | Normal display | Hidden until clicked |
 | Terminal `/memory` view | Normal display | Shown in full, tagged `sensitive` -- not blurred |
 
 The agent can still access sensitive data when you explicitly ask for it via `recall` -- it just will not be broadcast in the system prompt where it could leak into logs or debugging output.
@@ -381,13 +381,15 @@ The same mechanism powers **accountability** -- commit to something ("I'll exerc
 
 ## Intelligent Extraction
 
-After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory, the new conversation, and what the tools returned during the turn, and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
+After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory and the new conversation, and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
 
-This happens *after* your answer is on screen, in the background, so it never adds to how long you wait for a reply. A fact you state may take a few more seconds to appear in the Memory Dashboard than the answer itself did.
+This happens *after* your answer is on screen, in the background, so it never adds to how long you wait for a reply. A fact you state may take a few more seconds to appear on the Memory page than the answer itself did.
 
 It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, ephemeral details, and narration of the current session (where you're working, what was just changed). For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
 
-Only what you said or what a tool showed is stored. A claim that appears only in the agent's own answer is not, because the answer can be wrong, and a permission refusal is not, because permissions change.
+Only what you said about yourself is stored. What GAIA read during the turn is not: summarizing a PDF, looking up the weather, or reading a note doesn't turn the document's contents into facts about you. A claim that appears only in the agent's own answer is not stored either, because the answer can be wrong, and a permission refusal is not, because permissions change.
+
+A new message stops an extraction that is still running, so your reply never waits behind it; the extraction runs again once you pause.
 
 <Tip>
   Intelligent extraction kicks in for messages of 5+ words. Short messages like "yes" or "thanks" are skipped. The LLM's explicit memory tools (`remember`, `update_memory`, `forget`) still handle anything the auto-extraction misses.
@@ -395,42 +397,46 @@ Only what you said or what a tool showed is stored. A claim that appears only in
 
 ---
 
-## Memory Dashboard
+## Memory page
 
-The Agent UI includes a full-page **Memory Dashboard** for viewing and managing everything the agent knows. Click the **Brain** icon in the toolbar to open it.
+The Agent UI has a **Memory** page for seeing and correcting what GAIA knows about you. Click **Memory** in the sidebar to open it.
 
 ```bash
 gaia chat --ui
 ```
 
-### What you can see
+### About you
+
+The page opens on **What GAIA knows about you**: the facts, preferences, reminders and notes GAIA uses in every chat, grouped and in plain words, each with where it came from ("Picked up in a chat", "You added this").
+
+- **Edit** an item in place when it's wrong.
+- **Forget** an item in one click. GAIA won't learn it again from old chats; **Undo** restores it.
+- **Add** something GAIA should know, like "I prefer short answers".
+
+### Advanced
+
+The **Advanced** tab keeps the full view for troubleshooting:
 
 - **Stats overview** -- total memories, sessions, tool calls, success rate, and embedding coverage
-- **Knowledge browser** -- filterable, sortable table of all memory entries with inline editing
+- **Knowledge browser** -- filterable, sortable table of all memory entries, including confidence and source, with inline editing
 - **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count
 - **Upcoming and overdue** -- time-sensitive items due soon or past due
 - **Conversation history** -- searchable archive of all past sessions with consolidation status
 - **Superseded items** -- toggle to see fact history and how knowledge evolved over time
+- **Settings** -- turn memory on or off, and clear or re-initialize it
 
-### What you can do
-
-- **Create** new memory entries manually (stored with high confidence and embedded right away, so recall by meaning finds them at once)
-- **Edit** any field on any memory entry -- content, category, context, entity, sensitivity
-- **Delete** entries the agent got wrong
-- **Toggle sensitive** to hide or show private data
-- **Search** across all knowledge using hybrid semantic+keyword search
-- **Filter** by category, context, or entity
+From the knowledge browser you can **create** entries (stored with high confidence and embedded right away, so recall by meaning finds them at once), **edit** any field, **delete** entries, **toggle sensitive** to hide or show private data, **search** with hybrid semantic+keyword search, and **filter** by category, context, or entity.
 
 ### Maintenance actions
 
-The dashboard also provides maintenance tools for keeping your memory healthy:
+The Advanced tab also provides maintenance tools for keeping your memory healthy:
 
 - **Consolidate** -- distill old conversation sessions into durable knowledge notes
 - **Rebuild Embeddings** -- embed the knowledge items that have no search vector yet (the ones `gaia memory status` lists as **Without vector**)
 - **Reconcile** -- scan for contradictory facts across sessions and resolve them automatically
 
 <Info>
-  To launch the Agent UI with the dashboard: `gaia chat --ui`
+  To launch the Agent UI with the Memory page: `gaia chat --ui`
 </Info>
 
 ### Memories saved without a search vector
@@ -440,7 +446,7 @@ If the embedding model is unreachable when a memory is written, the memory is st
 To repair, either:
 
 - Start any memory-enabled agent with the embedding model loaded -- it re-embeds up to 100 missing vectors on every start.
-- Click **Rebuild Embeddings** in the Memory Dashboard (`gaia chat --ui`) to embed up to 500 at a time.
+- Click **Rebuild Embeddings** on the Memory page's **Advanced** tab (`gaia chat --ui`) to embed up to 500 at a time.
 
 ### Terminal UI: `/memory`
 
@@ -455,9 +461,8 @@ adding are still Agent UI features.
 machine -- installed standalone, or hub-installed via `gaia init` and run as a
 daemon-supervised sidecar. The one thing that can still block it is an
 out-of-date sidecar: a peer built before this contract has no memory route at
-all, and `/memory` says so and names the fix rather than failing silently --
-`gaia hub uninstall gaia` then `gaia hub install gaia` picks up a build that has
-it.
+all, and `/memory` says so and names the command that updates the agent rather
+than failing silently.
 
 ---
 
@@ -553,7 +558,7 @@ rm ~/.gaia/memory.db
 System facts — GAIA/Lemonade versions, OS, CPU/GPU/RAM, installed apps — are
 captured as `system`-category memories. Collection is **opt-in**: the
 `system_context_enabled` flag in `~/.gaia/memory_settings.json` defaults to
-`false`. Enable it from the Agent UI Memory Dashboard or by running
+`false`. Enable it from the Agent UI Memory page (**Advanced** tab) or by running
 `gaia memory bootstrap --system` (which offers to turn it on).
 
 Once enabled, system facts auto-refresh on agent startup when either:
@@ -576,7 +581,7 @@ are replaced rather than duplicated. To force a refresh yourself, run
   </Card>
 
   <Card title="Agent UI" icon="desktop" href="/guides/agent-ui">
-    Desktop interface with Memory Dashboard for visual knowledge management
+    Desktop interface with a Memory page for seeing and correcting what GAIA knows
   </Card>
 
   <Card title="Agent SDK" icon="comments" href="/sdk/sdks/chat">

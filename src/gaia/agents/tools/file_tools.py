@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools import search_scope
@@ -1335,6 +1336,7 @@ class FileSearchToolsMixin:
                         )
                     return {**refusal, "operation": "write_file"}
 
+                before_change(resolved_path, "write_file")
                 # Create backup of existing file before overwriting
                 if path_validator is not None and resolved_path.exists():
                     backup_path = path_validator.create_backup(str(resolved_path))
@@ -1749,6 +1751,7 @@ class FileSearchToolsMixin:
                     )
                 )
 
+                before_change(resolved_path, "edit_file")
                 # Write updated content
                 _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
@@ -2177,10 +2180,25 @@ class FileSearchToolsMixin:
                                 return Path(indexed_path)
                     return None
 
+                # A bare name means the attachment, not a same-named file in the
+                # working folder — so it needs no prompt.
+                attached = None
+                if (
+                    not Path(file_path).is_absolute()
+                    and len(Path(file_path).parts) == 1
+                ):
+                    attached = _resolve_indexed_basename(fp)
+                if (
+                    attached is not None
+                    and attached.is_file()
+                    and read_access_error(self, str(attached), prompt_user=False)
+                    is None
+                ):
+                    fp = attached
+
                 # Enforce the --allowed-paths sandbox FIRST — before any existence
-                # or extension probe — so an out-of-sandbox path yields one
-                # identical refusal whether or not it exists and regardless of its
-                # extension (no file-existence/type oracle). An out-of-sandbox path
+                # or extension probe — so this tool adds no file-existence/type
+                # oracle beyond the validator's own refusal. An out-of-sandbox path
                 # proceeds only if its basename matches an indexed document that is
                 # itself inside the sandbox (the fuzzy fallback below).
                 denied = self._read_access_error(str(fp))

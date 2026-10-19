@@ -1714,12 +1714,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists at the current version (v5, #887)."""
+        """schema_version table exists at the current version (v6, #4730)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 5
+            assert row[0] == 6
 
 
 # ===========================================================================
@@ -3796,14 +3796,14 @@ class TestSchemaV2Migration:
         assert any(r["id"] == kid for r in results)
 
     def test_schema_version_is_current(self, store):
-        """A fresh database is stamped at the current schema version (v5, #887)."""
+        """A fresh database is stamped at the current schema version (v6, #4730)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 5
+        assert row[0] == 6
 
 
 # ===========================================================================
@@ -4898,7 +4898,7 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 5
+        assert _schema_version(db) == 6
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
         assert "synthesis_marks" in _table_names(db)
@@ -4946,7 +4946,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 5
+            assert _schema_version(db) == 6
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -4989,7 +4989,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 5
+            assert _schema_version(db) == 6
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")
