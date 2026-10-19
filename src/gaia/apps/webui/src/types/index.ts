@@ -3,6 +3,8 @@
 
 /** Types shared across the GAIA Agent UI frontend. */
 
+import type { TurnSummaryResponse } from './api.gen';
+
 export interface Session {
     id: string;
     title: string;
@@ -316,7 +318,12 @@ export interface Message {
     stopError?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
+    /** Sources, files and data flow of the turn, for the side rail (#5222). */
+    turnSummary?: TurnSummary;
 }
+
+/** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */
+export type TurnSummary = TurnSummaryResponse;
 
 /** One card instance transferred onto a finalized Message (issue #2108). */
 export interface RenderCardData {
@@ -732,6 +739,8 @@ export interface StreamEvent {
     tools_used?: number;
     /** Inference stats from the LLM backend (attached to done events). */
     stats?: InferenceStats;
+    /** Per-turn sources, files and data flow (attached to done events). */
+    turn_summary?: TurnSummary;
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */

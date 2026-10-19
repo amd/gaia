@@ -988,26 +988,7 @@ export function attachToRun(
     return controller;
 }
 
-/** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
-    return apiFetch('GET', '/chat/active');
-}
-
 // -- Tool Confirmation ---------------------------------------------------------
-
-/** Answer a tool confirmation: allow once, always allow this call in this chat, or deny. */
-export async function confirmTool(
-    sessionId: string,
-    approved: boolean,
-    options: { always?: boolean; confirmId?: string } = {},
-): Promise<{ status: string; approved: boolean; granted: string | null }> {
-    return apiFetch('POST', '/chat/confirm-tool', {
-        session_id: sessionId,
-        approved,
-        always: options.always ?? false,
-        ...(options.confirmId ? { confirm_id: options.confirmId } : {}),
-    });
-}
 
 export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
     return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
@@ -1025,17 +1006,6 @@ export async function setPermissionMode(sessionId: string, mode: PermissionMode)
 export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
     const q = key ? `?key=${encodeURIComponent(key)}` : '';
     return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
-}
-
-/** Answer a pending mid-run `needs_input` question (#2595). The agent
- *  blocks server-side until this call lands, so the run continues once it
- *  resolves. */
-export async function respondToInput(
-    sessionId: string,
-    requestId: string,
-    value: string,
-): Promise<{ status: string; request_id: string }> {
-    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
 }
 
 // -- Documents -----------------------------------------------------------------
@@ -1129,6 +1099,18 @@ export async function indexFolder(folderPath: string, recursive: boolean = true)
 
 export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {
     return apiFetch('POST', '/files/open', { path, reveal });
+}
+
+/** Open a file in its default app. The server refuses scripts and programs. */
+export async function openFileInApp(path: string): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, launch: true });
+}
+
+/** Whether each path still exists and when it last changed (unchecked outside home). */
+export async function getFileStatus(paths: string[]): Promise<{
+    files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;
+}> {
+    return apiFetch('POST', '/files/status', { paths });
 }
 
 /** Upload a file (image/document) to the server. */
