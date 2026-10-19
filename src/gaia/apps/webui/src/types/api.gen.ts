@@ -21,6 +21,7 @@ export interface ApiSchemas {
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
   CancelStreamRequest: CancelStreamRequest;
+  ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
@@ -40,6 +41,9 @@ export interface ApiSchemas {
   FilePreviewResponse: FilePreviewResponse;
   FileSearchResponse: FileSearchResponse;
   FileSearchResult: FileSearchResult;
+  FileStatusEntry: FileStatusEntry;
+  FileStatusRequest: FileStatusRequest;
+  FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
@@ -55,6 +59,7 @@ export interface ApiSchemas {
   InstallRequest: InstallRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
+  LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
   MemorySettingsBody: MemorySettingsBody;
@@ -77,6 +82,7 @@ export interface ApiSchemas {
   ScriptedUserRequest: ScriptedUserRequest;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
+  SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
@@ -90,6 +96,15 @@ export interface ApiSchemas {
   TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnSummaryCost: TurnSummaryCost;
+  TurnSummaryDocument: TurnSummaryDocument;
+  TurnSummaryFile: TurnSummaryFile;
+  TurnSummaryLiveData: TurnSummaryLiveData;
+  TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryPage: TurnSummaryPage;
+  TurnSummaryResponse: TurnSummaryResponse;
+  UndoRequest: UndoRequest;
+  UndoSettings: UndoSettings;
   UnloadModelRequest: UnloadModelRequest;
   UnloadModelResponse: UnloadModelResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
@@ -182,6 +197,7 @@ export interface AgentListResponse {
 export interface AgentStepResponse {
   active?: boolean;
   commandOutput?: CommandOutputResponse | null;
+  currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
   detail?: string | null;
@@ -190,6 +206,8 @@ export interface AgentStepResponse {
   label: string;
   latencyMs?: number | null;
   mcpServer?: string | null;
+  narration?: string | null;
+  planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;
@@ -279,6 +297,12 @@ export interface QuickLink {
 }
 export interface CancelStreamRequest {
   session_id: string;
+}
+/**
+ * One of setup's default chat models.
+ */
+export interface ChatModelRequest {
+  model_id: string;
 }
 /**
  * Request to send a chat message.
@@ -455,6 +479,29 @@ export interface FileSearchResult {
   size_display: string;
 }
 /**
+ * Whether a file exists now, and when it last changed.
+ */
+export interface FileStatusEntry {
+  exists?: boolean | null;
+  mtime?: number | null;
+  path: string;
+}
+/**
+ * Paths whose current state the side rail re-checks.
+ */
+export interface FileStatusRequest {
+  /**
+   * @maxItems 50
+   */
+  paths: string[];
+}
+/**
+ * Current state of each requested path, in request order.
+ */
+export interface FileStatusResponse {
+  files: FileStatusEntry[];
+}
+/**
  * Response from a file upload.
  */
 export interface FileUploadResponse {
@@ -548,6 +595,7 @@ export interface InferenceCommitItem {
 export interface InferenceStatsResponse {
   input_tokens?: number;
   output_tokens?: number;
+  place?: string | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -586,8 +634,15 @@ export interface KnowledgeUpdate {
   reminded_at?: string | null;
   sensitive?: boolean | null;
 }
+/**
+ * ``limit_usd`` None removes the limit.
+ */
+export interface LimitRequest {
+  limit_usd?: number | null;
+}
 export interface LoadModelRequest {
   ctx_size?: number | null;
+  force?: boolean;
   model_name: string;
 }
 /**
@@ -628,6 +683,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  turn_summary?: TurnSummaryResponse | null;
 }
 /**
  * RAG source citation.
@@ -638,6 +694,68 @@ export interface SourceInfo {
   filename: string;
   page?: number | null;
   score: number;
+}
+/**
+ * Sources, files and data flow of one turn, for the side rail (#5222).
+ */
+export interface TurnSummaryResponse {
+  cost: TurnSummaryCost;
+  documents?: TurnSummaryDocument[];
+  error?: string | null;
+  files?: TurnSummaryFile[];
+  live_data?: TurnSummaryLiveData;
+  model?: TurnSummaryModel | null;
+  pages?: TurnSummaryPage[];
+  sites?: string[];
+}
+/**
+ * What the turn cost.
+ */
+export interface TurnSummaryCost {
+  kind: string;
+  usd?: number | null;
+}
+/**
+ * A document the turn's answer drew passages from.
+ */
+export interface TurnSummaryDocument {
+  name: string;
+  pages?: number[];
+  passages?: number;
+  path: string;
+}
+/**
+ * A file the turn created or changed.
+ */
+export interface TurnSummaryFile {
+  mtime?: number | null;
+  name: string;
+  openable?: boolean;
+  path: string;
+}
+/**
+ * How the turn's internet tools fared.
+ */
+export interface TurnSummaryLiveData {
+  attempted?: number;
+  failed?: number;
+}
+/**
+ * Where the turn's model ran.
+ */
+export interface TurnSummaryModel {
+  name: string;
+  provider: string;
+  provider_name: string;
+  remote: boolean;
+}
+/**
+ * A web page the turn read, or a search hit when it read none.
+ */
+export interface TurnSummaryPage {
+  kind: string;
+  title?: string | null;
+  url: string;
 }
 /**
  * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
@@ -675,6 +793,7 @@ export interface ModelStatus {
  * Request to open a file or folder in the system file explorer.
  */
 export interface OpenFileRequest {
+  launch?: boolean;
   path: string;
   reveal?: boolean;
 }
@@ -809,14 +928,24 @@ export interface SessionResponse {
   inference_provider?: string | null;
   inference_provider_name?: string | null;
   inference_remote?: boolean | null;
+  kind?: string;
+  last_run_status?: string | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;
+  pinned?: boolean;
   private?: boolean;
   system_prompt?: string | null;
   title: string;
   title_is_custom?: boolean;
+  unread?: boolean;
   updated_at: string;
+}
+/**
+ * Pin or unpin a chat.
+ */
+export interface SessionPinRequest {
+  pinned: boolean;
 }
 /**
  * Current user settings.
@@ -881,6 +1010,7 @@ export interface SystemStatus {
   init_tasks?: InitTaskInfo[];
   initialized?: boolean;
   lemonade_error?: string | null;
+  lemonade_probe?: ("ok" | "down" | "timed_out" | "error") | null;
   lemonade_running?: boolean;
   lemonade_url?: string | null;
   lemonade_version?: string | null;
@@ -905,8 +1035,10 @@ export interface SystemStatus {
  */
 export interface WarmUpStatus {
   cached_tokens?: number | null;
+  device?: string | null;
   elapsed_seconds?: number | null;
   error?: string | null;
+  model?: string | null;
   prompt_tokens?: number | null;
   state: string;
 }
@@ -953,6 +1085,16 @@ export interface ToolConfirmRequest {
   approved: boolean;
   confirm_id?: string | null;
   session_id: string;
+}
+export interface UndoRequest {
+  /**
+   * Undo even files changed after the turn, losing those changes.
+   */
+  force?: boolean;
+}
+export interface UndoSettings {
+  max_mb: number;
+  retention_days: number;
 }
 export interface UnloadModelRequest {
   model_name: string;

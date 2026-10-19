@@ -81,7 +81,7 @@ describe('buildTrayActivity', () => {
         expect(a.needsYou).toEqual([{ id: 'a', title: 'Trip plan', reason: 'approval' }]);
     });
 
-    it.each([['loading_model'], ['downloading_model'], ['model_retry']])(
+    it.each([['loading_model'], ['downloading_model'], ['model_retry'], ['waiting']])(
         'the %s phase is waiting for the model',
         (phase) => {
             const a = buildTrayActivity(input({

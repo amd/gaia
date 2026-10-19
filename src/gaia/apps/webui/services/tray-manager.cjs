@@ -171,6 +171,8 @@ class TrayManager {
 
     /** @type {number} Unread notifications reflected in the tooltip/badge. */
     this._notificationCount = 0;
+    /** Chats waiting on the user or finished unread, per the renderer's alert settings. */
+    this._attentionCount = 0;
 
     /** Last snapshot from the window; null until it first reports. */
     this._activity = null;
@@ -247,11 +249,30 @@ class TrayManager {
       console.log(`[tray] Unread notifications: ${unread}`);
     }
     this._notificationCount = unread;
+    this._renderBadge();
+  }
 
+  /**
+   * Reflect how many chats need the user (#5226): waiting on a permission or
+   * a question, or finished and unread. Shares the badge with notifications.
+   *
+   * @param {number} count Chats needing attention; must be a non-negative integer.
+   */
+  setAttentionCount(count) {
+    if (!Number.isInteger(count) || count < 0) {
+      throw new TypeError(`setAttentionCount expects a non-negative integer, got ${count}`);
+    }
+    this._attentionCount = count;
+    this._renderBadge();
+  }
+
+  _renderBadge() {
+    const unread = this._notificationCount;
+    const chats = this._attentionCount;
     // Dock (macOS) / Unity launcher (Linux) badge. Windows has no
     // app.setBadgeCount equivalent; the taskbar overlay stands in for it.
     if (process.platform !== "win32" && typeof app.setBadgeCount === "function") {
-      app.setBadgeCount(unread);
+      app.setBadgeCount(unread + chats);
     }
     this._render();
   }
@@ -289,6 +310,11 @@ class TrayManager {
   /** @returns {string} The tray state now showing: one of tray-icons.STATES. */
   get state() {
     return this._view ? this._view.state : "idle";
+  }
+
+  /** @returns {number} The chat count last passed to setAttentionCount. */
+  get attentionCount() {
+    return this._attentionCount;
   }
 
   /** @returns {number} The unread count last passed to setNotificationCount. */
@@ -346,6 +372,7 @@ class TrayManager {
     this._view = deriveTrayView(this._activity, {
       backendAlive: this._backendAlive,
       unread: this._notificationCount,
+      attention: this._attentionCount,
     });
     const trayAlive =
       this.tray &&

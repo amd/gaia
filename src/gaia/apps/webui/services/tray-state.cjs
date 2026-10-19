@@ -98,9 +98,10 @@ function plural(n, one, many) {
  * Priority, highest first: error, needs you, waiting for the model, working, idle.
  *
  * @param {ReturnType<typeof validateActivity>|null} activity Null before the window first reports.
- * @param {{backendAlive: boolean, unread: number}} ctx `backendAlive` is false once the GAIA service process exits.
+ * @param {{backendAlive: boolean, unread: number, attention?: number}} ctx `backendAlive` is false
+ *   once the GAIA service process exits; `attention` counts chats in any window that need the user.
  */
-function deriveTrayView(activity, { backendAlive, unread }) {
+function deriveTrayView(activity, { backendAlive, unread, attention = 0 }) {
   const unreadNote = unread > 0 ? ` · ${unread} unread ${plural(unread, "notification", "notifications")}` : "";
   const view = {
     state: "idle",
@@ -116,7 +117,12 @@ function deriveTrayView(activity, { backendAlive, unread }) {
   };
 
   const finish = () => {
-    view.tooltip = `GAIA — ${view.activityText}${unreadNote}`.slice(0, MAX_TOOLTIP);
+    // A needs-you state already names the chats waiting on the user.
+    const attentionNote =
+      attention > 0 && view.state !== "needs-you"
+        ? ` · ${attention} ${plural(attention, "chat needs", "chats need")} you`
+        : "";
+    view.tooltip = `GAIA — ${view.activityText}${attentionNote}${unreadNote}`.slice(0, MAX_TOOLTIP);
     return view;
   };
   const error = (text) => {

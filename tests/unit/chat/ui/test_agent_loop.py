@@ -10,7 +10,6 @@ loop's behavior for a legacy 'autonomous' value is bit-identical to
 'goal_driven' (idle when no goals — no phantom observation cycle).
 """
 
-import asyncio
 import os
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -126,9 +125,7 @@ class TestHourlyBudgetOnlySpentOnRealTicks:
     def _make_loop(self, db):
         loop = AgentLoop()
         loop._db = db
-        loop._app_state = SimpleNamespace(
-            tunnel=None, session_locks={}, chat_semaphore=asyncio.Semaphore(1)
-        )
+        loop._app_state = SimpleNamespace(tunnel=None, session_locks={})
         return loop
 
     async def _run(self, loop, tmp_path):

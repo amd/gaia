@@ -10,8 +10,11 @@
 import type { Session, SystemStatus } from '../types';
 import type { GaiaNotification, TrayActivity, TrayChatRef } from '../types/agent';
 
-/** Phases where the answer is waiting on the model itself, not on a tool or the user. */
-const MODEL_WAIT_PHASES = new Set(['loading_model', 'downloading_model', 'model_retry']);
+/**
+ * Phases where the answer is waiting on the model itself, not on a tool or the user.
+ * `waiting` is the send held while another chat has the model.
+ */
+const MODEL_WAIT_PHASES = new Set(['loading_model', 'downloading_model', 'model_retry', 'waiting']);
 
 const RECENT_CHATS = 5;
 
