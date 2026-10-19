@@ -1,12 +1,15 @@
 ---
 title: GAIA design language
-description: The graphite, ivory, and copper palette the GAIA Agent UI and TUI share, the AMD-brand palette the website carries, and the contrast floors each surface must hold
+description: The roles and contrast floors GAIA's surfaces share, the TUI's graphite and copper, the Agent UI's warm gray and brass, and the AMD-brand palette the website carries
 ---
 
 GAIA looks like one product in a desktop window and a terminal. This page pins
 the colour roles both implement, the values behind them, and the contrast each
-surface is tested against. The website shares their roles, floors and status
-hues but wears AMD's brand palette instead of the copper; see
+surface is tested against. The role table below is the TUI's palette and the
+baseline every surface starts from. The Agent UI keeps the roles, floors and
+status hues but wears warm gray and brass; see
+[The Agent UI's palette](#the-agent-uis-palette). The website shares the roles,
+floors and status hues but wears AMD's brand palette; see
 [The website](#the-website). This page is the source of truth for
 [`website/src/design/tokens.css`](https://github.com/amd/gaia/blob/main/website/src/design/tokens.css),
 the Agent UI's CSS custom properties, and
@@ -45,8 +48,8 @@ prompt and the one primary action. That is why the TUI's markdown renderer paint
 
 ### The terminal has no canvas, and its status band is not the raised surface
 
-The first two rows are the Agent UI's grounds (its light theme substitutes white;
-see [Surface mappings](#surface-mappings)). A terminal's background belongs
+The first two rows are the grounds a canvas-owning surface would use (the Agent
+UI has its own; see [The Agent UI's palette](#the-agent-uis-palette)). A terminal's background belongs
 to the user's emulator, so the TUI sets none — it paints foregrounds onto
 whatever the reader already chose.
 
@@ -82,12 +85,63 @@ fails on a real terminal passes review.
 warm near-neutral. On a 256-colour light terminal GAIA's accent therefore reads
 as a dark warm grey rather than copper. That is the documented, intended
 degradation — the palette's rule is that a colour may fade toward neutral, but
-may never land on a *different* saturated meaning. Truecolor terminals and the
-Agent UI render `#9A4930` as copper.
+may never land on a *different* saturated meaning. Truecolor terminals render
+`#9A4930` as copper.
 
-Using the same `#9A4930` in the Agent UI as in the terminal is deliberate: the
-surfaces previously carried three near-but-unequal golds, and one shared literal
-is what makes "the same assistant" true rather than approximate.
+The Agent UI used the same `#9A4930` until it moved to brass. The TUI keeps
+copper for now; see [The Agent UI's palette](#the-agent-uis-palette) for why the
+light brass cannot simply follow it into the terminal.
+
+## The Agent UI's palette
+
+The Agent UI is a full-window app with a canvas it owns, so it carries its own
+grounds and accent: warm gray neutrals and muted brass. The roles and floors
+are the shared ones, and so is every status hue.
+
+| Role | Dark | Light | Used for |
+|---|---|---|---|
+| App canvas | `#1A1917` | `#FAF9F7` | The page behind everything |
+| App sidebar | `#161513` | `#F3F1ED` | The chat list, one step deeper than the canvas |
+| App raised surface | `#24231F` | `#FFFFFF` | Cards, the composer, menus, dialogs; separated by shadow |
+| App primary text | `#EFECE6` | `#1F1D1A` | Answers, labels, values |
+| App secondary text | `#B3ADA5` | `#5C5650` | Hints, descriptions, previews |
+| App brass | `#D4B47E` | `#7A5A22` | Actions, links, focus, an on switch, a chosen option |
+| App brass wash | `#383227` | `#EEE8DD` | The soft-tinted button behind brass text |
+
+**Brass marks only what can be acted on.** Status keeps its own hues and nothing
+decorative is brass, so the eye learns that brass means "you can do this". The
+light value is a deep brass because the raw brass `#B08D57` measures only 2.9:1
+on the light canvas; that raw value is kept as `--accent-solid` for marks that
+carry no text (a switch track, a native checkbox) and are held to the chrome
+floor.
+
+**Buttons are soft tinted.** A brass wash with brass text for the action you
+would most likely take, a neutral wash for the rest. Brass text holds 5.2:1 on
+its light wash and 6.43:1 on its dark one.
+
+**Warning amber and brass are neighbours.** In dark mode they measure 1.05:1
+apart, which breaks the "never let two roles share a hue family" rule if colour
+is all that tells them apart. So a warning in the Agent UI must carry its alert
+icon and a word, never colour alone, and brass never appears on a warning.
+
+**The TUI keeps copper until a terminal-safe brass exists.** On a 256-colour
+terminal the light brass `#7A5A22` rounds to `#875F00`, the entry the TUI
+already uses for Warning and Selected, which is the collision the copper was
+chosen to avoid. The two surfaces carry different accents until that is solved;
+`website/src/design/cross-surface.test.ts` pins the TUI's copper on its own
+meanwhile.
+
+**Depth is layered and answers interaction.** Raised surfaces carry a 1px light
+top rim, a hairline edge and stacked soft shadows (`--shadow-sm`, `-md`, `-lg`).
+Controls lift 1px onto the resting shadow on hover and settle below rest on
+press (`--shadow-press`), faster than they rose. None of these are glows: each
+blurred layer has an offset, and the zero-offset layers are unblurred rings.
+
+**Motion is rare but rich.** Nothing moves on an idle screen. A meaningful moment
+(a step finishing, something needing you, an answer arriving) uses the spring
+`--ease-spring` over `--duration-spring`; hover and press use the fast tokens.
+Under `prefers-reduced-motion` every transition and animation completes
+instantly.
 
 ## The website
 
@@ -184,12 +238,8 @@ colour that clears its floor in truecolor can drop below it once rounded. See
 | Agent UI / Electron | `src/gaia/apps/webui/src/styles/index.css` | `html[data-theme]`, `localStorage` key `gaia-chat-theme` | `npm test` in `src/gaia/apps/webui/` |
 | TUI | `tui/internal/ui/theme/theme.go` (`lipgloss.AdaptiveColor`) | terminal background query, `GAIA_TUI_THEME` override | `go test ./internal/ui/...` in `tui/` |
 
-**The Agent UI's light theme is neutral, not porcelain.** Its light canvas is
-white (`#FFFFFF`) with faintly cool greys for raised surfaces, rules and hover,
-because the warm stone read as brown in a full-window app. The accent, the accent
-fill and every status hue are the shared values above, and the dark theme is the
-shared graphite. `contrast.test.ts` holds the Agent UI's values to the same
-floors.
+The Agent UI's values are in [The Agent UI's palette](#the-agent-uis-palette);
+`contrast.test.ts` holds them to the same floors as every other surface.
 
 ## Rules for adding a colour
 
@@ -211,9 +261,9 @@ floors.
 Shared starting points, not pixel-matched measurements:
 
 - Body text 15–16px, readable proportional type for prose on the website.
-- System monospace for composer input, the `>` prompt, labels, and activity lines.
-  The terminal follows the user's own font — never force size, truecolor, or
-  background.
+- In the TUI, the terminal's own monospace for everything; never force size,
+  truecolor, or background. In the Agent UI, Inter for everything a person reads
+  and monospace only for machine text: paths, code, commands.
 - Roughly 760px readable content width; a 240–260px collapsible sidebar.
 - Restrained rounding, subtle borders, generous spacing. No glow, no
   gradient-filled panels.

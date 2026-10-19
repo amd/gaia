@@ -71,6 +71,7 @@ from gaia.agents.base.memory_store import (
     MAX_CONTENT_LENGTH,
     MAX_EXTRACTION_TURN_LENGTH,
     VALID_CATEGORIES,
+    MemoryContentError,
     content_stems,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
@@ -84,7 +85,6 @@ from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
-    SIDE_SLOT,
     backend_crash_remedy,
 )
 
@@ -207,11 +207,43 @@ RRF_WEIGHT_BM25 = 0.4
 #: RRF smoothing constant (standard value from the original RRF paper).
 RRF_K = 60
 
-#: Memories surfaced per turn for the current request, and the cosine floor a
-#: match must clear. In the embedder's space, unrelated stored memories sit
-#: around 0.3 and same-topic ones above 0.8.
+#: Memories surfaced per turn for the current request.
 TURN_RECALL_TOP_K = 3
-TURN_RECALL_MIN_SIMILARITY = 0.5
+#: With embeddinggemma-300m, a natural question scores the memory it is about
+#: only 0.35-0.55, while unrelated memories sit at 0.25-0.40. No single floor
+#: separates those, so a match passes on a sure score, or on standing clear of
+#: how the query scores against the whole store (the field's median) while
+#: staying close to the best match.
+TURN_RECALL_SURE_SIMILARITY = 0.5
+TURN_RECALL_MIN_SIMILARITY = 0.38
+TURN_RECALL_MIN_MARGIN = 0.08
+TURN_RECALL_MAX_GAP = 0.06
+#: Memories brought along beyond TURN_RECALL_TOP_K because they share a
+#: capitalised mid-sentence word (usually a name) with a match, and the floor
+#: they must clear.
+TURN_RECALL_LINKED_MAX = 2
+TURN_RECALL_LINKED_MIN_SIMILARITY = 0.35
+#: The field needs this many memories for its median to mean anything; a
+#: smaller store is shown whole in the stable prompt anyway.
+TURN_RECALL_MIN_FIELD = 8
+#: Memories scored to measure the field.
+TURN_RECALL_FIELD_SIZE = 200
+
+#: Size cap on the stable memory section, instructions included
+#: (4000 chars ≈ 1000 tokens).
+STABLE_MEMORY_PROMPT_CHARS = 4000
+#: Rows read per category when filling that section; the size cap decides
+#: how many are shown.
+STABLE_MEMORY_FETCH_LIMIT = 200
+#: Personal categories in the stable section, in the order they take turns.
+_STABLE_PERSONAL_SECTIONS = (
+    ("preference", "Preferences"),
+    ("fact", "Known facts"),
+    ("skill", "Skills"),
+    ("error", "Known errors to avoid"),
+    ("reminder", "Reminders on file (bring up only when relevant)"),
+    ("note", "Notes"),
+)
 
 #: Categories per-turn recall may surface. Reminders have their own due-date
 #: path, and privileged categories live in the stable prompt.
@@ -229,6 +261,21 @@ LESSON_PART_CHARS = 160
 #: Lookup ceiling for a workspace's lessons. One row per operation keeps this
 #: far above any real workspace; the prompt still shows LESSONS_IN_PROMPT.
 LESSON_LOOKUP_LIMIT = 500
+
+
+def _names_in(text: str) -> set:
+    """Capitalised words that don't open a sentence: names, like "Ada" or "Leo"."""
+    names = set()
+    sentence_start = True
+    for token in re.findall(r"[A-Za-z']+|[.!?]", text):
+        if token in ".!?":
+            sentence_start = True
+            continue
+        token = token.removesuffix("'s")
+        if not sentence_start and re.fullmatch(r"[A-Z][a-z]{2,}", token):
+            names.add(token)
+        sentence_start = False
+    return names
 
 
 def _is_lesson(item: Dict) -> bool:
@@ -1859,8 +1906,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                         outcome["response"] = self.chat.send_messages(
                             messages=[{"role": "user", "content": prompt}],
                             system_prompt="You are a memory extraction engine. Return valid JSON only.",
-                            # Off the conversation's slot, so its cache survives.
-                            id_slot=SIDE_SLOT,
                             temperature=0.1,
                             max_tokens=EXTRACTION_MAX_TOKENS,
                             # Streamed, so a user turn can stop it mid-reply.
@@ -2826,12 +2871,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             return ""
 
     def _build_stable_memory_prompt(self) -> str:
-        """Stable memory: system context + preferences + facts + known errors.
+        """Stable memory: system context, profile, lessons, then personal memories.
 
         Personal items carry the absolute dates they were learned and last
         confirmed. No clock time, so the prompt stays stable within a session.
         """
-        ctx = self._memory_context
         sections = []
 
         # 0a. System context (global only — always included first so the agent
@@ -2867,48 +2911,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                 + "\n".join(lesson_lines)
             )
 
-        # 1-4. User-created sections (preference, fact, skill, error)
-        user_sections: list = []
-        # (rendered line, memory id) so the truncation below can tell which
-        # memories the model actually ends up seeing.
-        rendered: List[Tuple[str, Any]] = []
-
-        prefs = self._get_context_items("preference", ctx, limit=10)
-        if prefs:
-            pref_lines = [f"  - {p['content']} ({self._memory_age(p)})" for p in prefs]
-            rendered.extend(zip(pref_lines, (p["id"] for p in prefs)))
-            user_sections.append("Preferences:\n" + "\n".join(pref_lines))
-
-        facts = self._get_context_items("fact", ctx, limit=5)
-        if facts:
-            fact_lines = [
-                f"  - {f['content']} (confidence: {f['confidence']:.2f}, "
-                f"{self._memory_age(f)})"
-                for f in facts
-            ]
-            rendered.extend(zip(fact_lines, (f["id"] for f in facts)))
-            user_sections.append("Known facts:\n" + "\n".join(fact_lines))
-
-        skills = self._get_context_items("skill", ctx, limit=3)
-        if skills:
-            skill_lines = [
-                f"  - {s['content']} (confidence: {s['confidence']:.2f}, "
-                f"{self._memory_age(s)})"
-                for s in skills
-            ]
-            rendered.extend(zip(skill_lines, (s["id"] for s in skills)))
-            user_sections.append("Skills:\n" + "\n".join(skill_lines))
-
-        errors = self._get_context_items("error", ctx, limit=5)
-        if errors:
-            error_lines = [
-                f"  - {e['content']} ({self._memory_age(e)})" for e in errors
-            ]
-            rendered.extend(zip(error_lines, (e["id"] for e in errors)))
-            user_sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
-
-        sections.extend(user_sections)
-
         # Always include memory instructions — even when 0 memories exist.
         # Without these, the LLM doesn't know it has persistent memory tools.
         instructions = (
@@ -2938,28 +2940,98 @@ class MemoryMixin(ProceduralMemoryMixin):
             "- NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.\n"
         )
 
-        if sections:
-            result = instructions + "\n" + "\n\n".join(sections)
-            # If system context exists but no personal memories yet, nudge the LLM.
-            if not user_sections:
-                result += (
-                    "\nNo personal memories stored yet."
-                    " Run `gaia memory bootstrap` to introduce yourself to GAIA.\n"
-                )
+        head = instructions + "\n" + "\n\n".join(sections) if sections else instructions
+        personal, self._stable_memory_ids = self._fit_personal_memories(
+            STABLE_MEMORY_PROMPT_CHARS - len(head) - 2
+        )
+        if personal:
+            result = head + ("\n\n" if sections else "\n") + personal
+        elif sections:
+            # System context exists but no personal memories yet: nudge the LLM.
+            result = head + (
+                "\nNo personal memories stored yet."
+                " Run `gaia memory bootstrap` to introduce yourself to GAIA.\n"
+            )
         else:
             result = (
                 instructions
                 + "\nNo memories stored yet. Start building your knowledge base by remembering what the user tells you.\n"
             )
 
-        # Hard cap: prevent context overflow if many large items exist.
-        # 4000 chars ≈ 1000 tokens — sufficient for preferences/facts without
-        # crowding the actual conversation context.
-        if len(result) > 4000:
-            result = result[:4000] + "\n... (memory truncated)"
-        # Suppress per-turn recall only for memories the cap actually left in.
-        self._stable_memory_ids = {mid for line, mid in rendered if line in result}
+        # Personal memories are fitted above; only an oversized system context,
+        # profile, or lesson block can still overflow.
+        if len(result) > STABLE_MEMORY_PROMPT_CHARS:
+            marker = "\n... (memory truncated)"
+            result = result[: STABLE_MEMORY_PROMPT_CHARS - len(marker)] + marker
         return result
+
+    def _fit_personal_memories(self, budget: int) -> Tuple[str, set]:
+        """Personal memories that fit in *budget* chars, and their ids.
+
+        Most recently confirmed first, so a fact that changed ("moved to
+        Toronto") outranks the one it replaced. Categories take turns, one item
+        each, so a long list of one kind can't crowd out the others. An item too
+        long for what is left is skipped rather than cut, and the block ends by
+        saying how many were left out so the model knows to ``recall`` them.
+        """
+        ctx = self._memory_context
+        today = datetime.now().astimezone().date()
+        pools = {
+            category: [
+                item
+                for item in self._get_context_items(
+                    category, ctx, limit=STABLE_MEMORY_FETCH_LIMIT, newest_first=True
+                )
+                if not _is_lesson(item)
+                # A session summary is dated history ("in March, lived in
+                # Calgary"); always on, it would contradict newer facts.
+                and not (
+                    item["category"] == "note" and item["source"] == "consolidation"
+                )
+                # A reminder whose day has passed is the due-date path's job.
+                and (self._due_day(item) or today) >= today
+            ]
+            for category, _ in _STABLE_PERSONAL_SECTIONS
+        }
+        chosen: Dict[str, List[str]] = {category: [] for category in pools}
+        ids: set = set()
+        used = 0
+        omitted = 0
+        # Room for the closing "N more ..." line, so it never overflows.
+        budget -= 100
+        position = 0
+        while any(len(pool) > position for pool in pools.values()):
+            for category, title in _STABLE_PERSONAL_SECTIONS:
+                pool = pools[category]
+                if len(pool) <= position:
+                    continue
+                item = pool[position]
+                due = self._due_day(item)
+                when = f"due {due.isoformat()}, " if due else ""
+                line = f"  - {item['content']} ({when}{self._memory_age(item)})"
+                cost = len(line) + 1
+                if not chosen[category]:
+                    cost += len(title) + 3
+                if used + cost > budget:
+                    omitted += 1
+                    continue
+                used += cost
+                chosen[category].append(line)
+                ids.add(item["id"])
+            position += 1
+
+        blocks = [
+            f"{title}:\n" + "\n".join(chosen[category])
+            for category, title in _STABLE_PERSONAL_SECTIONS
+            if chosen[category]
+        ]
+        if omitted:
+            noun = "memory is" if omitted == 1 else "memories are"
+            blocks.append(
+                f"({omitted} more stored {noun} not listed here; "
+                "recall() searches all of them.)"
+            )
+        return "\n\n".join(blocks), ids
 
     @staticmethod
     def _memory_age(item: Dict) -> str:
@@ -2975,10 +3047,11 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _recall_memories_for_turn(self, query: str) -> List[Dict]:
         """The few stored memories most relevant to *query*, for this turn only.
 
-        Vector search with an absolute cosine floor, so an unrelated nearest
-        neighbour is never surfaced. Skips what the stable prompt already shows,
-        and doesn't count as a use (no confidence bump), because the model
-        didn't ask for it.
+        A match must clear a sure score, or stand out from how the query scores
+        against the whole store. A memory sharing a capitalised word (usually
+        a name) with a match comes along too, so "children named Ada and Leo" brings "Leo is allergic to
+        peanuts". Skips what the stable prompt already shows, and doesn't count
+        as a use (no confidence bump), because the model didn't ask for it.
         """
         index = getattr(self, "_faiss_index", None)
         if not query or not query.strip() or index is None or index.ntotal == 0:
@@ -2987,10 +3060,24 @@ class MemoryMixin(ProceduralMemoryMixin):
         ctx = self._memory_context
         # A default (global) session is unscoped and reads every context.
         contexts = None if ctx == "global" else (ctx, "global")
-        hits = self._faiss_search(self._embed_text(query), TURN_RECALL_TOP_K * 4)
-        items: List[Dict] = []
+        hits = self._faiss_search(self._embed_text(query), TURN_RECALL_FIELD_SIZE)
+        bar = TURN_RECALL_SURE_SIMILARITY
+        if len(hits) >= TURN_RECALL_MIN_FIELD:
+            scores = [score for _kid, score in hits]
+            bar = min(
+                bar,
+                max(
+                    TURN_RECALL_MIN_SIMILARITY,
+                    float(np.median(scores)) + TURN_RECALL_MIN_MARGIN,
+                    max(scores) - TURN_RECALL_MAX_GAP,
+                ),
+            )
+
+        candidates: List[Tuple[Dict, float]] = []
         for kid, score in hits:
-            if score < TURN_RECALL_MIN_SIMILARITY or kid in shown:
+            if len(candidates) == TURN_RECALL_TOP_K * 4:
+                break
+            if score < TURN_RECALL_LINKED_MIN_SIMILARITY or kid in shown:
                 continue
             item = self._memory_store.get_item(kid)
             if (
@@ -3008,9 +3095,21 @@ class MemoryMixin(ProceduralMemoryMixin):
                 or (contexts is not None and item.get("context") not in contexts)
             ):
                 continue
-            items.append(item)
-            if len(items) == TURN_RECALL_TOP_K:
+            candidates.append((item, score))
+
+        items = [item for item, score in candidates if score >= bar]
+        items = items[:TURN_RECALL_TOP_K]
+        names = set().union(*(_names_in(item["content"]) for item in items))
+        limit = len(items) + TURN_RECALL_LINKED_MAX
+        for item, _score in candidates:
+            if len(items) == limit:
                 break
+            words = {
+                word.removesuffix("'s")
+                for word in re.findall(r"[A-Za-z']+", item["content"])
+            }
+            if item not in items and names & words:
+                items.append(item)
         return self._redact_credentials(items)
 
     def _reminder_window_open(self, now_ts: float) -> bool:
@@ -3157,7 +3256,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         return None if ctx == "global" else ctx
 
     def _get_context_items(
-        self, category: str, context: str, limit: int = 10
+        self, category: str, context: str, limit: int = 10, newest_first: bool = False
     ) -> List[Dict]:
         """Get non-sensitive knowledge items for active context + global.
 
@@ -3166,8 +3265,27 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         scope = context if context != "global" else None
         return self._redact_credentials(
-            self._memory_store.get_by_category_contexts(category, scope, limit=limit)
+            self._memory_store.get_by_category_contexts(
+                category, scope, limit=limit, newest_first=newest_first
+            )
         )
+
+    @staticmethod
+    def _due_day(item: Dict):
+        """The local calendar day *item* is due, or None if it has no due date."""
+        due_at = item.get("due_at")
+        if not due_at:
+            return None
+        try:
+            due = datetime.fromisoformat(due_at)
+        except ValueError as e:
+            raise ValueError(
+                f"memory {item.get('id')} has an invalid due_at {due_at!r}; "
+                "correct or delete it on the memory page (/memory)"
+            ) from e
+        if due.tzinfo is None:
+            due = due.astimezone()
+        return due.astimezone().date()
 
     @classmethod
     def _redact_credentials(cls, items: List[Dict]) -> List[Dict]:
@@ -3730,10 +3848,6 @@ class MemoryMixin(ProceduralMemoryMixin):
         if self._looks_like_credential(content):
             logger.info("[MemoryMixin] not storing a lesson that carries a credential")
             return
-        # One lesson per operation: `pytest -q` and `pytest tests/` differ only
-        # in argument text, and two rows would split confidence between them.
-        for stale in existing:
-            self._forget_lesson(stale["id"])
         kid = self._memory_store.store(
             category="note",
             content=content,
@@ -3743,6 +3857,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             confidence=LESSON_INITIAL_CONFIDENCE,
             metadata={"operation": operation, "fix": call},
         )
+        # One lesson per operation: `pytest -q` and `pytest tests/` differ only
+        # in argument text, and two rows would split confidence between them.
+        # Forgotten only after the store succeeds, so a refused lesson keeps the old one.
+        for stale in existing:
+            if stale["id"] != kid:
+                self._forget_lesson(stale["id"])
         lesson = {"id": kid, "content": content}
         self._confirmed_lessons_set().add(kid)
         for bucket in ("_session_lessons", "_turn_lessons"):
@@ -4305,17 +4425,29 @@ class MemoryMixin(ProceduralMemoryMixin):
             sens = sensitive.lower() == "true" if sensitive else False
 
             was_truncated = len(fact) > MAX_CONTENT_LENGTH
-            knowledge_id = mixin._memory_store.store(
-                category=category,
-                content=fact[:MAX_CONTENT_LENGTH],
-                domain=domain or None,
-                due_at=due_at or None,
-                source="tool",
-                context=ctx,
-                sensitive=sens,
-                entity=entity or None,
-                confidence=0.7,  # Explicit remember() calls are high-confidence
-            )
+            try:
+                # The full fact: the store checks it for markup, then truncates.
+                knowledge_id = mixin._memory_store.store(
+                    category=category,
+                    content=fact,
+                    domain=domain or None,
+                    due_at=due_at or None,
+                    source="tool",
+                    context=ctx,
+                    sensitive=sens,
+                    entity=entity or None,
+                    confidence=0.7,  # Explicit remember() calls are high-confidence
+                )
+            except MemoryContentError as e:
+                return {
+                    "status": "error",
+                    "stored": 0,
+                    "unrun_tool_calls": e.unrun_tool_calls,
+                    "message": (
+                        f"Not stored: {e} Use one remember call per fact, and "
+                        "tell the user only what was actually stored."
+                    ),
+                }
             mixin._embed_and_index(
                 knowledge_id, fact[:MAX_CONTENT_LENGTH], "remembered fact"
             )
@@ -4325,6 +4457,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
             return {
                 "status": "stored",
+                "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
@@ -4548,7 +4681,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                             "keep secrets in memory."
                         ),
                     }
-                kwargs["content"] = content[:MAX_CONTENT_LENGTH]
+                # Untruncated: the store checks it for markup, then truncates.
+                kwargs["content"] = content
             if category:
                 if category not in EXTRACTABLE_CATEGORIES:
                     return {
@@ -4599,7 +4733,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Re-embed if content changed
                 if content:
                     mixin._embed_and_index(
-                        knowledge_id, kwargs["content"], "edited memory", replace=True
+                        knowledge_id,
+                        content[:MAX_CONTENT_LENGTH],
+                        "edited memory",
+                        replace=True,
                     )
                 mixin._refresh_if_shown(knowledge_id)
 

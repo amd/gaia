@@ -53,6 +53,19 @@ type Instance struct {
 	APIVersion string  `json:"api_version"`
 	Service    string  `json:"service"`
 	StartedAt  float64 `json:"started_at"`
+	// RelayBudget is what the daemon reported on its last status probe.
+	RelayBudget RelayBudget `json:"-"`
+}
+
+// RelayBudget is the relay's idle-read budget for agent queries, as the daemon
+// computes it from its own environment.
+type RelayBudget struct {
+	// Known is false for a daemon that predates reporting it.
+	Known bool
+	// Seconds is the budget; 0 with Known means no limit.
+	Seconds float64
+	// Err is the daemon's own complaint about an unusable setting.
+	Err string
 }
 
 // BaseURL is the daemon's loopback root, e.g. "http://127.0.0.1:51234".

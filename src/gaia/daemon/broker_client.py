@@ -126,10 +126,13 @@ def attach_broker_env() -> bool:
     # Deferred: keeps the daemon client (and its httpx/probe path) off the
     # import path of standalone callers that never attach.
     from gaia.daemon.client import attach
-    from gaia.daemon.errors import DaemonVersionError
+    from gaia.daemon.errors import DaemonBusyError, DaemonVersionError
 
     try:
         inst = attach()
+    except DaemonBusyError as e:
+        # Running but not answering. Loading unbrokered would race its sidecars.
+        raise BrokerUnavailableError(f"could not reserve the model slot: {e}") from e
     except DaemonVersionError as e:
         # A MAJOR-skewed daemon left running is an expected state after an app
         # update (see gaia.daemon.client), and it must not take down commands

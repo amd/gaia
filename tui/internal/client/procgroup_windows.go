@@ -39,9 +39,15 @@ func newProcessGroup() (*processGroup, error) {
 	// KILL_ON_JOB_CLOSE: if this process dies without ever calling terminate,
 	// the handle closes with it and Windows reaps the tree. Without it a
 	// crashed TUI leaks a running agent holding the model slot.
+	//
+	// BREAKAWAY_OK lets a child that asks (CREATE_BREAKAWAY_FROM_JOB) leave.
+	// Only GAIA's shared daemon and model server ask, so closing one session
+	// never stops them for the others. Tool children don't ask, so cancel
+	// still reaps them.
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
-			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+				windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK,
 		},
 	}
 	if _, err := windows.SetInformationJobObject(

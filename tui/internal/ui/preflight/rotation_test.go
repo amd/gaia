@@ -131,6 +131,9 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(initReady))
 	case "/v1/email/connectors":
 		_, _ = w.Write([]byte(connectorsReady))
+	case "/daemon/v1/agents/email/ensure":
+		// A restarted daemon starts its sidecars again when a relayed call needs one.
+		_, _ = w.Write([]byte(`{"agent_id":"email","state":"running"}`))
 	case "/v1/email/search":
 		// The mailbox row's credential probe. It is a relayed POST like any
 		// other, so a token rotation lands on it too.
