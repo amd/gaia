@@ -13,10 +13,18 @@ Comparing the manifest against src/gaia/daemon/constants.py would NOT have
 caught it — this tree already has 1.1. The break is between the tree and a
 published wheel, so several tests below exist specifically to prove the guard
 never answers for a released version by reading this tree.
+
+What is "released" comes from PyPI on every run (#3922); these tests stand in
+for PyPI and refuse any real network read.
 """
 
+import io
+import json
 import sys
+import urllib.error
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -35,28 +43,117 @@ AGENT_UI_MANIFEST = REPO_ROOT / "hub" / "components" / "agent-ui" / "gaia-agent.
 
 TUI_FLOOR = guard.HostAPIFloor(major=1, minor=1)
 
-# Stand-ins for "what each release shipped", so these tests do not move when a
-# real release is added to the production table.
-FAKE_RELEASED = {(0, 22, 0): "1", (0, 23, 0): "1.1"}
-FAKE_LATEST = (0, 23, 0)
-FAKE_PUBLISHED = {(0, 22, 0), (0, 23, 0)}
+# Stand-ins for PyPI, so these tests do not move when a real release ships.
+# None = the wheel has no gaia/daemon package.
+FAKE_WHEELS = {"0.21.2": None, "0.22.0": "1", "0.23.0": "1.1"}
+FAKE_PUBLISHED = {guard.parse_version(v): v for v in FAKE_WHEELS}
+
+# What real releases shipped, read out of their PyPI wheels. Published wheels
+# are immutable, so this never needs a new row; it only feeds the committed
+# manifests through the guard without the network.
+KNOWN_WHEELS = {
+    "0.21.2": None,
+    "0.22.0": "1",
+    "0.23.0": "1.1",
+    "0.24.0": "1.1",
+    "0.24.1": "1.1",
+}
+KNOWN_PUBLISHED = {guard.parse_version(v): v for v in KNOWN_WHEELS}
+
+_real_fetch = guard._fetch
+
+
+@pytest.fixture(autouse=True)
+def no_network():
+    """Any unplanned PyPI read fails the test instead of reaching the internet."""
+
+    def refuse(url, timeout):
+        raise AssertionError(f"unexpected network read of {url}")
+
+    with patch.object(guard, "_fetch", side_effect=refuse):
+        yield
+
+
+def fake_fetcher(wheels=None):
+    wheels = FAKE_WHEELS if wheels is None else wheels
+    return lambda raw: wheels[raw]
 
 
 def exploding_fetcher(version):
-    raise AssertionError(f"unexpected PyPI fetch for {version}")
+    raise AssertionError(f"unexpected wheel fetch for {version}")
+
+
+def published_from(wheels):
+    return {guard.parse_version(v): v for v in wheels}
 
 
 def check(min_gaia_version, *, tree_api="1.1", floor=TUI_FLOOR, **kwargs):
     """Run the component check against a synthetic manifest."""
+    kwargs.setdefault("published", FAKE_PUBLISHED)
+    kwargs.setdefault("fetcher", fake_fetcher())
     return guard.check_component(
         "terminal-hub",
         {"min_gaia_version": min_gaia_version},
         floor=floor,
         tree_api=tree_api,
-        released_api=FAKE_RELEASED,
-        latest_release=FAKE_LATEST,
         **kwargs,
     ).problems
+
+
+def resolve(min_gaia_version, **kwargs):
+    kwargs.setdefault("tree_api", "1.1")
+    kwargs.setdefault("published", FAKE_PUBLISHED)
+    kwargs.setdefault("fetcher", fake_fetcher())
+    return guard.resolve_daemon_api(min_gaia_version, **kwargs)
+
+
+def wheel_bytes(daemon_api):
+    """A wheel archive, with or without gaia/daemon/constants.py."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("gaia/version.py", '__version__ = "x"\n')
+        if daemon_api is not None:
+            archive.writestr(
+                guard.WHEEL_MEMBER, f'DAEMON_API_VERSION = "{daemon_api}"\n'
+            )
+    return buf.getvalue()
+
+
+def pypi_release(version, *, yanked=False, wheel=True):
+    files = [
+        {
+            "packagetype": "sdist",
+            "filename": f"amd_gaia-{version}.tar.gz",
+            "url": f"https://files.example/{version}.tar.gz",
+            "yanked": yanked,
+        }
+    ]
+    if wheel:
+        files.append(
+            {
+                "packagetype": "bdist_wheel",
+                "filename": f"amd_gaia-{version}-py3-none-any.whl",
+                "url": f"https://files.example/{version}.whl",
+                "yanked": yanked,
+            }
+        )
+    return files
+
+
+class FakePyPI:
+    """Serves a JSON index and wheels through guard._fetch, recording reads."""
+
+    def __init__(self, wheels):
+        self.wheels = wheels
+        self.releases = {v: pypi_release(v) for v in wheels}
+        self.reads = []
+
+    def __call__(self, url, timeout):
+        self.reads.append(url)
+        if url == guard.PYPI_JSON_URL:
+            return json.dumps({"releases": self.releases}).encode()
+        version = url.rsplit("/", 1)[1].removesuffix(".whl")
+        return wheel_bytes(self.wheels[version])
 
 
 # ── The regression this guard exists for ────────────────────────────────────
@@ -71,7 +168,7 @@ def test_min_gaia_version_naming_a_release_without_the_agents_api_fails():
 
 
 def test_a_released_version_is_never_answered_from_this_tree():
-    """The exact hole in the old state: the tree says 1.1, the release shipped 1.
+    """The tree says 1.1, the release shipped 1.
 
     If resolution ever consults the tree for a released version, this passes and
     the guard is worthless.
@@ -90,145 +187,190 @@ def test_first_release_shipping_the_required_api_passes():
     assert check("0.23.0") == []
 
 
-# ── Resolution rules ────────────────────────────────────────────────────────
+# ── A new release needs no code edit ───────────────────────────────────────
+
+
+def test_a_newly_published_release_is_read_from_its_wheel_with_no_table_edit():
+    """The drift #3922 tracks: a release shipped and nobody recorded it."""
+    wheels = {**FAKE_WHEELS, "0.24.0": "1.2"}
+    api, provenance = resolve(
+        "0.24.0",
+        tree_api="9.9",
+        published=published_from(wheels),
+        fetcher=fake_fetcher(wheels),
+    )
+    assert api == "1.2"
+    assert "amd-gaia==0.24.0 wheel" in provenance
+
+
+def test_a_new_release_that_regressed_the_api_is_caught_though_the_tree_is_fine():
+    """With a stale table this resolved from the tree and passed."""
+    wheels = {**FAKE_WHEELS, "0.24.0": "1"}
+    problems = check(
+        "0.24.0",
+        tree_api="1.1",
+        published=published_from(wheels),
+        fetcher=fake_fetcher(wheels),
+    )
+    assert problems and "ships v1 " in problems[0]
+
+
+def test_short_version_resolves_to_the_padded_pypi_release():
+    """min_gaia_version "0.23" must read the 0.23.0 wheel, not miss it."""
+    seen = []
+    api, _ = resolve("0.23", fetcher=lambda raw: (seen.append(raw), "1.1")[1])
+    assert api == "1.1"
+    assert seen == ["0.23.0"]
+
+
+# ── Unreleased versions ─────────────────────────────────────────────────────
 
 
 def test_unreleased_version_resolves_from_this_tree():
-    """A version above every known release can only be cut from this tree."""
-    api, provenance = guard.resolve_daemon_api(
-        "0.24.0",
-        tree_api="1.1",
-        released_api=FAKE_RELEASED,
-        latest_release=FAKE_LATEST,
-    )
+    """A version above every published release can only be cut from this tree."""
+    api, provenance = resolve("0.24.0", fetcher=exploding_fetcher)
     assert api == "1.1"
     assert "this tree" in provenance
 
 
 def test_unreleased_version_fails_when_the_tree_does_not_satisfy_the_floor():
-    assert check("0.24.0", tree_api="1.0") != []
+    assert check("0.24.0", tree_api="1.0", fetcher=exploding_fetcher) != []
 
 
-def test_released_version_missing_from_the_table_is_a_hard_error():
-    """No guessing: an unknown release must stop the check, not fall back."""
-    with pytest.raises(guard.CheckError, match="no row in RELEASED_DAEMON_API"):
-        guard.resolve_daemon_api(
-            "0.22.5",
-            tree_api="1.1",
-            released_api=FAKE_RELEASED,
-            latest_release=FAKE_LATEST,
-        )
-
-
-def test_verify_mode_reads_a_published_version_from_the_wheel_not_the_table():
-    """Ground truth wins, even over a stale LATEST_CORE_RELEASE."""
-    api, provenance = guard.resolve_daemon_api(
-        "0.23.0",
-        tree_api="9.9",
-        verify_released=True,
-        released_api=FAKE_RELEASED,
-        latest_release=(0, 22, 0),  # stale on purpose
-        published=FAKE_PUBLISHED,
-        fetcher=lambda _v: "1.1",
-    )
-    assert api == "1.1"
-    assert "wheel" in provenance
-
-
-def test_verify_mode_does_not_trust_a_stale_latest_release_constant():
-    """The regression the first version of this guard shipped with.
-
-    With LATEST_CORE_RELEASE stale, a released version used to take the
-    "unreleased -> read this tree" path and never touch PyPI.
-    """
-    problems = guard.check_component(
-        "terminal-hub",
-        {"min_gaia_version": "0.23.0"},
-        floor=TUI_FLOOR,
-        tree_api="1.1",  # tree looks fine...
-        verify_released=True,
-        released_api=FAKE_RELEASED,
-        latest_release=(0, 22, 0),  # ...and the constant says 0.23.0 is unreleased
-        published=FAKE_PUBLISHED,
-        fetcher=lambda _v: "1",  # ...but the wheel actually shipped v1
-    ).problems
-    assert problems, "verify mode must read the wheel, not fall back to the tree"
-
-
-def test_verify_mode_uses_the_tree_only_when_pypi_has_no_such_release():
-    api, provenance = guard.resolve_daemon_api(
-        "0.99.0",
+def test_the_release_being_cut_reads_its_wheel_once_pypi_has_it():
+    """publish.yml may finish before the components run; then the wheel wins."""
+    wheels = {**FAKE_WHEELS, "0.24.0": "1"}
+    problems = check(
+        "0.24.0",
         tree_api="1.1",
-        verify_released=True,
-        released_api=FAKE_RELEASED,
-        latest_release=FAKE_LATEST,
-        published=FAKE_PUBLISHED,
-        fetcher=exploding_fetcher,
+        published=published_from(wheels),
+        fetcher=fake_fetcher(wheels),
+        cutting=(0, 24, 0),
     )
+    assert problems, "a published wheel must outrank the tree, even when cutting"
+
+
+def test_a_backport_being_cut_below_the_latest_release_resolves_from_the_tree():
+    api, provenance = resolve("0.22.1", fetcher=exploding_fetcher, cutting=(0, 22, 1))
     assert api == "1.1"
-    assert "no such release yet" in provenance
+    assert "this tree" in provenance
 
 
-# ── The released-table audit ────────────────────────────────────────────────
+# ── A tag that never became a release ───────────────────────────────────────
 
 
-def test_audit_detects_a_pinned_row_that_disagrees_with_the_wheel():
-    with pytest.raises(guard.CheckError, match="RELEASED_DAEMON_API is wrong"):
-        guard.audit_released_table(
-            published=FAKE_PUBLISHED,
-            released_api=FAKE_RELEASED,
-            latest_release=FAKE_LATEST,
-            fetcher=lambda _v: "1.4",
-        )
+def test_a_tag_without_a_published_release_is_a_hard_error():
+    """v0.23.1 was tagged but never reached PyPI. Never answer it from the tree."""
+    with pytest.raises(guard.CheckError, match="PyPI has no installable 0.22.5"):
+        resolve("0.22.5", fetcher=exploding_fetcher)
 
 
-def test_audit_detects_a_stale_latest_release_constant():
-    with pytest.raises(guard.CheckError, match="LATEST_CORE_RELEASE is stale"):
-        guard.audit_released_table(
-            published=FAKE_PUBLISHED,
-            released_api=FAKE_RELEASED,
-            latest_release=(0, 22, 0),
-            fetcher=lambda v: FAKE_RELEASED[guard.parse_version(v)],
-        )
+def test_a_tag_without_a_release_is_not_rescued_by_an_unrelated_cut():
+    with pytest.raises(guard.CheckError, match="no installable"):
+        resolve("0.22.5", fetcher=exploding_fetcher, cutting=(0, 23, 1))
 
 
-def test_audit_ignores_the_release_currently_being_cut():
-    """At tag time the core wheel may already be on PyPI; that is not staleness."""
-    guard.audit_released_table(
-        cutting=(0, 23, 0),
-        published=FAKE_PUBLISHED,
-        released_api={(0, 22, 0): "1"},
-        latest_release=(0, 22, 0),
-        fetcher=lambda _v: "1",
-    )
+def test_prereleases_alone_do_not_count_as_a_release():
+    index = {
+        "releases": {
+            "0.23.0": pypi_release("0.23.0"),
+            "0.24.0rc3": pypi_release("0.24.0rc3"),
+        }
+    }
+    assert set(guard.released_versions(index)) == {(0, 23, 0)}
 
 
-def test_audit_passes_when_the_table_matches_pypi():
-    guard.audit_released_table(
-        published=FAKE_PUBLISHED,
-        released_api=FAKE_RELEASED,
-        latest_release=FAKE_LATEST,
-        fetcher=lambda v: FAKE_RELEASED[guard.parse_version(v)],
-    )
+def test_a_release_with_no_uploaded_files_does_not_count():
+    index = {"releases": {"0.23.0": pypi_release("0.23.0"), "0.23.1": []}}
+    assert set(guard.released_versions(index)) == {(0, 23, 0)}
 
 
-def test_verify_released_run_actually_audits_the_table():
-    """Catches "the flag is wired but does no work" — the defect this replaced.
+def test_a_fully_yanked_release_does_not_count():
+    index = {
+        "releases": {
+            "0.23.0": pypi_release("0.23.0"),
+            "0.23.1": pypi_release("0.23.1", yanked=True),
+        }
+    }
+    assert set(guard.released_versions(index)) == {(0, 23, 0)}
 
-    The committed manifests pin an unreleased version, so a manifest-driven
-    check makes zero PyPI calls. The audit must run regardless.
-    """
-    fetched = []
 
-    guard.run(
-        verify_released=True,
-        release_version="0.23.0",
-        published=FAKE_PUBLISHED,
-        released_api=FAKE_RELEASED,
-        latest_release=FAKE_LATEST,
-        fetcher=lambda v: (fetched.append(v), FAKE_RELEASED[guard.parse_version(v)])[1],
-    )
-    assert fetched, "--verify-released must read published wheels, not just the tree"
+def test_a_release_with_only_an_sdist_fails_loudly_when_its_api_is_needed():
+    index = {"releases": {"0.23.0": pypi_release("0.23.0", wheel=False)}}
+    with pytest.raises(guard.CheckError, match="no unyanked wheel"):
+        guard.fetch_released_daemon_api("0.23.0", index)
+
+
+# ── PyPI unreachable or wrong ───────────────────────────────────────────────
+
+
+def test_pypi_unreachable_fails_the_run_instead_of_answering_from_the_tree():
+    guard_error = guard.CheckError("could not reach PyPI")
+    with patch.object(guard, "_fetch", side_effect=guard_error):
+        with pytest.raises(guard.CheckError, match="could not reach PyPI"):
+            guard.run()
+
+
+def test_pypi_http_error_fails_the_cli_with_an_actionable_error(capsys):
+    error = urllib.error.HTTPError(guard.PYPI_JSON_URL, 503, "down", {}, None)
+    with patch.object(guard, "_fetch", side_effect=_real_fetch):
+        with patch("urllib.request.urlopen", side_effect=error):
+            assert guard.main([]) == 1
+    out = capsys.readouterr().out
+    assert "::error::PyPI returned HTTP 503" in out
+    assert "OK:" not in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"<html>maintenance</html>", b"{}", b'{"releases": {}}', b"[]"],
+    ids=["not-json", "no-releases-key", "empty-releases", "not-an-object"],
+)
+def test_a_malformed_index_is_a_hard_error_not_zero_releases(body):
+    """An empty answer would make every version "unreleased" — answered by the tree."""
+    with patch.object(guard, "_fetch", return_value=body):
+        with pytest.raises(guard.CheckError):
+            guard.load_pypi_index()
+
+
+def test_an_index_with_only_prereleases_is_a_hard_error():
+    index = {"releases": {"0.25.0rc1": pypi_release("0.25.0rc1")}}
+    with pytest.raises(guard.CheckError, match="no installable final release"):
+        guard.released_versions(index)
+
+
+# ── The live read path, end to end over a fake PyPI ─────────────────────────
+
+
+def _terminal_hub_minimum():
+    manifest = yaml.safe_load(TERMINAL_HUB_MANIFEST.read_text(encoding="utf-8"))
+    return manifest["min_gaia_version"]
+
+
+def test_run_reads_the_index_once_and_only_the_wheel_it_needs():
+    fake = FakePyPI(KNOWN_WHEELS)
+    with patch.object(guard, "_fetch", side_effect=fake):
+        assert guard.run().problems == []
+    assert fake.reads.count(guard.PYPI_JSON_URL) == 1
+    wheel_reads = [url for url in fake.reads if url != guard.PYPI_JSON_URL]
+    wanted = _terminal_hub_minimum()
+    expected = [f"https://files.example/{wanted}.whl"] if wanted in KNOWN_WHEELS else []
+    assert wheel_reads == expected
+
+
+def test_run_against_a_fake_pypi_catches_a_release_that_ships_too_old_an_api():
+    """Same path as production: index JSON, then the wheel bytes."""
+    fake = FakePyPI({**KNOWN_WHEELS, _terminal_hub_minimum(): "1"})
+    with patch.object(guard, "_fetch", side_effect=fake):
+        problems = guard.run().problems
+    assert any("ships v1 " in p for p in problems), problems
+
+
+def test_a_wheel_without_the_daemon_package_reads_as_no_daemon():
+    fake = FakePyPI({"0.21.2": None})
+    with patch.object(guard, "_fetch", side_effect=fake):
+        index = guard.load_pypi_index()
+        assert guard.fetch_released_daemon_api("0.21.2", index) is None
 
 
 # ── Publish gate ────────────────────────────────────────────────────────────
@@ -255,6 +397,8 @@ def test_publish_gate_applies_to_components_without_a_daemon_floor():
         floor=None,
         tree_api="1.1",
         release_version="0.22.0",
+        published=FAKE_PUBLISHED,
+        fetcher=exploding_fetcher,
     ).problems
     assert any("cannot publish under 0.22.0" in p for p in problems)
 
@@ -365,23 +509,26 @@ def test_floor_requires_an_exact_major():
 
 def test_real_components_declare_a_serviceable_minimum_core():
     """The end-to-end guard over the manifests as they are committed."""
-    assert guard.run().problems == []
+    result = guard.run(published=KNOWN_PUBLISHED, fetcher=fake_fetcher(KNOWN_WHEELS))
+    assert result.problems == []
 
 
 def test_terminal_hub_minimum_is_not_a_release_that_predates_the_agents_api():
     """The invariant that actually fails if someone lowers the manifest again.
 
-    Stated against the released table rather than ``LATEST_CORE_RELEASE``: once a
-    shipped core serves the floor (0.23.0 serves 1.1), "must name a future
-    release" stops being true while the real rule -- never name a release whose
-    daemon cannot serve the hub -- still holds.
+    Stated against what releases shipped rather than "must name a future
+    release": once a shipped core serves the floor (0.23.0 serves 1.1) that
+    stops being true, while the real rule -- never name a release whose daemon
+    cannot serve the hub -- still holds.
     """
     manifest = yaml.safe_load(TERMINAL_HUB_MANIFEST.read_text(encoding="utf-8"))
     declared = guard.parse_version(manifest["min_gaia_version"])
     too_old = sorted(
         version
-        for version, api in guard.RELEASED_DAEMON_API.items()
-        if not TUI_FLOOR.satisfied_by(guard.parse_api_version(api))
+        for version, api in (
+            (guard.parse_version(raw), api) for raw, api in KNOWN_WHEELS.items()
+        )
+        if api is None or not TUI_FLOOR.satisfied_by(guard.parse_api_version(api))
     )
     assert all(declared > version for version in too_old), (
         f"terminal-hub declares min_gaia_version {manifest['min_gaia_version']}, which "

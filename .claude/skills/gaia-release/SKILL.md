@@ -241,11 +241,8 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
      hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
    python util/check_component_core_api.py --release-version <version>
    ```
-
-   Finally, record what the **previous** release shipped in `RELEASED_DAEMON_API`
-   in [util/check_component_core_api.py](../../../util/check_component_core_api.py) — the
-   guard resolves an already-published version from that table, and a missing row
-   makes it fall back to trusting this tree, which is the drift it exists to catch.
+   The guard reads what each published release shipped straight from PyPI, so it
+   needs network access and there is no table of releases to update.
 
 7. **Confirm `__version__` is correct.**
    ```bash
