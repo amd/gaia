@@ -12,6 +12,7 @@ import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
@@ -49,8 +50,9 @@ interface MessageBubbleProps {
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
+    const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
+    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
     const wasActiveRef = useRef(active);
     const textLengthRef = useRef(text.length);
     textLengthRef.current = text.length;
@@ -58,19 +60,19 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     // Type out characters
     useEffect(() => {
         if (phase !== 'typing') return;
-        if (chars >= text.length) { setPhase('idle'); return; }
+        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
         const timer = setTimeout(() => setChars(c => c + 1), 30);
         return () => clearTimeout(timer);
-    }, [phase, chars, text.length]);
+    }, [phase, chars, text.length, reduceMotion]);
 
     // Detect active → false: start erasing
     useEffect(() => {
         if (wasActiveRef.current && !active) {
             setChars(textLengthRef.current);
-            setPhase('erasing');
+            setPhase(reduceMotion ? 'done' : 'erasing');
         }
         wasActiveRef.current = active;
-    }, [active]);
+    }, [active, reduceMotion]);
 
     // Erase characters
     useEffect(() => {
@@ -98,7 +100,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
-        <span className="thinking-indicator">
+        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
