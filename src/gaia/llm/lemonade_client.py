@@ -544,6 +544,20 @@ def _slots_in_flags(flags: List[str]) -> Optional[int]:
     return None
 
 
+# Called with the model's name after this process loads a model.
+_MODEL_LOAD_LISTENERS: List[Callable[[str], None]] = []
+
+
+def add_model_load_listener(listener: Callable[[str], None]) -> None:
+    """Call *listener(model_name)* after every model this process loads.
+
+    How the Agent UI keeps count of the models it loaded itself, including
+    the ones its agents reload mid-turn.
+    """
+    if listener not in _MODEL_LOAD_LISTENERS:
+        _MODEL_LOAD_LISTENERS.append(listener)
+
+
 def profile_ctx_size(device: Optional[str]) -> int:
     """Context window for *device*'s profile.
 
@@ -6434,6 +6448,12 @@ class LemonadeClient:
         if manages_embedder_backend(model_name):
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
+        for listener in list(_MODEL_LOAD_LISTENERS):
+            try:
+                listener(model_name)
+            except Exception as e:  # pylint: disable=broad-except
+                # The model is loaded; a bookkeeping failure must not undo that.
+                self.log.warning(f"Model-load listener failed for {model_name}: {e}")
         return response
 
     def _load_model_leased(

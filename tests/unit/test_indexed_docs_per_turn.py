@@ -37,7 +37,7 @@ def test_a_document_still_indexing_is_not_listed_as_indexed():
     release = threading.Event()
     rag = MagicMock(indexed_files={"/docs/b.txt"})
 
-    def index_document(path, progress_callback=None):
+    def index_document(path, progress_callback=None, wait_callback=None):
         assert release.wait(30)
         rag.indexed_files.add(path)
         return {"success": True}

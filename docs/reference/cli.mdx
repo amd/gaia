@@ -444,6 +444,8 @@ gaia install --lemonade --silent
 If a different version of Lemonade is already installed, you'll be prompted to uninstall first.
 </Note>
 
+The installer is downloaded to a file of its own in the temp folder and checked against its expected size and SHA-256 before it runs. It is deleted after a successful install. After a failed one it is kept, and its path is printed so you can retry by hand. If Windows Installer still holds the file, GAIA can't delete it; it logs a warning with the path instead.
+
 ### Uninstall Command
 
 Tiered cleanup of GAIA components. By default, the OS-native uninstall (Add or Remove Programs, drag to Trash, `apt remove`) only removes the app — user data in `~/.gaia/` is preserved. This command lets you escalate cleanup as far as you want.
@@ -3295,7 +3297,12 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 
 A daemon also shuts down on its own, logging why, within a few seconds of its
 home folder or `instance.json` being deleted, since no GAIA command can reach it
-after that. `gaia kill --daemons` finds and stops any that are still left.
+after that. A daemon for any home other than `~/.gaia` (a scratch `GAIA_HOME`,
+say) also shuts down after 120 minutes with no client connected, no sidecar busy
+and no scheduled job pending, and the next GAIA command starts a fresh one. Set
+`GAIA_DAEMON_IDLE_EXIT_MINUTES` to change that limit, or `0` to keep it running.
+The daemon for `~/.gaia` never idles out. `gaia kill --daemons` finds and stops
+any that are still left.
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from

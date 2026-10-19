@@ -12,7 +12,7 @@
     font-family: var(--font-sans);
     line-height: 1.5;
     flex-shrink: 0;
-    animation: slideDown 200ms var(--ease);
+    animation: slideDown var(--duration) var(--ease);
     z-index: 40;
 }
 
@@ -119,7 +119,7 @@
 }
 
 .connection-banner__spinner {
-    animation: spin 1s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 /* Live download progress (Lemonade /v1/pull SSE → /api/system/status). */
@@ -146,7 +146,7 @@
     display: block;
     height: 100%;
     background-color: currentColor;
-    transition: width 200ms ease-out;
+    transition: width var(--duration) var(--ease);
     /* Cap at 100% even if upstream computation drifts (defensive — Lemonade
        has been observed reporting >100% briefly when files repair). */
     max-width: 100%;

@@ -227,9 +227,9 @@ class EmbeddedLemonadeOwner:
             if current.unresponsive_pid and not orphaned:
                 raise EmbeddedLemonadeNotAnswering(
                     f"GAIA's Lemonade Server (pid {current.unresponsive_pid}) is "
-                    "running but not answering; it may still be loading a model. "
-                    f"Wait and retry, or run `gaia init` to restart it. Its log is "
-                    f"{embedded.log_path}."
+                    "running but stuck: it answers nothing, or its model backends "
+                    "have done no work for over 5 minutes. Run `gaia init` to "
+                    f"restart it. Its log is {embedded.log_path}."
                 )
             if current.running and current.version == embedded.version:
                 return self._claim(embedded, current)

@@ -13,6 +13,7 @@ where to look — no silent fallback to an unauthenticated response.
 
 from __future__ import annotations
 
+import math
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ from gaia.daemon.constants import (
     SERVICE_ID,
 )
 from gaia.daemon.paths import instance_path
+from gaia.daemon.timeouts import agent_read_timeout
 
 
 def build_require_token(token: str):
@@ -164,6 +166,13 @@ def create_app(
             "started_at": started_at,
             "uptime_seconds": max(0.0, now - started_at),
         }
+        # Thin clients wait on the relay; they need its budget, not their own shell's.
+        try:
+            budget = agent_read_timeout()
+            # null is "no limit": JSON has no infinity.
+            payload["agent_read_timeout_s"] = None if math.isinf(budget) else budget
+        except ValueError as exc:
+            payload["agent_read_timeout_error"] = str(exc)
         if clock is not None:
             counts = clock.job_counts()
             payload["clock"] = {

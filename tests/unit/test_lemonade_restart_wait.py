@@ -532,7 +532,7 @@ class TestTheDaemonNeverRestartsAServerInUse:
             )
         )
 
-        with pytest.raises(EmbeddedLemonadeNotAnswering, match="not answering"):
+        with pytest.raises(EmbeddedLemonadeNotAnswering, match="running but stuck"):
             owner.ensure()
         assert embedded.started == [] and embedded.stopped == []
 
