@@ -8,6 +8,7 @@ No live server: every request is answered by ``responses`` (or a patched
 OpenAI client), and tests assert the shape of what the client sends.
 """
 
+import itertools
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ from gaia.llm.lemonade_client import (
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
+    LemonadeStatus,
     create_lemonade_client,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
@@ -256,7 +258,8 @@ class TestLemonadeClientMock(unittest.TestCase):
         mock_load.assert_called_once()
         args, kwargs = mock_load.call_args
         self.assertEqual(args[0], TEST_MODEL)  # First arg should be model
-        self.assertEqual(kwargs.get("timeout", None), 60)  # Should have timeout=60
+        # Bounded by GAIA_LLM_LOAD_WAIT: queues behind other apps' loads.
+        self.assertEqual(kwargs.get("timeout"), 600)
         # list_models should also be called when auto_pull=True (default)
         mock_list_models.assert_called_once()
 
@@ -1051,9 +1054,13 @@ class TestLemonadeClientMock(unittest.TestCase):
     def test_ensure_model_loaded_locked_times_an_actual_load(self):
         """A cold load (model not resident) must set _last_model_load_seconds
         to the wall-clock time load_model() actually took."""
-        monotonic_values = iter([100.0, 136.9])
+        monotonic_values = itertools.chain([100.0, 136.9], itertools.repeat(137.0))
         with (
-            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(
+                self.client,
+                "get_status",
+                return_value=LemonadeStatus(running=True, loaded_models=[]),
+            ),
             patch.object(self.client, "list_models", return_value={"data": []}),
             patch.object(self.client, "load_model", return_value={"status": "success"}),
             patch(
@@ -1076,7 +1083,7 @@ class TestLemonadeClientMock(unittest.TestCase):
             patch.object(
                 self.client,
                 "get_status",
-                return_value={"loaded_models": [loaded_entry]},
+                return_value=LemonadeStatus(running=True, loaded_models=[loaded_entry]),
             ),
             patch.object(self.client, "_find_loaded_entry", return_value=loaded_entry),
         ):
@@ -1091,7 +1098,11 @@ class TestLemonadeClientMock(unittest.TestCase):
             (model, state)
         )
         with (
-            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(
+                self.client,
+                "get_status",
+                return_value=LemonadeStatus(running=True, loaded_models=[]),
+            ),
             patch.object(
                 self.client,
                 "list_models",
@@ -1106,7 +1117,11 @@ class TestLemonadeClientMock(unittest.TestCase):
         seen = []
         self.client.model_load_listener = lambda model, state: seen.append(state)
         with (
-            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(
+                self.client,
+                "get_status",
+                return_value=LemonadeStatus(running=True, loaded_models=[]),
+            ),
             patch.object(
                 self.client,
                 "list_models",
@@ -1125,7 +1140,7 @@ class TestLemonadeClientMock(unittest.TestCase):
             patch.object(
                 self.client,
                 "get_status",
-                return_value={"loaded_models": [loaded_entry]},
+                return_value=LemonadeStatus(running=True, loaded_models=[loaded_entry]),
             ),
             patch.object(self.client, "_find_loaded_entry", return_value=loaded_entry),
         ):
@@ -1136,7 +1151,11 @@ class TestLemonadeClientMock(unittest.TestCase):
         """A load that raises must not leave a stale/partial duration behind
         — never misattribute latency to a request that never got a response."""
         with (
-            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(
+                self.client,
+                "get_status",
+                return_value=LemonadeStatus(running=True, loaded_models=[]),
+            ),
             patch.object(self.client, "list_models", return_value={"data": []}),
             patch.object(
                 self.client,

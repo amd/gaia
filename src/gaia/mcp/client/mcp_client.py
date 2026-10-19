@@ -332,6 +332,8 @@ class MCPTool:
                 "required": param_name in required_list,
                 "description": param_schema.get("description", ""),
             }
+            if "items" in param_schema:
+                gaia_params[param_name]["items"] = param_schema["items"]
 
         return {
             "name": f"mcp_{prefix}_{self.name}",
@@ -351,6 +353,35 @@ class MCPTool:
             # works after sanitisation changes the prefix.
             "_mcp_server": raw_server_name,
         }
+
+
+#: The longest wait a server's config may ask for. Beyond it, a hung server
+#: freezes the turn for good; and the OS rejects the wait past ~49 days.
+MAX_SERVER_TIMEOUT_S = 600
+
+
+def server_timeout(name: str, config: Dict[str, Any], default: float) -> float:
+    """The server's own ``timeout`` (seconds) from its config, else *default*.
+
+    Raises:
+        ValueError: If ``timeout`` is set but is not a positive number.
+    """
+    value = config.get("timeout")
+    if value is None:
+        return default
+    # A comparison, not math.isfinite: it refuses NaN and infinity, and an
+    # integer too large for a float, which isfinite would raise on.
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 < value <= MAX_SERVER_TIMEOUT_S
+    ):
+        raise ValueError(
+            f"MCP server '{name}' has timeout {value!r} in its config; it must be "
+            f"a positive number of seconds, at most {MAX_SERVER_TIMEOUT_S}. "
+            "Fix it in mcp_servers.json."
+        )
+    return float(value)
 
 
 class MCPClient:
@@ -396,7 +427,7 @@ class MCPClient:
             ValueError: If ``command`` contains shell syntax, which would not be
                 interpreted. Pass the program and its arguments separately.
         """
-        transport = StdioTransport(command, timeout=timeout, debug=debug)
+        transport = StdioTransport(command, timeout=timeout, debug=debug, name=name)
         return cls(name, transport, debug=debug)
 
     @classmethod
@@ -431,10 +462,22 @@ class MCPClient:
             command=config["command"],
             args=config.get("args"),
             env=resolved_env or None,
-            timeout=timeout,
+            timeout=server_timeout(name, config, timeout),
             debug=debug,
+            name=name,
         )
         return cls(name, transport, debug=debug)
+
+    def _redact(self, value: Any) -> Any:
+        """A server's own reply value, with its launch secrets removed.
+
+        A server can echo the options it was started with back in an error.
+        Structured values are cleaned before anything turns them into text.
+        """
+        # Only a stdio server has a command line and env to echo.
+        if isinstance(self.transport, StdioTransport):
+            return self.transport.redact_value(value)
+        return value
 
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
@@ -476,16 +519,20 @@ class MCPClient:
             if "error" in response:
                 error = response["error"]
                 self.last_error = (
-                    f"Initialization failed: {error.get('message', 'Unknown error')}"
+                    "Initialization failed: "
+                    f"{self._redact(error.get('message', 'Unknown error'))!s}"
                 )
                 logger.debug(f"MCP server '{self.name}': {self.last_error}")
+                # A server that refused to initialise must not keep running.
+                self.disconnect()
                 return False
 
             result = response.get("result", {})
             self.server_info = result.get("serverInfo", {})
 
             logger.debug(
-                f"Connected to '{self.name}' - {self.server_info.get('name', 'Unknown')}"
+                f"Connected to '{self.name}' - "
+                f"{self._redact(self.server_info.get('name', 'Unknown'))}"
             )
             return True
 
@@ -527,7 +574,10 @@ class MCPClient:
 
         if "error" in response:
             error = response["error"]
-            logger.error(f"Failed to list tools: {error.get('message', 'Unknown')}")
+            logger.error(
+                "Failed to list tools: %s",
+                self._redact(error.get("message", "Unknown")),
+            )
             return []
 
         result = response.get("result", {})
@@ -579,7 +629,8 @@ class MCPClient:
             error_msg,
             "",
             "Expected tool schema:",
-            json.dumps(tool_def.input_schema, indent=2),
+            # The schema is the server's text, so it is cleaned like any other.
+            json.dumps(self._redact(tool_def.input_schema), indent=2),
             "",
             "Your arguments:",
             json.dumps(arguments, indent=2),
@@ -614,7 +665,7 @@ class MCPClient:
 
         if "error" in response:
             error = response["error"]
-            error_msg = error.get("message", "Unknown error")
+            error_msg = str(self._redact(error.get("message", "Unknown error")))
 
             # Enhance validation errors with schema context
             if error.get("code") == -32602:  # JSON-RPC invalid params error
@@ -629,7 +680,7 @@ class MCPClient:
 
         if self.debug:
             logger.debug(f"Tool {tool_name} completed successfully")
-            logger.debug(f"  Response: {json.dumps(result, indent=2)}")
+            logger.debug("  Response: %s", json.dumps(self._redact(result), indent=2))
 
         return result
 

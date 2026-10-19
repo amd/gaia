@@ -19,8 +19,9 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
@@ -46,6 +47,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
+from gaia.ui.turn_summary import TurnLedger
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -557,6 +559,12 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_tool = None
         self._confirm_args = None
         self._tool_start_time: Optional[float] = None
+        # The turn's place on the model (``turn_queue.TurnSlot``); given up
+        # while a prompt or question waits on the user. None outside a chat run.
+        self.turn_slot = None
+        # Re-checks the model once the turn has its place back: another chat
+        # may have unloaded or reloaded it meanwhile. Raises when it can't.
+        self.on_model_regained = None
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
         self.background_mode: bool = background_mode
@@ -592,6 +600,8 @@ class SSEOutputHandler(OutputHandler):
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
+        # What this turn's tools used, wrote and contacted, for the side rail.
+        self.turn_ledger = TurnLedger()
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -712,6 +722,7 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
+        self.turn_ledger.tool_started(tool_name)
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -746,6 +757,7 @@ class SSEOutputHandler(OutputHandler):
         # so the frontend can show what the tool was called with.
         if title == "Arguments" and isinstance(data, dict):
             detail = _format_tool_args(self._last_tool_name, data)
+            self.turn_ledger.tool_args(data)
             self._emit(
                 {
                     "type": "tool_args",
@@ -769,6 +781,7 @@ class SSEOutputHandler(OutputHandler):
         summary = _summarize_tool_result(data)
         success = not tool_result_failed(data)
         self._last_tool_success = success
+        self.turn_ledger.tool_result(data, success)
         event = {
             "type": "tool_result",
             "title": title,
@@ -1803,18 +1816,21 @@ class SSEOutputHandler(OutputHandler):
         # Poll in short intervals so cancellation is detected promptly.
         deadline = None if timeout is None else time.monotonic() + timeout
         answered = False
-        while deadline is None or time.monotonic() < deadline:
-            if self.cancelled.is_set():
-                self._clear_pending_confirmation()
-                self._last_denial = Denial(
-                    tool_name,
-                    f"Confirmation for '{tool_name}' was abandoned: the run was "
-                    "cancelled before the user answered.",
-                )
-                return False
-            if self._confirm_event.wait(timeout=0.5):
-                answered = True
-                break
+        with self._away_from_model():
+            while deadline is None or time.monotonic() < deadline:
+                if self.cancelled.is_set():
+                    break
+                if self._confirm_event.wait(timeout=0.5):
+                    answered = True
+                    break
+        if self.cancelled.is_set():
+            self._clear_pending_confirmation()
+            self._last_denial = Denial(
+                tool_name,
+                f"Confirmation for '{tool_name}' was abandoned: the run was "
+                "cancelled before the user answered.",
+            )
+            return False
 
         if not answered:
             self._emit(
@@ -1850,6 +1866,57 @@ class SSEOutputHandler(OutputHandler):
                 f"Tool '{tool_name}' was denied by the user.",
             )
         return result
+
+    def waiting_on(self) -> Optional[str]:
+        """``"permission"`` or ``"question"`` while the turn is paused on the user.
+
+        An answered prompt no longer counts, even while the turn waits in line
+        to get back on the model.
+        """
+        with self._confirm_lock:
+            unanswered = self._confirm_event is None or not self._confirm_event.is_set()
+            if (
+                self._confirm_id is not None and unanswered
+            ) or self._relay_confirm_id is not None:
+                return "permission"
+        with self._user_input_lock:
+            if any(not evt.is_set() for evt in self._user_input_events.values()):
+                return "question"
+        return None
+
+    @contextmanager
+    def _away_from_model(self) -> Iterator[None]:
+        """Let other chats use the model while this turn waits on the user.
+
+        On the way back the turn retakes the model at the front of the line,
+        and a Stop while it waits there ends the turn.
+        """
+        slot = self.turn_slot
+        try:
+            stepped_away = slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            stepped_away = False
+        if not stepped_away:
+            yield
+            return
+        try:
+            yield
+        finally:
+            if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
+                # Withdrawn from the line: the turn must not use the model.
+                self.cancelled.set()
+            elif not self.cancelled.is_set() and self.on_model_regained is not None:
+                try:
+                    self.on_model_regained()
+                except Exception as exc:  # pylint: disable=broad-except
+                    # The model the turn needs is gone and can't be loaded:
+                    # end the turn before the approved tool runs, and say why.
+                    logger.error("Model check after the user answered failed: %s", exc)
+                    self._emit({"type": "agent_error", "content": str(exc)})
+                    self.cancelled.set()
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -2069,11 +2136,12 @@ class SSEOutputHandler(OutputHandler):
 
         # Block until resolved or timeout
         deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            if self.cancelled.is_set():
-                break
-            if evt.wait(timeout=0.5):
-                break
+        with self._away_from_model():
+            while time.monotonic() < deadline:
+                if self.cancelled.is_set():
+                    break
+                if evt.wait(timeout=0.5):
+                    break
 
         # Clean up. Under the lock and as one step, so a resolve landing at the
         # deadline either wins outright or is rejected — never accepted into a

@@ -56,6 +56,7 @@ from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.terminal import (
     background_popen_kwargs,
+    popen_outliving_job,
     windows_hidden_popen_kwargs,
 )
 from gaia.version import LEMONADE_VERSION
@@ -581,6 +582,42 @@ def asset_url(version: str = LEMONADE_VERSION) -> str:
         Absolute GitHub release download URL.
     """
     return f"{GITHUB_RELEASE_BASE}/v{version}/{asset_name(version)}"
+
+
+def _inside(path: str, root: str) -> bool:
+    """Whether *path* is under *root* (both compared case-normalized)."""
+    try:
+        resolved = os.path.normcase(str(Path(path).resolve()))
+        return os.path.commonpath([root, resolved]) == root
+    except (OSError, ValueError):
+        # ValueError: different drives on Windows -- not under root.
+        return False
+
+
+def _anchor_pid(proc, windows: bool = sys.platform == "win32") -> int:
+    """The process whose death orphans *proc*.
+
+    Windows never reparents, so it is the recorded parent. POSIX reparents an
+    orphan to init or a subreaper, so it is the session leader instead: lemond
+    starts its own session, and its backends stay in it.
+    """
+    if windows:
+        return proc.ppid()
+    return os.getsid(proc.pid)  # pylint: disable=no-member
+
+
+def _outlived(anchor: int, born: float) -> bool:
+    """Whether the process *anchor* is gone, or its pid now names a process
+    younger than one created at *born*. One the OS hides counts as alive."""
+    import psutil
+
+    try:
+        return psutil.Process(anchor).create_time() > born
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.AccessDenied as e:
+        log.debug("Treating pid %s as alive: cannot inspect it (%s)", anchor, e)
+        return False
 
 
 def _free_port() -> int:
@@ -1230,11 +1267,16 @@ class EmbeddedLemonade:
         liveness -- one evicting a model, say -- is running and ``busy``. One
         that answers neither is reported through ``unresponsive_pid`` and keeps
         its state, so ``stop`` can still reach it. The first busy sighting is
-        recorded in :attr:`busy_since_path`, so this is not read-only.
+        recorded in :attr:`busy_since_path`, so this is not read-only. Finding
+        the daemon gone also stops the backends it left
+        (:meth:`_reap_orphaned_backends`).
 
         Returns:
             The current :class:`EmbeddedStatus`.
         """
+        return self._status(reap=True)
+
+    def _status(self, reap: bool) -> EmbeddedStatus:
         installed = self.is_installed()
         stopped = EmbeddedStatus(
             installed=installed,
@@ -1333,8 +1375,77 @@ class EmbeddedLemonade:
             )
 
         self._report_gone(state)
-        self._clear_state()
+        recorded = self._read_state()
+        if recorded is not None and recorded.get("pid") == pid:
+            self._clear_state()  # unless a start recorded a new server since
+        if reap:
+            # Safe without the lock: a concurrent start's backends have a live anchor.
+            self._reap_orphaned_backends()
         return stopped
+
+    def _reap_orphaned_backends(self) -> List[int]:
+        """Kill backends a dead lemond of this install left running.
+
+        lemond's llama-server children each hold gigabytes of memory. Killed
+        without its tree, or crashed, lemond leaves them running, and the next
+        start loads the same models again beside them. A process is reaped only
+        when its executable is under this install's ``cache/bin`` and the
+        process that anchored it (:func:`_anchor_pid`) is gone or was replaced
+        by a younger one on the same pid. A tool the user runs from that
+        directory has a live anchor -- their shell -- and is left alone, as are
+        a live lemond's backends and anything outside the install.
+
+        Returns:
+            The pids killed.
+        """
+        import psutil
+
+        bin_dir = self.cache_dir / "bin"
+        # Names first: reading every process's path or parent takes seconds.
+        names = {name.lower() for _, _, files in os.walk(bin_dir) for name in files}
+        if not names:
+            return []
+        bin_root = os.path.normcase(str(bin_dir.resolve()))
+        killed = []
+        for proc in psutil.process_iter(["pid", "name"]):
+            if (proc.info.get("name") or "").lower() not in names:
+                continue
+            try:
+                exe = proc.exe()
+                if not _inside(exe, bin_root):
+                    continue
+                anchor, born = _anchor_pid(proc), proc.create_time()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError) as e:
+                log.debug("Not reaping pid %s: cannot inspect it (%s)", proc.pid, e)
+                continue
+            if not _outlived(anchor, born):
+                continue
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as e:
+                log.warning(
+                    "Backend %s (pid %s) outlived the server that started it, "
+                    "but GAIA may not stop it (%s). End it by hand: Task "
+                    "Manager on Windows, `kill %s` elsewhere.",
+                    exe,
+                    proc.pid,
+                    e,
+                    proc.pid,
+                )
+                continue
+            log.warning(
+                "Stopped backend %s (pid %s): the server that started it is gone",
+                exe,
+                proc.pid,
+            )
+            killed.append(proc)
+        # The next lemond loads models into the memory these release.
+        _, alive = psutil.wait_procs(killed, timeout=5)
+        for proc in alive:
+            log.warning("Backend pid %s is still exiting after 5s", proc.pid)
+        return [proc.pid for proc in killed]
 
     def _wedged(self, pid: int) -> bool:
         """Whether busy *pid* is wedged (see :class:`QuietWatch`).
@@ -1657,7 +1768,7 @@ class EmbeddedLemonade:
         owner_pid: Optional[int],
         owner_started: Optional[float],
     ) -> EmbeddedStatus:
-        existing = self.status()
+        existing = self._status(reap=False)
         if existing.running:
             if existing.version != self.version:
                 raise EmbeddedLemonadeError(
@@ -1693,6 +1804,7 @@ class EmbeddedLemonade:
                 )
             self.install()
 
+        self._reap_orphaned_backends()
         self.write_config()
         chosen = port is None
         port = port or self._choose_port()
@@ -1788,7 +1900,7 @@ class EmbeddedLemonade:
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
-            process = subprocess.Popen(
+            process = popen_outliving_job(
                 argv,
                 env=env,
                 stdout=logfile,

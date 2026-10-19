@@ -208,19 +208,20 @@ def test_mcp_stdio_child_env_lacks_internal_tokens(internal_secrets, server_env)
 
 def test_mcp_stdio_server_process_sees_no_internal_token(internal_secrets):
     """A real child: what the spawned program can read, not just what we passed."""
-    # Waits on stdin so the transport's early-exit check sees a live server.
+    # Answers one JSON-RPC request with the internal names it can see.
     probe = (
-        "import os, sys; sys.stdin.readline(); "
-        f"sys.stdout.write(','.join(n for n in {sorted(INTERNAL)!r} "
-        "if n in os.environ) or 'clean')"
+        "import json, os, sys; req = json.loads(sys.stdin.readline()); "
+        f"seen = ','.join(n for n in {sorted(INTERNAL)!r} if n in os.environ); "
+        "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req['id'], "
+        "'result': {'seen': seen or 'clean'}}) + chr(10)); sys.stdout.flush()"
     )
-    transport = StdioTransport(sys.executable, args=["-c", probe])
+    transport = StdioTransport(sys.executable, args=["-c", probe], timeout=30)
     assert transport.connect() is True
     try:
-        out, _ = transport._process.communicate(input="\n", timeout=30)
+        reply = transport.send_request("probe")
     finally:
         transport.disconnect()
-    assert out.strip() == "clean", out
+    assert reply["result"]["seen"] == "clean", reply
 
 
 def test_external_service_env_lacks_internal_tokens(internal_secrets):

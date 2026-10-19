@@ -162,6 +162,8 @@
 
     --sidebar-w: 260px;
     --content-w: 760px;
+    /* The desktop app's top band, where the window controls sit (main.cjs TITLE_BAR_HEIGHT). */
+    --titlebar-h: 48px;
     /* Motion — every animation and transition takes its timing from here
        (enforced by styles/__tests__/motion.test.ts). */
     --ease: cubic-bezier(0.22, 1, 0.36, 1);       /* things arriving or settling */
@@ -676,6 +678,38 @@ textarea:focus-visible {
         max-height: 100vh;
         border-radius: 0;
     }
+}
+
+/* ── Desktop app window frame ──────────────────────────────────────
+ * The desktop app has no system title bar (main.cjs). An invisible band
+ * across the top drags the window; anything you can click stays clickable,
+ * and the top rows make room for the native window controls. */
+:root[data-titlebar] body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: var(--titlebar-h);
+    -webkit-app-region: drag;
+    pointer-events: none;
+    z-index: 0;
+}
+:root[data-titlebar] .sb-top,
+:root[data-titlebar] .task-header {
+    -webkit-app-region: drag;
+}
+:root[data-titlebar] :is(button, a, input, textarea, select, label, summary,
+    [role="button"], [role="tab"], [role="menu"], [role="dialog"], [contenteditable="true"],
+    .settings-overlay) {
+    -webkit-app-region: no-drag;
+}
+/* Windows and Linux: minimize, maximize and close sit at the top right. */
+:root[data-titlebar="overlay"] .task-header {
+    min-height: var(--titlebar-h);
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+}
+/* macOS: the traffic lights sit at the top left, over the sidebar's first row. */
+:root[data-titlebar="mac"] .sb-top {
+    padding-left: 84px;
 }
 
 .startup {

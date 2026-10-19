@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -556,8 +556,23 @@ export async function deactivateConnectorAgent(
 
 // -- Sessions ------------------------------------------------------------------
 
+/** The backend's largest page of chats. */
+export const SESSION_PAGE_SIZE = 200;
+
+/** Every chat, newest first, fetched page by page so none past the first page go missing. */
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-    return apiFetch('GET', '/sessions');
+    const byId = new Map<string, Session>();
+    let total = 0;
+    for (let offset = 0; ; offset += SESSION_PAGE_SIZE) {
+        const page: { sessions: Session[]; total: number } = await apiFetch(
+            'GET', `/sessions?limit=${SESSION_PAGE_SIZE}&offset=${offset}`,
+        );
+        total = page.total;
+        // A chat updated between two page reads can shift into both; keep one.
+        for (const s of page.sessions) if (!byId.has(s.id)) byId.set(s.id, s);
+        if (page.sessions.length < SESSION_PAGE_SIZE || offset + SESSION_PAGE_SIZE >= total) break;
+    }
+    return { sessions: [...byId.values()], total };
 }
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
@@ -570,6 +585,19 @@ export async function updateSession(id: string, data: { title?: string; title_is
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function getSession(id: string): Promise<Session> {
+    return apiFetch('GET', `/sessions/${id}`);
+}
+
+export async function pinSession(id: string, pinned: boolean): Promise<Session> {
+    return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/** Clear the chat's unread mark. */
+export async function markSessionRead(id: string): Promise<Session> {
+    return apiFetch('POST', `/sessions/${id}/read`);
 }
 
 export async function toggleSessionPrivacy(id: string): Promise<Session> {
@@ -988,56 +1016,6 @@ export function attachToRun(
     return controller;
 }
 
-/** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
-    return apiFetch('GET', '/chat/active');
-}
-
-// -- Tool Confirmation ---------------------------------------------------------
-
-/** Answer a tool confirmation: allow once, always allow this call in this chat, or deny. */
-export async function confirmTool(
-    sessionId: string,
-    approved: boolean,
-    options: { always?: boolean; confirmId?: string } = {},
-): Promise<{ status: string; approved: boolean; granted: string | null }> {
-    return apiFetch('POST', '/chat/confirm-tool', {
-        session_id: sessionId,
-        approved,
-        always: options.always ?? false,
-        ...(options.confirmId ? { confirm_id: options.confirmId } : {}),
-    });
-}
-
-export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
-    return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
-}
-
-export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
-    return apiFetch('GET', '/chat/permissions');
-}
-
-export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
-    return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
-}
-
-/** Revoke one "always allow" grant, or all of them when `key` is omitted. */
-export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
-    const q = key ? `?key=${encodeURIComponent(key)}` : '';
-    return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
-}
-
-/** Answer a pending mid-run `needs_input` question (#2595). The agent
- *  blocks server-side until this call lands, so the run continues once it
- *  resolves. */
-export async function respondToInput(
-    sessionId: string,
-    requestId: string,
-    value: string,
-): Promise<{ status: string; request_id: string }> {
-    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
-}
-
 // -- Documents -----------------------------------------------------------------
 
 export async function listDocuments(): Promise<{ documents: Document[]; total: number; total_size_bytes: number; total_chunks: number }> {
@@ -1129,6 +1107,18 @@ export async function indexFolder(folderPath: string, recursive: boolean = true)
 
 export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {
     return apiFetch('POST', '/files/open', { path, reveal });
+}
+
+/** Open a file in its default app. The server refuses scripts and programs. */
+export async function openFileInApp(path: string): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, launch: true });
+}
+
+/** Whether each path still exists and when it last changed (unchecked outside home). */
+export async function getFileStatus(paths: string[]): Promise<{
+    files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;
+}> {
+    return apiFetch('POST', '/files/status', { paths });
 }
 
 /** Upload a file (image/document) to the server. */

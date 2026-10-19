@@ -423,15 +423,6 @@ def test_a_malformed_context_state_fails_loudly(report):
 # ── Review follow-ups: never present a partial or guessed number ───────────
 
 
-def test_a_retried_turn_has_no_model_split():
-    perf = turn_insights.summarize_turn(
-        LOCAL_RESULT, wall_seconds=40.0, model_id="Gemma-4-E4B-it-GGUF", attempts=2
-    )
-    assert perf["time"]["model_seconds"] is None
-    assert perf["time"]["gaia_seconds"] is None
-    assert perf["time"]["wall_seconds"] == 40.0
-
-
 def test_a_step_without_stats_makes_token_totals_unknown():
     result = {
         "timing_summary": {"llm_seconds": 3.0, "tool_seconds": 0.0},

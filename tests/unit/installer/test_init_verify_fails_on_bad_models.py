@@ -75,11 +75,12 @@ def test_failed_model_makes_init_exit_nonzero_with_fix_steps():
 def test_failed_verification_still_saves_the_profile():
     """A transient verification failure must not leave the user on the default profile."""
     config_cls = MagicMock()
+    saved = MagicMock(default_model=None)
+    config_cls.update.side_effect = lambda mutate, **_kw: mutate(saved)
     rc, out = _run_init(lambda _client, _model: (False, "timed out"), config_cls)
 
     assert rc == 1
-    saved = config_cls.load.return_value
-    saved.save.assert_called_once()
+    config_cls.update.assert_called_once()
     assert saved.profile == "minimal"
     assert "re-run `gaia init` first" in out
 

@@ -116,8 +116,7 @@
                     "pages": [
                       "guides/starter-skills",
                       "guides/custom-agent",
-                      "guides/composing-skills",
-                      "guides/hub-publishing"
+                      "guides/composing-skills"
                     ]
                   },
                   {
@@ -420,7 +419,6 @@
             "pages": [
               "plans/flagship-installer",
               "plans/embedded-onboarding",
-              "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
@@ -554,6 +552,10 @@
     "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
+    {
+      "source": "/guides/hub-publishing",
+      "destination": "/guides/custom-agent"
+    },
     {
       "source": "/guides/terminal-hub",
       "destination": "/guides/tui"

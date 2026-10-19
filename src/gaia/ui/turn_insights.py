@@ -322,12 +322,8 @@ def summarize_turn(
     wall_seconds: float,
     model_id: Optional[str],
     loads: Iterable[Dict[str, Any]] = (),
-    attempts: int = 1,
 ) -> Dict[str, Any]:
     """One turn's performance, from the agent's result and the turn's wall time.
-
-    *attempts* above 1 means the turn was retried: the failed attempt's model
-    time was never recorded, so the model / GAIA split is unknown.
 
     ``model_seconds + gaia_seconds == wall_seconds`` exactly: model time is
     measured (each request's wall time, plus any model load before the turn),
@@ -351,9 +347,7 @@ def summarize_turn(
     llm_s = _num(timing.get("llm_seconds"))
 
     wall = round(wall_seconds, _ROUND)
-    model = (
-        round(llm_s + preload, _ROUND) if llm_s is not None and attempts == 1 else None
-    )
+    model = round(llm_s + preload, _ROUND) if llm_s is not None else None
     split: Dict[str, Any] = {
         "wall_seconds": wall,
         "model_seconds": model,
@@ -387,10 +381,6 @@ def summarize_turn(
         )
     if tokens_in is None or tokens_out is None:
         unknown["tokens"] = "Not every model call reported its token counts."
-    if model is None and attempts > 1:
-        unknown["time"] = (
-            "The turn was retried, and the failed attempt's model time wasn't recorded."
-        )
     return {
         "model": model_id,
         "time": split,

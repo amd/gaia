@@ -24,29 +24,11 @@ class FollowUpInbox(queue.Queue):
     def __init__(self, on_take: Callable[[str], None]):
         super().__init__()
         self._on_take = on_take
-        self._taken: list[str] = []
-        self._reported: list[str] = []
 
     def get(self, block: bool = True, timeout: float | None = None) -> str:
         text = super().get(block, timeout)
-        self._taken.append(text)
-        if text in self._reported:
-            self._reported.remove(text)
-        else:
-            self._on_take(text)
+        self._on_take(text)
         return text
-
-    def requeue_taken(self) -> None:
-        """Offer what this turn took again, for a rerun of the same turn.
-
-        The rerun starts from the user's original message, so without this a
-        follow-up already shown as received would never be answered. It is
-        not reported a second time.
-        """
-        taken, self._taken = self._taken, []
-        self._reported.extend(taken)
-        for text in taken:
-            self.put(text)
 
     def take_untaken(self) -> list[str]:
         """Empty the inbox without reporting, for a turn that has ended."""

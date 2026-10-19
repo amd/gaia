@@ -363,6 +363,10 @@ class SessionResponse(BaseModel):
     inference_provider: Optional[str] = None       # "lemonade", "fireworks", "amd", ...
     inference_provider_name: Optional[str] = None  # "Fireworks AI"
     inference_description: Optional[str] = None    # one sentence, as the TUI shows it
+    pinned: bool = False                    # pinned to the top of the chat list
+    unread: bool = False                    # a turn finished since the chat was last opened
+    last_run_status: Optional[str] = None   # "done" | "failed" | "stopped"
+    kind: str = "chat"                      # "chat" | "eval" | "scheduled"
 
 class SessionListResponse(BaseModel):
     sessions: List[SessionResponse]
@@ -600,6 +604,36 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```
   </Accordion>
 
+  <Accordion title="GET /api/system/work-in-progress">
+    Answers still being written and documents still being indexed. The desktop app reads it when you quit, to warn that the work would be lost; nothing polls it.
+
+    **Response (200):**
+    ```json
+    {
+      "answers": [{ "session_id": "3f2a…", "title": "Trip plan" }],
+      "indexing": [{ "document_id": "9c1d…", "filename": "report.pdf" }]
+    }
+    ```
+
+    `title` or `filename` is `null` when the chat or document was deleted while it ran. `indexing` covers background uploads and the document monitor's re-indexes.
+  </Accordion>
+
+  <Accordion title="POST /api/system/unload-model">
+    Unload one model from the model server to free its memory; the embedding model and any other loaded model stay. The next message loads it again. Used by the desktop tray's **Free memory**.
+
+    **Request:**
+    ```json
+    { "model_name": "Gemma-4-E4B-it-GGUF" }
+    ```
+
+    **Response (200):**
+    ```json
+    { "status": "unloaded" }
+    ```
+
+    `409` while an answer is running or a document is indexing in this app. `422` without a `model_name`. `502` with the model server's error when it refuses.
+  </Accordion>
+
   <Accordion title="POST /api/system/warm-up">
     Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
@@ -740,6 +774,18 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   <Accordion title="PATCH /api/sessions/{session_id}/private">
     Toggle a session's private (incognito) mode.
   </Accordion>
+
+  <Accordion title="PUT /api/sessions/{session_id}/pin">
+    Pin (`{"pinned": true}`) or unpin a chat. Leaves `updated_at` alone, so the
+    chat keeps its place in the recency groups. **Response:** `SessionResponse`
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/read">
+    Clear the chat's `unread` flag; the UI calls it when the chat is opened.
+    Every finished turn sets `unread` and `last_run_status`. A chat titled
+    `Eval: …` or `Schedule: …` is created with `kind` `eval` or `scheduled`.
+    **Response:** `SessionResponse`
+  </Accordion>
 </AccordionGroup>
 
 ### Undo a turn's file changes
@@ -824,6 +870,14 @@ Deleting a chat deletes its copies.
     a **422**, and sending into a chat stored under another agent is a **409**
     ("start a new chat"). See [Flagship only](#flagship-only).
 
+    Turns run one at a time. A streamed turn sent while another chat is working
+    starts at once and waits in line inside its run, sending
+    `{"type": "status", "phase": "queued", "queue_position": 1,
+    "queue_waited_s": 0, "message": "Waiting for the GPU — 1st in line"}`
+    whenever its place changes and again every 10 s while it waits, so the
+    stream is never silent. A non-streamed turn waits up to 60 s, then gets
+    **429**.
+
     **Request:**
     ```json
     {
@@ -891,7 +945,7 @@ Deleting a chat deletes its copies.
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `done` | `message_id` (int), `content` (string) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. |
+    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. |
 
     **Example stream** showing a typical multi-step interaction:
     ```
@@ -909,6 +963,19 @@ Deleting a chat deletes its copies.
     data: {"type": "done", "message_id": 42, "content": "This function initializes the database..."}
     ```
 
+    **`turn_summary`** describes what the turn used and where its data went. It is built from the turn's tool calls and the location of the model that answered, never assumed:
+
+    | Field | Description |
+    |-------|-------------|
+    | `pages` | Web pages the turn read (`url`, `title`, `kind: "page"`). When it only searched, the search hits (`kind: "search_result"`). |
+    | `documents` | Documents it drew passages from: `name` (the name the file was attached under, not the upload copy's ID), `path`, `pages`, `passages`. |
+    | `files` | Files it created or changed and that still exist: `path`, `name`, `openable` (false for scripts, programs and web pages), `mtime` (when the turn ended). |
+    | `sites` | Hosts GAIA's web tools contacted. |
+    | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
+    | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
+    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), or `unknown`. |
+    | `error` | Set, with the rest empty, when the summary could not be built. |
+
     **Non-streaming response:**
     ```json
     {
@@ -921,9 +988,21 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="GET /api/chat/active">
-    Session ids with a currently-running chat turn — a run continues
-    server-side after the user navigates away, so this (not an open SSE
-    connection) is the source of truth for a "still running" indicator.
+    Chats with a turn in flight — a run continues server-side after the user
+    navigates away, so this (not an open SSE connection) is the source of
+    truth for the chat list.
+
+    ```json
+    {
+      "session_ids": ["a", "b"],
+      "queued": ["b"],
+      "awaiting_user": {"a": "permission"}
+    }
+    ```
+
+    `queued` lists chats waiting for the model, next to run first.
+    `awaiting_user` maps a chat paused on the user to `permission` or
+    `question`.
   </Accordion>
 
   <Accordion title="GET /api/chat/attach">
@@ -935,7 +1014,8 @@ Deleting a chat deletes its copies.
   <Accordion title="POST /api/chat/cancel">
     Cancel an active streaming turn without tearing down the HTTP connection
     — sets the SSE handler's cancelled flag and, for an email-relay turn
-    parked in a blocking socket read, forces it to error out.
+    parked in a blocking socket read, forces it to error out. A turn still
+    waiting in line is withdrawn and ends with a cancelled `done` event.
   </Accordion>
 
   <Accordion title="POST /api/chat/user-input">
@@ -999,8 +1079,8 @@ Deleting a chat deletes its copies.
     or `unknown`), `device`, `backend`, `ctx_size`, `weights_gb`,
     `kv_cache_gb` and `free_gb`. `latest_message_id` is the newest answer, so
     a client can tell when it has no record. A value nobody measured is
-    `null`, never 0: a retried turn has no model / GAIA split, and token totals
-    are `null` unless every model call reported them. Turns answered before
+    `null`, never 0: token totals are `null` unless every model call reported
+    them. Turns answered before
     this existed have no entry.
   </Accordion>
 
@@ -1103,6 +1183,7 @@ Deleting a chat deletes its copies.
     |-------|------|-------------|
     | `path` | string | Absolute path to the file or folder to open. |
     | `reveal` | boolean | If `true` (default), reveal the file selected in its parent folder. If `false`, open the containing folder directly. Ignored when `path` is a directory. |
+    | `launch` | boolean | If `true`, open the file itself in its default app instead of the explorer. Only documents, data files and images (for example `.md`, `.pdf`, `.xlsx`, `.png`); anything that could run code, such as `.py`, `.exe` or `.html`, is refused with **400**. |
 
     **Response:**
     ```json
@@ -1116,9 +1197,26 @@ Deleting a chat deletes its copies.
 
     | Status | Condition |
     |--------|-----------|
-    | `400` | Invalid path (empty or contains null bytes), or path is a symbolic link |
+    | `400` | Invalid path (empty or contains null bytes), path is a symbolic link, or `launch` was asked for a folder or a file type that could run |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
+  </Accordion>
+
+  <Accordion title="POST /api/files/status">
+    Report whether each path still exists and when it last changed. The side rail uses it to show files deleted or changed since the turn that wrote them.
+
+    **Request:** `{"paths": ["/home/user/out/report.md"]}` (at most 50 paths).
+
+    **Response:**
+    ```json
+    {
+      "files": [
+        {"path": "/home/user/out/report.md", "exists": true, "mtime": 1792195636.2}
+      ]
+    }
+    ```
+
+    `exists` is `false` for a missing path or a folder, and `null` for a path outside the home folder, which is not checked. Returns **422** for more than 50 paths and **400** for a path containing a null byte.
   </Accordion>
 
   <Accordion title="POST /api/files/upload">
@@ -2176,7 +2274,7 @@ model with no known price reads as unknown, never $0. Cloud models from
 
 ### Hub
 
-Install and uninstall agents from the Agent Hub catalog — the backend for
+Install and uninstall agents from the download server catalog — the backend for
 the desktop app's `gaia://hub/install/<id>` deep link.
 
 <AccordionGroup>

@@ -537,6 +537,19 @@ back to full size after its first turn. `read_tool_output` pages and
 are never changed. Each batch adds `evicted_results` and `evicted_tokens_est`
 to that step's `stats` entry in the conversation log and logs one info line.
 
+**When the backend refuses a request as too long**, the overflow retry runs once,
+eviction on or off. It moves every older tool result out of the request the same
+way, archived whole with a stub that names the `read_tool_output` call that reads
+it back. A large result from the latest step is cut to its first 2,000 characters
+plus a handle to the rest; a `read_tool_output` page the model just asked for, a
+refusal, and a `delegate_task` answer stay whole. Assistant text over 800
+characters is clipped, and any lesson memory learned this turn is restated on the
+last user message. The retry runs only when the shrink frees more than the
+request was over by (read from the backend's error), or, when the error gives no
+numbers, at least a tenth of the request. Otherwise nothing is archived and the
+turn ends with the message that the request needs more than fits, rather than
+repeating a refusal.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
@@ -865,7 +878,14 @@ The flagship TUI persists these traces in private SQLite files under
 `~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
 starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
 explicitly resume the same transcript, or pass `--history-file` to the stdio
-agent. This archive contains tool output, including local file contents.
+agent. A turn is written to the archive when it starts, marked as the running
+process's, and replaced by its full trace when it ends. A turn cut short by the
+TUI closing (stdin reaching end of file, or the output pipe breaking) ends with
+"This answer was interrupted when GAIA closed." So does one the TUI had to
+kill, so a resumed session knows that turn never finished. A process sharing
+the file leaves out another live process's running turn. A turn that failed
+while the TUI was open leaves no entry. This archive contains tool output,
+including local file contents.
 Delete the file to remove it. A host calling `conversation_history.clear()`
 erases both the visible history and its archived turns.
 
@@ -878,8 +898,9 @@ that receives a `HistoryCut(turns, tokens)` when more turns are hidden than
 before. `select_history()` alone compares with the view minus the newest turn;
 pass a `CutReporter` (as `SessionHistory.prepare()` does) to compare with the
 last reported view, so a switch to a smaller model is reported too. The TUI and
-Agent UI use it to tell the user. The terminal event is sent only after the completed trace is committed;
-a storage failure is reported as an error rather than a successful saved turn.
+Agent UI use it to tell the user. The terminal event is sent only after the
+completed trace is committed; a storage failure is reported as an error rather
+than a successful saved turn.
 
 
 <Accordion title="How process_query() Works Internally">

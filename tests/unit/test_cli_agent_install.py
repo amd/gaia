@@ -177,10 +177,10 @@ def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
     cli.handle_agent_list(Namespace(agent_action="list"))
     captured = capsys.readouterr()
     # Loud note on stderr, not a silent empty result.
-    assert "Could not reach the Agent Hub catalog" in captured.err
+    assert "Could not reach the agent catalog" in captured.err
     # Still lists what IS installed.
     assert "email" in captured.out
-    assert "Installed (not in the hub catalog)" in captured.out
+    assert "Installed (not in the catalog)" in captured.out
 
 
 def test_list_empty_state_is_actionable(monkeypatch, capsys):

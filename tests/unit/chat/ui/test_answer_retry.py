@@ -18,6 +18,7 @@ from gaia.ui import _chat_helpers as helpers
 from gaia.ui import answer_retry
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers import chat
+from gaia.ui.turn_queue import turn_queue
 
 pytestmark = pytest.mark.asyncio
 
@@ -69,7 +70,9 @@ def _clean():
 
 
 def _http():
-    state = SimpleNamespace(session_locks={}, chat_semaphore=asyncio.Semaphore(1))
+    # Only what create_app really puts on app.state: a stand-in attribute here
+    # once hid a retry that crashed in the app.
+    state = SimpleNamespace(session_locks={})
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
@@ -412,10 +415,79 @@ async def test_the_model_is_loaded_and_asked_under_one_slot_lease():
     ]
 
 
+async def test_a_retry_holds_the_model_slot_and_gives_it_back(db):
+    """A chat sent while the other model answers waits instead of evicting it."""
+    sid, mid = _chat(db)
+    held = []
+
+    def answer(model, messages):
+        held.append(turn_queue.holder)
+        return {"content": "391", "stats": {"model": model, "retried": True}}
+
+    with patch.object(answer_retry, "answer_with", side_effect=answer):
+        await chat.retry_with(
+            chat.RetryWithRequest(session_id=sid, message_id=mid, model="Other-GGUF"),
+            _http(),
+            db,
+        )
+    assert held == [sid]
+    assert turn_queue.locked() is False
+
+
+async def test_a_failed_retry_still_gives_the_model_slot_back(db):
+    sid, mid = _chat(db)
+    failure = answer_retry.RetryError(503, "Other-GGUF could not be loaded")
+    with patch.object(answer_retry, "answer_with", side_effect=failure):
+        with pytest.raises(HTTPException) as exc:
+            await chat.retry_with(
+                chat.RetryWithRequest(
+                    session_id=sid, message_id=mid, model="Other-GGUF"
+                ),
+                _http(),
+                db,
+            )
+    assert exc.value.status_code == 503
+    assert turn_queue.locked() is False
+
+
+async def test_a_chat_sent_during_a_retry_waits_in_line_then_runs(db):
+    sid, mid = _chat(db)
+    release_answer = asyncio.Event()
+    started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def answer(model, messages):
+        loop.call_soon_threadsafe(started.set)
+        asyncio.run_coroutine_threadsafe(release_answer.wait(), loop).result(5)
+        return {"content": "391", "stats": {"model": model, "retried": True}}
+
+    with patch.object(answer_retry, "answer_with", side_effect=answer):
+        retry = asyncio.create_task(
+            chat.retry_with(
+                chat.RetryWithRequest(
+                    session_id=sid, message_id=mid, model="Other-GGUF"
+                ),
+                _http(),
+                db,
+            )
+        )
+        await asyncio.wait_for(started.wait(), 5)
+        other = asyncio.create_task(turn_queue.acquire("another-chat"))
+        await asyncio.sleep(0)
+        assert turn_queue.holder == sid
+        assert turn_queue.waiting() == ["another-chat"]
+        release_answer.set()
+        await asyncio.wait_for(retry, 5)
+        await asyncio.wait_for(other, 5)
+    assert turn_queue.holder == "another-chat"
+    turn_queue.release()
+    assert turn_queue.locked() is False
+
+
 async def test_retry_waits_while_another_chat_is_answering(db):
     sid, mid = _chat(db)
     http = _http()
-    await http.app.state.chat_semaphore.acquire()
+    await turn_queue.acquire("another-chat")
     try:
         with patch.object(answer_retry, "answer_with") as asked:
             with pytest.raises(HTTPException) as exc:
@@ -427,7 +499,8 @@ async def test_retry_waits_while_another_chat_is_answering(db):
                     db,
                 )
     finally:
-        http.app.state.chat_semaphore.release()
+        turn_queue.release()
     assert exc.value.status_code == 409
     assert "another chat" in exc.value.detail
     asked.assert_not_called()
+    assert turn_queue.locked() is False

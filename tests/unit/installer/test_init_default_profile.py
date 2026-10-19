@@ -457,9 +457,10 @@ class TestFlagshipCompletionMessage:
             cmd._print_completion()
         return "\n".join(printed)
 
-    def test_missing_flagship_names_the_hub_not_the_chat_wheel(self):
+    def test_missing_flagship_names_gaia_init_not_the_chat_wheel(self):
         out = self._completion(available=False)
-        assert "gaia hub install gaia" in out
+        assert "run: gaia init" in out
+        assert "gaia hub" not in out
         assert "incomplete" in out
 
     def test_quick_start_names_something_that_starts_the_flagship(self):

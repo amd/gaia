@@ -25,8 +25,10 @@ import shutil  # noqa: F401  # pylint: disable=unused-import
 import sys
 import threading
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
@@ -52,6 +54,7 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from ._chat_helpers import writing_tool_registry
 from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
@@ -244,8 +247,18 @@ def lemonade_is_remote() -> bool:
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
-def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
-    """Run one scheduled prompt through a fresh GAIA agent; returns the answer."""
+def _run_scheduled_prompt(
+    db: ChatDatabase,
+    prompt: str,
+    cancel_event: Optional[threading.Event] = None,
+    console=None,
+) -> str:
+    """Run one scheduled prompt through a fresh GAIA agent; returns the answer.
+
+    Setting *cancel_event* stops the agent at its next step; *console*
+    (an ``SSEOutputHandler`` in background mode) reports whether a tool is
+    running, and cancelling it ends a streaming model reply.
+    """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError as e:
@@ -273,13 +286,69 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
         dynamic_tools=dynamic_tools,
         memory_incognito=not memory_enabled(db),
     )
-    agent = GaiaAgent(config)
+    with writing_tool_registry():
+        agent = GaiaAgent(config)
     agent._incognito_reason = "memory_off"
+    agent._cancel_event = cancel_event
+    if console is not None:
+        agent.console = console
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
         return val if val is not None else result.get("answer", "")
     return str(result) if result else ""
+
+
+class _ScheduledRuns:
+    """Runs scheduled prompts one at a time, in line with chat turns.
+
+    A run waits in the turn queue (it builds and drives an agent on the same
+    model) and gets *timeout* seconds once it reaches the model. On timeout
+    its agent is told to stop, a model reply in progress included, and the
+    run keeps its place on the model while a model call may still run: chats
+    wait in line meanwhile and see that they are waiting. A run stuck in a
+    tool frees the model; told to stop, it calls the model no more.
+    """
+
+    def __init__(self, db: ChatDatabase, timeout: float):
+        self._db = db
+        self._timeout = timeout
+
+    async def run(self, prompt: str) -> str:
+        from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
+        from gaia.ui.sse_handler import SSEOutputHandler
+        from gaia.ui.turn_queue import turn_queue
+
+        await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
+        try:
+            cancel = threading.Event()
+            # Background mode: nobody is watching, so gated tools are denied.
+            console = SSEOutputHandler(background_mode=True)
+            worker = run_in_own_thread(
+                lambda: _run_scheduled_prompt(
+                    self._db, prompt, cancel_event=cancel, console=console
+                ),
+                name="gaia-scheduled-run",
+            )
+            done, _ = await asyncio.wait({worker}, timeout=self._timeout)
+            if done:
+                return worker.result()
+            cancel.set()
+            console.cancelled.set()
+            if not await wait_until_off_the_model(
+                worker, console, what="Scheduled run"
+            ):
+                logger.error(
+                    "Scheduled run is still running after its %gs timeout; "
+                    "freeing the model while its thread winds down",
+                    self._timeout,
+                )
+            raise asyncio.TimeoutError(
+                f"Scheduled run did not finish within {self._timeout:g}s and was "
+                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+            )
+        finally:
+            turn_queue.release()
 
 
 # ── Application Factory ────────────────────────────────────────────────────
@@ -523,6 +592,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui.scheduler import Scheduler
 
         _sched_timeout = float(os.environ.get("GAIA_SCHEDULE_TIMEOUT", "300"))
+        scheduled_runs = _ScheduledRuns(db, _sched_timeout)
 
         async def _schedule_executor(prompt: str) -> str:
             """Execute a scheduled prompt through a fresh GAIA (flagship) agent.
@@ -542,11 +612,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
                 )
 
-            loop = asyncio.get_running_loop()
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, _run_scheduled_prompt, db, prompt),
-                timeout=_sched_timeout,
-            )
+            return await scheduled_runs.run(prompt)
 
         scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler
@@ -699,12 +765,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
 
-    # Concurrency control for /api/chat/send
-    # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
-    # the number of concurrent chat requests to avoid resource exhaustion.
-    app.state.chat_semaphore = asyncio.Semaphore(
-        1
-    )  # serialize: _TOOL_REGISTRY is global
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock

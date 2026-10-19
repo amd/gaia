@@ -6,6 +6,39 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A context overflow no longer throws away the evidence.** A task that read
+  many documents used to fill a 32K–64K window, after which the overflow retry
+  dropped every older result and the answer was built on whatever was left
+  (#2780). The retry now keeps each result whole behind a handle the model can
+  re-read, and retries only when the request will then fit.
+- **Token counts no longer undercount when the tokenizer data can't load.** On
+  an offline or locked-down machine the counter fell back to characters ÷ 4.28,
+  which undercounts JSON and CJK text, so history that should take half the
+  window could fill it (#5066). It now warns and counts at least one token per
+  three UTF-8 bytes.
+- **A turn queued for the model says so on the stream.** When another process
+  or request is using the model, `/query` now sends `status` events with
+  `phase: "model_queue"` every ~2 s, carrying a `queue` object with the turn's
+  place in line, who holds the model and how long it has waited, then one
+  `granted` update. A turn queued this way leases ahead of background work, and
+  `/query/{run_id}/cancel` takes it out of the queue. Before, the stream went
+  silent for the whole wait, so a client could not tell a queued turn from a
+  dead one.
+- **A turn cut short by closing the TUI is saved as interrupted.** The session
+  history got a turn only once it ended, so closing the TUI mid-turn saved it
+  as an ordinary "stopped" answer, or, if the TUI had to kill the agent, lost
+  the question entirely. The question is now saved when the turn starts, and a
+  turn the TUI's closing cut short ends with "This answer was interrupted when
+  GAIA closed." A resumed session (`GAIA_HISTORY_FILE`) sees it. Questions
+  queued before the close are saved as they ended.
+- **No more approval prompts for files that aren't there.** Naming a missing
+  file or folder outside the allowed paths opened a 10-minute approval prompt,
+  and only after it did the agent learn the file didn't exist; a retry asked
+  again. The tool now says the file wasn't found straight away, without asking,
+  and names an allowed or attached file with the same name. `analyze_data_file`
+  given a bare file name uses the attached file of that name instead of asking
+  about one in the working folder. Secret and protected paths are refused
+  exactly as before, whether or not they exist.
 - **Background memory upkeep no longer wipes the chat's cached prompt.**
   Memory consolidation, reconciliation and skill distillation ran on the
   model slot the conversation uses, so the next message re-read the whole

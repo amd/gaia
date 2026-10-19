@@ -311,7 +311,7 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 				"right program to run.", found.Unverified, catalog.SentinelName)
 		row.Remedy = Remedy{
 			Action:  "Install it again so the install can finish and verify itself.",
-			Command: "gaia hub install " + cfg.AgentID,
+			Command: catalog.InstallCommand(cfg.AgentID),
 			Where:   catalog.AgentDocsURL,
 		}
 		row.Raw = found.Unverified

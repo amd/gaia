@@ -185,16 +185,3 @@ def test_inbox_reports_each_message_as_the_agent_takes_it():
     assert taken == ["a"]
     assert inbox.take_untaken() == ["b"]
     assert taken == ["a"]
-
-
-def test_a_rerun_turn_is_offered_its_followups_again_without_a_second_report():
-    taken = []
-    inbox = followups.FollowUpInbox(taken.append)
-    inbox.put("also the totals")
-    assert inbox.get_nowait() == "also the totals"
-
-    inbox.requeue_taken()
-
-    assert inbox.get_nowait() == "also the totals"
-    assert taken == ["also the totals"]
-    assert inbox.take_untaken() == []

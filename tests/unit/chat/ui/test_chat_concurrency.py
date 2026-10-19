@@ -3,7 +3,7 @@
 
 """Unit tests for GAIA Agent UI chat endpoint concurrency control.
 
-Tests the per-session lock (409) and global semaphore (429) mechanisms
+Tests the per-session lock (409) and the turn-queue release
 in the /api/chat/send endpoint, as well as lock release on error paths.
 """
 
@@ -96,53 +96,12 @@ class TestSessionLockConflict:
             assert r2.status_code == 200
 
 
-class TestGlobalSemaphore429:
-    """Tests for global concurrency semaphore returning 429 Too Many Requests."""
+class TestTurnQueueRelease:
+    """The turn slot is given back after every non-streamed turn.
 
-    def test_semaphore_exhausted_returns_429(self):
-        """When the global semaphore is exhausted, a request gets 429.
-
-        Implementation notes:
-
-        - We use ``Semaphore(0)`` rather than a Semaphore(1) we manually
-          exhaust on a side event loop. The old approach tied the
-          semaphore's internal waiter list to a loop different from the
-          one TestClient uses, producing flaky cross-loop behaviour
-          (sometimes 429 in 60 s, sometimes hung). A semaphore with
-          starting value 0 is exhausted from birth and works on any loop.
-
-        - The endpoint waits up to ``timeout=60.0`` for the semaphore
-          (see chat.py — long enough to cushion sequential workloads
-          like the eval runner). We patch ``asyncio.wait_for`` to a
-          tiny timeout so the test runs in <1 s instead of >60 s.
-        """
-        from unittest.mock import patch as _patch
-
-        app = create_app(db_path=":memory:")
-        db = app.state.db
-        sid = db.create_session(title="Test")["id"]
-
-        # Permanently-exhausted semaphore — no waiters needed.
-        app.state.chat_semaphore = asyncio.Semaphore(0)
-
-        # Patch the in-endpoint wait_for so the test isn't dominated by
-        # the production 60 s gate. We wrap the real wait_for and force
-        # a short timeout; everything else (acquire, TimeoutError raise)
-        # runs unchanged.
-        real_wait_for = asyncio.wait_for
-
-        async def _fast_wait_for(awaitable, timeout):  # noqa: ARG001
-            return await real_wait_for(awaitable, timeout=0.2)
-
-        with _patch("gaia.ui.routers.chat.asyncio.wait_for", _fast_wait_for):
-            client = TestClient(app)
-            resp = client.post(
-                "/api/chat/send",
-                json={"session_id": sid, "message": "blocked", "stream": False},
-            )
-
-        assert resp.status_code == 429
-        assert "busy" in resp.json()["detail"]
+    A busy model queues a non-streamed turn instead of refusing it; see
+    ``test_turn_slot_reliability.py``.
+    """
 
     def test_semaphore_released_after_non_streaming_request(self, client, session_id):
         """After a non-streaming request completes, the semaphore is released."""

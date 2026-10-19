@@ -121,6 +121,8 @@ class Run:
         self.subscribers: List[asyncio.Queue] = []
         self.done = asyncio.Event()
         self.task: Optional[asyncio.Task] = None
+        # The turn's place on the model (``turn_queue.TurnSlot``), once in line.
+        self.slot = None
 
     # ── Producer side (called from the lifecycle task) ────────────────
     def emit(self, data: str) -> None:
@@ -324,6 +326,10 @@ class RunManager:
             return False
         if run.handler is not None:
             run.handler.cancelled.set()
+        else:
+            from gaia.ui.turn_queue import turn_queue
+
+            turn_queue.cancel(session_id)
         return True
 
 

@@ -113,6 +113,20 @@ SUMMARY_VIEW_KEYS = (
 #: words so far, or characters of a tool call's arguments so far.
 _PHASE_COUNT_FIELDS = ("words", "chars")
 
+#: What a ``model_queue`` status carries under ``queue``: where a turn waiting
+#: for the model stands (see ``broker_client.queue_status_event``).
+_QUEUE_FIELDS = (
+    "event",
+    "scope",
+    "position",
+    "queue_length",
+    "holder",
+    "holder_model",
+    "held_for_s",
+    "waited_s",
+    "model",
+)
+
 
 class CanonicalTranslator:
     """Stateful translator: in-process handler events → canonical wire events.
@@ -328,6 +342,9 @@ class CanonicalTranslator:
                 value = event.get(key)
                 if isinstance(value, int) and not isinstance(value, bool):
                     out[0][key] = value
+            queue = event.get("queue")
+            if phase == "model_queue" and isinstance(queue, dict):
+                out[0]["queue"] = {k: queue[k] for k in _QUEUE_FIELDS if k in queue}
         return out
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:

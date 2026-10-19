@@ -8,10 +8,8 @@ the *wrong* (too small) ctx — in which case a reload fixes it and the error is
 loaded model? They answered that by comparing the reported ``n_ctx`` against a
 hardcoded 65536, which is the GPU/CPU profile's window. On NPU a *correctly*
 loaded model sits at ``NPU_CTX_SIZE`` (32768), so the comparison was
-unconditionally true there: every real NPU overflow was labelled retryable,
-the chat layer announced "Model reloaded — retrying...", replayed the identical
-oversized turn, and only then surfaced an error. The user is told the model was
-reloaded when nothing was wrong with the load.
+unconditionally true there: every real NPU overflow was labelled retryable and
+the user was told a reload would help when nothing was wrong with the load.
 
 The threshold is now derived from the active device profile
 (``active_profile_ctx_size``), not from either constant hardcoded in place.

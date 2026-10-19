@@ -41,6 +41,9 @@ export interface ApiSchemas {
   FilePreviewResponse: FilePreviewResponse;
   FileSearchResponse: FileSearchResponse;
   FileSearchResult: FileSearchResult;
+  FileStatusEntry: FileStatusEntry;
+  FileStatusRequest: FileStatusRequest;
+  FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
   FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
@@ -74,12 +77,15 @@ export interface ApiSchemas {
   QuickLink: QuickLink;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
+  RunningAnswer: RunningAnswer;
+  RunningIndexJob: RunningIndexJob;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
   ScriptedUserRequest: ScriptedUserRequest;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
+  SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
@@ -93,13 +99,23 @@ export interface ApiSchemas {
   TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnSummaryCost: TurnSummaryCost;
+  TurnSummaryDocument: TurnSummaryDocument;
+  TurnSummaryFile: TurnSummaryFile;
+  TurnSummaryLiveData: TurnSummaryLiveData;
+  TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryPage: TurnSummaryPage;
+  TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
   UndoSettings: UndoSettings;
+  UnloadModelRequest: UnloadModelRequest;
+  UnloadModelResponse: UnloadModelResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   WarmUpStatus: WarmUpStatus;
+  WorkInProgress: WorkInProgress;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -466,6 +482,29 @@ export interface FileSearchResult {
   size_display: string;
 }
 /**
+ * Whether a file exists now, and when it last changed.
+ */
+export interface FileStatusEntry {
+  exists?: boolean | null;
+  mtime?: number | null;
+  path: string;
+}
+/**
+ * Paths whose current state the side rail re-checks.
+ */
+export interface FileStatusRequest {
+  /**
+   * @maxItems 50
+   */
+  paths: string[];
+}
+/**
+ * Current state of each requested path, in request order.
+ */
+export interface FileStatusResponse {
+  files: FileStatusEntry[];
+}
+/**
  * Response from a file upload.
  */
 export interface FileUploadResponse {
@@ -654,6 +693,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  turn_summary?: TurnSummaryResponse | null;
 }
 /**
  * RAG source citation.
@@ -664,6 +704,68 @@ export interface SourceInfo {
   filename: string;
   page?: number | null;
   score: number;
+}
+/**
+ * Sources, files and data flow of one turn, for the side rail (#5222).
+ */
+export interface TurnSummaryResponse {
+  cost: TurnSummaryCost;
+  documents?: TurnSummaryDocument[];
+  error?: string | null;
+  files?: TurnSummaryFile[];
+  live_data?: TurnSummaryLiveData;
+  model?: TurnSummaryModel | null;
+  pages?: TurnSummaryPage[];
+  sites?: string[];
+}
+/**
+ * What the turn cost.
+ */
+export interface TurnSummaryCost {
+  kind: string;
+  usd?: number | null;
+}
+/**
+ * A document the turn's answer drew passages from.
+ */
+export interface TurnSummaryDocument {
+  name: string;
+  pages?: number[];
+  passages?: number;
+  path: string;
+}
+/**
+ * A file the turn created or changed.
+ */
+export interface TurnSummaryFile {
+  mtime?: number | null;
+  name: string;
+  openable?: boolean;
+  path: string;
+}
+/**
+ * How the turn's internet tools fared.
+ */
+export interface TurnSummaryLiveData {
+  attempted?: number;
+  failed?: number;
+}
+/**
+ * Where the turn's model ran.
+ */
+export interface TurnSummaryModel {
+  name: string;
+  provider: string;
+  provider_name: string;
+  remote: boolean;
+}
+/**
+ * A web page the turn read, or a search hit when it read none.
+ */
+export interface TurnSummaryPage {
+  kind: string;
+  title?: string | null;
+  url: string;
 }
 /**
  * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
@@ -701,6 +803,7 @@ export interface ModelStatus {
  * Request to open a file or folder in the system file explorer.
  */
 export interface OpenFileRequest {
+  launch?: boolean;
   path: string;
   reveal?: boolean;
 }
@@ -770,6 +873,20 @@ export interface RetryWithRequest {
   session_id: string;
 }
 /**
+ * A chat whose answer is still being written.
+ */
+export interface RunningAnswer {
+  session_id: string;
+  title?: string | null;
+}
+/**
+ * A document still being indexed.
+ */
+export interface RunningIndexJob {
+  document_id: string;
+  filename?: string | null;
+}
+/**
  * List of scheduled tasks.
  */
 export interface ScheduleListResponse {
@@ -831,14 +948,24 @@ export interface SessionResponse {
   inference_provider?: string | null;
   inference_provider_name?: string | null;
   inference_remote?: boolean | null;
+  kind?: string;
+  last_run_status?: string | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;
+  pinned?: boolean;
   private?: boolean;
   system_prompt?: string | null;
   title: string;
   title_is_custom?: boolean;
+  unread?: boolean;
   updated_at: string;
+}
+/**
+ * Pin or unpin a chat.
+ */
+export interface SessionPinRequest {
+  pinned: boolean;
 }
 /**
  * Current user settings.
@@ -989,6 +1116,15 @@ export interface UndoSettings {
   max_mb: number;
   retention_days: number;
 }
+export interface UnloadModelRequest {
+  model_name: string;
+}
+/**
+ * The model server dropped its models from memory.
+ */
+export interface UnloadModelResponse {
+  status: string;
+}
 /**
  * Request to update a scheduled task.
  */
@@ -1018,4 +1154,11 @@ export interface UserInputRequest {
   request_id: string;
   session_id: string;
   value: string;
+}
+/**
+ * Work that quitting or unloading the model would cut short.
+ */
+export interface WorkInProgress {
+  answers: RunningAnswer[];
+  indexing: RunningIndexJob[];
 }
