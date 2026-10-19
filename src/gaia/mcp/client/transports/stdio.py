@@ -58,6 +58,10 @@ _SECRET_WORDS = frozenset(
         "credentials",
         "auth",
         "authorization",
+        "authtoken",
+        "apitoken",
+        "pass",
+        "pat",
     }
 )
 # ... unless its last word says the value is something else about the secret:
@@ -81,7 +85,17 @@ _QUALIFIER_WORDS = frozenset(
         "sort",
         "partition",
         "cache",
+        "enabled",
+        "ttl",
+        "endpoint",
+        "provider",
+        "uri",
+        "timeout",
     }
+)
+# ... or it is a database's key: SORT_KEY, PARTITION_KEY, PRIMARY_KEY.
+_KEY_KINDS = frozenset(
+    {"sort", "partition", "primary", "cache", "foreign", "composite"}
 )
 # ... or its first word makes it a count: MAX_TOKENS, --max-tokens.
 _COUNT_WORDS = frozenset({"max", "min", "num"})
@@ -94,8 +108,12 @@ _AUTH_HEADER = re.compile(
 
 
 def _words(name: str) -> List[str]:
-    """``--accessToken`` / ``ACCESS_TOKEN`` / ``access-token`` -> access, token."""
-    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", name.lstrip("-"))
+    """``--accessToken``, ``APIToken``, ``API_KEY2`` -> access token, api token, api key 2."""
+    spaced = name.lstrip("-")
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", spaced)  # APIToken
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1-\2", spaced)  # accessToken
+    spaced = re.sub(r"([A-Za-z])([0-9])", r"\1-\2", spaced)  # KEY2
+    spaced = re.sub(r"([0-9])([A-Za-z])", r"\1-\2", spaced)  # 2FA
     return [word for word in re.split(r"[-_.]+", spaced.lower()) if word]
 
 
@@ -103,8 +121,14 @@ def _names_a_secret(name: str) -> bool:
     words = _words(name)
     if not words or words[-1] in _QUALIFIER_WORDS or words[0] in _COUNT_WORDS:
         return False
-    # --no-auth and --disable-auth switch something off; they take no value.
-    if name.startswith("-") and words[0] in ("no", "disable"):
+    # A switch: --no-auth, --disable-auth, DISABLE_AUTH, NO_AUTH. NO_PROXY_TOKEN
+    # is a token for NO_PROXY, so for a name "no" must be followed by one word.
+    if words[0] in ("disable", "enable") or (
+        words[0] == "no" and (name.startswith("-") or len(words) == 2)
+    ):
+        return False
+    # A database's key, not a credential: SORT_KEY, PARTITION_KEY, PRIMARY_KEY.
+    if len(words) >= 2 and words[-1] in ("key", "keys") and words[-2] in _KEY_KINDS:
         return False
     return any(word in _SECRET_WORDS for word in words)
 
@@ -119,30 +143,58 @@ def _is_secret_name(name: str) -> bool:
     return _names_a_secret(name)
 
 
-def _encodings(secret: str) -> List[str]:
-    """*secret* in every form it can reach GAIA's text in.
+def _secret_pattern(secret: str) -> "re.Pattern[str]":
+    r"""One regex matching *secret* in every form it can reach GAIA's text in.
 
-    Raw; JSON-escaped, ASCII-only (Python's json) and not (Node's
-    JSON.stringify); Python's backslash escapes (``\\xe9``, ``\\U0001f600``);
-    and as GAIA's UTF-8 pipe decodes what a server wrote in a Windows code
-    page, whether it encoded strictly, replaced what wouldn't fit with ``?``,
-    or wrote backslash escapes for it.
+    Each ASCII character matches itself, except that ``\`` and ``"`` may carry
+    any number of escaping backslashes (JSON, and JSON inside JSON). Each
+    non-ASCII character matches itself, or up to four of ``?``, ``\ufffd`` or
+    any non-ASCII character (a code page's replacement, an undecodable byte,
+    mojibake), or a backslash escape behind any number of backslashes:
+    ``\xNN``, ``\uNNNN``, a ``\uD8xx\uDCxx`` surrogate pair, or
+    ``\UNNNNNNNN``, in either case. That one shape covers JSON, Python's
+    escapes, and any single-byte code page a server writes in.
+
+    A secret with fewer than 4 ASCII letters or digits is matched exactly
+    (raw or JSON-escaped): the loose form would match ordinary text in its
+    script.
     """
-    escaped = {
-        secret,
-        json.dumps(secret)[1:-1],
-        json.dumps(secret, ensure_ascii=False)[1:-1],
-        secret.encode("ascii", "backslashreplace").decode("ascii"),
-    }
-    forms = set(escaped)
-    # Any of those, written in cp1252 (a Windows server's default). "replace"
-    # also gives the strict bytes whenever every character fits; latin-1
-    # differs from cp1252 only in C1 control characters.
-    for form in escaped:
-        for errors in ("replace", "backslashreplace"):
-            written = form.encode("cp1252", errors)
-            forms.add(written.decode("utf-8", errors="replace"))
-    return [form for form in forms if form]
+    if len(re.findall(r"[A-Za-z0-9]", secret)) < 4:
+        exact = {
+            secret,
+            json.dumps(secret)[1:-1],
+            json.dumps(secret, ensure_ascii=False)[1:-1],
+        }
+        return re.compile(
+            "|".join(re.escape(f) for f in sorted(exact, key=len, reverse=True))
+        )
+    parts = []
+    for char in secret:
+        code = ord(char)
+        if char == "\\":
+            parts.append(r"\\+")
+        elif char == '"':
+            parts.append(r'\\*"')
+        elif code < 128:
+            parts.append(re.escape(char))
+        else:
+            escapes = []
+            if code < 0x100:
+                escapes.append(f"x{code:02x}")
+            if code < 0x10000:
+                escapes.append(f"u{code:04x}")
+            else:
+                high = 0xD800 + ((code - 0x10000) >> 10)
+                low = 0xDC00 + ((code - 0x10000) & 0x3FF)
+                escapes.append(f"u{high:04x}\\\\+u{low:04x}")
+            escapes.append(f"U{code:08x}")
+            alternatives = [
+                re.escape(char),
+                r"[?\x80-\U0010ffff]{1,4}",
+                *(r"\\+" + f"(?i:{escape})" for escape in escapes),
+            ]
+            parts.append("(?:" + "|".join(alternatives) + ")")
+    return re.compile("".join(parts))
 
 
 # How long connect() watches for an immediate crash, and in how many steps.
@@ -320,6 +372,8 @@ class StdioTransport(MCPTransport):
     def _secrets(self) -> List[str]:
         """The known secret values in this server's launch config, longest first.
 
+        ``redact`` finds each one in any encoding (``_secret_pattern``).
+
         Exactly these, and nothing guessed from a value's shape:
 
         - the value of an env var whose name holds a secret word
@@ -364,10 +418,7 @@ class StdioTransport(MCPTransport):
                 found.add(userinfo)
                 found.update(userinfo.split(":", 1))
             found.update(match.group(1) for match in _AUTH_HEADER.finditer(text))
-        forms = {
-            form for secret in found if len(secret) >= 4 for form in _encodings(secret)
-        }
-        return sorted(forms, key=len, reverse=True)
+        return sorted((v for v in found if len(v) >= 4), key=len, reverse=True)
 
     def redact(self, text: str) -> str:
         """*text* from the server with this server's known secrets removed.
@@ -379,12 +430,12 @@ class StdioTransport(MCPTransport):
         can still hold other server output.
         """
         # Spans, merged, so two secrets that overlap leave no piece of either.
-        spans = []
-        for secret in self._secrets():
-            start = text.find(secret)
-            while start != -1:
-                spans.append((start, start + len(secret)))
-                start = text.find(secret, start + 1)
+        spans = [
+            match.span()
+            for secret in self._secrets()
+            for match in _secret_pattern(secret).finditer(text)
+            if match.end() > match.start()
+        ]
         if not spans:
             return text
         spans.sort()

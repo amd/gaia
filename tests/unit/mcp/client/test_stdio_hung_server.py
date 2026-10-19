@@ -974,7 +974,7 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
             "max_tokens=4096",
             "--token-limit=8000",
             "--primary-key-id",
-            "42",
+            "pk_00042",
         ],
         env={
             "NODE_ENV": "production",
@@ -982,6 +982,7 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
             "AUTHOR": "Alice",
             "GIT_AUTHOR_NAME": "Alice Smith",
             "TOKENIZERS_PARALLELISM": "false",
+            "API_KEY_PATH": "/srv/keys/api.pem",
             "MAX_TOKENS": "4096",
             "AUTH_MODE": "oauth2",
         },
@@ -989,7 +990,7 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
     text = (
         f"max tokens 4096 on port 3000 and 8080 via stdio at info by Alice; "
         f"production debug true {long_path} gpt2-xl dvorak Alice Smith "
-        "8000 false oauth2"
+        "8000 false oauth2 pk_00042 /srv/keys/api.pem"
     )
     assert t.redact(text) == text
 
@@ -997,6 +998,41 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
 @pytest.mark.parametrize(
     "args,env,secret,forms",
     [
+        # A backslash before a letter, escaped twice over.
+        (
+            [],
+            {"API_KEY": "Zq9v\\Ke7wP2", "STUB_DOUBLE_JSON": "1"},
+            "Zq9v\\Ke7wP2",
+            ["Zq9v\\Ke7wP2", "Zq9v\\\\\\\\Ke7wP2"],
+        ),
+        # latin-1 has no euro sign: "?" in its place.
+        (
+            [],
+            {"API_KEY": "p€ss1234", "STUB_CODEC": "latin-1", "STUB_ERRORS": "replace"},
+            "p€ss1234",
+            ["p€ss1234", "p?ss1234"],
+        ),
+        # ASCII with errors="replace".
+        (
+            [],
+            {"API_KEY": "p€ss1234", "STUB_CODEC": "ascii", "STUB_ERRORS": "replace"},
+            "p€ss1234",
+            ["p€ss1234", "p?ss1234"],
+        ),
+        # cp437 (a DOS console), which isn't valid UTF-8.
+        (
+            [],
+            {"API_KEY": "Zq9véKe7w", "STUB_CODEC": "cp437", "STUB_ERRORS": "strict"},
+            "Zq9véKe7w",
+            ["Zq9véKe7w", "Zq9v�Ke7w"],
+        ),
+        # A JSON string holding a JSON string: every escape doubled.
+        (
+            [],
+            {"API_KEY": 'Zq9v"éKe7w', "STUB_DOUBLE_JSON": "1"},
+            'Zq9v"éKe7w',
+            ['Zq9v"éKe7w', 'Zq9v\\\\\\"\\\\u00e9Ke7w'],
+        ),
         # stderr as Python's ASCII backslash escapes.
         (
             [],
@@ -1064,6 +1100,11 @@ def test_ordinary_config_values_are_never_treated_as_secrets(tmp_path):
         ),
     ],
     ids=[
+        "backslash-in-json-in-json",
+        "latin1-euro",
+        "ascii-replace",
+        "cp437",
+        "json-in-json",
         "ascii-backslash",
         "json-in-cp1252",
         "url-userinfo",
@@ -1090,6 +1131,7 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
         errors = os.environ.get("STUB_ERRORS", "replace")
         codec = os.environ.get("STUB_CODEC", "cp1252")
         json_codec = os.environ.get("STUB_JSON_CODEC", "utf-8")
+        double = os.environ.get("STUB_DOUBLE_JSON") == "1"
         for line in sys.stdin:
             req = json.loads(line)
             if req["method"] == "initialize":
@@ -1098,6 +1140,8 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
             elif req["method"] == "tools/list":  # a non-object JSON line
                 # UTF-8 bytes, as Node writes them whatever the console code page.
                 line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
+                if double:  # a JSON string holding a JSON string
+                    line = json.dumps(line)
                 sys.stdout.flush()
                 sys.stdout.buffer.write((line + "\\n").encode(json_codec))
             else:  # a dict-key echo in an error, then cp1252 bytes on stderr
@@ -1301,3 +1345,109 @@ def test_a_switch_off_flag_takes_no_value():
     )
     text = "serving workspace_alpha and beta_dir"
     assert t.redact(text) == text
+
+
+_SECRET_WORD_ROWS = [
+    "key",
+    "keys",
+    "apikey",
+    "token",
+    "tokens",
+    "secret",
+    "secrets",
+    "password",
+    "passwords",
+    "passwd",
+    "pwd",
+    "passphrase",
+    "credential",
+    "credentials",
+    "auth",
+    "authorization",
+    "authtoken",
+    "apitoken",
+    "pass",
+    "pat",
+]
+_QUALIFIER_ROWS = [
+    "id",
+    "mode",
+    "limit",
+    "file",
+    "path",
+    "type",
+    "url",
+    "name",
+    "size",
+    "count",
+    "length",
+    "region",
+    "parallelism",
+    "layout",
+    "sort",
+    "partition",
+    "cache",
+    "enabled",
+    "ttl",
+    "endpoint",
+    "provider",
+    "uri",
+    "timeout",
+]
+_COUNT_ROWS = ["max", "min", "num"]
+_KEY_KIND_ROWS = ["sort", "partition", "primary", "cache", "foreign", "composite"]
+
+
+@pytest.mark.parametrize("word", _SECRET_WORD_ROWS)
+def test_each_secret_word_names_a_secret(word):
+    from gaia.mcp.client.transports.stdio import _is_secret_flag, _is_secret_name
+
+    assert _is_secret_name(f"SERVICE_{word.upper()}")
+    assert _is_secret_flag(f"--service-{word}")
+
+
+@pytest.mark.parametrize("word", _QUALIFIER_ROWS)
+def test_each_qualifier_makes_a_secret_word_ordinary(word):
+    from gaia.mcp.client.transports.stdio import _is_secret_name
+
+    assert not _is_secret_name(f"API_TOKEN_{word.upper()}")
+
+
+@pytest.mark.parametrize("word", _COUNT_ROWS)
+def test_each_count_prefix_makes_a_secret_word_ordinary(word):
+    from gaia.mcp.client.transports.stdio import _is_secret_flag, _is_secret_name
+
+    assert not _is_secret_name(f"{word.upper()}_TOKENS")
+    assert not _is_secret_flag(f"--{word}-tokens")
+
+
+@pytest.mark.parametrize("word", _KEY_KIND_ROWS)
+def test_a_database_key_is_not_a_credential(word):
+    from gaia.mcp.client.transports.stdio import _is_secret_name
+
+    assert not _is_secret_name(f"TABLE_{word.upper()}_KEY")
+    assert _is_secret_name("TABLE_API_KEY")
+
+
+@pytest.mark.parametrize(
+    "name,secret",
+    [
+        ("DISABLE_AUTH", False),
+        ("ENABLE_AUTH", False),
+        ("NO_AUTH", False),
+        ("--no-auth", False),
+        ("--disable-auth", False),
+        ("NO_PROXY_TOKEN", True),
+        ("APIToken", True),
+        ("JWTSecret", True),
+        ("DBPassword", True),
+        ("API_KEY2", True),
+        ("TOKEN2", True),
+        ("apiKey2", True),
+    ],
+)
+def test_name_splitting_and_switches(name, secret):
+    from gaia.mcp.client.transports.stdio import _is_secret_flag, _is_secret_name
+
+    check = _is_secret_flag if name.startswith("-") else _is_secret_name
+    assert check(name) is secret

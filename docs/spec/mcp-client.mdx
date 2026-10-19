@@ -1065,22 +1065,35 @@ def send_request(
     or env. Text the server sends back (stderr, errors, a validation error's
     schema, results in debug logs) is cleaned of the known secret values in
     its launch config, and of nothing else:
-    - env values whose name has a secret word, matched whole (key, token,
-      secret, password, credential, auth, authorization, and plurals:
-      `API_KEY_2`, `SECRET_KEY_BASE`, `PROXY_AUTHORIZATION`), unless the last
-      word is a qualifier such as id, mode, limit, file or path (`AUTH_MODE`,
-      `KEY_ID`) or the first a count (`MAX_TOKENS`);
+    - env values whose name has a secret word: key, keys, apikey, token,
+      tokens, secret, secrets, password, passwords, passwd, pwd, passphrase,
+      credential, credentials, auth, authorization, authtoken, apitoken,
+      pass or pat. Names are split into words on `_`, `-`, `.`, camelCase,
+      acronyms and digits, so `APIToken`, `JWTSecret` and `API_KEY2` count.
+      Not when the last word is a qualifier (id, mode, limit, file, path,
+      type, url, name, size, count, length, region, parallelism, layout,
+      sort, partition, cache, enabled, ttl, endpoint, provider, uri,
+      timeout: `AUTH_MODE`, `KEY_ID`), the first word a count (max, min,
+      num: `MAX_TOKENS`), the name a database's key (`SORT_KEY`,
+      `PARTITION_KEY`, `PRIMARY_KEY`), or a switch: `disable`/`enable` first,
+      or `no` first in a flag (`--no-auth`) or a two-word name (`NO_AUTH`).
+      `NO_PROXY_TOKEN` still counts;
     - the value after a flag named the same way (`--api-key v`, `--token=v`,
       `--accessToken v`), so `--max-tokens=4096` and `--token-limit` are not;
     - `KEY=VALUE` where `KEY` is named the same way;
     - a URL's userinfo (`user:pass@` or `TOKEN@`), and an Authorization or
       Bearer header value inside an argument.
-    Each is matched raw, JSON-escaped (ASCII-only and not), backslash-escaped,
-    and as a code page writes it (strict, `?` replacement or escapes);
-    overlapping matches are removed together. Values under 4 characters are
-    not matched, and a secret echoed as a JSON number is out of scope. A
-    successful tool result is returned to the agent as the server sent it;
-    only errors and logs are cleaned. Debug logs of raw traffic
+    Each secret is found with one pattern. ASCII characters match themselves,
+    except that `\` and `"` may carry any number of escaping backslashes (JSON,
+    and JSON inside JSON). Each non-ASCII character matches itself; up to four
+    of `?`, `\ufffd` or any non-ASCII character (a code page's replacement, an
+    undecodable byte, mojibake); or a `\xNN`, `\uNNNN`, surrogate-pair or
+    `\UNNNNNNNN` escape behind any number of backslashes. A secret with fewer
+    than 4 ASCII letters or digits is matched only exactly, raw or
+    JSON-escaped. Overlapping matches are removed together. Values under 4
+    characters are not matched, and a secret echoed as a JSON number is out of
+    scope. A successful tool result is returned to the agent as the server
+    sent it; only errors and logs are cleaned. Debug logs of raw traffic
     (`debug=True`) can still hold other server output.
     Writes are bounded too: a server that stops reading its input is stopped
     rather than left blocking the request, and waiting behind another request
