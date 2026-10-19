@@ -332,6 +332,8 @@ class MCPTool:
                 "required": param_name in required_list,
                 "description": param_schema.get("description", ""),
             }
+            if "items" in param_schema:
+                gaia_params[param_name]["items"] = param_schema["items"]
 
         return {
             "name": f"mcp_{prefix}_{self.name}",

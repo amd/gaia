@@ -124,7 +124,7 @@ def _array_items(annotation: Any) -> Dict[str, Any]:
     if origin is typing.Union or origin is types.UnionType:
         non_none = [a for a in typing.get_args(annotation) if a is not types.NoneType]
         return _array_items(non_none[0]) if len(non_none) == 1 else {}
-    args = typing.get_args(annotation)
+    args = [a for a in typing.get_args(annotation) if a is not Ellipsis]
     element = _infer_param_type(args[0]) if len(args) == 1 else "unknown"
     return {} if element == "unknown" else {"type": element}
 

@@ -2620,7 +2620,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,
-            choices: list = None,
+            choices: List[str] = None,
             default_if_no_response: str = None,
             timeout_seconds: int = 300,
             continue_if_no_response: bool = True,
