@@ -492,11 +492,18 @@ def _post_start(payload: dict, timeout: float) -> dict:
 
     from gaia.daemon import client as daemon_client
     from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME
+    from gaia.daemon.errors import DaemonBusyError
 
     # ATTACH, never start-or-attach. See the module docstring: bringing up a
     # machine-wide daemon is a front-end's decision, not something a readiness
     # check does behind the caller's back.
-    inst = daemon_client.attach()
+    try:
+        inst = daemon_client.attach()
+    except DaemonBusyError as e:
+        raise LemonadeStartError(
+            "Could not ask the GAIA background service to start the local "
+            f"model server: {e}"
+        ) from e
     if inst is None:
         raise LemonadeStartError(
             "The local model server is not running, and neither is the GAIA "

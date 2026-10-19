@@ -3,6 +3,8 @@
 
 /** Types shared across the GAIA Agent UI frontend. */
 
+import type { TurnSummaryResponse } from './api.gen';
+
 export interface Session {
     id: string;
     title: string;
@@ -31,6 +33,27 @@ export interface Session {
     inference_provider_name?: string | null;
     /** One sentence on where chat runs and what is sent there. */
     inference_description?: string | null;
+    /** Pinned to the top of the chat list. */
+    pinned?: boolean;
+    /** A turn finished since the chat was last opened. */
+    unread?: boolean;
+    /** How the last turn ended; null before the first. */
+    last_run_status?: 'done' | 'failed' | 'stopped' | null;
+    /** Who started the chat: a person, the eval runner, or a schedule. */
+    kind?: SessionKind;
+}
+
+export type SessionKind = 'chat' | 'eval' | 'scheduled';
+
+/** What a chat's running turn is paused on. */
+export type AwaitingUser = 'permission' | 'question';
+
+/** GET /api/chat/active: chats with a turn in flight. */
+export interface ActiveRuns {
+    session_ids: string[];
+    /** Chats waiting for the model, first to run next first. */
+    queued: string[];
+    awaiting_user: Record<string, AwaitingUser>;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -268,7 +291,12 @@ export interface Message {
     stopError?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
+    /** Sources, files and data flow of the turn, for the side rail (#5222). */
+    turnSummary?: TurnSummary;
 }
+
+/** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */
+export type TurnSummary = TurnSummaryResponse;
 
 /** One card instance transferred onto a finalized Message (issue #2108). */
 export interface RenderCardData {
@@ -602,6 +630,12 @@ export interface AgentStep {
     active?: boolean;
     /** Plan steps (for type='plan'). */
     planSteps?: string[];
+    /** One plain line per plan step, parallel to planSteps (for type='plan'). */
+    planNarrations?: string[];
+    /** Zero-based index of the plan step being executed (for type='plan'). */
+    currentStep?: number;
+    /** What the tool call does, in plain words (for type='tool'). */
+    narration?: string;
     /** Timestamp when this step started. */
     timestamp: number;
     /** Structured command output (for run_shell_command). */
@@ -658,7 +692,11 @@ export interface StreamEvent {
     summary?: string;
     success?: boolean;
     steps?: string[];
+    /** One plain line per plan step, parallel to `steps` (for plan events). */
+    step_narrations?: string[];
     current_step?: number;
+    /** What a tool call does, in plain words (for tool_start and tool_args). */
+    narration?: string;
     title?: string;
     detail?: string;
     args?: Record<string, unknown>;
@@ -667,6 +705,8 @@ export interface StreamEvent {
     tools_used?: number;
     /** Inference stats from the LLM backend (attached to done events). */
     stats?: InferenceStats;
+    /** Per-turn sources, files and data flow (attached to done events). */
+    turn_summary?: TurnSummary;
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */
@@ -895,6 +935,37 @@ export interface ProviderModel {
     rank: number | null;
     note: string | null;
     evidence: string | null;
+    /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
+    price?: ModelPrice | null;
+}
+
+/** USD per million tokens, from GAIA's one rate card. */
+export interface ModelPrice {
+    input_per_million: number;
+    cached_input_per_million: number;
+    output_per_million: number;
+    source: string;
+}
+
+/** GET /api/spending/prices/{provider}: prices before connecting. */
+export interface CloudPriceList {
+    provider: string;
+    models: Array<{ model: string; name: string; rank: number | null; note: string | null; price: ModelPrice | null }>;
+    source: string | null;
+    note: string | null;
+}
+
+/** GET /api/spending: this month's cloud chats at list price, and the limit. */
+export interface SpendingReport {
+    month: string;
+    total_usd: number;
+    turns: number;
+    /** Turns on a model with no known price, counted apart rather than as $0. */
+    unpriced_turns: number;
+    limit_usd: number | null;
+    state: 'no_limit' | 'ok' | 'near' | 'reached' | 'allowed_over';
+    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number }>;
+    price_source: string;
 }
 
 export interface ConnectProviderBody {

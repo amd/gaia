@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **No more approval prompts for files that aren't there.** Naming a missing
+  file or folder outside the allowed paths opened a 10-minute approval prompt,
+  and only after it did the agent learn the file didn't exist; a retry asked
+  again. The tool now says the file wasn't found straight away, without asking,
+  and names an allowed or attached file with the same name. `analyze_data_file`
+  given a bare file name uses the attached file of that name instead of asking
+  about one in the working folder. Secret and protected paths are refused
+  exactly as before, whether or not they exist.
 - **Background memory upkeep no longer wipes the chat's cached prompt.**
   Memory consolidation, reconciliation and skill distillation ran on the
   model slot the conversation uses, so the next message re-read the whole

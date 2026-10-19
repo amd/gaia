@@ -3,7 +3,8 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { ActiveRuns } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -104,6 +105,7 @@ async function apiFetch<T>(
     path: string,
     body?: unknown,
     extraHeaders?: Record<string, string>,
+    signal?: AbortSignal,
 ): Promise<T> {
     const url = `${API_BASE}${path}`;
     const t = log.api.time();
@@ -119,6 +121,7 @@ async function apiFetch<T>(
         // Content-Type cannot be accidentally overridden for body requests.
         headers: { ...UI_HEADER, ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
     };
 
     let res: Response;
@@ -167,8 +170,8 @@ async function apiFetch<T>(
 
 // -- System --------------------------------------------------------------------
 
-export async function getSystemStatus(): Promise<SystemStatus> {
-    return apiFetch<SystemStatus>('GET', '/system/status');
+export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
+    return apiFetch<SystemStatus>('GET', '/system/status', undefined, undefined, signal);
 }
 
 /** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
@@ -326,6 +329,26 @@ export async function listProviderModels(provider: string): Promise<{ provider: 
 
 export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
+}
+
+// -- Cloud prices and spending (#5258) ------------------------------------------
+
+export async function getCloudPrices(provider: string): Promise<CloudPriceList> {
+    return apiFetch('GET', `/spending/prices/${encodeURIComponent(provider)}`);
+}
+
+export async function getSpending(): Promise<SpendingReport> {
+    return apiFetch('GET', '/spending');
+}
+
+/** Set the monthly limit for cloud chats; null removes it. */
+export async function setSpendingLimit(limitUsd: number | null): Promise<SpendingReport> {
+    return apiFetch('PUT', '/spending/limit', { limit_usd: limitUsd });
+}
+
+/** Let cloud chats go on past the limit until the month ends. */
+export async function allowSpendingThisMonth(): Promise<SpendingReport> {
+    return apiFetch('POST', '/spending/allow-month');
 }
 
 // -- Skills ----------------------------------------------------------------------
@@ -534,8 +557,23 @@ export async function deactivateConnectorAgent(
 
 // -- Sessions ------------------------------------------------------------------
 
+/** The backend's largest page of chats. */
+export const SESSION_PAGE_SIZE = 200;
+
+/** Every chat, newest first, fetched page by page so none past the first page go missing. */
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-    return apiFetch('GET', '/sessions');
+    const byId = new Map<string, Session>();
+    let total = 0;
+    for (let offset = 0; ; offset += SESSION_PAGE_SIZE) {
+        const page: { sessions: Session[]; total: number } = await apiFetch(
+            'GET', `/sessions?limit=${SESSION_PAGE_SIZE}&offset=${offset}`,
+        );
+        total = page.total;
+        // A chat updated between two page reads can shift into both; keep one.
+        for (const s of page.sessions) if (!byId.has(s.id)) byId.set(s.id, s);
+        if (page.sessions.length < SESSION_PAGE_SIZE || offset + SESSION_PAGE_SIZE >= total) break;
+    }
+    return { sessions: [...byId.values()], total };
 }
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
@@ -548,6 +586,19 @@ export async function updateSession(id: string, data: { title?: string; title_is
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function getSession(id: string): Promise<Session> {
+    return apiFetch('GET', `/sessions/${id}`);
+}
+
+export async function pinSession(id: string, pinned: boolean): Promise<Session> {
+    return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/** Clear the chat's unread mark. */
+export async function markSessionRead(id: string): Promise<Session> {
+    return apiFetch('POST', `/sessions/${id}/read`);
 }
 
 export async function toggleSessionPrivacy(id: string): Promise<Session> {
@@ -964,7 +1015,7 @@ export function attachToRun(
 }
 
 /** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
+export async function getActiveRuns(): Promise<ActiveRuns> {
     return apiFetch('GET', '/chat/active');
 }
 
@@ -1109,6 +1160,18 @@ export async function indexFolder(folderPath: string, recursive: boolean = true)
 
 export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {
     return apiFetch('POST', '/files/open', { path, reveal });
+}
+
+/** Open a file in its default app. The server refuses scripts and programs. */
+export async function openFileInApp(path: string): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, launch: true });
+}
+
+/** Whether each path still exists and when it last changed (unchecked outside home). */
+export async function getFileStatus(paths: string[]): Promise<{
+    files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;
+}> {
+    return apiFetch('POST', '/files/status', { paths });
 }
 
 /** Upload a file (image/document) to the server. */

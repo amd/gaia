@@ -8,6 +8,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
+import { refreshActiveRuns } from '../services/activeRuns';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
@@ -20,6 +21,7 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
+import { SideRail } from './SideRail';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -118,13 +120,15 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 label: 'Using tool',
                 tool: event.tool,
                 detail: event.detail,
+                narration: event.narration,
                 active: true, timestamp: ts,
                 mcpServer: event.mcp_server,
             };
         case 'plan':
             return {
                 id, type: 'plan', label: 'Created plan',
-                planSteps: event.steps, active: false,
+                planSteps: event.steps, planNarrations: event.step_narrations,
+                currentStep: event.current_step, active: false,
                 success: true, timestamp: ts,
             };
         case 'step':
@@ -181,6 +185,7 @@ function fromApiMessages(raw: unknown[] | undefined): Message[] {
         ...m,
         agentSteps: m.agentSteps || m.agent_steps || undefined,
         stats: m.stats || m.inference_stats || undefined,
+        turnSummary: m.turnSummary || m.turn_summary || undefined,
     }));
 }
 
@@ -264,6 +269,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // blinked once per second — too distracting for an always-visible
     // text input). Native browser caret is plenty.
     const abortRef = useRef<AbortController | null>(null);
+    /** When this view's own stream last ended; gates re-attaching (#5247). */
+    const streamEndedAtRef = useRef(0);
+    /** The view closed a turn the server never confirmed stopping; don't reopen it. */
+    const gaveUpOnRunRef = useRef(false);
     /** Reconnects spent on the current turn's stream. */
     const reconnectsRef = useRef(0);
     /** A re-attach waiting out its delay; cleared when the chat changes or the turn stops. */
@@ -622,6 +631,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         closeStoppedTurnLocallyRef.current = () => {
             if (doneHandled) return;
             doneHandled = true;
+            gaveUpOnRunRef.current = true;
+            streamEndedAtRef.current = Date.now();
             endStopWait();
             abortRef.current?.abort();
             abortRef.current = null;
@@ -900,6 +911,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (event.type === 'tool_args') {
                     updateLastToolStep({
                         detail: event.detail || JSON.stringify(event.args),
+                        ...(event.narration ? { narration: event.narration } : {}),
                     });
                     return;
                 }
@@ -1010,6 +1022,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (isStale()) return;
 
                 // `done` is the run's last event, so it is no longer running.
+                streamEndedAtRef.current = Date.now();
                 const store = useChatStore.getState();
                 store.setRunningSessions(store.runningSessionIds.filter((id) => id !== sessionId));
 
@@ -1032,6 +1045,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         rag_sources: null,
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
                         stats: event.stats || undefined,
+                        turnSummary: event.turn_summary || undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
@@ -1124,6 +1138,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     else reattach();
                     return;
                 }
+                streamEndedAtRef.current = Date.now();
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 useChatStore.getState().closeSessionQuestions(sessionId);
                 const wasStopping = stopRequestedRef.current;
@@ -1216,38 +1231,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
-    // Re-attach to an in-flight background run on mount (#1580). When the
-    // user revisits a session whose turn is still running server-side, hook
-    // back into its live stream so progress resumes in the view instead of
-    // sitting static until the run finishes. Once per session mount; the
-    // attach path no-ops if a stream is already live here.
-    const reattachedRef = useRef(false);
+    // Re-attach to a turn still running server-side (#1580), whenever this view
+    // isn't streaming it: on open, on reload, and after leaving a chat that was
+    // still streaming. The replay brings back a pending permission prompt (#5247).
+    // A poll sent before this view's last stream ended can't trigger it, so a
+    // finished turn is never re-attached.
+    const runningHere = useChatStore((s) => s.runningSessionIds.includes(sessionId));
+    const pollIsNewer = useChatStore((s) => s.activeRunsAt > streamEndedAtRef.current);
+    useEffect(() => { void refreshActiveRuns(); }, [sessionId]);
     useEffect(() => {
-        reattachedRef.current = false;
-    }, [sessionId]);
-    useEffect(() => {
-        const attemptAttach = () => {
-            if (reattachedRef.current) return;
-            if (useChatStore.getState().isStreaming) return;
-            reattachedRef.current = true;
-            log.chat.info(`Resuming live view of background run for session=${sessionId}`);
-            sendMessageRef.current(undefined, { attach: true });
-        };
-        // Fast path: the global poll already knows this session is running.
-        if (useChatStore.getState().runningSessionIds.includes(sessionId)) {
-            attemptAttach();
+        if (!runningHere) {
+            gaveUpOnRunRef.current = false;
             return;
         }
-        // Otherwise confirm once with the backend on mount.
-        let cancelled = false;
-        api.getActiveRuns()
-            .then(({ session_ids }) => {
-                if (cancelled) return;
-                if (session_ids.includes(sessionId)) attemptAttach();
-            })
-            .catch(() => { /* non-critical — sidebar spinner still signals running */ });
-        return () => { cancelled = true; };
-    }, [sessionId]);
+        if (!pollIsNewer || isStreaming || gaveUpOnRunRef.current) return;
+        log.chat.info(`Resuming live view of background run for session=${sessionId}`);
+        sendMessageRef.current(undefined, { attach: true });
+    }, [sessionId, runningHere, pollIsNewer, isStreaming]);
 
     // Listen for programmatic message dispatches from rich-content
     // components (currently the EmailPreScanCard's Approve / Reply
@@ -1641,6 +1641,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <div ref={messagesEndRef} />
                 </div>
             </div>
+
+            <SideRail messages={messages} busy={isStreaming} />
 
             {showScrollBtn && (
                 <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">

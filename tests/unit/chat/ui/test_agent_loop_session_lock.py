@@ -4,7 +4,7 @@
 """Goal ticks share the session agent safely (#4197).
 
 A tick reuses the session's cached agent, so it must hold the same session
-lock and chat semaphore a user turn holds, skip the session while a turn is in
+lock and turn-queue slot a user turn holds, skip the session while a turn is in
 flight, and look the agent up by the session's real agent type and model — a
 lookup under the wrong type evicts (and disconnects) the user's agent.
 """
@@ -21,6 +21,7 @@ import gaia.ui.agent_loop as agent_loop_mod
 from gaia.ui.agent_loop import AgentLoop, AgentTrigger
 from gaia.ui.database import ChatDatabase
 from gaia.ui.run_manager import run_manager
+from gaia.ui.turn_queue import TurnQueue
 
 _GOAL = types.SimpleNamespace(priority="high", title="t", description="")
 
@@ -61,6 +62,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     monkeypatch.setattr(AgentLoop, "_get_actionable_goals", lambda self: [_GOAL])
 
+    monkeypatch.setattr(agent_loop_mod, "turn_queue", TurnQueue())
     helpers._agent_cache.clear()
     yield
     helpers._agent_cache.clear()
@@ -74,9 +76,7 @@ def _make(agent_type="gaia"):
     helpers._store_agent(session["id"], "M-GGUF", [], agent, agent_type)
     loop = AgentLoop()
     loop._db = db
-    loop._app_state = types.SimpleNamespace(
-        tunnel=None, session_locks={}, chat_semaphore=asyncio.Semaphore(1)
-    )
+    loop._app_state = types.SimpleNamespace(tunnel=None, session_locks={})
     return loop, session, agent
 
 
@@ -112,9 +112,9 @@ async def test_tick_skips_session_with_active_run(env, monkeypatch):
     assert agent.calls == []
 
 
-async def test_tick_skips_while_another_session_holds_the_chat_semaphore(env):
+async def test_tick_skips_while_another_session_holds_the_turn_queue(env):
     loop, session, agent = _make("chat")
-    await loop._app_state.chat_semaphore.acquire()
+    await agent_loop_mod.turn_queue.acquire("another-session")
 
     directive = await loop._run_step(AgentTrigger("idle_tick", session["id"]))
 
@@ -122,14 +122,14 @@ async def test_tick_skips_while_another_session_holds_the_chat_semaphore(env):
     assert agent.calls == []
 
 
-async def test_tick_holds_lock_and_semaphore_while_agent_runs(env):
+async def test_tick_holds_lock_and_turn_slot_while_agent_runs(env):
     loop, session, agent = _make("chat")
     state = loop._app_state
     held = {}
 
     def _process_query(message):
         held["lock"] = state.session_locks[session["id"]].locked()
-        held["sem"] = state.chat_semaphore.locked()
+        held["sem"] = agent_loop_mod.turn_queue.locked()
         return "ok"
 
     agent.process_query = _process_query
@@ -138,7 +138,7 @@ async def test_tick_holds_lock_and_semaphore_while_agent_runs(env):
 
     assert held == {"lock": True, "sem": True}
     assert not state.session_locks[session["id"]].locked()
-    assert not state.chat_semaphore.locked()
+    assert not agent_loop_mod.turn_queue.locked()
 
 
 async def test_followup_waits_for_its_own_turn_to_release_the_session(env):

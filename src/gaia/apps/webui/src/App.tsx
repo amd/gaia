@@ -14,7 +14,10 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useChatAlerts } from './hooks/useChatAlerts';
+import { startActiveRunsPoll } from './services/activeRuns';
 import * as api from './services/api';
+import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
 import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
@@ -38,6 +41,8 @@ type SetupGate =
     | { state: 'unknown'; error: string };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
+/** A backend that has answered no status request for this long is treated as gone. */
+const BACKEND_SILENT_LOST_MS = 5 * 60_000;
 const RESTORE_NOTICE_MS = 6000;
 
 function Loading() {
@@ -60,7 +65,6 @@ function App() {
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
     const setAgents = useChatStore((s) => s.setAgents);
-    const setRunningSessions = useChatStore((s) => s.setRunningSessions);
     const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
     const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
     const openSettings = useChatStore((s) => s.openSettings);
@@ -117,32 +121,76 @@ function App() {
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
-    const checkSystemStatus = useCallback(async () => {
-        try {
-            const status = await api.getSystemStatus();
-            setBackendConnected(true);
-            if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
-            // One slow health probe under load is not an outage.
-            failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
-            const prev = useChatStore.getState().systemStatus;
-            if (status.lemonade_running || failCount.current >= LEMONADE_FAIL_THRESHOLD || !prev?.lemonade_running) {
-                setSystemStatus(status);
-            } else {
-                setSystemStatus({ ...prev, download_progress: status.download_progress });
-            }
-        } catch (err) {
-            log.system.warn('System status check failed', err);
+    const slowCount = useRef(0);
+    const slowSince = useRef<number | null>(null);
+    const wasUnreachable = useRef(false);
+    // A backend that answers late is busy, not gone; only a refused request means it is unreachable.
+    const [backendSlow, setBackendSlow] = useState(false);
+    // The backend answered the status request with an HTTP error: reachable, but failing.
+    const [backendError, setBackendError] = useState<string | null>(null);
+    const applyStatus = useCallback((outcome: StatusOutcome) => {
+        if (outcome.kind === 'unreachable') {
+            log.system.warn('System status check failed', outcome.error);
+            wasUnreachable.current = true;
+            slowCount.current = 0;
+            slowSince.current = null;
+            setBackendSlow(false);
+            setBackendError(null);
             setBackendConnected(false);
             setSystemStatus(null);
+            return;
+        }
+        if (outcome.kind === 'error') {
+            log.system.warn(`System status answered HTTP ${outcome.httpStatus}`, outcome.message);
+            wasUnreachable.current = false;
+            slowCount.current = 0;
+            slowSince.current = null;
+            setBackendSlow(false);
+            setBackendError(`HTTP ${outcome.httpStatus}: ${outcome.message}`);
+            setBackendConnected(true);
+            return;
+        }
+        if (outcome.kind === 'slow') {
+            slowCount.current += 1;
+            slowSince.current ??= Date.now();
+            setBackendError(null);
+            log.system.warn(`System status did not answer in time (${slowCount.current} in a row)`);
+            if (Date.now() - slowSince.current >= BACKEND_SILENT_LOST_MS) {
+                // Busy does not last this long; one that never answers is as good as gone.
+                setBackendSlow(false);
+                setBackendConnected(false);
+                setSystemStatus(null);
+                return;
+            }
+            // Something accepted the request, so the backend is back, if slow. Fresh
+            // from an outage, say so at once rather than show nothing until it answers.
+            setBackendConnected(true);
+            if (wasUnreachable.current || slowCount.current >= LEMONADE_FAIL_THRESHOLD) setBackendSlow(true);
+            return;
+        }
+        const { status } = outcome;
+        wasUnreachable.current = false;
+        slowCount.current = 0;
+        slowSince.current = null;
+        setBackendSlow(false);
+        setBackendError(null);
+        setBackendConnected(true);
+        if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
+        // One slow health probe under load is not an outage.
+        failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
+        const prev = useChatStore.getState().systemStatus;
+        if (status.lemonade_running || failCount.current >= LEMONADE_FAIL_THRESHOLD || !prev?.lemonade_running) {
+            setSystemStatus(status);
+        } else {
+            setSystemStatus({ ...prev, download_progress: status.download_progress });
         }
     }, [setBackendConnected, setSystemStatus]);
+    const applyStatusRef = useRef(applyStatus);
+    applyStatusRef.current = applyStatus;
+    const [statusPoller] = useState(() => createStatusPoller((outcome) => applyStatusRef.current(outcome)));
+    const checkSystemStatus = statusPoller.check;
 
-    useEffect(() => {
-        void checkSystemStatus();
-        const fast = useChatStore.getState().systemStatus?.download_progress ? 2_000 : 5_000;
-        const t = setInterval(checkSystemStatus, fast);
-        return () => clearInterval(t);
-    }, [checkSystemStatus]);
+    useEffect(() => statusPoller.start(), [statusPoller]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -155,7 +203,7 @@ function App() {
                     if (!initial && list.length === 0 && useChatStore.getState().sessions.length > 0) return;
                     // Includes the model and inference location, so a model change reaches the indicators.
                     const fp = list
-                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}`)
+                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}|${s.unread}|${s.pinned}|${s.last_run_status}|${s.kind}`)
                         .join('\n');
                     if (fp === sessionFingerprint.current) return;
                     sessionFingerprint.current = fp;
@@ -168,16 +216,9 @@ function App() {
         return () => clearInterval(t);
     }, [setSessions]);
 
-    useEffect(() => {
-        const poll = () => {
-            api.getActiveRuns()
-                .then((d) => setRunningSessions(d.session_ids || []))
-                .catch((err) => log.api.debug('Active-run poll failed', err));
-        };
-        poll();
-        const t = setInterval(poll, 2_600);
-        return () => clearInterval(t);
-    }, [setRunningSessions]);
+    useEffect(() => startActiveRunsPoll(), []);
+
+    useChatAlerts();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);
@@ -436,7 +477,7 @@ function App() {
             />
 
             <div className="main-content">
-                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} />}
+                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
                 {setup.state === 'unknown' && (
                     <div className="app-notice is-warning" role="status">
                         <span>Could not check whether GAIA is set up: {setup.error}</span>

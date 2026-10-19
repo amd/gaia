@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re as _re
+import sqlite3
 import threading
 import time as _time
 from pathlib import Path
@@ -52,6 +53,7 @@ from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
 
 from . import permissions as session_permissions
+from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -62,6 +64,7 @@ from .sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
@@ -225,8 +228,8 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
 # even when nothing has changed.  Caching the agent per session_id lets us skip
 # all of that on follow-up turns.
 #
-# Thread-safety: the global chat_semaphore(1) in server.py serialises all chat
-# requests, and the per-session session_lock prevents concurrent turns within
+# Thread-safety: the global turn queue (turn_queue.py) serialises all chat
+# turns, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
 _agent_cache: dict[str, dict] = (
@@ -2107,6 +2110,37 @@ def _turn_inference_stats(
     return stats or None
 
 
+def _agent_location(agent) -> InferenceLocation | None:
+    """Where *agent*'s turn was answered, or None when it cannot say.
+
+    Only the agent's live client knows its backend; a bare model id would call
+    an agent on a remote backend local.
+    """
+    locate = getattr(agent, "_inference_location", None)
+    return locate() if callable(locate) else None
+
+
+def _turn_summary(
+    sse_handler, agent, message: str, answer_event: Optional[dict]
+) -> dict:
+    """The side rail's account of this turn (see :mod:`gaia.ui.turn_summary`).
+
+    A failure here becomes an ``error`` the rail shows, so it never costs the
+    user the answer it describes.
+    """
+    try:
+        evidence = getattr(agent, "_completion_evidence", None)
+        return sse_handler.turn_ledger.summary(
+            location=_agent_location(agent) if agent is not None else None,
+            written_files=evidence.written_files() if evidence is not None else (),
+            display_names=upload_display_names(message),
+            usage=answer_event,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Could not build this turn's summary: %s", exc, exc_info=True)
+        return {"error": f"{type(exc).__name__}: {exc}", "cost": {"kind": "unknown"}}
+
+
 def _undo_link_warning_event(message: str) -> str:
     """SSE line telling the user this answer will not offer Undo."""
     payload = {"type": "status", "status": "warning", "message": message}
@@ -2157,7 +2191,11 @@ async def _local_place(model_id: str, client, base_url: str, headers: dict) -> s
 
 
 def _done_event(
-    msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
+    msg_id: int,
+    content: str,
+    turn_cancelled: bool,
+    stats: Optional[dict] = None,
+    turn_summary: Optional[dict] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -2170,6 +2208,8 @@ def _done_event(
         event["cancelled"] = True
     if stats:
         event["stats"] = stats
+    if turn_summary:
+        event["turn_summary"] = turn_summary
     return event
 
 
@@ -2531,6 +2571,9 @@ async def _get_chat_response(
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            return refusal
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -2719,6 +2762,13 @@ async def _get_chat_response(
                 # The non-streaming response has no channel for a notice.
                 logger.error(warning)
 
+        # Without counts the turn is still recorded, as one of unknown cost.
+        counts = (
+            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            if isinstance(result, dict)
+            else {}
+        )
+        spending.record_turn(db, model_id, counts)
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -2954,6 +3004,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        # Stop before a cloud turn once this month's spending reached the limit.
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
+            msg_id = db.add_message(session_id, "assistant", refusal)
+            yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
+            yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
+            return
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
@@ -3289,6 +3347,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # model reload at our 32K ctx_size before re-issuing the
                 # query so we don't replay against a still-broken backend.
                 t_query = _time.monotonic()
+                result_holder["agent"] = agent
                 try:
                     result = agent.process_query(request.message)
                 except Exception as first_exc:  # pylint: disable=broad-except
@@ -3383,7 +3442,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
-        _stream_start = _time.time()
+        last_event_at = _time.monotonic()
 
         def _blocked_policy_steps():
             return [
@@ -3443,7 +3502,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                _idle.progressed(_time.monotonic())
+                last_event_at = _time.monotonic()
+                _idle.progressed(last_event_at)
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -3494,6 +3554,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": f"Using {event.get('tool', 'tool')}",
                             "tool": event.get("tool"),
                             "detail": event.get("detail"),
+                            "narration": event.get("narration"),
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
@@ -3505,6 +3566,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     tool_step = _find_last_tool_step(captured_steps)
                     if tool_step is not None:
                         tool_step["detail"] = event.get("detail", "")
+                        if event.get("narration"):
+                            tool_step["narration"] = event["narration"]
                 elif event_type == "tool_end" and captured_steps:
                     tool_step = _find_last_tool_step(captured_steps)
                     if tool_step is not None:
@@ -3541,20 +3604,45 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             tool_step["render"] = event["render"]
                             tool_step["data"] = event.get("data")
                 elif event_type == "plan":
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "plan",
-                            "label": "Created plan",
-                            "planSteps": event.get("steps"),
-                            "active": False,
-                            "success": True,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
+                    # The agent re-sends its plan before every step; keep one row
+                    # and move its current step. A replan still gets its own row.
+                    last_plan = next(
+                        (
+                            s
+                            for s in reversed(captured_steps)
+                            if s.get("type") == "plan"
+                        ),
+                        None,
                     )
+                    same_plan = (
+                        last_plan
+                        if last_plan is not None
+                        and last_plan.get("planSteps") == event.get("steps")
+                        else None
+                    )
+                    if same_plan is not None:
+                        same_plan["currentStep"] = event.get("current_step")
+                        if event.get("step_narrations"):
+                            same_plan["planNarrations"] = event["step_narrations"]
+                    else:
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "plan",
+                                "label": "Created plan",
+                                "planSteps": event.get("steps"),
+                                "planNarrations": event.get("step_narrations"),
+                                "currentStep": event.get("current_step"),
+                                "active": False,
+                                "success": True,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                            }
+                        )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
                 ):
@@ -3626,9 +3714,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # Every 15s (75 cycles) emit a visible status so the user knows
                 # the model is still processing (prompt prefill is silent).
                 # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend.
-                if idle_cycles % 75 == 0:
-                    elapsed = int(_time.time() - _stream_start)
+                # into a single updating step on the frontend. A running tool
+                # shows its own timer, so the model is not the one being waited on.
+                if idle_cycles % 75 == 0 and not sse_handler.tool_running():
+                    elapsed = int(_time.monotonic() - last_event_at)
                     status_evt = json.dumps(
                         {
                             "type": "status",
@@ -3792,6 +3881,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
+            turn_summary = _turn_summary(
+                sse_handler, result_holder.get("agent"), request.message, answer_event
+            )
 
             msg_id = db.upsert_message(
                 request.session_id,
@@ -3801,6 +3893,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
+                turn_summary=turn_summary,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -3809,6 +3902,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
+            spending.record_turn(db, model_id, inference_stats)
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -3829,7 +3923,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 )
             )
             done_event = _done_event(
-                msg_id, full_response, turn_cancelled, stats=inference_stats
+                msg_id,
+                full_response,
+                turn_cancelled,
+                stats=inference_stats,
+                turn_summary=turn_summary,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -3861,12 +3959,19 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db.add_message(request.session_id, "assistant", content)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                turn_summary = _turn_summary(
+                    sse_handler, result_holder.get("agent"), request.message, None
+                )
                 msg_id = db.add_message(
                     request.session_id,
                     "assistant",
                     content,
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
+                    turn_summary=turn_summary,
+                )
+                done_event = _done_event(
+                    msg_id, content, turn_cancelled, turn_summary=turn_summary
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)
@@ -3875,7 +3980,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 )
                 if link_warning:
                     yield _undo_link_warning_event(link_warning)
-                done_event = _done_event(msg_id, content, turn_cancelled)
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
@@ -3892,6 +3996,72 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         await _cleanup_stream()
 
 
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
+# A waiting turn re-sends its place this often, so clients never see a silent stream.
+_QUEUE_HEARTBEAT_SECONDS = 10.0
+
+
+def _queued_status_event(position: int, ordinal, waited_s: int = 0) -> dict:
+    """The status a turn shows while another chat has the model (#5226)."""
+    return {
+        "type": "status",
+        "status": "working",
+        "phase": "queued",
+        "queue_position": position,
+        "queue_waited_s": waited_s,
+        "message": f"Waiting for the GPU — {ordinal(position)} in line",
+    }
+
+
+class _RunOutcome:
+    """How a turn ended, read off the SSE events it emitted (#5221)."""
+
+    def __init__(self) -> None:
+        self._error = False
+        self._done = False
+        self._cancelled = False
+
+    def observe(self, data: str) -> None:
+        # A frame may carry ": padding" lines after its data line.
+        line = data.split("\n", 1)[0]
+        if not line.startswith("data: "):
+            return
+        try:
+            event = json.loads(line[len("data: ") :])
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Chat run emitted a malformed SSE frame: {line[:200]!r}"
+            ) from exc
+        kind = event.get("type") if isinstance(event, dict) else None
+        if kind == "error":
+            self._error = True
+        elif kind == "done":
+            self._done = True
+            self._cancelled = bool(event.get("cancelled"))
+
+    def status(self) -> str:
+        if self._error or not self._done:
+            return "failed"
+        return "stopped" if self._cancelled else "done"
+
+
+def _record_run_outcome(db: ChatDatabase, session_id: str, status: str) -> None:
+    """Persist the turn's outcome and mark the chat unread for the list."""
+    try:
+        db.finish_session_run(session_id, status)
+    except sqlite3.Error as exc:
+        # The turn already ended and was persisted; only the list status is lost.
+        logger.error(
+            "Could not record the %s outcome of session %s: %s",
+            status,
+            session_id[:8],
+            exc,
+        )
+
+
 async def _run_chat_lifecycle(
     run, db: ChatDatabase, session: dict, request: ChatRequest
 ):
@@ -3903,8 +4073,45 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
-    async for data in _stream_chat_impl(run, db, session, request):
+    from gaia.ui.turn_queue import TurnCancelled, ordinal, turn_queue
+
+    session_id = request.session_id
+    outcome = _RunOutcome()
+
+    def _emit(data: str) -> None:
+        outcome.observe(data)
         run.emit(data)
+
+    queued_at = _time.monotonic()
+
+    def _announce_place(position: int) -> None:
+        waited = int(_time.monotonic() - queued_at)
+        _emit(_sse(_queued_status_event(position, ordinal, waited)))
+
+    async def _heartbeat() -> None:
+        while True:
+            await asyncio.sleep(_QUEUE_HEARTBEAT_SECONDS)
+            position = turn_queue.position(session_id)
+            if position:
+                _announce_place(position)
+
+    try:
+        heartbeat = asyncio.create_task(_heartbeat())
+        try:
+            await turn_queue.acquire(session_id, on_position=_announce_place)
+        except TurnCancelled:
+            msg_id = db.add_message(session_id, "assistant", "Cancelled.")
+            _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
+            return
+        finally:
+            heartbeat.cancel()
+        try:
+            async for data in _stream_chat_impl(run, db, session, request):
+                _emit(data)
+        finally:
+            turn_queue.release()
+    finally:
+        _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
     # than on subscriber detach.
