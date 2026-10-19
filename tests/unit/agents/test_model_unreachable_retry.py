@@ -519,15 +519,16 @@ def _overflow(tagged: bool):
 
 
 @pytest.mark.parametrize("tagged", [False, True], ids=["plain", "tagged"])
-def test_context_overflow_path_is_unchanged(agent, tagged):
+def test_context_overflow_with_nothing_to_archive_is_not_retried(agent, tagged):
     sent = _script(agent, _overflow(tagged), _overflow(tagged))
     result = agent.process_query("Check the ledger", max_steps=5)
-    assert len(sent) == 2
+    # Nothing to put away, so no retry that would only be refused again (#2780).
+    assert len(sent) == 1
     assert agent.sleeps == []
     assert strip_verification_scope(result["result"]) == (
         _CONTEXT_STILL_OVERFLOWING_MESSAGE
     )
-    assert "llm_context_overflow_trimmed" in _types(agent)
+    assert "llm_context_overflow_unrecoverable" in _types(agent)
 
 
 @pytest.mark.parametrize("tagged", [False, True], ids=["plain", "tagged"])
