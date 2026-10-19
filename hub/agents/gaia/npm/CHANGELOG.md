@@ -13,6 +13,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turn the TUI's closing cut short ends with "This answer was interrupted when
   GAIA closed." A resumed session (`GAIA_HISTORY_FILE`) sees it. Questions
   queued before the close are saved as they ended.
+- **Opening a session or switching its model no longer freezes the other
+  sessions.** The sidecar built a new session's agent, and ran a `/model`
+  switch (which builds a new client and checks its server), on its event
+  loop. Every other session's stream stopped for that long, heartbeats
+  included, so the TUI and the daemon relay saw an idle connection. That
+  setup now runs on a worker thread, and a request that goes away mid-setup
+  still releases its session.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

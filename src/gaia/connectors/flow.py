@@ -44,6 +44,7 @@ from urllib.parse import urlsplit
 import httpx
 from aiohttp import web
 
+from gaia.connectors._refresh_lock import locked_write
 from gaia.connectors.errors import (
     ConnectorsError,
     ConsentDeniedError,
@@ -788,7 +789,9 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
 
-    save_connection(
+    await locked_write(
+        flow.provider_id,
+        save_connection,
         provider=flow.provider_id,
         account_email=account_email or "default",
         refresh_token=refresh_token,
@@ -1016,7 +1019,9 @@ async def poll_device_flow(
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, scopes_list)
 
-    save_connection(
+    await locked_write(
+        provider_id,
+        save_connection,
         provider=provider_id,
         account_email=account_email,
         refresh_token=refresh_token,

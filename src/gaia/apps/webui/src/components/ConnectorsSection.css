@@ -404,7 +404,7 @@
 }
 
 .spin {
-    animation: spin 1s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 @keyframes spin {
