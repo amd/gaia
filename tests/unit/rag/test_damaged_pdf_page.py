@@ -262,7 +262,7 @@ class TestTheDegradedReportReachesTheCaller:
 
         from gaia.rag.sdk import RAGSDK
 
-        source = inspect.getsource(RAGSDK.index_document)
+        source = inspect.getsource(RAGSDK._index_document)
         assert 'stats["pdf_status"] = "readable"' not in source
         assert 'file_metadata.get("pdf_status"' in source
 

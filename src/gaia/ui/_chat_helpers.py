@@ -14,6 +14,7 @@ patches take effect.
 """
 
 import asyncio
+import concurrent.futures
 import copy
 import importlib.util
 import json
@@ -4259,28 +4260,102 @@ async def _attach_chat_stream(session_id: str):
 # ── Document Indexing ────────────────────────────────────────────────────────
 
 
+# Indexing gets its own pools: a big PDF embeds for minutes, and on the
+# shared default executor a few of them starve the chat stream loop. Files
+# under _INDEX_SMALL_FILE_BYTES have a pool of their own, so a quick upload
+# never waits behind big documents.
+_INDEX_MAX_PARALLEL = 2
+_INDEX_SMALL_FILE_BYTES = 20 * 1024 * 1024
+_INDEX_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index"
+)
+_INDEX_SMALL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index-small"
+)
+_INDEX_TIMEOUT_ENV = "GAIA_INDEX_TIMEOUT"
+_INDEX_TIMEOUT_DEFAULT_S = 600.0
+
+
+def _index_timeout_from_env() -> float:
+    """Seconds indexing may go without progress (``GAIA_INDEX_TIMEOUT``, default 600).
+
+    Progress is a page extracted or a batch embedded, so a large document that
+    keeps moving is never stopped.
+
+    Raises:
+        ValueError: the variable is set to something other than a positive number.
+    """
+    raw = os.environ.get(_INDEX_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _INDEX_TIMEOUT_DEFAULT_S
+    remedy = (
+        "Set it to a positive number of seconds without progress (e.g. 1200), "
+        f"or unset it for the {_INDEX_TIMEOUT_DEFAULT_S:g} s default."
+    )
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{_INDEX_TIMEOUT_ENV}={raw!r} is not a number. {remedy}"
+        ) from e
+    if value <= 0:
+        raise ValueError(f"{_INDEX_TIMEOUT_ENV}={raw!r} must be positive. {remedy}")
+    return value
+
+
+# Read once at import so a bad value stops the Agent UI server at startup.
+_INDEX_TIMEOUT_S = _index_timeout_from_env()
+# How often a waiting index checks for progress.
+_INDEX_POLL_S = 0.5
+
+
+def _settled_quietly(future) -> None:
+    """Mark an abandoned index's outcome as seen, so asyncio doesn't warn about it."""
+    if not future.cancelled():
+        future.exception()
+
+
 async def _index_document(filepath: Path) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
-    Runs the synchronous RAG indexing in a thread pool executor
-    to avoid blocking the async event loop.
+    Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
+    files have their own, and the rest wait their turn). Cancelling the
+    awaiting task stops indexing at its next page or embedding batch, and so
+    does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
+    for a worker doesn't count.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails for any reason.
+        RuntimeError: If indexing fails or stops making progress.
+        asyncio.CancelledError: If the awaiting task was cancelled.
     """
+    from gaia.rag.sdk import IndexingStopped
+
+    stop = threading.Event()
+    # Monotonic time of the last page or batch; None until a worker starts.
+    progress = {"at": None}
+
+    def _step() -> None:
+        progress["at"] = _time.monotonic()
+        if stop.is_set():
+            raise IndexingStopped(filepath.name)
 
     def _do_index():
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
+        _step()
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(str(filepath))
+        result = rag.index_document(
+            str(filepath),
+            progress_callback=lambda _done, _total: _step(),
+            heartbeat=_step,
+        )
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
@@ -4301,9 +4376,29 @@ async def _index_document(filepath: Path) -> int:
         return chunks
 
     try:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _do_index)
-    except RuntimeError:
+        small = filepath.stat().st_size < _INDEX_SMALL_FILE_BYTES
+    except OSError:
+        small = False
+    pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
+    future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
+    future.add_done_callback(_settled_quietly)
+    try:
+        while True:
+            done, _ = await asyncio.wait({future}, timeout=_INDEX_POLL_S)
+            if done:
+                return future.result()
+            last = progress["at"]
+            if last is not None and _time.monotonic() - last > _INDEX_TIMEOUT_S:
+                stop.set()
+                raise RuntimeError(
+                    f"Indexing {filepath.name} made no progress for "
+                    f"{_INDEX_TIMEOUT_S:g} s and was stopped. Try it again; "
+                    f"if it stalls again, raise {_INDEX_TIMEOUT_ENV}."
+                )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
+    except (RuntimeError, IndexingStopped):
         raise
     except Exception as e:
         raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e
