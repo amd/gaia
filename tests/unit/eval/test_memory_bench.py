@@ -10,6 +10,7 @@ bench's own machinery: scenario validation, the simulated clock, the gate.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import textwrap
 from datetime import datetime, timedelta
@@ -24,6 +25,14 @@ from gaia.eval.memory.clock import simulated_time
 from gaia.eval.memory.harness import CheckResult, ScriptedChat
 from gaia.eval.memory.scenario import ScenarioError, load_scenario, load_scenarios
 
+#: A replay needs faiss for vector search, and a strict replay fails on memory's
+#: "vector search disabled" warning; skip visibly rather than fail or mis-pass.
+requires_faiss = pytest.mark.skipif(
+    importlib.util.find_spec("faiss") is None,
+    reason="faiss-cpu is not installed; the memory bench replay needs it for "
+    "vector search (pip install faiss-cpu). The Unit Tests workflow installs it.",
+)
+
 BASELINE = (
     Path(__file__).resolve().parents[2]
     / "fixtures"
@@ -33,6 +42,7 @@ BASELINE = (
 )
 
 
+@requires_faiss
 def test_the_pr_suite_holds_its_baseline():
     """A check the baseline passes must still pass.
 
@@ -215,6 +225,7 @@ def test_a_failed_check_is_named_in_the_report():
     assert "`maya/home/unseen:Calgary`" in runner.render_report(result)
 
 
+@requires_faiss
 def test_a_scripting_slip_fails_the_replay_instead_of_passing_quietly(tmp_path):
     """Production logs a failed extraction and carries on; the bench must not."""
     from gaia.eval.memory.harness import HashEmbedder, Replay
@@ -233,8 +244,10 @@ def test_a_scripting_slip_fails_the_replay_instead_of_passing_quietly(tmp_path):
         embedder=HashEmbedder(),
         strict=True,
     )
-    with pytest.raises(RuntimeError, match="strict replay"):
+    with pytest.raises(RuntimeError, match="strict replay") as raised:
         replay.run()
+    # The slip itself, not some other warning (a missing faiss, say), failed it.
+    assert "no current memory matches it" in str(raised.value)
 
 
 def test_gating_one_scenario_compares_only_that_scenario():
