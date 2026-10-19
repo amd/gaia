@@ -1869,13 +1869,38 @@ def test_hung_pip_fails_the_install_and_frees_the_slot(tmp_path, monkeypatch):
             active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
         )
 
-    with pytest.raises(InstallError, match="timed out after 1s"):
+    with pytest.raises(InstallError, match="stuck"):
         attempt()
     assert not installer.is_installing("demo")
     assert installer.get_install_status("demo")["status"] == "failed"
     assert read_sentinel("demo", tmp_path) is None
 
     # A retry gets the same honest error, not "already in progress".
-    with pytest.raises(InstallError, match="timed out") as retry:
+    with pytest.raises(InstallError, match="stuck") as retry:
         attempt()
     assert not isinstance(retry.value, InstallInProgressError)
+
+
+def test_a_failed_update_never_nests_the_backup_in_a_half_deleted_dir(
+    tmp_path, monkeypatch
+):
+    """A pip child that outlived its kill can hold a file, so the failed
+    install's directory survives deletion. Moving the backup onto it put the
+    previous version at demo/demo."""
+    install_dir = installer.agent_install_dir("demo", tmp_path)
+    (install_dir / "site-packages").mkdir(parents=True)
+    (install_dir / "site-packages" / "held.pyd").write_bytes(b"in use")
+    backup = installer._backup_dir("demo", tmp_path)
+    backup.mkdir(parents=True)
+    (backup / "gaia-agent.yaml").write_text("version: 1\n")
+
+    def held_rmtree(path, ignore_errors=False, **_kwargs):
+        # What a file locked by a live process does to rmtree.
+        if not ignore_errors:
+            raise PermissionError(13, "in use by another process", str(path))
+
+    monkeypatch.setattr(installer.shutil, "rmtree", held_rmtree)
+    with pytest.raises(InstallError, match="Could not remove the failed install"):
+        installer._restore_backup_if_present("demo", tmp_path)
+    assert not (install_dir / "demo").exists()
+    assert (backup / "gaia-agent.yaml").exists()

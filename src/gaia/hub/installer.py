@@ -42,6 +42,7 @@ import sys
 import sysconfig
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -418,13 +419,23 @@ def _download_and_verify(
 # ---------------------------------------------------------------------------
 
 
-#: Default for how long one pip/uv install may run. A wheel and its dependencies
-#: install well within it; past it the child is usually parked on a cache lock
-#: another ``uv`` process holds, which uv waits on with no limit of its own.
+#: Default for how long one pip/uv install may go without any activity (CPU,
+#: disk or network, across its whole process tree) before it is stopped. A
+#: slow download is activity; a process parked on a lock or a hung build is not.
 PIP_TIMEOUT_SECONDS = 900.0
 
-#: Overrides ``PIP_TIMEOUT_SECONDS``, for a slow link pulling large dependencies.
+#: Overrides ``PIP_TIMEOUT_SECONDS``.
 PIP_TIMEOUT_ENV = "GAIA_HUB_PIP_TIMEOUT"
+
+#: How often a running install's process tree is sampled.
+_PIP_POLL_SECONDS = 1.0
+
+#: How long to wait for the output pipes after the installer exits; a stray
+#: grandchild can hold them open.
+_PIP_PIPE_WAIT_SECONDS = 10.0
+
+#: What uv prints when another uv holds its package-cache lock.
+_UV_LOCK_MARKERS = ("could not acquire lock", "waiting to acquire lock")
 
 
 def _pip_timeout() -> float:
@@ -452,37 +463,147 @@ def _pip_frontends() -> List[List[str]]:
     ]
 
 
-class _PipTimeout(Exception):
+def _mentions_uv_lock(output: str) -> bool:
+    text = output.lower()
+    return any(marker in text for marker in _UV_LOCK_MARKERS)
+
+
+class _PipStuck(Exception):
     def __init__(self, output: str) -> None:
         super().__init__(output)
         self.output = output
 
 
-def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess:
-    """Run one pip frontend, killing its whole process tree past ``timeout``.
+def _tree_activity(root, seen: Dict[int, Any]) -> float:
+    """A number that changes whenever anything in ``root``'s tree does work.
 
-    ``subprocess.run(timeout=)`` kills only the direct child, then reads the
-    pipes until they close. ``python -m uv`` and a ``uv`` shim each start the
-    real ``uv`` as a grandchild that holds those pipes, so that read, and the
-    install, would still wait on the lock forever.
+    Every process ever seen stays in ``seen``, so a grandchild whose parent
+    exited (and which no longer shows up as a descendant) is still counted,
+    and still killed.
     """
+    import psutil
+
+    try:
+        for process in [root, *root.children(recursive=True)]:
+            seen.setdefault(process.pid, process)
+    except psutil.Error:
+        pass  # the root is exiting; the processes already seen are sampled
+    total = 0.0
+    for process in seen.values():
+        try:
+            cpu = process.cpu_times()
+            total += cpu.user + cpu.system
+            io = process.io_counters()
+        except (psutil.Error, AttributeError):
+            continue  # gone, or no I/O counters on this platform (macOS)
+        # read/write_chars include socket traffic on Linux; other_bytes holds
+        # it on Windows.
+        for name in ("read_chars", "write_chars", "read_bytes", "write_bytes"):
+            total += getattr(io, name, 0)
+        total += getattr(io, "other_bytes", 0)
+    return total
+
+
+def _kill_tree(proc: "subprocess.Popen", seen: Dict[int, Any]) -> None:
+    import psutil
+
+    try:
+        for process in psutil.Process(proc.pid).children(recursive=True):
+            seen.setdefault(process.pid, process)
+    except psutil.Error:
+        pass  # already gone; kill what was seen
+    for process in seen.values():
+        try:
+            process.kill()
+        except psutil.Error:
+            continue
+    proc.kill()
+    _, alive = psutil.wait_procs(list(seen.values()), timeout=5)
+    for process in alive:
+        logger.error(
+            "installer: pip process %s survived a kill; end it by hand", process.pid
+        )
+
+
+def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess:
+    """Run one pip frontend, stopping it after ``timeout`` seconds of no work.
+
+    Activity is sampled across the whole process tree (``python -m uv`` and a
+    ``uv`` shim run the real ``uv`` as a grandchild), so a long download keeps
+    it alive and a process waiting on a lock does not. On any failure the
+    whole tree is killed, including grandchildren already orphaned.
+    """
+    import psutil
+
+    env = dict(os.environ)
+    # Make current uv give up on another install's cache lock with a clear
+    # error, before the no-progress limit would have to stop it.
+    env.setdefault("UV_LOCK_TIMEOUT", str(max(1, int(timeout * 0.8))))
     proc = subprocess.Popen(  # noqa: S603 - args are constructed, not shell
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
+        env=env,
         start_new_session=os.name != "nt",
     )
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # Imported here: gaia.agents.tools pulls in every tool mixin.
-        from gaia.agents.tools.command_timeouts import terminate_process_tree
+    output: Dict[str, str] = {}
 
-        stdout, stderr = terminate_process_tree(proc)
-        tail = ((stderr or "") + (stdout or "")).strip()[-500:]
-        raise _PipTimeout(tail) from None
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    def read(name: str, stream) -> None:
+        output[name] = stream.read()
+
+    readers = [
+        threading.Thread(target=read, args=(name, stream), daemon=True)
+        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr))
+    ]
+    for reader in readers:
+        reader.start()
+    seen: Dict[int, Any] = {}
+    try:
+        try:
+            root = psutil.Process(proc.pid)
+        except psutil.NoSuchProcess:
+            root = None  # finished before it could be sampled
+        last_activity: Optional[float] = None
+        last_change = time.monotonic()
+        while True:
+            try:
+                proc.wait(timeout=_PIP_POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            activity = _tree_activity(root, seen) if root is not None else 0.0
+            now = time.monotonic()
+            if activity != last_activity:
+                last_activity, last_change = activity, now
+            elif now - last_change >= timeout:
+                raise _PipStuck("")
+        for reader in readers:
+            reader.join(_PIP_PIPE_WAIT_SECONDS)
+        if any(reader.is_alive() for reader in readers):
+            # A stray descendant holds the pipes; it is part of this install.
+            raise _PipStuck("")
+    except BaseException as e:
+        _kill_tree(proc, seen)
+        for reader in readers:
+            reader.join(_PIP_PIPE_WAIT_SECONDS)
+        if isinstance(e, _PipStuck):
+            tail = (output.get("stderr", "") + output.get("stdout", "")).strip()
+            raise _PipStuck(tail[-500:]) from None
+        raise
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, output.get("stdout", ""), output.get("stderr", "")
+    )
+
+
+def _uv_lock_error(frontend: List[str], output: str) -> InstallError:
+    return InstallError(
+        f"'{' '.join(frontend)}' could not get the package cache: another install "
+        "is using it (another GAIA session, or a uv/pip command in a terminal). "
+        "Nothing was changed by this one. Wait for the other install to finish, "
+        "then retry." + (f"\nLast output: {output[-500:]}" if output else "")
+    )
 
 
 def _default_run_pip(args: List[str]) -> None:
@@ -493,9 +614,9 @@ def _default_run_pip(args: List[str]) -> None:
     venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
     ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
     still installs the wheel instead of hard-failing. Raises InstallError
-    if every frontend fails, or as soon as one runs past the pip timeout --
-    a frontend that hangs is not handed to the next, which would wait on the
-    same lock.
+    if every frontend fails, or at once when one is stuck or blocked on the
+    package-cache lock -- that is not handed to the next frontend, which
+    would wait on the same lock.
     """
     timeout = _pip_timeout()
     attempts: List[str] = []
@@ -506,18 +627,21 @@ def _default_run_pip(args: List[str]) -> None:
         except FileNotFoundError:
             attempts.append(f"{frontend[0]} (not found on PATH)")
             continue
-        except _PipTimeout as e:
+        except _PipStuck as e:
+            if _mentions_uv_lock(e.output):
+                raise _uv_lock_error(frontend, e.output) from e
             raise InstallError(
-                f"'{' '.join(frontend)}' timed out after {timeout:.0f}s and was "
-                "stopped before it finished. This is often a package-cache "
-                "lock held by another install (another GAIA session, or a "
-                "uv/pip command in a terminal): let it finish, then retry. If "
-                "the install is just slow, raise the limit with "
-                f"{PIP_TIMEOUT_ENV}=<seconds>."
+                f"'{' '.join(frontend)}' did no work for {timeout:.0f}s (no CPU, "
+                "disk or network activity) and was stopped as stuck before it "
+                "finished. Retry; if a package build or a very slow connection "
+                f"needs longer, raise the limit with {PIP_TIMEOUT_ENV}=<seconds>."
                 + (f"\nLast output: {e.output}" if e.output else "")
             ) from e
         if proc.returncode == 0:
             return
+        output = (proc.stderr or "") + (proc.stdout or "")
+        if _mentions_uv_lock(output):
+            raise _uv_lock_error(frontend, output.strip())
         attempts.append(
             f"{' '.join(frontend)} (exit {proc.returncode}): "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
@@ -1566,6 +1690,32 @@ def _discard_backup(agent_id: str, install_root: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def _remove_failed_dir(install_dir: Path, keep: Optional[Path] = None) -> None:
+    """Delete a failed install's directory, or fail naming what is left.
+
+    A process still holding a file (a pip child that outlived its kill) makes
+    the delete partial. Restoring a backup into a directory that still exists
+    would nest it inside (``demo/demo``), so that is refused, loudly.
+    """
+    if not install_dir.exists():
+        return
+    try:
+        shutil.rmtree(install_dir)
+    except OSError as e:
+        kept = f" The previous version is kept at {keep}." if keep else ""
+        raise InstallError(
+            f"Could not remove the failed install at {install_dir}: {e}. A "
+            f"process may still be using it; close it (or restart), delete "
+            f"that directory, then retry.{kept}"
+        ) from e
+    if install_dir.exists():
+        raise InstallError(
+            f"{install_dir} still exists after removing the failed install. "
+            f"Delete it, then retry."
+            + (f" The previous version is kept at {keep}." if keep else "")
+        )
+
+
 def _restore_backup_if_present(agent_id: str, install_root: Path) -> bool:
     """Roll back to the previous version. True when a backup was restored.
 
@@ -1576,8 +1726,7 @@ def _restore_backup_if_present(agent_id: str, install_root: Path) -> bool:
     if not backup.exists():
         return False
     install_dir = agent_install_dir(agent_id, install_root)
-    if install_dir.exists():
-        shutil.rmtree(install_dir, ignore_errors=True)
+    _remove_failed_dir(install_dir, keep=backup)
     shutil.move(str(backup), str(install_dir))
     logger.info("installer: restored %s from backup after failed install", agent_id)
     return True
@@ -1594,7 +1743,7 @@ def _clear_failed_install(agent_id: str, install_root: Path) -> None:
     install_dir = agent_install_dir(agent_id, install_root)
     if not install_dir.exists():
         return
-    shutil.rmtree(install_dir, ignore_errors=True)
+    _remove_failed_dir(install_dir)
     logger.info(
         "installer: removed the failed first install of %s so it is not "
         "reported as installed",

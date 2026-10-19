@@ -3354,10 +3354,11 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   tree-kill, the command aborts loudly and nothing is mutated.
 - Install and uninstall of the same agent are serialized: the second caller gets
   a clean "already in progress" error instead of racing the first.
-- A Python agent's package install is stopped after 900 seconds, usually
-  because it is waiting for a package-cache lock another install holds. The
-  error says so, and the install is rolled back. Set `GAIA_HUB_PIP_TIMEOUT` to a
-  number of seconds to allow longer on a slow connection.
+- If another install holds uv's package cache, a Python agent's install stops
+  with an error saying so; wait for the other install to finish, then retry.
+  An install that does no work (no CPU, disk or network activity) for 900
+  seconds is stopped as stuck. In both cases the install is rolled back. Set
+  `GAIA_HUB_PIP_TIMEOUT` to a number of seconds to change that window.
 - The catalog only lists agents this GAIA build can actually supervise; anything
   else is reported as hidden rather than silently dropped.
 - **Trust gate.** Any agent outside the `verified` security tier runs
