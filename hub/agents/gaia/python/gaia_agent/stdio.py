@@ -67,6 +67,7 @@ import json
 import logging
 import os
 import queue
+import sqlite3
 import sys
 import threading
 import traceback
@@ -176,6 +177,10 @@ DECISION_ALWAYS = "always"
 #: The client's own clock ran out with no answer. Denies like ``deny``, but the
 #: agent is told it timed out — the user never said no.
 DECISION_TIMEOUT = "timeout"
+
+
+#: Why the stdin pump cancels a turn: the host has gone.
+STDIN_CLOSED = "stdin closed mid-turn"
 
 
 class PermissionState:
@@ -314,7 +319,7 @@ class PermissionState:
                 timed_out=decision == DECISION_TIMEOUT,
             )
 
-    def cancel_active(self, reason: str = "stdin closed mid-turn") -> bool:
+    def cancel_active(self, reason: str = STDIN_CLOSED) -> bool:
         """Cancel the turn currently running, if any. True if one was cancelled.
 
         Two callers. The host's ``cancel`` verb stops a turn while keeping the
@@ -325,15 +330,25 @@ class PermissionState:
         already-exited host pay.
 
         Either way, cancelling unblocks the wait, which lets the turn finish
-        through its normal path and emit its one terminal event.
+        through its normal path and emit its one terminal event. A turn stdin's
+        closing cancels is marked as cut short (``closed_by_host``), so it is
+        saved as interrupted; one that had already ended is not.
         """
         with self._lock:
             handler = self._handler
             if handler is None:
                 return False
+            if reason == STDIN_CLOSED and not handler.cancelled.is_set():
+                handler.closed_by_host = True
             handler.cancelled.set()
         audit.warning("%s — cancelled the in-flight turn", reason)
         return True
+
+    def end_turn(self, handler: Any) -> None:
+        """Mark *handler*'s turn as over, so a close after this point does not
+        count as cutting it short."""
+        with self._lock:
+            handler.cancelled.set()
 
 
 def parse_control(line: str) -> Optional[Dict[str, Any]]:
@@ -1022,8 +1037,31 @@ def _write(event: Dict[str, Any], out) -> None:
 LOG_PATH_ENV = "GAIA_AGENT_LOG"
 
 
-def _record_turn(agent: Any, query: str, answer: str, result=None) -> None:
-    """Save the completed worker's full tool trail before admitting the next turn."""
+#: How a turn that never finished reads in the session transcript.
+INTERRUPTED_NOTE = (
+    "This turn was interrupted before it finished: the TUI closed or the agent "
+    "stopped."
+)
+
+
+def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*messages* ending with :data:`INTERRUPTED_NOTE`, in the last reply when
+    there is one, so roles still alternate."""
+    last = messages[-1] if messages else None
+    if last and last.get("role") == "assistant" and isinstance(last.get("content"), str):
+        text = last["content"].strip()
+        noted = f"{text}\n\n{INTERRUPTED_NOTE}" if text else INTERRUPTED_NOTE
+        return [*messages[:-1], {**last, "content": noted}]
+    return [*messages, {"role": "assistant", "content": INTERRUPTED_NOTE}]
+
+
+def _record_turn(
+    agent: Any, query: str, answer: str, result=None, interrupted: bool = False
+) -> None:
+    """Save the completed worker's full tool trail before admitting the next turn.
+
+    *interrupted* marks a turn that the host's closing cut short.
+    """
     from gaia.agents.base.history import SessionHistory
 
     if not query or not str(query).strip():
@@ -1043,8 +1081,46 @@ def _record_turn(agent: Any, query: str, answer: str, result=None) -> None:
             {"role": "user", "content": str(query)},
             {"role": "assistant", "content": str(answer or "")},
         ]
-    history.record(messages)
+    history.record(_with_note(messages) if interrupted else messages)
     history.prepare(agent, "")
+
+
+def _begin_turn_record(agent: Any, query: str) -> None:
+    """Put the turn in the transcript now, as interrupted until it ends.
+
+    If this process is killed mid-turn (the TUI closes and its grace runs
+    out), that stand-in is what the transcript keeps. A turn that ends is
+    recorded over it.
+    """
+    from gaia.agents.base.history import SessionHistory
+
+    history = getattr(agent, "conversation_history", None)
+    if isinstance(history, SessionHistory) and str(query).strip():
+        history.begin(_with_note([{"role": "user", "content": str(query)}]))
+
+
+def _settle_turn_record(agent: Any, host_gone: bool) -> None:
+    """A turn that ended unrecorded keeps its stand-in only if the host left.
+
+    A failed turn leaves no trace, as before. Runs in ``run_turn``'s cleanup,
+    so a database error is logged rather than raised into a second terminal
+    event.
+    """
+    from gaia.agents.base.history import SessionHistory
+
+    history = getattr(agent, "conversation_history", None)
+    if not isinstance(history, SessionHistory):
+        return
+    if host_gone:
+        history.keep_pending()
+        return
+    try:
+        history.discard_pending()
+    except sqlite3.Error:
+        logger.exception(
+            "Could not drop the unfinished turn's placeholder from the session "
+            "history; it will read as interrupted"
+        )
 
 
 def log_path() -> "Path":
@@ -1249,6 +1325,8 @@ def run_turn(
         agent.conversation_history.prepare(
             agent, query, on_cut=lambda cut: _write(_history_cut_event(cut), out)
         )
+    _begin_turn_record(agent, query)
+    host_gone = False
 
     handler = SSEOutputHandler()
     # stdin carries tool decisions, not answers to free-form questions.
@@ -1314,7 +1392,7 @@ def run_turn(
                     # confirmation nobody can ever see would otherwise wait
                     # forever and this drain — which must outlive the worker
                     # — would never return, wedging the whole process.
-                    handler.cancelled.set()
+                    _end_turn(handler, state)
 
         if not terminated:
             for canonical in translator.flush():
@@ -1328,6 +1406,8 @@ def run_turn(
                     terminated = True
 
         worker.join(timeout=5.0)
+        # Over: a close from here on did not cut this turn short.
+        _end_turn(handler, state)
 
         if terminated:
             # Commit before the terminal frame: persistence errors must not leak
@@ -1338,7 +1418,13 @@ def run_turn(
             )
             if streamed_answer is not None or has_trace:
                 try:
-                    _record_turn(agent, query, streamed_answer or "", value)
+                    _record_turn(
+                        agent,
+                        query,
+                        streamed_answer or "",
+                        value,
+                        interrupted=_closed_by_host(handler),
+                    )
                 except Exception as exc:
                     logger.exception("Failed to preserve turn history")
                     _write(_terminal_error(exc), out)
@@ -1364,7 +1450,13 @@ def run_turn(
         # Recorded even when empty — same reasoning as the streamed branch:
         # the question half of the pair must survive.
         try:
-            _record_turn(agent, query, answer, result.get("value"))
+            _record_turn(
+                agent,
+                query,
+                answer,
+                result.get("value"),
+                interrupted=_closed_by_host(handler),
+            )
         except Exception as exc:
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
@@ -1374,6 +1466,10 @@ def run_turn(
         if usage:
             final["usage"] = usage
         _write(final, out)
+    except OSError:
+        # The wire broke: the host left mid-turn, as when the TUI closes.
+        host_gone = True
+        raise
     finally:
         # Every exit path, including the early returns above: leaving a dead
         # turn's handler attached would send the next decision to a thread that
@@ -1384,6 +1480,18 @@ def run_turn(
         # timed-out worker running), so a handler left attached between turns
         # accumulates events on a queue nobody drains.
         agent.console = previous_console
+        _settle_turn_record(agent, host_gone or _closed_by_host(handler))
+
+
+def _closed_by_host(handler: Any) -> bool:
+    return bool(getattr(handler, "closed_by_host", False))
+
+
+def _end_turn(handler: Any, state: Optional[PermissionState]) -> None:
+    if state is not None:
+        state.end_turn(handler)
+    else:
+        handler.cancelled.set()
 
 
 CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"

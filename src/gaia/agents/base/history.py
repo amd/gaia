@@ -320,14 +320,45 @@ class SessionHistory(list):
         )
         self._db.commit()
         self._cuts = CutReporter()
+        self._pending: Optional[int] = None
 
-    def record(self, messages: list[dict]) -> None:
-        """Persist a complete turn without modifying its native tool IDs."""
+    def begin(self, messages: list[dict]) -> None:
+        """Save a stand-in for the turn now starting, so the transcript has it
+        even if the process is killed before the turn ends.
+
+        The next :meth:`record` replaces it; :meth:`discard_pending` drops it.
+        """
         with self._db:
-            self._db.execute(
+            cursor = self._db.execute(
                 "INSERT INTO turns(messages) VALUES (?)",
                 (json.dumps(messages, ensure_ascii=False),),
             )
+        self._pending = cursor.lastrowid
+
+    def keep_pending(self) -> None:
+        """Leave the stand-in as the turn's entry: it never finished."""
+        self._pending = None
+
+    def discard_pending(self) -> None:
+        """Drop the stand-in of a turn that ended without being recorded."""
+        if self._pending is None:
+            return
+        with self._db:
+            self._db.execute("DELETE FROM turns WHERE id = ?", (self._pending,))
+        self._pending = None
+
+    def record(self, messages: list[dict]) -> None:
+        """Persist a complete turn without modifying its native tool IDs."""
+        payload = json.dumps(messages, ensure_ascii=False)
+        with self._db:
+            if self._pending is not None:
+                self._db.execute(
+                    "UPDATE turns SET messages = ? WHERE id = ?",
+                    (payload, self._pending),
+                )
+            else:
+                self._db.execute("INSERT INTO turns(messages) VALUES (?)", (payload,))
+        self._pending = None
 
     def prepare(
         self,
@@ -336,9 +367,13 @@ class SessionHistory(list):
         on_cut: Optional[Callable[[HistoryCut], None]] = None,
     ) -> None:
         """Rebuild the bounded view for the currently selected model."""
+        # The running turn's stand-in is for the transcript, not the model.
         turns = [
             json.loads(row[0])
-            for row in self._db.execute("SELECT messages FROM turns ORDER BY id")
+            for row in self._db.execute(
+                "SELECT messages FROM turns WHERE id IS NOT ? ORDER BY id",
+                (self._pending,),
+            )
         ]
         if (
             hasattr(agent, "_uses_native_tool_calls")
@@ -358,6 +393,7 @@ class SessionHistory(list):
             self._db.execute("DELETE FROM turns")
         super().clear()
         self._cuts = CutReporter()
+        self._pending = None
 
     def close(self) -> None:
         self._db.close()
