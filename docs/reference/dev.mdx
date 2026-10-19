@@ -535,7 +535,7 @@ The flagship sidecar also serves the last records at
 `GET /v1/gaia/debug/turns?limit=N` (with its caller token) while `GAIA_TURN_LOG`
 is set. The route is off the versioned contract and returns 404 otherwise. It
 returns every session's records, queries included, to anyone holding the
-caller token, so turn recording on only on a machine you use alone.
+caller token, so keep turn recording on only on a machine you use alone.
 
 To watch the server itself, `util/perf_turns.py` drives `/v1/gaia/query` and
 samples the llama.cpp server behind Lemonade: `/slots` for per-slot busy time

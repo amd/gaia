@@ -522,6 +522,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     # A new pid means the model was reloaded: the counters
                     # reset and the run is not comparable.
                     "backend_reloaded": pid_now != backend_pid,
+                    # None when the sidecar returned no record to compare with.
+                    "foreign": (
+                        req_delta > agent["llm_calls"] if agent else None
+                    ),
                     "gpu": gpu.between(turn["t0"], turn["t1"], backend_pid),
                     "cache_hit_pct": round(
                         100
