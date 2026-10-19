@@ -9,14 +9,21 @@ contract version is tracked separately as
 
 ### Fixed
 
-- **A scheduled send or snooze interrupted mid-fire now shows up as failed.**
-  A crash, or a locked database when the result was written, left the job in
-  `firing` forever: never retried, and never reported as a failure. The
-  scheduler now records when it claims a job (`claimed_at`, added to
-  `email_scheduled_jobs` on startup) and moves on a claim that has gone an
-  hour without an outcome. A scheduled send is marked `failed` with the reason
-  and never run a second time, because it may already have gone out. A snooze
-  is re-queued, since putting a message back in the inbox twice is harmless.
+- **A scheduled send or snooze cut off mid-fire no longer stays stuck, and a
+  failed send is listed.** A crash, or a locked database when the result was
+  written, left the job in `firing` forever, never retried and never reported.
+  A claim is now a lease: the scheduler renews it every minute while the job
+  runs, and only the holder can record the outcome (`claim_id`,
+  `superseded_claim` and `claimed_at` are added to `email_scheduled_jobs` on
+  startup). A lease with no renewal for 10 minutes, still unrenewed two minutes
+  later, is recovered. A scheduled send is marked `failed` with the reason and
+  never run a second time, because it may already have gone out. A snooze is
+  re-queued, since putting a message back in the inbox twice is harmless.
+  `list_scheduled_jobs` now also returns `failed`: the jobs that failed in the
+  last 7 days, with the error, so the user hears about a send that did not go
+  out. A driver that was alive after all (two schedulers on one database, a
+  laptop waking from sleep) keeps its job, and its own outcome replaces the
+  recovery's guess.
 
 - **A batch organize that failed for every message is reported as a failure.**
   `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,

@@ -36,12 +36,17 @@ error message persisted on the row and logs at ERROR — a firing send must
 never silently swallow a send failure. A job whose kind has no registered
 executor is likewise marked failed, never quietly skipped.
 
-At-most-once trade-off (deliberate): a process crash, or a locked DB, between
-``claim_job`` and ``mark_fired``/``mark_failed`` leaves the row in ``firing``.
-A send never re-fires, which is the safe side for email (no double-send):
-once the claim is older than ``stale_firing_seconds`` a pass marks it ``failed``
-with the reason, so it shows up as a failure to check. A snooze restore is safe
-to repeat, so it goes back to ``pending`` and fires again.
+Leases: a claim is held with a token and renewed every ``heartbeat_seconds``
+while the executor runs, and only the holder can record the outcome. A process
+crash, or a locked DB, between ``claim_job`` and ``mark_fired``/``mark_failed``
+leaves the row in ``firing`` with a lease nobody renews. Once it has gone
+``stale_firing_seconds`` without a heartbeat, and this scheduler has watched it
+stay unrenewed for two more heartbeat intervals (which a live holder clears
+even after a sleep/resume), a pass recovers it. A send is marked ``failed`` and
+never re-fires, the safe side for email (no double-send); the failure is
+listed by ``list_scheduled_jobs``. A snooze restore is safe to repeat, so it
+goes back to ``pending``. If the holder was alive after all, its own outcome
+still overwrites the recovery's guess.
 """
 
 from __future__ import annotations
@@ -51,6 +56,12 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia_agent_email import schedule_store
+from gaia_agent_email.lease import (
+    DEFAULT_HEARTBEAT_SECONDS,
+    DEFAULT_STALE_AFTER_SECONDS,
+    Heartbeat,
+    StaleLeases,
+)
 
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
@@ -61,9 +72,9 @@ log = get_logger(__name__)
 # per-pass connection; executors must use it for any store/audit writes.
 JobExecutor = Callable[[Dict[str, Any], Any], None]
 
-# How long a ``firing`` claim may go without an outcome before a pass fails it.
-# Longer than any send or snooze restore takes, so a live fire is never failed.
-DEFAULT_STALE_FIRING_SECONDS = 3600.0
+# How long a ``firing`` lease may go without a heartbeat before it is a
+# recovery candidate.
+DEFAULT_STALE_FIRING_SECONDS = DEFAULT_STALE_AFTER_SECONDS
 
 
 class _SchedulerDB(DatabaseMixin):
@@ -86,12 +97,18 @@ class EmailJobScheduler:
         *,
         poll_seconds: float = 30.0,
         stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
+        heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
         if stale_firing_seconds <= 0:
             raise ValueError(
                 f"stale_firing_seconds must be > 0, got {stale_firing_seconds}"
+            )
+        if not 0 < heartbeat_seconds < stale_firing_seconds:
+            raise ValueError(
+                f"heartbeat_seconds must be > 0 and below stale_firing_seconds "
+                f"({stale_firing_seconds}), got {heartbeat_seconds}"
             )
         if db_path == ":memory:":
             raise ValueError(
@@ -103,6 +120,8 @@ class EmailJobScheduler:
         self._executors = dict(executors)
         self._poll_seconds = poll_seconds
         self._stale_firing_seconds = stale_firing_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+        self._stale_leases = StaleLeases(confirm_after=2 * heartbeat_seconds)
         self._schema_ready = False
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -114,9 +133,9 @@ class EmailJobScheduler:
 
         The atomic ``claim_job`` guard makes each job fire exactly once even
         when two drivers (thread + external dispatcher) poll the same store.
-        Claims left ``firing`` past ``stale_firing_seconds`` are recovered
-        first: a failed send is reported in ``failed``, and a re-queued snooze
-        fires in this same pass.
+        Abandoned leases are recovered first (see the module docstring): a
+        failed send is reported in ``failed``, and a re-queued snooze fires in
+        this same pass.
         """
         db = _SchedulerDB()
         db.init_db(self._db_path)
@@ -129,31 +148,56 @@ class EmailJobScheduler:
         finally:
             db.close_db()
 
+    def _recover_abandoned(self, db, now: float) -> List[str]:
+        candidates = schedule_store.find_stale_firing(
+            db, now=now, stale_after=self._stale_firing_seconds
+        )
+        failed: List[str] = []
+        for job in self._stale_leases.confirm(candidates, now):
+            outcome = schedule_store.recover_claim(db, job, now=now)
+            if outcome == "requeued":
+                log.warning(
+                    "email scheduler: snooze %s stopped renewing its lease while "
+                    "firing; re-queued it",
+                    job["job_id"],
+                )
+            elif outcome == "failed":
+                log.error(
+                    "email scheduler: job %s stopped renewing its lease while "
+                    "firing; marked it failed instead of running it twice",
+                    job["job_id"],
+                )
+                failed.append(job["job_id"])
+        return failed
+
+    def _renew(self, job_id: str, claim_id: str) -> bool:
+        # Own connection: sqlite3 connections are not shared across threads.
+        db = _SchedulerDB()
+        db.init_db(self._db_path, quiet=True)
+        try:
+            return schedule_store.renew_claim(
+                db, job_id=job_id, claim_id=claim_id, now=time.time()
+            )
+        finally:
+            db.close_db()
+
+    def _record(self, recorded: bool, job: Dict[str, Any], outcome: str) -> None:
+        if not recorded:
+            log.warning(
+                "email scheduler: %s job %s %s, but another driver had already "
+                "claimed it again; that driver's outcome stands",
+                job["kind"],
+                job["job_id"],
+                outcome,
+            )
+
     def _fire_due_jobs_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
-        recovered = schedule_store.recover_stale_firing(
-            db,
-            now=now if now is not None else time.time(),
-            stale_after=self._stale_firing_seconds,
-        )
-        for job_id in recovered["requeued"]:
-            log.warning(
-                "email scheduler: snooze %s was left firing with no outcome for "
-                "over %.0fs; re-queued it",
-                job_id,
-                self._stale_firing_seconds,
-            )
-        for job_id in recovered["failed"]:
-            log.error(
-                "email scheduler: job %s was left firing with no outcome for "
-                "over %.0fs; marked it failed instead of running it twice",
-                job_id,
-                self._stale_firing_seconds,
-            )
-        failed: List[str] = list(recovered["failed"])
+        failed = self._recover_abandoned(db, now if now is not None else time.time())
         for job in schedule_store.fetch_due(db, now=now):
             job_id = job["job_id"]
-            if not schedule_store.claim_job(db, job_id=job_id, now=now):
+            claim_id = schedule_store.claim_job(db, job_id=job_id, now=now)
+            if claim_id is None:
                 continue  # another driver won the claim
             executor = self._executors.get(job["kind"])
             if executor is None:
@@ -161,15 +205,28 @@ class EmailJobScheduler:
                     f"no executor registered for job kind {job['kind']!r} — "
                     "the job cannot fire in this process"
                 )
-                schedule_store.mark_failed(db, job_id=job_id, error=msg)
+                schedule_store.mark_failed(
+                    db, job_id=job_id, claim_id=claim_id, error=msg
+                )
                 log.error("email scheduler: job %s failed: %s", job_id, msg)
                 failed.append(job_id)
                 continue
             try:
-                executor(job, db)
+                with Heartbeat(
+                    lambda j=job_id, c=claim_id: self._renew(j, c),
+                    self._heartbeat_seconds,
+                    job_id,
+                ):
+                    executor(job, db)
             except Exception as exc:
                 msg = f"{type(exc).__name__}: {exc}"
-                schedule_store.mark_failed(db, job_id=job_id, error=msg)
+                self._record(
+                    schedule_store.mark_failed(
+                        db, job_id=job_id, claim_id=claim_id, error=msg
+                    ),
+                    job,
+                    "failed",
+                )
                 log.exception(
                     "email scheduler: %s job %s failed to fire: %s",
                     job["kind"],
@@ -178,7 +235,11 @@ class EmailJobScheduler:
                 )
                 failed.append(job_id)
                 continue
-            schedule_store.mark_fired(db, job_id=job_id)
+            self._record(
+                schedule_store.mark_fired(db, job_id=job_id, claim_id=claim_id),
+                job,
+                "fired",
+            )
             log.info("email scheduler: %s job %s fired", job["kind"], job_id)
             fired.append(job_id)
         return {"fired": fired, "failed": failed}

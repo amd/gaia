@@ -103,8 +103,8 @@ def test_fired_job_not_remigrated(tmp_path):
     migrate_email_clocks(db)
     # Simulate the daemon firing it.
     daemon_jid = daemon_store.list_jobs(db)[0]["job_id"]
-    daemon_store.claim_job(db, job_id=daemon_jid)
-    daemon_store.mark_fired(db, job_id=daemon_jid)
+    claim = daemon_store.claim_job(db, job_id=daemon_jid)
+    daemon_store.mark_fired(db, job_id=daemon_jid, claim_id=claim)
 
     # The source job is still pending in schedule_store, but the ledger already
     # owns it, so a re-run must not create a second daemon job.

@@ -1,17 +1,20 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A job left in ``firing`` by a crash or a locked DB must not stay stuck.
+"""A job left in ``firing`` by a crash or a locked DB must not stay stuck,
+and a fire that is still running must not be taken over.
 
-``claim_job`` moves a row ``pending -> firing`` before its executor runs. If the
-process dies, or the DB is locked when the outcome is written back, nothing ever
-moved the row on, so a recurring job never fired again. Each pass now re-queues
-a recurring row whose claim has gone stale, and fails a stale one-shot row (it
-may already have taken effect, so it is not run a second time).
+``claim_job`` moves a row ``pending -> firing`` and returns a lease token. The
+firing driver renews the lease while its executor runs, and only the token's
+holder can record the outcome. A lease that goes ``stale_firing_seconds``
+without renewal, and that this clock then watches stay unrenewed for two more
+heartbeat intervals, is recovered: a recurring row is re-queued, a one-shot
+row fails (it may already have taken effect, so it is not run twice).
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 
 import pytest
 
@@ -21,11 +24,14 @@ from gaia.daemon.scheduler.models import (
     KIND_ONE_SHOT,
     KIND_RECURRING,
     STATUS_FAILED,
+    STATUS_FIRED,
     STATUS_FIRING,
     STATUS_PENDING,
 )
 
 STALE = 600.0
+BEAT = 10.0
+CONFIRM = 2 * BEAT
 
 
 def _db(path):
@@ -35,18 +41,19 @@ def _db(path):
     return db
 
 
+def _clock(path, executors):
+    return DaemonClock(
+        str(path), executors, stale_firing_seconds=STALE, heartbeat_seconds=BEAT
+    )
+
+
 def test_recurring_job_whose_outcome_write_failed_fires_again(tmp_path, monkeypatch):
     path = tmp_path / "clock.db"
-    db = _db(path)
     jid = store.register_job(
-        db, source="t", kind=KIND_RECURRING, fire_at=100.0, interval_seconds=60
+        _db(path), source="t", kind=KIND_RECURRING, fire_at=100.0, interval_seconds=60
     )
     calls = []
-    clock = DaemonClock(
-        str(path),
-        executors={KIND_RECURRING: lambda job, _db: calls.append(job["job_id"])},
-        stale_firing_seconds=STALE,
-    )
+    clock = _clock(path, {KIND_RECURRING: lambda job, _db: calls.append(job["job_id"])})
 
     def locked(*_a, **_k):
         raise sqlite3.OperationalError("database is locked")
@@ -57,12 +64,14 @@ def test_recurring_job_whose_outcome_write_failed_fires_again(tmp_path, monkeypa
     monkeypatch.undo()
     assert store.get_job(_db(path), job_id=jid)["status"] == STATUS_FIRING
 
-    # Within the claim window the row still belongs to whoever claimed it.
+    # Within the stale window the lease still belongs to its holder.
     assert clock.fire_due(now=100.0 + STALE - 1) == {"fired": [], "failed": []}
+    # Stale, but first seen now: watched, not recovered yet.
+    assert clock.fire_due(now=100.0 + STALE + 1) == {"fired": [], "failed": []}
     assert calls == [jid]
-
-    # Past it, the stuck row is re-queued and fires on the same pass.
-    assert clock.fire_due(now=100.0 + STALE + 1) == {"fired": [jid], "failed": []}
+    # Still unrenewed after two heartbeat intervals: re-queued and fired.
+    out = clock.fire_due(now=100.0 + STALE + 1 + CONFIRM)
+    assert out == {"fired": [jid], "failed": []}
     assert calls == [jid, jid]
     job = store.get_job(_db(path), job_id=jid)
     assert job["status"] == STATUS_PENDING
@@ -74,43 +83,86 @@ def test_one_shot_job_left_firing_by_a_crash_fails_loudly_not_rerun(tmp_path):
     db = _db(path)
     jid = store.register_job(db, source="t", kind=KIND_ONE_SHOT, fire_at=100.0)
     # A previous daemon claimed the job and died before writing the outcome.
-    assert store.claim_job(db, job_id=jid, now=100.0) is True
+    assert store.claim_job(db, job_id=jid, now=100.0) is not None
 
     calls = []
-    clock = DaemonClock(
-        str(path),
-        executors={KIND_ONE_SHOT: lambda job, _db: calls.append(job)},
-        stale_firing_seconds=STALE,
-    )
-    assert clock.fire_due(now=100.0 + STALE + 1) == {"fired": [], "failed": [jid]}
+    clock = _clock(path, {KIND_ONE_SHOT: lambda job, _db: calls.append(job)})
+    assert clock.fire_due(now=100.0 + STALE + 1) == {"fired": [], "failed": []}
+    out = clock.fire_due(now=100.0 + STALE + 1 + CONFIRM)
+    assert out == {"fired": [], "failed": [jid]}
     assert calls == []
     job = store.get_job(_db(path), job_id=jid)
     assert job["status"] == STATUS_FAILED
     assert "interrupted while firing" in job["error"]
 
 
-def test_row_claimed_before_claim_times_were_recorded_is_recovered(tmp_path):
-    """A row stuck by an older daemon has no claim time; it is stale on sight."""
+def test_a_live_holder_that_renews_after_a_wake_up_keeps_its_job(tmp_path):
+    """After sleep/resume every lease looks hours old; a live holder's next
+    heartbeat must clear it before anyone recovers it."""
     path = tmp_path / "clock.db"
     db = _db(path)
-    jid = store.register_job(
-        db, source="t", kind=KIND_RECURRING, fire_at=100.0, interval_seconds=60
-    )
-    db.update(
-        "daemon_jobs",
-        {"status": STATUS_FIRING, "claimed_at": None},
-        "job_id = :id",
-        {"id": jid},
-    )
+    jid = store.register_job(db, source="t", kind=KIND_ONE_SHOT, fire_at=100.0)
+    claim = store.claim_job(db, job_id=jid, now=100.0)
+    other = _clock(path, {KIND_ONE_SHOT: lambda job, _db: None})
+
+    woke = 100.0 + 3 * 3600
+    assert other.fire_due(now=woke) == {"fired": [], "failed": []}
+    assert store.renew_claim(db, job_id=jid, claim_id=claim, now=woke + 1)
+    assert other.fire_due(now=woke + CONFIRM + 1) == {"fired": [], "failed": []}
+    assert store.get_job(db, job_id=jid)["status"] == STATUS_FIRING
+    assert store.mark_fired(db, job_id=jid, claim_id=claim)
+    assert store.get_job(db, job_id=jid)["status"] == STATUS_FIRED
+
+
+def test_only_the_claim_holder_can_record_an_outcome(tmp_path):
+    db = _db(tmp_path / "clock.db")
+    jid = store.register_job(db, source="t", kind=KIND_ONE_SHOT, fire_at=1.0)
+    first = store.claim_job(db, job_id=jid, now=1.0)
+    stale = store.find_stale_firing(db, now=1.0 + STALE + 1, stale_after=STALE)
+    assert store.recover_claim(db, stale[0], now=1.0 + STALE + 1) == "failed"
+    # Re-scheduled by the user and claimed again by a second driver.
+    db.update("daemon_jobs", {"status": STATUS_PENDING}, "job_id = :id", {"id": jid})
+    second = store.claim_job(db, job_id=jid, now=2000.0)
+
+    assert store.mark_failed(db, job_id=jid, claim_id=first, error="late") is False
+    assert store.mark_fired(db, job_id=jid, claim_id=first) is False
+    job = store.get_job(db, job_id=jid)
+    assert job["status"] == STATUS_FIRING and job["claim_id"] == second
+    assert "late" not in (job["error"] or "")
+    assert store.mark_fired(db, job_id=jid, claim_id=second) is True
+
+
+def test_a_holder_alive_after_recovery_overwrites_the_guessed_failure(tmp_path):
+    db = _db(tmp_path / "clock.db")
+    jid = store.register_job(db, source="t", kind=KIND_ONE_SHOT, fire_at=1.0)
+    claim = store.claim_job(db, job_id=jid, now=1.0)
+    stale = store.find_stale_firing(db, now=1.0 + STALE + 1, stale_after=STALE)
+    assert store.recover_claim(db, stale[0], now=1.0 + STALE + 1) == "failed"
+
+    assert store.mark_fired(db, job_id=jid, claim_id=claim) is True
+    job = store.get_job(db, job_id=jid)
+    assert job["status"] == STATUS_FIRED and job["error"] is None
+
+
+def test_a_running_executor_renews_its_lease(tmp_path):
+    path = tmp_path / "clock.db"
+    jid = store.register_job(_db(path), source="t", kind=KIND_ONE_SHOT, fire_at=1.0)
+    seen = []
+
+    def slow(job, _db):
+        time.sleep(0.5)
+        seen.append(store.get_job(_db, job_id=job["job_id"])["claimed_at"])
+
     clock = DaemonClock(
-        str(path),
-        executors={KIND_RECURRING: lambda job, _db: None},
-        stale_firing_seconds=STALE,
+        str(path), {KIND_ONE_SHOT: slow}, stale_firing_seconds=60, heartbeat_seconds=0.1
     )
-    assert clock.fire_due(now=200.0) == {"fired": [jid], "failed": []}
+    clock.fire_due(now=1.0)
+    # Claimed at the fake now=1.0; renewed with the real clock while running.
+    assert seen[0] > 1.0
 
 
-def test_store_created_before_the_claim_column_is_migrated(tmp_path):
+def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(tmp_path):
+    """No claim time recorded: stale after the window, not on sight."""
     path = tmp_path / "old.db"
     db = _ClockDB()
     db.init_db(str(path))
@@ -128,10 +180,49 @@ def test_store_created_before_the_claim_column_is_migrated(tmp_path):
     )
     db.close_db()
 
-    clock = DaemonClock(str(path), executors={KIND_ONE_SHOT: lambda job, _db: None})
-    assert clock.fire_due(now=10.0) == {"fired": [], "failed": ["old"]}
+    clock = _clock(path, {KIND_ONE_SHOT: lambda job, _db: None})
+    upgraded = time.time()
+    assert clock.fire_due(now=upgraded) == {"fired": [], "failed": []}
+    assert clock.fire_due(now=upgraded + CONFIRM) == {"fired": [], "failed": []}
+    later = upgraded + STALE + 1
+    assert clock.fire_due(now=later) == {"fired": [], "failed": []}
+    assert clock.fire_due(now=later + CONFIRM) == {"fired": [], "failed": ["old"]}
 
 
-def test_nonpositive_stale_window_rejected(tmp_path):
+def test_two_connections_adding_the_lease_columns_at_once_both_start(tmp_path):
+    path = tmp_path / "race.db"
+    winner, loser = _ClockDB(), _ClockDB()
+    winner.init_db(str(path))
+    loser.init_db(str(path))
+    loser.execute(
+        store.DAEMON_JOBS_DDL.replace(
+            "    claimed_at      REAL,\n    claim_id        TEXT,\n"
+            "    superseded_claim TEXT\n",
+            "    claimed_at      REAL\n",
+        )
+    )
+    real_query = loser.query
+
+    def stale_view(sql, *args, **kwargs):
+        rows = real_query(sql, *args, **kwargs)
+        if sql.startswith("PRAGMA table_info"):
+            # The winner adds the columns after the loser looked.
+            store.init_schema(winner)
+        return rows
+
+    loser.query = stale_view
+    store.init_schema(loser)  # must not raise "duplicate column name"
+    columns = {r["name"] for r in real_query("PRAGMA table_info(daemon_jobs)")}
+    assert {"claim_id", "superseded_claim"} <= columns
+
+
+def test_bad_lease_settings_rejected(tmp_path):
     with pytest.raises(ValueError, match="stale_firing_seconds"):
         DaemonClock(str(tmp_path / "c.db"), executors={}, stale_firing_seconds=0)
+    with pytest.raises(ValueError, match="heartbeat_seconds"):
+        DaemonClock(
+            str(tmp_path / "c.db"),
+            executors={},
+            stale_firing_seconds=60,
+            heartbeat_seconds=60,
+        )
