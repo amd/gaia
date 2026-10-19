@@ -3229,6 +3229,14 @@ server's memory when GAIA is not in use:
   finds the server gone mid-request has the daemon start it again and sends
   the request once more, so the turn still answers. A stream already under way
   is not replayed.
+- **A server that is briefly not answering is waited for.** A request, a
+  `/model` switch, or a CLI command such as `gaia llm` that finds GAIA's server
+  unreachable shows "Reconnecting to the model server…" and waits up to 60
+  seconds while the daemon brings it back, then carries on. A new agent session
+  waits the same way while it starts, but only logs the message. If the server
+  is not back by then, the request fails with an
+  error that says so and points at `gaia daemon status`. A Lemonade you run
+  yourself, or one `LEMONADE_BASE_URL` names, is never waited on.
 - **`gaia daemon stop` stops the server, whoever started it,** including the one
   first-time setup starts. If the daemon is not running, it still stops GAIA's
   server.
