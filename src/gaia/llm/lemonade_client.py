@@ -84,6 +84,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils import awake_clock
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -4061,7 +4062,8 @@ class LemonadeClient:
         return ModelCallRetrier(
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
-            clock=self._retry_clock or time.monotonic,
+            # A request the PC slept through still has its retry budget.
+            clock=self._retry_clock or awake_clock.monotonic,
             rng=self._retry_rng,
             server_loading=(
                 self._server_load_in_progress
@@ -4114,7 +4116,7 @@ class LemonadeClient:
             StreamCancelledError: Stop was pressed during the wait.
         """
         limit = RetryPolicy.from_env().load_wait
-        clock = self._retry_clock or time.monotonic
+        clock = self._retry_clock or awake_clock.monotonic
         sleep = self._retry_sleep or time.sleep
         is_cancelled = current_cancel_check()
         listener = current_retry_listener()

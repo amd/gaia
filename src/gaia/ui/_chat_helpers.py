@@ -59,6 +59,7 @@ from gaia.ui.email_sidecar.profiles import (
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
+from gaia.utils import awake_clock as _awake_clock
 
 from . import permissions as session_permissions
 from . import spending
@@ -2002,6 +2003,15 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
     return last.get("success") is False or bool(running)
 
 
+def _turn_clock() -> float:
+    """Seconds on a clock that stops while the PC sleeps.
+
+    A turn on a PC that sleeps for longer than the no-progress limit must not
+    be stopped the moment it wakes: the model slept too.
+    """
+    return _awake_clock.monotonic()
+
+
 class _TurnIdleClock:
     """Seconds a turn has gone without progress.
 
@@ -2808,7 +2818,7 @@ async def _get_chat_response(
 
         agent._cancel_event = cancel_event
 
-        activity = _ActivityConsole(agent.console, _time.monotonic)
+        activity = _ActivityConsole(agent.console, _turn_clock)
         agent.console = activity
         activity_box["console"] = activity
         recording = TurnRecording(session_id)
@@ -2846,12 +2856,12 @@ async def _get_chat_response(
         return _clean_answer_json(result_str)
 
     try:
-        idle = _TurnIdleClock(_time.monotonic())
+        idle = _TurnIdleClock(_turn_clock())
         # A wait for the model is progress: the queue reports every few seconds.
         queue_seen = {"at": 0.0}
 
         def _queue_update(_event: dict) -> None:
-            queue_seen["at"] = _time.monotonic()
+            queue_seen["at"] = _turn_clock()
 
         worker = asyncio.get_running_loop().run_in_executor(
             None,
@@ -2869,7 +2879,7 @@ async def _get_chat_response(
                 idle.progressed(queue_seen["at"])
                 if (
                     not worker.done()
-                    and idle.idle_for(owned_wait, _time.monotonic())
+                    and idle.idle_for(owned_wait, _turn_clock())
                     > _STREAM_TIMEOUT_SECONDS
                 ):
                     idle_message = _turn_idle_message(_STREAM_TIMEOUT_SECONDS)
@@ -3482,7 +3492,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # The limit is on going without progress, not on total time: a long
         # task that keeps making progress runs to the end.
-        _idle = _TurnIdleClock(_time.monotonic())
+        _idle = _TurnIdleClock(_turn_clock())
         idle_message = None
         producer = threading.Thread(
             target=_as_interactive_turn(_run_agent, cancel_event, sse_handler),
@@ -3500,7 +3510,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         step_id = 0
         idle_cycles = 0
         stopped_at = None
-        last_event_at = _time.monotonic()
+        last_event_at = _turn_clock()
 
         def _blocked_policy_steps():
             return [
@@ -3541,7 +3551,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             _owned_wait = (
                 sse_handler.awaiting_user_input() or sse_handler.tool_running()
             )
-            if _idle.idle_for(_owned_wait, _time.monotonic()) > _STREAM_TIMEOUT_SECONDS:
+            if _idle.idle_for(_owned_wait, _turn_clock()) > _STREAM_TIMEOUT_SECONDS:
                 logger.error(
                     "Turn made no progress for %ds (%s); stopping it",
                     _STREAM_TIMEOUT_SECONDS,
@@ -3560,7 +3570,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                last_event_at = _time.monotonic()
+                last_event_at = _turn_clock()
                 _idle.progressed(last_event_at)
                 if event is None:
                     # Sentinel - agent is done
@@ -3782,7 +3792,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # into a single updating step on the frontend. A running tool
                 # shows its own timer, so the model is not the one being waited on.
                 if idle_cycles % 75 == 0 and not sse_handler.tool_running():
-                    elapsed = int(_time.monotonic() - last_event_at)
+                    elapsed = int(_turn_clock() - last_event_at)
                     status_evt = json.dumps(
                         {
                             "type": "status",
