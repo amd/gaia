@@ -178,7 +178,6 @@ function App() {
         setBackendSlow(false);
         setBackendError(null);
         setBackendConnected(true);
-        if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
         // One slow health probe under load is not an outage.
         failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
         const prev = useChatStore.getState().systemStatus;
@@ -314,7 +313,6 @@ function App() {
         const session = await api.createSession({
             title: 'New Task',
             agent_type: FLAGSHIP_AGENT_ID,
-            device: store.activeDevice,
             document_ids: store.draftDocumentIds,
         });
         store.clearDraftDocuments();

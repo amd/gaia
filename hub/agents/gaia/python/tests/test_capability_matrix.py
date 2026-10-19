@@ -291,3 +291,15 @@ def test_sequence_pins_exist_and_load(matrix):
         "tool_query",
         "write_needs_confirmation",
     }
+
+
+def test_a_route_hidden_from_the_schema_is_off_the_contract(tmp_path):
+    """A dev-only route (``include_in_schema=False``) is not a functional op."""
+    server = tmp_path / "server.py"
+    server.write_text(
+        "@router.get('/memory')\nasync def memory(): ...\n"
+        "@router.get('/debug/turns', include_in_schema=False)\nasync def d(): ...\n",
+        encoding="utf-8",
+    )
+    count, _, ops = capability_matrix._derive_rest(server)
+    assert ops == ["memory"] and count == 1

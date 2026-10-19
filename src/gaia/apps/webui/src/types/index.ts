@@ -970,10 +970,18 @@ export interface ProviderInfo {
 
 export interface ActiveModel {
     provider: ProviderId;
-    model: string;
-    label: string;
+    /** Null only when an unreadable config hides the default; `config_error` says why. */
+    model: string | null;
+    display_name?: string | null;
+    label: string | null;
     remote: boolean;
     is_default: boolean;
+    /** Local model on disk; null for a cloud model or while the server starts. */
+    downloaded?: boolean | null;
+    config_error?: string | null;
+    /** Where a new chat would be answered, as the backend resolves it; null when it can't tell. */
+    inference_remote?: boolean | null;
+    inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
     restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
 }
@@ -992,8 +1000,84 @@ export interface ProviderModel {
     rank: number | null;
     note: string | null;
     evidence: string | null;
+    // Local models only (GET /api/providers/local/models).
+    display_name?: string;
+    recipe?: string | null;
+    state?: LocalModelState;
+    placement?: ModelPlacement;
+    size_gb?: number | null;
+    /** Fits this PC's memory; null when GAIA can't tell. */
+    fits?: boolean | null;
+    available?: boolean;
+    unavailable_reason?: string | null;
+    /** Median tokens/s of its recent turns on this PC. */
+    tokens_per_second?: number | null;
+    /** An in-flight (or just-finished) download of this model. */
+    download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
     price?: ModelPrice | null;
+}
+
+export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';
+
+/** Where a local model runs: Lemonade's report once loaded, its recipe's target before. */
+export interface ModelPlacement {
+    device: string | null;
+    backend: string | null;
+    /** "GPU · Vulkan", "NPU · FLM", "CPU". */
+    label: string | null;
+    source: 'reported' | 'expected' | null;
+    /** Set when the reported device is not the expected one. */
+    warning: string | null;
+}
+
+export interface ProviderModelsResponse {
+    provider: string;
+    models: ProviderModel[];
+    memory_gb?: number | null;
+    memory_source?: string | null;
+    capacity_error?: string | null;
+}
+
+/** GET/PUT /api/providers/local/context. */
+export interface ContextChoice {
+    model: string;
+    display_name: string;
+    chosen: number | null;
+    automatic: number | null;
+    min: number | null;
+    max_fit: number | null;
+    options: number[];
+    loaded_ctx: number | null;
+    memory_source: string;
+    note: string | null;
+    /** On PUT for a loaded model: whether GAIA started reloading it at the new size. */
+    reload?: { started: boolean; reason: 'busy' | 'warm_up' | 'already_loaded' | 'restarting' | 'not_gaias_server' | null } | null;
+}
+
+/** GET /api/providers/local/status — the sidebar pill's popover. */
+export interface LocalModelStatus {
+    state: 'loaded' | 'warming' | 'idle' | 'stopped';
+    active_model: string | null;
+    active_display_name: string | null;
+    active_remote: boolean;
+    model: string | null;
+    display_name: string | null;
+    placement: ModelPlacement | null;
+    ctx_size: number | null;
+    memory: { source: string; total_gb: number; free_gb: number | null; model_gb: number | null } | null;
+    memory_error: string | null;
+    /** One plain line; `error_detail` carries the raw cause. */
+    error: string | null;
+    error_detail?: string | null;
+    base_url: string | null;
+    /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
+    owner: 'gaia' | 'user' | 'remote' | null;
+    /** The loaded model is answering a request, or GAIA is warming it up for a new chat. */
+    busy: boolean;
+    busy_reason?: 'warm_up' | 'request' | null;
+    restarting: boolean;
+    restart_error: string | null;
 }
 
 /** USD per million tokens, from GAIA's one rate card. */

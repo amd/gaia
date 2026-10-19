@@ -20,6 +20,7 @@ from gaia.llm import create_client
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
 from gaia.logger import get_logger
+from gaia.utils import perf_trace
 
 #: Threads inside ``AgentSDK.side_request``; their calls are not the turn's.
 _SIDE_CALLS = threading.local()
@@ -446,6 +447,14 @@ class AgentSDK:
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             self.log.warning("turn recorder (mark) failed: %s", e)
 
+    def _timed_stats(self) -> Dict[str, Any]:
+        """``get_stats()``, booked on the open call as ``stats_fetch_s``."""
+        started = time.perf_counter()
+        try:
+            return self.get_stats()
+        finally:
+            perf_trace.note_wait("stats_fetch_s", time.perf_counter() - started)
+
     def _recorder_end(self, stats: Optional[Dict[str, Any]] = None) -> None:
         """Close the open call. A no-op once closed, so a ``finally`` can back
         up a normal close without recording the call twice."""
@@ -671,7 +680,7 @@ class AgentSDK:
                     self._recorder_mark()
                     call_reported = True
                     self._report_llm_call(call_started, streamed=True, ok=True)
-                    tool_call_stats = self.get_stats()
+                    tool_call_stats = self._timed_stats()
                     self._recorder_end(tool_call_stats)
                     yield AgentResponse(
                         text=chunk,
@@ -687,7 +696,7 @@ class AgentSDK:
             self._recorder_mark()
             call_reported = True
             self._report_llm_call(call_started, streamed=True, ok=True)
-            stats = self.get_stats()
+            stats = self._timed_stats()
             self._recorder_end(stats)
 
             yield AgentResponse(

@@ -1241,6 +1241,25 @@ class ChatDatabase:
             )
             return cursor.rowcount > 0
 
+    def recent_inference_stats(self, limit: int = 500) -> List[Dict]:
+        """Inference stats of the newest assistant messages that recorded any."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT inference_stats FROM messages WHERE role = 'assistant' "
+                "AND inference_stats IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                stats = json.loads(row["inference_stats"])
+            except ValueError:
+                logger.warning("Skipping a message with unreadable inference_stats")
+                continue
+            if isinstance(stats, dict):
+                out.append(stats)
+        return out
+
     # ── Cloud spending ────────────────────────────────────────────────
 
     def add_cloud_spend(

@@ -827,6 +827,31 @@
     "title": "ConnectRequest",
     "type": "object"
   },
+  "ContextRequest": {
+    "description": "``ctx_size`` None returns the model to GAIA's automatic size.",
+    "properties": {
+      "ctx_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ctx Size"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "ContextRequest",
+    "type": "object"
+  },
   "CreateScheduleRequest": {
     "description": "Request to create a new scheduled task.",
     "properties": {
@@ -2931,6 +2956,18 @@
       "path"
     ],
     "title": "QuickLink",
+    "type": "object"
+  },
+  "RestartRequest": {
+    "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "RestartRequest",
     "type": "object"
   },
   "RetryChoiceRequest": {

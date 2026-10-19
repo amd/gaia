@@ -106,12 +106,6 @@ interface ChatState {
     agents: AgentInfo[];
     setAgents: (agents: AgentInfo[]) => void;
 
-    // Device selection (CPU / GPU / NPU)
-    activeDevice: string;
-    setActiveDevice: (device: string) => void;
-    detectedDevices: string[];
-    setDetectedDevices: (devices: string[]) => void;
-
     // Sessions
     sessions: Session[];
     currentSessionId: string | null;
@@ -258,15 +252,6 @@ interface ChatState {
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
     setAgents: (agents) => set({ agents }),
-
-    // Device selection
-    activeDevice: readPref('gaia-active-device', 'gpu'),
-    setActiveDevice: (device) => {
-        writePref('gaia-active-device', device);
-        set({ activeDevice: device });
-    },
-    detectedDevices: ['gpu'],
-    setDetectedDevices: (devices) => set({ detectedDevices: devices }),
 
     // Sessions
     sessions: [],
