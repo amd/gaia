@@ -6,11 +6,10 @@
 // the real GAIA mark (public/gaia-icon.png) is a detailed illustration that
 // turns to mush at 22-26px, and inventing a substitute would put a fabricated
 // brand mark in the most identity-critical position on the site.
-// Section anchors live on the landing page, so they are absolute — the header
-// is shared with /hub and /hub/[id] where those sections don't exist.
+// Section anchors are absolute so they resolve from any path, including a
+// redirect landing.
 const NAV = [
   { label: 'Build', href: '/#build' },
-  { label: 'Agent Hub', href: '/hub' },
   { label: 'Docs', href: 'https://amd-gaia.ai/docs', external: true },
 ];
 ---

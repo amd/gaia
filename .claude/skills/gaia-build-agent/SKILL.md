@@ -1,15 +1,12 @@
 ---
 name: "gaia-build-agent"
-description: "Build a new GAIA agent with the SDK end-to-end: scaffold the package, write the Agent subclass, register @tool functions, compose reusable tool mixins, set the model + system prompt, and test it locally — then hand off to publishing. Use when creating a NEW agent (a Python class inheriting from the base Agent) for the GAIA repo or a user-authored package, not for tuning an existing agent's prompt (prompt-engineer), adding one tool to an existing class (python-developer), or shipping/releasing an already-built agent (use the agent-hub-release skill + docs/guides/hub-publishing.mdx). Pairs with the agent-hub-release skill: this one BUILDS, that one PUBLISHES."
+description: "Build a new GAIA agent with the SDK end-to-end: scaffold the package, write the Agent subclass, register @tool functions, compose reusable tool mixins, set the model + system prompt, and test it locally. Use when creating a NEW agent (a Python class inheriting from the base Agent) for the GAIA repo or a user-authored package, not for tuning an existing agent's prompt (prompt-engineer), adding one tool to an existing class (python-developer). GAIA ships one agent (the flagship) through the TUI and Agent UI and has no public agent catalog, so there is no publish step for a user-built agent."
 ---
 
 # Building a GAIA Agent
 
 How to take an idea to a working, testable GAIA agent — a Python class that runs
-locally on AI PCs. This skill covers **build**; publishing is its sibling
-[`agent-hub-release`](../agent-hub-release/SKILL.md) skill and the author guide
-[`docs/guides/hub-publishing.mdx`](../../../docs/guides/hub-publishing.mdx). The
-full prose walkthrough is [`docs/guides/custom-agent.mdx`](../../../docs/guides/custom-agent.mdx).
+locally on AI PCs. The full prose walkthrough is [`docs/guides/custom-agent.mdx`](../../../docs/guides/custom-agent.mdx).
 
 > Read [`CLAUDE.md`](../../../CLAUDE.md) first — the "No Silent Fallbacks", code-reuse,
 > testing, and eval rules all apply to a new agent.
@@ -21,8 +18,7 @@ A GAIA agent is **one Python class** that inherits from the base `Agent`
 methods. The base class owns the agent loop, tool registry, state, error recovery,
 and (via mixins) MCP / OpenAI-API exposure — you write the prompt + the tools, not
 the plumbing. There are no YAML agent manifests for in-core agents (removed in
-v0.17.5); a *publishable hub package* adds a `gaia-agent.yaml` manifest on top (see
-the publish skill).
+v0.17.5); an in-repo package under `hub/agents/` adds a `gaia-agent.yaml` manifest on top.
 
 ## Steps
 
@@ -79,17 +75,14 @@ the publish skill).
    yet, so report the scores you measured (CLAUDE.md eval rule). Unit tests don't
    catch LLM regressions.
 
-## Then publish
+## After it works
 
-Once it runs and is documented (README/SPEC/SKILL per the doc-sync rule), ship it:
-
-- **Standard wheel → Hub + PyPI** (PR route, no token): the
-  [`hub-publishing.mdx`](../../../docs/guides/hub-publishing.mdx) guide.
-- **Frozen-binary + npm sidecar** (like the email agent): the
-  [`agent-hub-release`](../agent-hub-release/SKILL.md) skill.
-- **Taking an agent that already exists to a publishable, Agent-UI-usable state**
-  (the parity kit, the generalize-before-documenting rule, the day-one gate): the
-  [`porting-agent-to-hub`](../porting-agent-to-hub/SKILL.md) skill.
+There is no publish step: GAIA ships one agent (the flagship) through the TUI and
+the Agent UI, and has no public catalog to list a new agent in. A user-authored
+agent runs from `~/.gaia/agents/<id>/`; an in-repo one is loaded through its entry
+point. Keep its docs in sync per the CLAUDE.md doc-sync rule. Releasing one of the
+agents GAIA itself ships (the email sidecar's frozen binary + npm client) is
+maintainer work — the [`agent-hub-release`](../agent-hub-release/SKILL.md) skill.
 
 ## Reference
 

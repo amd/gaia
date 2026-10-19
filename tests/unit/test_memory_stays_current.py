@@ -585,3 +585,88 @@ class TestAdversarialEdges:
         ).fetchall()
         assert rows == [("User's car service is booked", None)]
         host.close()
+
+
+class TestConsolidationChecksOnlyWhatTheAgentReads:
+    """Another agent's memory must not stop this agent filing what it can't see."""
+
+    def _supersede(self, store, old_text, new_text, context):
+        old = store.store(category="fact", content=old_text, context=context)
+        new = store.store(category="fact", content=new_text, context=context)
+        store.update(old, superseded_by=new)
+
+    def test_a_row_in_another_context_is_not_current_here(self, store):
+        store.store(category="fact", content="User lives in Calgary", context="b")
+
+        assert not store.is_current("User lives in Calgary", "fact", context="a")
+        assert store.is_current("User lives in Calgary", "fact", context="b")
+        assert store.is_current("User lives in Calgary", "fact")
+
+    def test_a_global_row_is_current_in_every_context(self, store):
+        store.store(category="fact", content="User lives in Calgary", context="global")
+
+        assert store.is_current("User lives in Calgary", "fact", context="a")
+
+    def test_a_change_in_another_context_does_not_block_this_one(self, store):
+        self._supersede(store, "User lives in Calgary", "User lives in Toronto", "b")
+
+        assert not store.changed_since("User lives in Calgary", _iso(1), context="a")
+        assert store.changed_since("User lives in Calgary", _iso(1), context="b")
+        assert store.changed_since("User lives in Calgary", _iso(1))
+
+    def test_a_global_change_blocks_every_context(self, store):
+        self._supersede(
+            store, "User lives in Calgary", "User lives in Toronto", "global"
+        )
+
+        assert store.changed_since("User lives in Calgary", _iso(1), context="a")
+
+    def test_a_context_named_like_sql_matches_nothing_extra(self, store):
+        store.store(category="fact", content="User lives in Calgary", context="b")
+
+        assert not store.is_current(
+            "User lives in Calgary", "fact", context="a') OR ('1'='1"
+        )
+
+    def test_consolidation_files_a_fact_only_another_agent_knows(self, tmp_path):
+        host = _host(tmp_path, [])
+        host._memory_context = "a"
+        store = host._memory_store
+        store.store(
+            category="fact", content="User keeps bees on their roof", context="b"
+        )
+        TestConsolidationDoesNotRefileOldFacts()._old_chat(
+            store, "s-old", 30, "I keep bees on the roof of my building"
+        )
+
+        result = TestConsolidationDoesNotRefileOldFacts()._consolidate(
+            host, [{"category": "fact", "content": "User keeps bees on their roof"}]
+        )
+
+        assert result["extracted_items"] == 1
+        contexts = sorted(
+            r[0]
+            for r in store._conn.execute(
+                "SELECT context FROM knowledge WHERE content LIKE '%bees%'"
+            )
+        )
+        assert contexts == ["a", "b"]
+        host.close()
+
+    def test_consolidation_still_skips_what_this_agent_knows(self, tmp_path):
+        host = _host(tmp_path, [])
+        host._memory_context = "a"
+        store = host._memory_store
+        store.store(
+            category="fact", content="User keeps bees on their roof", context="a"
+        )
+        TestConsolidationDoesNotRefileOldFacts()._old_chat(
+            store, "s-old", 30, "I keep bees on the roof of my building"
+        )
+
+        result = TestConsolidationDoesNotRefileOldFacts()._consolidate(
+            host, [{"category": "fact", "content": "User keeps bees on their roof"}]
+        )
+
+        assert result["extracted_items"] == 0
+        host.close()

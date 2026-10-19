@@ -15,6 +15,7 @@ file is never clobbered).
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import socket
@@ -261,12 +262,18 @@ def run(host: str = HOST) -> None:
 
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
-    from gaia.daemon.lifetime import LifetimeWatch, exit_with_pid_from_env
+    from gaia.daemon.lifetime import (
+        DaemonIdle,
+        LifetimeWatch,
+        exit_with_pid_from_env,
+        idle_exit_seconds_from_env,
+    )
     from gaia.daemon.migrate import run_migrations
     from gaia.daemon.paths import custody_db_path, scheduler_db_path
     from gaia.daemon.sidecars.spec import builtin_specs
 
     exit_with_pid = exit_with_pid_from_env()
+    idle_limit = idle_exit_seconds_from_env()
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
     # bound so a corrupt/unknown-newer custody schema refuses loudly (MigrationError
@@ -350,9 +357,29 @@ def run(host: str = HOST) -> None:
     def _exit_on_own(_reason: str) -> None:
         server.should_exit = True
 
+    def _slots_idle() -> Optional[float]:
+        slots = broker.snapshot()
+        if slots["active"] is not None or slots["waiting"]:
+            return None
+        ago = slots["last_activity_s_ago"]
+        return math.inf if ago is None else ago
+
+    idle = DaemonIdle(
+        clients_idle=lambda: lemonade_clients.snapshot()["idle_seconds"],
+        slots_idle=_slots_idle,
+        jobs_pending=lambda: bool(clock.job_counts()["pending"]),
+        limit=idle_limit,
+    )
+
     # Exit once nothing can find this daemon (its home or instance.json is
-    # gone) or the GAIA_DAEMON_EXIT_WITH_PID process has exited.
-    lifetime = LifetimeWatch(_exit_on_own, exit_with_pid=exit_with_pid)
+    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, or, outside the
+    # default home, nothing has used it for the idle limit.
+    lifetime = LifetimeWatch(
+        _exit_on_own,
+        exit_with_pid=exit_with_pid,
+        idle=idle,
+        idle_limit=idle_limit,
+    )
 
     _register = _build_register(
         specs=specs,
