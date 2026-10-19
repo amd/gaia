@@ -316,7 +316,7 @@ PPTX_TO_PDF_PS_SCRIPT = (
     "  ); "
     "  $pres.SaveAs($out, 32); "  # 32 = ppSaveAsPDF
     "} finally { "
-    "  if ($pres) { $pres.Close() }; "
+    "  if ($pres) { try { $pres.Close() } catch { } }; "
     # The user may have opened a deck in our instance meanwhile; leave it be.
     "  if ($ppt -and $owned -and $ppt.Presentations.Count -eq 0) { $ppt.Quit() } "
     "}"
@@ -337,8 +337,9 @@ def _kill_owned_powerpoint(pid_file: str) -> None:
             pid = f.read().strip()
     except FileNotFoundError:
         logger.warning(
-            "PPTX→PDF conversion timed out inside a PowerPoint that was already "
-            "running; leaving it open. Close any stuck dialog in PowerPoint."
+            "PPTX→PDF conversion timed out before GAIA recorded a PowerPoint it "
+            "started (it was already running, or its launch hung); leaving "
+            "PowerPoint open. Close any stuck dialog or hidden POWERPNT.EXE manually."
         )
         return
     except OSError as e:

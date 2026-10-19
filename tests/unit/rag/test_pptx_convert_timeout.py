@@ -107,3 +107,10 @@ def test_setup_runs_inside_the_try_so_a_failure_still_quits():
     script = pptx_utils.PPTX_TO_PDF_PS_SCRIPT
     assert script.index("try {") < script.index("New-Object -ComObject")
     assert script.index("try {") < script.index("Set-Content")
+
+
+def test_a_failing_close_still_reaches_quit():
+    script = pptx_utils.PPTX_TO_PDF_PS_SCRIPT
+    finally_block = script[script.index("} finally {") :]
+    assert "try { $pres.Close() } catch { }" in finally_block
+    assert finally_block.index("$pres.Close()") < finally_block.index("$ppt.Quit()")
