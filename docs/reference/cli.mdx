@@ -3356,7 +3356,7 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   a clean "already in progress" error instead of racing the first.
 - A Python agent's package install is stopped after 900 seconds, usually
   because it is waiting for a package-cache lock another install holds. The
-  error says so, and nothing is installed. Set `GAIA_HUB_PIP_TIMEOUT` to a
+  error says so, and the install is rolled back. Set `GAIA_HUB_PIP_TIMEOUT` to a
   number of seconds to allow longer on a slow connection.
 - The catalog only lists agents this GAIA build can actually supervise; anything
   else is reported as hidden rather than silently dropped.

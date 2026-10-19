@@ -508,7 +508,7 @@ def _default_run_pip(args: List[str]) -> None:
         except _PipTimeout as e:
             raise InstallError(
                 f"'{' '.join(frontend)}' timed out after {timeout:.0f}s and was "
-                "stopped; nothing was installed. This is often a package-cache "
+                "stopped before it finished. This is often a package-cache "
                 "lock held by another install (another GAIA session, or a "
                 "uv/pip command in a terminal): let it finish, then retry. If "
                 "the install is just slow, raise the limit with "
