@@ -1,9 +1,5 @@
-# Ignore individual eval run directories (runtime artifacts)
-eval-*/
-rerun/
-
-# `gaia eval sessions` output is built from the user's own Claude Code sessions
-sessions*/
-
-# Keep baseline reference
+# Eval run outputs are local artifacts. The committed flagship baselines live
+# in tests/fixtures/eval_baselines/; only the `--save-baseline` target is kept.
+*
+!.gitignore
 !baseline.json
