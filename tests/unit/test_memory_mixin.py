@@ -30,6 +30,7 @@ from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.system_context import (
     collect_system_info as _real_collect_system_info,
 )
+from gaia.llm.lemonade_client import SIDE_SLOT
 from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
@@ -5994,6 +5995,8 @@ class TestSideRequestsDisableThinking:
         assert host.chat.send_messages.called
         for call in host.chat.send_messages.call_args_list:
             assert call.kwargs["chat_template_kwargs"] == _NO_THINKING
+            # Off the conversation's slot, so its prompt cache survives.
+            assert call.kwargs["id_slot"] == SIDE_SLOT
 
     def test_reconciliation_turns_thinking_off(self, host):
         from gaia.agents.base.memory import _embedding_to_blob
@@ -6021,3 +6024,4 @@ class TestSideRequestsDisableThinking:
         assert host.chat.send_messages.called
         kwargs = host.chat.send_messages.call_args.kwargs
         assert kwargs["chat_template_kwargs"] == _NO_THINKING
+        assert kwargs["id_slot"] == SIDE_SLOT
