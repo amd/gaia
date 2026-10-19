@@ -8907,7 +8907,7 @@ def _resolve_sidecar_log(agent_id: str):
     try:
         from gaia.daemon import client
 
-        inst = client.attach()
+        inst = client.attach(patient=False)
         if inst is not None:
             for entry in _fetch_daemon_agents(inst):
                 if entry.get("agent_id") == agent_id and entry.get("port"):

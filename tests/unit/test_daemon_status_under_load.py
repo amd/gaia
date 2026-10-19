@@ -35,6 +35,12 @@ def _free_port() -> int:
     return port
 
 
+@pytest.fixture(autouse=True)
+def _own_daemon_home(monkeypatch, tmp_path):
+    # A busy marker left by one test must not read as silence in the next.
+    monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon-home"))
+
+
 @pytest.fixture
 def live_daemon():
     uvicorn = pytest.importorskip("uvicorn")
