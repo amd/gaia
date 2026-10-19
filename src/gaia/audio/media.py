@@ -374,6 +374,9 @@ def _run_ffmpeg(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            # A file's metadata can put non-UTF-8 bytes in ffmpeg's messages; a
+            # strict decode would stop the stderr drain and look like a stall.
+            errors="replace",
             stdin=subprocess.DEVNULL,
             env=child_env(),
         )

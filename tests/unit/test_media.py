@@ -426,3 +426,15 @@ class TestDecodeStall:
         with pytest.raises(media.MediaError, match="failed to decode") as excinfo:
             media._run_ffmpeg(["ffmpeg"], Path("bad.mp3"))
         assert "Error while decoding stream" in str(excinfo.value)
+
+    def test_non_utf8_stderr_does_not_stop_the_drain(self, monkeypatch):
+        self._fake_ffmpeg(
+            monkeypatch,
+            "import sys\n"
+            "for _ in range(5000):\n"
+            "    sys.stderr.buffer.write(b'bad tag \\x81\\x8d\\x8f\\n')\n"
+            "sys.stderr.flush()\n"
+            "sys.exit(1)\n",
+        )
+        with pytest.raises(media.MediaError, match="failed to decode"):
+            media._run_ffmpeg(["ffmpeg"], Path("bad.mp3"))
