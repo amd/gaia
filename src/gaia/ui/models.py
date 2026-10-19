@@ -191,6 +191,8 @@ class WarmUpStatus(BaseModel):
     prompt_tokens: Optional[int] = None
     cached_tokens: Optional[int] = None
     error: Optional[str] = None
+    model: Optional[str] = None  # what the warm-up loads, once resolved
+    device: Optional[str] = None  # npu | gpu | cpu; None when unknown
 
 
 class InitTaskInfo(BaseModel):
@@ -342,11 +344,14 @@ class AgentListResponse(BaseModel):
 
 # ── Sessions ────────────────────────────────────────────────────────────────
 
+#: Longest chat title the API accepts; the webui caps its rename box to match.
+MAX_SESSION_TITLE_CHARS = 200
+
 
 class CreateSessionRequest(BaseModel):
     """Request to create a new chat session."""
 
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=MAX_SESSION_TITLE_CHARS)
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
@@ -361,7 +366,7 @@ class CreateSessionRequest(BaseModel):
 class UpdateSessionRequest(BaseModel):
     """Request to update a session."""
 
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=MAX_SESSION_TITLE_CHARS)
     # Pin state for the title (#2165). Omitted + title set → the server pins
     # (a rename is explicit). The webui's client-side auto-title sends False
     # so the server-side LLM titler can still improve the title later.

@@ -21,6 +21,7 @@ export interface ApiSchemas {
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
   CancelStreamRequest: CancelStreamRequest;
+  ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
@@ -284,6 +285,12 @@ export interface QuickLink {
 }
 export interface CancelStreamRequest {
   session_id: string;
+}
+/**
+ * One of setup's default chat models.
+ */
+export interface ChatModelRequest {
+  model_id: string;
 }
 /**
  * Request to send a chat message.
@@ -986,8 +993,10 @@ export interface SystemStatus {
  */
 export interface WarmUpStatus {
   cached_tokens?: number | null;
+  device?: string | null;
   elapsed_seconds?: number | null;
   error?: string | null;
+  model?: string | null;
   prompt_tokens?: number | null;
   state: string;
 }
