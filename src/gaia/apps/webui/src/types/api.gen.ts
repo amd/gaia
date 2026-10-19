@@ -91,6 +91,8 @@ export interface ApiSchemas {
   TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  UndoRequest: UndoRequest;
+  UndoSettings: UndoSettings;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
@@ -180,6 +182,7 @@ export interface AgentListResponse {
 export interface AgentStepResponse {
   active?: boolean;
   commandOutput?: CommandOutputResponse | null;
+  currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
   detail?: string | null;
@@ -188,6 +191,8 @@ export interface AgentStepResponse {
   label: string;
   latencyMs?: number | null;
   mcpServer?: string | null;
+  narration?: string | null;
+  planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;
@@ -961,6 +966,16 @@ export interface ToolConfirmRequest {
   approved: boolean;
   confirm_id?: string | null;
   session_id: string;
+}
+export interface UndoRequest {
+  /**
+   * Undo even files changed after the turn, losing those changes.
+   */
+  force?: boolean;
+}
+export interface UndoSettings {
+  max_mb: number;
+  retention_days: number;
 }
 /**
  * Request to update a scheduled task.

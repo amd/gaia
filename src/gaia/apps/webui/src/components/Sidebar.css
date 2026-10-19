@@ -72,8 +72,8 @@
     height: 15px;
     padding: 0 3px;
     border-radius: var(--radius-full);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    background: var(--text-primary);
+    color: var(--bg-primary);
     font-size: 9.5px;
     font-weight: 600;
     line-height: 15px;

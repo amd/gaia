@@ -80,10 +80,8 @@
 }
 
 .schedule-section h4 {
-    font-size: 12px;
+    font-size: var(--fs-label);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -148,10 +146,9 @@
 }
 
 .schedule-card-status {
-    font-size: 11px;
+    font-size: var(--fs-caption);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    text-transform: capitalize;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
 }
@@ -236,10 +233,8 @@
 }
 
 .schedule-results h4 {
-    font-size: 12px;
+    font-size: var(--fs-label);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -262,8 +257,9 @@
 .schedule-result-time {
     color: var(--text-muted);
     margin-bottom: 4px;
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-family: var(--font-sans);
+    font-size: var(--fs-caption);
+    font-variant-numeric: tabular-nums;
 }
 
 .schedule-result-content {
@@ -366,40 +362,4 @@
 .schedule-field-missing {
     border-color: var(--accent-yellow) !important;
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-}
-
-.btn-primary {
-    padding: 6px 16px;
-    border-radius: var(--radius-sm);
-    border: none;
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background var(--duration-fast) var(--ease);
-}
-
-.btn-primary:hover {
-    background: var(--accent-fill-hover);
-}
-
-.btn-primary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.btn-secondary {
-    padding: 6px 16px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-    transition: background var(--duration-fast) var(--ease);
-}
-
-.btn-secondary:hover {
-    background: var(--bg-active);
 }

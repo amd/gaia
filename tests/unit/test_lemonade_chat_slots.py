@@ -175,6 +175,22 @@ def test_memory_extraction_runs_on_the_side_slot():
     assert SIDE_SLOT != CONVERSATION_SLOT
 
 
+def test_every_background_memory_call_runs_on_the_side_slot():
+    """Consolidation, reconciliation and skill distillation share these kwargs.
+
+    Without a slot they landed on the conversation's, and the user's next turn
+    re-read the whole ~19K-token prompt.
+    """
+    from gaia.agents.base.memory import MemoryMixin
+
+    class Host(MemoryMixin):
+        pass
+
+    host = Host()
+    host.chat = MagicMock(effective_model="Gemma-4-E4B-it-GGUF")
+    assert host._side_request_kwargs()["id_slot"] == SIDE_SLOT
+
+
 def _health(entry):
     return {"status": "ok", "all_models_loaded": [entry]}
 

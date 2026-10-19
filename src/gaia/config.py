@@ -163,6 +163,10 @@ class GaiaConfig:
         context_sizes: Context window, in tokens, the user chose per local
             model in the Agent UI (model id -> tokens). Every load of that
             model uses it; a model not listed gets GAIA's automatic size.
+        undo_retention_days: Keep the copies that let a turn's file changes be
+            undone for this many days.
+        undo_max_mb: Keep at most this many megabytes of those copies; the
+            oldest turns go first. The size limit never removes the newest turn.
     """
 
     profile: str = "chat"
@@ -177,6 +181,8 @@ class GaiaConfig:
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
     context_sizes: Dict[str, int] = field(default_factory=dict)
+    undo_retention_days: int = 7
+    undo_max_mb: int = 500
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
