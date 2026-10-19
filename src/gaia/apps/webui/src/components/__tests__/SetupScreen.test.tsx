@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { LemonadeFound, LemonadeTarget, SetupCheck, SetupRunStatus, SetupStep } from '../../types';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, SetupCheck, SetupPlan, SetupRunStatus, SetupStep, StartScreen } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -45,6 +45,31 @@ const FOUND: LemonadeFound = {
     message: 'Lemonade Server v10.3.0 is running at http://localhost:13305/api/v1.',
 };
 
+const PLAN: SetupPlan = {
+    lemonade: { mode: 'gaia', url: 'http://localhost:13305/api/v1', reachable: true },
+    chat_model: { id: 'Qwen3.6-35B-A3B-GGUF', user_set: false, size_gb: 23.3, downloaded: false },
+    recommended_model: 'Qwen3.6-35B-A3B-GGUF',
+    decided_after_server: false,
+    memory_gb: 96,
+    memory_source: 'AMD iGPU',
+    options: [
+        { id: 'Qwen3.6-35B-A3B-GGUF', size_gb: 23.3, fits: true, reason: null },
+        { id: 'Gemma-4-E4B-it-GGUF', size_gb: 5.6, fits: true, reason: null },
+    ],
+    models: [],
+    download_gb: 29.2,
+};
+
+const HARDWARE = {
+    compatible: true, blockers: [], warnings: [], ram_gb: 96, gpu_name: 'AMD Radeon 8060S',
+    npu_detected: true, disk_free_gb: 400, lemonade_running: true,
+} as unknown as PreflightReport;
+
+const START: StartScreen = {
+    cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
+    working_folder: { path: '/w', name: 'w', gaia_folder: false },
+};
+
 beforeEach(() => {
     sessionStorage.clear();
     localStorage.clear();
@@ -58,6 +83,8 @@ beforeEach(() => {
     });
     mockedApi.startSetup.mockResolvedValue(READY);
     mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: false });
+    mockedApi.getSetupPlan.mockRejectedValue(new Error('not checked'));
+    mockedApi.getStartScreen.mockResolvedValue(START);
 });
 
 async function start(choice?: RegExp) {
@@ -68,9 +95,10 @@ async function start(choice?: RegExp) {
 }
 
 describe('SetupScreen', () => {
-    it('shows the reason and pending steps without an error before setup starts', async () => {
+    it('reads as progress, with pending steps and no error, before setup starts', async () => {
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
-        expect(screen.getByText('The local model server is not installed.')).toBeInTheDocument();
+        expect(screen.getByText('A few minutes of setup, then your first chat.')).toBeInTheDocument();
+        expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.getByText(/Install the model server/)).toBeInTheDocument();
         expect(screen.getByText(/Download models/)).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
@@ -78,10 +106,10 @@ describe('SetupScreen', () => {
         expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     });
 
-    it('stops naming the missing model once setup has started', async () => {
+    it('says it is all set once setup has finished', async () => {
         await start();
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
-        expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
+        expect(screen.getByText('All set.')).toBeInTheDocument();
     });
 
     it('installs the local chat model when running on this PC', async () => {
@@ -186,7 +214,7 @@ describe('SetupScreen', () => {
         expect(screen.getByText(/key goes to GAIA/)).toBeInTheDocument();
     });
 
-    it('shows the cloud download size and drops the local chat-model reason for a cloud choice', async () => {
+    it('shows the cloud download size and drops the chat model step for a cloud choice', async () => {
         const check: SetupCheck = {
             ...CHECK,
             reasons: ["Model 'Gemma-4-E4B-it-GGUF' is not downloaded", "Model 'user.embeddinggemma-300m-GGUF' is not downloaded"],
@@ -196,12 +224,12 @@ describe('SetupScreen', () => {
         render(<SetupScreen initial={check} onReady={vi.fn()} />);
         await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
         expect(screen.getByText(/about 6 GB/)).toBeInTheDocument();
-        expect(screen.getByText("Model 'Gemma-4-E4B-it-GGUF' is not downloaded.")).toBeInTheDocument();
+        expect(screen.getByText('Chat model')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('radio', { name: /AMD LLM Gateway/ }));
         expect(screen.getByText(/under 1 GB/)).toBeInTheDocument();
         expect(screen.queryByText(/about 6 GB/)).not.toBeInTheDocument();
-        expect(screen.getByText("Model 'user.embeddinggemma-300m-GGUF' is not downloaded.")).toBeInTheDocument();
+        expect(screen.queryByText('Chat model')).not.toBeInTheDocument();
     });
 
     it('keeps the gateway choice after a reload and lets the user switch provider', async () => {
@@ -229,7 +257,197 @@ describe('SetupScreen', () => {
         await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
         fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
         fireEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
-        await waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+        await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(undefined));
+    });
+});
+
+describe('SetupScreen: system check', () => {
+    it('lists the device, memory and disk it found', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        const list = await screen.findByRole('list', { name: 'This PC' });
+        expect(list).toHaveTextContent('AMD Radeon 8060S · Ryzen AI NPU');
+        expect(list).toHaveTextContent('96 GB');
+        expect(list).toHaveTextContent('400 GB free');
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('says the device is checked later when no model server runs yet, not that it is missing', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, gpu_name: null, npu_detected: null, lemonade_running: false });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText('Checked once the model server is running')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it("doesn't warn about the NPU before a model server can be asked", async () => {
+        const npu = 'GAIA could not query Lemonade for NPU availability; the NPU result for the recommended model is unknown.';
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, lemonade_running: false, warnings: [npu, 'Low memory.'] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText('Low memory.')).toBeInTheDocument();
+        expect(screen.queryByText(npu)).not.toBeInTheDocument();
+    });
+
+    it('shows a real blocker as an error', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ ...HARDWARE, compatible: false, blockers: ['Needs 30 GB of disk; 4 GB free.'] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent('Needs 30 GB of disk');
+    });
+});
+
+describe('SetupScreen: the chat model', () => {
+    it('names the model setup will download, and its size, before it starts', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText('Qwen3.6-35B-A3B-GGUF', { selector: 'strong' })).toBeInTheDocument();
+        expect(screen.getByText(/will answer your chats \(23\.3 GB\)\. This PC has 96 GB for models \(AMD iGPU\)/)).toBeInTheDocument();
+        expect(screen.getByText(/chat model Qwen3\.6-35B-A3B-GGUF, plus the embedding model \(29\.2 GB\)/)).toBeInTheDocument();
+        expect(screen.queryByText(/about 6 GB/)).not.toBeInTheDocument();
+    });
+
+    it('lets the user pick a smaller model before the download', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.chooseSetupChatModel.mockResolvedValue({
+            ...PLAN, chat_model: { id: 'Gemma-4-E4B-it-GGUF', user_set: true, size_gb: 5.6, downloaded: false }, download_gb: 5.9,
+        });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('radio', { name: /Gemma-4-E4B-it/ }));
+        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledExactlyOnceWith('Gemma-4-E4B-it-GGUF'));
+        await waitFor(() => expect(screen.getByRole('radio', { name: /Gemma-4-E4B-it/ })).toHaveAttribute('aria-checked', 'true'));
+        expect(screen.getByText(/\(5\.9 GB\)/)).toBeInTheDocument();
+    });
+
+    it("offers no choice while the model server can't be asked", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({
+            ...PLAN, lemonade: { ...PLAN.lemonade, reachable: false },
+            chat_model: { ...PLAN.chat_model, user_set: true },
+            options: PLAN.options.map((o) => ({ ...o, fits: null })),
+        });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText('Qwen3.6-35B-A3B-GGUF', { selector: 'strong' })).toBeInTheDocument();
+        expect(screen.queryByRole('radiogroup', { name: 'Chat model' })).not.toBeInTheDocument();
+    });
+
+    it("never offers to replace the user's own default_model", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({
+            ...PLAN, chat_model: { id: 'user.Qwen3.8-Flash-Next-GGUF', user_set: true, size_gb: 82.9, downloaded: true },
+        });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/your default_model; change it in Settings/)).toBeInTheDocument();
+        expect(screen.queryByRole('radiogroup', { name: 'Chat model' })).not.toBeInTheDocument();
+    });
+
+    it('says "You chose" once the user picked the model', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.chooseSetupChatModel.mockResolvedValue({
+            ...PLAN, chat_model: { id: 'Gemma-4-E4B-it-GGUF', user_set: true, size_gb: 5.6, downloaded: false },
+        });
+        mockedApi.startSetup.mockResolvedValue({ state: 'running', chat_model: 'Gemma-4-E4B-it-GGUF', steps: [] });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' })
+            .mockResolvedValue({ state: 'running', chat_model: 'Gemma-4-E4B-it-GGUF', steps: [] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('radio', { name: /Gemma-4-E4B-it/ }));
+        await waitFor(() => expect(screen.getByRole('radio', { name: /Gemma-4-E4B-it/ })).toHaveAttribute('aria-checked', 'true'));
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        expect(await screen.findByText(/You chose/)).toHaveTextContent('You chose Gemma-4-E4B-it-GGUF.');
+        expect(screen.queryByText(/Setup chose/)).not.toBeInTheDocument();
+    });
+
+    it("greys out a model this PC can't hold, with the reason", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({
+            ...PLAN,
+            options: [PLAN.options[0], PLAN.options[1], { id: 'Big-GGUF', size_gb: 80, fits: false, reason: 'needs ~84 GB of memory' }],
+        });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        const big = await screen.findByRole('radio', { name: /Big/ });
+        expect(big).toBeDisabled();
+        expect(big).toHaveTextContent('needs ~84 GB of memory');
+    });
+
+    it("says the pick comes once GAIA's own server is running, without claiming a size", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, decided_after_server: true, download_gb: 5.9 });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Picked once the model server is running/)).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /Gemma-4-E4B-it/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/5\.9 GB/)).not.toBeInTheDocument();
+    });
+
+    it('names the model setup actually chose while it runs', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, decided_after_server: true });
+        mockedApi.startSetup.mockResolvedValue({
+            state: 'running',
+            chat_model: 'Qwen3.6-35B-A3B-GGUF',
+            steps: [{ key: 'models', label: 'Download the models', detail: 'chat model Qwen3.6-35B-A3B-GGUF, plus the embedding model', status: 'active' }],
+        });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue({
+            state: 'running', chat_model: 'Qwen3.6-35B-A3B-GGUF', steps: [],
+        });
+        await start();
+        expect(await screen.findByText(/Setup chose/)).toHaveTextContent('Setup chose Qwen3.6-35B-A3B-GGUF for this PC.');
+    });
+});
+
+describe('SetupScreen: Use mine', () => {
+    it('drops the install step and names the server once the user picks theirs', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found: FOUND });
+        mockedApi.setLemonadeTarget.mockResolvedValue({ ...TARGET, daemon: null });
+        mockedApi.getSetupPlan
+            .mockResolvedValueOnce({ ...PLAN, decided_after_server: true, lemonade: { ...PLAN.lemonade, reachable: false } })
+            .mockResolvedValueOnce({ ...PLAN, lemonade: { mode: 'external', url: FOUND.url, reachable: true } });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Install the model server/)).toBeInTheDocument();
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
+        expect(await screen.findByText('Use your Lemonade Server')).toBeInTheDocument();
+        expect(screen.queryByText(/Install the model server/)).not.toBeInTheDocument();
+        expect(screen.getByText('Qwen3.6-35B-A3B-GGUF', { selector: 'strong' })).toBeInTheDocument();
+        expect(mockedApi.getSetupPlan).toHaveBeenCalledTimes(2);
+        // The device is read again now that a model server answers.
+        expect(mockedApi.getOnboardingPreflight).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the newest plan when an older request answers last', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found: FOUND });
+        mockedApi.setLemonadeTarget.mockResolvedValue({ ...TARGET, daemon: null });
+        let answerFirst!: (p: SetupPlan) => void;
+        mockedApi.getSetupPlan
+            .mockImplementationOnce(() => new Promise((r) => { answerFirst = r; }))
+            .mockResolvedValueOnce({ ...PLAN, lemonade: { mode: 'external', url: FOUND.url, reachable: true } });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
+        expect(await screen.findByText('Use your Lemonade Server')).toBeInTheDocument();
+
+        answerFirst({ ...PLAN, decided_after_server: true });
+        await new Promise((r) => setTimeout(r, 0));
+        expect(screen.getByText('Use your Lemonade Server')).toBeInTheDocument();
+        expect(screen.queryByText(/Picked once the model server is running/)).not.toBeInTheDocument();
+    });
+});
+
+describe('SetupScreen: ready', () => {
+    it('names the model setup reported, over the one the plan expected', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.startSetup.mockResolvedValue({ ...READY, chat_model: 'Gemma-4-E4B-it-GGUF' });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+        expect(await screen.findByText(/GAIA is ready\./)).toHaveTextContent('GAIA is ready. Gemma-4-E4B-it-GGUF answers on this PC.');
+    });
+
+    it('names the one model that answers and offers a first task', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.startSetup.mockResolvedValue({ ...READY, chat_model: 'Qwen3.6-35B-A3B-GGUF' });
+        mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: 'Qwen3.6-35B-A3B-GGUF', label: 'Qwen', remote: false, is_default: true });
+        const onReady = vi.fn();
+        render(<SetupScreen initial={CHECK} onReady={onReady} />);
+        await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
+        fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
+
+        const done = await screen.findByText(/GAIA is ready\./);
+        expect(done).toHaveTextContent('GAIA is ready. Qwen3.6-35B-A3B-GGUF answers on this PC.');
+        fireEvent.click(await screen.findByRole('button', { name: /Check in/ }));
+        await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(START.cards[0]));
     });
 });
 
@@ -286,6 +504,37 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
         expect(await screen.findByRole('alert')).toHaveTextContent(message);
         expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
+    });
+
+    it("says it couldn't check a server that didn't answer in time, and checks again", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade
+            .mockResolvedValueOnce({ found: null, unchecked: [FOUND.url] })
+            .mockResolvedValueOnce({ found: FOUND, unchecked: [] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Couldn.t check whether your Lemonade Server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
+        expect(await screen.findByRole('button', { name: 'Use mine' })).toBeInTheDocument();
+        expect(screen.queryByText(/Couldn.t check/)).not.toBeInTheDocument();
+    });
+
+    it('says it is looking while detection runs', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        let answer!: (r: { found: LemonadeFound | null; unchecked: string[] }) => void;
+        mockedApi.detectLemonade.mockImplementation(() => new Promise((r) => { answer = r; }));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/Looking for a Lemonade Server you already run/)).toBeInTheDocument();
+        answer({ found: null, unchecked: [] });
+        await waitFor(() => expect(screen.queryByText(/Looking for a Lemonade/)).not.toBeInTheDocument());
+    });
+
+    it('stays quiet when no server is running', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found: null, unchecked: [] });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await waitFor(() => expect(mockedApi.detectLemonade).toHaveBeenCalled());
+        expect(screen.queryByText(/Couldn.t check/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
     });
 
     it('explains a too-old server and offers no way to use it', async () => {

@@ -33,6 +33,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_import_error_message
@@ -102,6 +103,19 @@ _AUTH_EXEMPT_PATHS = {"/api/health"}
 # app's subsequent ``fetch('/api/...')`` calls carry it automatically
 # (same-origin fetches include cookies by default).
 _TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
+
+
+class _SpaPathConvertor(PathConvertor):
+    """A path that is never ``/api`` or under it.
+
+    Keeps the SPA catch-all off unknown API paths, so they get a JSON 404
+    (or a 405 for a real path with the wrong method) instead of index.html.
+    """
+
+    regex = r"(?!api(?:/|$)).*"
+
+
+register_url_convertor("spa_path", _SpaPathConvertor())
 
 
 # ── Tunnel Auth Middleware ──────────────────────────────────────────────────
@@ -926,7 +940,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         )
         return redirect
 
-    @app.get("/{full_path:path}")
+    @app.get("/{full_path:spa_path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the React SPA for all non-API routes.
 
