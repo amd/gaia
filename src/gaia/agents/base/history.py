@@ -279,28 +279,28 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
     return result
 
 
-def context_window(agent: Any) -> int:
-    """The context window, in tokens, the agent's model is admitted with."""
-    from gaia.llm.lemonade_client import (
-        GPU_CTX_SIZE,
-        LemonadeClient,
-        cloud_model_provider,
-        resolve_ctx_size,
-    )
+def _is_cloud(agent: Any) -> bool:
+    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
 
     model = getattr(agent, "model_id", None)
     provider = getattr(getattr(agent, "chat", None), "llm_client", None)
     backend = getattr(provider, "_backend", None)
-    cloud = (
+    return bool(
         backend.cloud_model_provider(model)
         if isinstance(backend, LemonadeClient)
         else cloud_model_provider(model)
     )
+
+
+def context_window(agent: Any) -> int:
+    """The context window, in tokens, the agent's model is admitted with."""
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, resolve_ctx_size
+
     if getattr(agent, "_use_claude", False):
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 
         return CLAUDE_CTX_SIZE
-    if cloud:
+    if _is_cloud(agent):
         # Remote admission policy, not a claim about the provider's context ceiling.
         return GPU_CTX_SIZE
     return resolve_ctx_size(
@@ -310,6 +310,10 @@ def context_window(agent: Any) -> int:
 
 
 def _reply_reserve(agent: Any) -> int:
+    # A cloud model's 64K is an input budget: the reply is written into the
+    # provider's own, far larger window, so it takes nothing from history here.
+    if _is_cloud(agent) and not getattr(agent, "_use_claude", False):
+        return 0
     config = getattr(getattr(agent, "chat", None), "config", None)
     return getattr(config, "max_tokens", 8192)
 

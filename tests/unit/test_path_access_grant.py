@@ -249,3 +249,43 @@ def test_a_document_attached_to_a_running_chat_joins_its_scope(layout):
     assert not agent.path_validator.is_path_allowed(
         str(layout["notes"]), prompt_user=False
     )
+
+
+# ── D: one unanswered prompt per path per turn ────────────────────────────
+
+
+def test_a_declined_folder_is_not_asked_about_again_this_turn(layout):
+    console = _Console(answer=False)
+    agent = _agent(layout, console)
+    docs = layout["pdf"].parent
+
+    first, _ = agent.path_validator.validate_read(str(docs))
+    again, reason = agent.path_validator.validate_read(str(layout["pdf"]))
+
+    assert (first, again) == (False, False)
+    assert console.asked == [("allow_path_access", str(docs.resolve()))]
+    assert reason
+
+
+def test_a_declined_path_does_not_block_an_unrelated_one(layout, tmp_path):
+    console = _Console(answer=False)
+    agent = _agent(layout, console)
+    other = tmp_path / "Other"
+    other.mkdir()
+    (other / "a.txt").write_text("a", "utf-8")
+
+    agent.path_validator.validate_read(str(layout["pdf"]))
+    agent.path_validator.validate_read(str(other / "a.txt"))
+
+    assert len(console.asked) == 2
+
+
+def test_the_next_turn_asks_again(layout):
+    console = _Console(answer=False)
+    agent = _agent(layout, console)
+
+    agent.path_validator.validate_read(str(layout["pdf"]))
+    agent._turn_seq += 1  # what process_query does at the start of a turn
+    agent.path_validator.validate_read(str(layout["pdf"]))
+
+    assert len(console.asked) == 2

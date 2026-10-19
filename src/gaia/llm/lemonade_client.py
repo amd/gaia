@@ -84,6 +84,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils import awake_clock
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -3839,6 +3840,17 @@ class LemonadeClient:
         # Handle string errors
         if isinstance(error, str):
             result["message"] = error
+            # "Request failed with status 404: {...}" carries Lemonade's own body.
+            brace = error.find("{")
+            if brace >= 0:
+                try:
+                    body = json.loads(error[brace:])
+                except ValueError:
+                    return result
+                if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                    result["type"] = body["error"].get("type")
+                    result["code"] = body["error"].get("code")
+                    result["is_structured"] = True
             return result
 
         # Handle dict responses
@@ -3893,6 +3905,8 @@ class LemonadeClient:
             error_type_lower = error_type.lower()
             if error_type_lower in ["not_found", "model_not_found", "model_not_loaded"]:
                 return True
+        if str(error_info.get("code") or "").lower() == "model_not_found":
+            return True
 
         # Fallback to string matching for unstructured errors
         error_message = error_info.get("message") or ""
@@ -4048,7 +4062,8 @@ class LemonadeClient:
         return ModelCallRetrier(
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
-            clock=self._retry_clock or time.monotonic,
+            # A request the PC slept through still has its retry budget.
+            clock=self._retry_clock or awake_clock.monotonic,
             rng=self._retry_rng,
             server_loading=(
                 self._server_load_in_progress
@@ -4101,7 +4116,7 @@ class LemonadeClient:
             StreamCancelledError: Stop was pressed during the wait.
         """
         limit = RetryPolicy.from_env().load_wait
-        clock = self._retry_clock or time.monotonic
+        clock = self._retry_clock or awake_clock.monotonic
         sleep = self._retry_sleep or time.sleep
         is_cancelled = current_cancel_check()
         listener = current_retry_listener()
@@ -5885,10 +5900,11 @@ class LemonadeClient:
 
         if not checkpoint:
             # A user. model Lemonade has not seen needs its registration on the
-            # first pull; every caller that pulls by name alone gets it here.
+            # first pull, under its user. name even when asked for without it.
             mr = find_model_requirement(model_name)
             registration = mr.pull_kwargs() if mr else {}
             if registration:
+                model_name = mr.model_id
                 checkpoint = registration["checkpoint"]
                 recipe = recipe or registration["recipe"]
                 mmproj = mmproj or registration["mmproj"]
@@ -7006,6 +7022,10 @@ class LemonadeClient:
                 "Send chat requests through Lemonade; select its provider in "
                 "the TUI provider settings if it is not connected."
             )
+        mr = find_model_requirement(model_name)
+        if mr and mr.pull_kwargs():
+            # Load under the user. name an auto-download registers it as.
+            model_name = mr.model_id
         with self._model_slot_lease(model_name):
             response = self._load_model_leased(
                 model_name,

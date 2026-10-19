@@ -1793,12 +1793,12 @@ export function MemoryDashboard() {
                                                 {kOffset + 1}{'\u2013'}{Math.min(kOffset + kLimit, knowledge.total)} of {knowledge.total}
                                             </span>
                                             <div className="mem-pagination-btns">
-                                                <button className="mem-page-btn"
+                                                <button type="button" className="mem-page-btn" aria-label="Previous page"
                                                     disabled={kOffset === 0}
                                                     onClick={() => setKOffset(Math.max(0, kOffset - kLimit))}>
                                                     <ChevronLeft size={14} />
                                                 </button>
-                                                <button className="mem-page-btn"
+                                                <button type="button" className="mem-page-btn" aria-label="Next page"
                                                     disabled={kOffset + kLimit >= knowledge.total}
                                                     onClick={() => setKOffset(kOffset + kLimit)}>
                                                     <ChevronRight size={14} />

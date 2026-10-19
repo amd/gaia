@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
-from gaia.agents.tools.path_access import read_access_error
+from gaia.agents.tools.path_access import missing_file_error, read_access_error
 from gaia.agents.tools.search_scope import (
     confine_roots,
     in_env_scope,
@@ -1022,7 +1022,7 @@ class FileSystemToolsMixin:
                 resolved = mixin._validate_path(file_path)
 
                 if not resolved.exists():
-                    return f"Error: File not found: {resolved}"
+                    return f"Error: {missing_file_error(resolved)['error']}"
 
                 if resolved.is_dir():
                     return f"Error: '{resolved}' is a directory. Use browse_directory or tree instead."

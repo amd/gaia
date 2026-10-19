@@ -496,6 +496,8 @@ export interface SystemStatus {
     config_error?: string | null;
     /** One message per status probe that failed; the matching fields stay unknown. */
     probe_warnings?: string[];
+    /** The folder that holds the chat database. */
+    data_dir?: string | null;
 }
 
 /**
