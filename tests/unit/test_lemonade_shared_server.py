@@ -333,6 +333,33 @@ def test_initialize_does_not_start_over_a_busy_server(isolated_home, stalled):
     launch.assert_not_called()
 
 
+def test_initialize_reports_a_busy_remote_server_as_busy(isolated_home, stalled):
+    """The install check must not turn a busy remote server into "not
+    reachable" before initialize() gets to say it is busy."""
+    client = lc.LemonadeClient(base_url=stalled.base_url, verbose=False)
+    with (
+        patch.object(client, "host", "lemonade.example"),
+        patch.object(lc, "resolve_lemonade") as resolve,
+        patch.object(client, "launch_server") as launch,
+    ):
+        status = client.initialize(quiet=True)
+    assert status.busy
+    launch.assert_not_called()
+    resolve.assert_not_called()
+
+
+def test_a_remote_server_that_is_down_is_still_not_reachable(isolated_home):
+    """Busy is not down: a remote server with nothing listening stays missing."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    client = lc.LemonadeClient(
+        base_url=f"http://127.0.0.1:{port}/api/v1", verbose=False
+    )
+    with patch.object(client, "host", "lemonade.example"):
+        assert client._check_lemonade_installed() is False
+
+
 def test_auto_start_does_not_launch_over_a_busy_server(isolated_home, stalled):
     with patch.object(lc.LemonadeClient, "launch_server") as launch:
         lc.create_lemonade_client(

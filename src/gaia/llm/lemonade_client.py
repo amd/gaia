@@ -7475,6 +7475,8 @@ class LemonadeClient:
             health = self.health_check()
             if health.get("status") == "ok":
                 return True
+        except LemonadeUnresponsiveError:
+            return True  # up but busy; initialize() reports it as such
         except Exception as exc:
             get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
