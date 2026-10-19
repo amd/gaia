@@ -35,6 +35,9 @@ logger = get_logger(__name__)
 #: How long shutdown waits for a start already in flight before leaving it be.
 STOP_LOCK_TIMEOUT = 5.0
 
+#: The ``Retry-After`` sent with a server that is up but not answering yet.
+LEMONADE_RETRY_AFTER_SECONDS = 2
+
 
 class LemonadeNotManaged(Exception):
     """The daemon has nothing to start: another server is configured, or GAIA's
@@ -184,10 +187,15 @@ class EmbeddedLemonadeOwner:
             LemonadeNotManaged: ``LEMONADE_BASE_URL`` or the saved setting names
                 another server, or GAIA's own is not installed.
             LemonadeChoiceError: The saved setting is unusable.
-            EmbeddedLemonadeError: The server would not start, is running but
-                not answering, or runs a version this GAIA does not target.
+            EmbeddedLemonadeNotAnswering: The server is running but not
+                answering; it is left alone, so the caller may ask again.
+            EmbeddedLemonadeError: The server would not start, or runs a
+                version this GAIA does not target.
         """
-        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+        from gaia.llm.lemonade_embedded import (
+            EmbeddedLemonadeError,
+            EmbeddedLemonadeNotAnswering,
+        )
 
         # Under the lock, so a switch to the user's server that reconfigure()
         # is applying can't be undone by a start already on its way.
@@ -217,11 +225,11 @@ class EmbeddedLemonadeOwner:
             current = embedded.status()
             orphaned = self._orphaned(current)
             if current.unresponsive_pid and not orphaned:
-                raise EmbeddedLemonadeError(
+                raise EmbeddedLemonadeNotAnswering(
                     f"GAIA's Lemonade Server (pid {current.unresponsive_pid}) is "
-                    "running but not answering; it may still be loading a model. "
-                    f"Wait and retry, or run `gaia init` to restart it. Its log is "
-                    f"{embedded.log_path}."
+                    "running but stuck: it answers nothing, or its model backends "
+                    "have done no work for over 5 minutes. Run `gaia init` to "
+                    f"restart it. Its log is {embedded.log_path}."
                 )
             if current.running and current.version == embedded.version:
                 return self._claim(embedded, current)

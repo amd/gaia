@@ -38,6 +38,22 @@ from eval_gaia_home import env_for  # noqa: E402
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
+BASELINE_META = (
+    REPO_ROOT / "tests" / "fixtures" / "eval_baselines" / "gaia-flagship" / "meta.json"
+)
+
+
+def baseline_eval_model() -> str:
+    """The Claude model CI drives and judges with: the one the baseline used."""
+    model = json.loads(BASELINE_META.read_text(encoding="utf-8")).get("eval_model")
+    if not model:
+        raise SystemExit(
+            f"{BASELINE_META} has no eval_model, so the CI judge is unknown. "
+            "Restore it, or pass --judge-model."
+        )
+    return model
+
+
 JUDGE_CREDENTIALS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 FIXTURE_PORT = 8765
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
@@ -135,10 +151,13 @@ def main() -> int:
     which.add_argument("--category", action="append", help="Category (repeatable)")
     parser.add_argument("--port", type=int, default=4200, help="Backend port")
     parser.add_argument(
-        "--judge-model", default="claude-sonnet-4-6", help="Judge (CI's default)"
+        "--judge-model",
+        default=None,
+        help="Judge and driver (default: CI's, from the flagship baseline's meta.json)",
     )
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "eval-out")
     args = parser.parse_args()
+    args.judge_model = args.judge_model or baseline_eval_model()
 
     categories = lane_categories(args.lane) if args.lane else args.category
     home = Path.home()
