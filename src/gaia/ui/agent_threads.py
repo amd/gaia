@@ -76,7 +76,9 @@ async def wait_until_off_the_model(
     token once its console is cancelled). Returns True once the thread has
     finished, or False as soon as it is inside a tool (*console*'s
     ``tool_running()``): outside any model call, and, told to stop, it starts
-    no other, so the caller can free the model while the tool returns. Also
+    no other, so the caller can free the model while the tool returns. (A tool
+    that calls the model itself, such as RAG or VLM, can still overlap the next
+    turn until it returns.) Also
     returns False after *max_wait* seconds (default
     ``STOPPED_RUN_MODEL_GRACE_SECONDS``) wherever the thread is stuck.
     """

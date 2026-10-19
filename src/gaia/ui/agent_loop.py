@@ -501,28 +501,28 @@ class AgentLoop:
         worker = run_in_own_thread(_run_agent, name=f"gaia-tick-{session_id[:8]}")
         try:
             done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
+            if not done:
+                logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
+                cancel_event.set()
+                sse_handler.cancelled.set()
+                finished = await wait_until_off_the_model(
+                    worker, sse_handler, what=f"Tick for session {session_id[:8]}"
+                )
+                if not finished:
+                    logger.error(
+                        "AgentLoop: tick for session %s is still running after "
+                        "it was stopped; freeing the model and holding the "
+                        "session until its thread exits",
+                        session_id[:8],
+                    )
+                    self._lingering_ticks[session_id] = worker
+                    return LoopDirective("idle", reason="tick timed out")
         except asyncio.CancelledError:
             cancel_event.set()
             sse_handler.cancelled.set()
             # The session stays held until the thread has stopped.
             self._lingering_ticks[session_id] = worker
             raise
-        if not done:
-            logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
-            cancel_event.set()
-            sse_handler.cancelled.set()
-            finished = await wait_until_off_the_model(
-                worker, sse_handler, what=f"Tick for session {session_id[:8]}"
-            )
-            if not finished:
-                logger.error(
-                    "AgentLoop: tick for session %s is still running after it "
-                    "was stopped; freeing the model and holding the session "
-                    "until its thread exits",
-                    session_id[:8],
-                )
-                self._lingering_ticks[session_id] = worker
-                return LoopDirective("idle", reason="tick timed out")
 
         # Save the autonomous tick as a message in the session DB
         # (stored as role="autonomous" — hidden from the UI by default)
