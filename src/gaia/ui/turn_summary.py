@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import urlparse
 
+from gaia.agents.base.verification import EXECUTED_KEY
 from gaia.llm.inference_location import InferenceLocation
 from gaia.logger import get_logger
 
@@ -122,6 +123,14 @@ def _host(url: Any) -> Optional[str]:
     if not host:
         return None
     return host[4:] if host.startswith("www.") else host
+
+
+def _ran(call: Mapping[str, Any]) -> bool:
+    """Whether the tool body ran, so a refused or denied call contacted nothing."""
+    data = call.get("data")
+    if not isinstance(data, dict):
+        return True
+    return data.get(EXECUTED_KEY) is not False and data.get("status") != "denied"
 
 
 def _web_url(url: Any) -> bool:
@@ -232,7 +241,7 @@ class TurnLedger:
         sites: List[str] = []
         for call in self._finished():
             tool = call["tool"]
-            if tool not in LIVE_DATA_TOOLS:
+            if tool not in LIVE_DATA_TOOLS or not _ran(call):
                 continue
             arg = LIVE_DATA_TOOLS[tool]
             if arg is None:
@@ -324,7 +333,9 @@ class TurnLedger:
         return out[:_MAX_FILES]
 
     def live_data(self) -> Dict[str, int]:
-        calls = [c for c in self._finished() if c["tool"] in LIVE_DATA_TOOLS]
+        calls = [
+            c for c in self._finished() if c["tool"] in LIVE_DATA_TOOLS and _ran(c)
+        ]
         return {
             "attempted": len(calls),
             "failed": sum(1 for c in calls if not c["success"]),
