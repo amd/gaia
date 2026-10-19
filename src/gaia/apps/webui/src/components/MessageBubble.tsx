@@ -15,6 +15,7 @@ import { AnswerStats } from './AnswerStats';
 import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
+import { TurnChanges } from './TurnChanges';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -579,6 +580,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
+                        <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
                 </div>
             </div>

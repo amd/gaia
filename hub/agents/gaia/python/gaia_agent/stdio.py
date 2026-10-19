@@ -71,7 +71,7 @@ import sqlite3
 import sys
 import threading
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
@@ -759,11 +759,56 @@ def _lemonade_url(agent: Any) -> Optional[str]:
         raise RuntimeError(f"{str(exc).rstrip('.')}. {start_advice()}") from exc
 
 
-def _apply_local_switch(agent: Any, target: str) -> str:
+def _wait_for_gaia_lemonade(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]]
+) -> Optional[str]:
+    """Wait, bounded, for GAIA's own server to answer again; return its URL.
+
+    None when the server is not GAIA's own (the user's, or a remote
+    ``LEMONADE_BASE_URL``) or nothing needed waiting for: the caller's own
+    error then stands. Goes through the live Lemonade client when there is one,
+    so it follows the restarted server too.
+    """
+    chat = agent.chat
+    client = getattr(chat, "llm_client", None)
+    if not callable(getattr(client, "current_base_url", None)):
+        client = LemonadeClient(base_url=chat.config.base_url, verbose=False)
+    wait = getattr(client, "wait_for_gaia_lemonade", None)
+    if not callable(wait):
+        return None
+    try:
+        if not wait(target, on_status=on_status):
+            return None
+        return client.current_base_url()
+    except LemonadeClientError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _reachable_lemonade_models(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]]
+) -> Tuple[Optional[str], List[str]]:
+    """``(base_url, models)`` from the server the live client talks to.
+
+    GAIA's own server is briefly unreachable while the daemon restarts it, so
+    that is waited out instead of refusing the switch.
+    """
+    try:
+        base_url = _lemonade_url(agent)
+        return base_url, _lemonade_models(base_url)
+    except RuntimeError:
+        base_url = _wait_for_gaia_lemonade(agent, target, on_status)
+        if base_url is None:
+            raise
+    return base_url, _lemonade_models(base_url)
+
+
+def _apply_local_switch(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
     """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
-    base_url = _lemonade_url(agent)
-    available = _lemonade_models(base_url)  # raises if unreachable
+    # Raises if unreachable, after waiting out a restart of GAIA's own server.
+    base_url, available = _reachable_lemonade_models(agent, target, on_status)
     if target not in available and _replayed_cloud_key(base_url, target):
         available = _lemonade_models(base_url)
     if target not in available:
@@ -814,7 +859,9 @@ def is_claude_model(model_id: str) -> bool:
     return model_id.startswith("claude-")
 
 
-def switch_model(agent: Any, target: str) -> str:
+def switch_model(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
     """Swap the agent's live LLM client to *target*.
 
     Returns the friendly display name on success; raises RuntimeError with an
@@ -829,10 +876,13 @@ def switch_model(agent: Any, target: str) -> str:
     lives here rather than in a module of its own because this is where the
     machinery it depends on already is — moving 200 working lines to improve a
     filename is not worth the risk.
+
+    *on_status* receives a plain-language line while the switch waits for
+    GAIA's model server to come back after a restart.
     """
     if is_claude_model(target):
         return _apply_claude_switch(agent, target)
-    return _apply_local_switch(agent, target)
+    return _apply_local_switch(agent, target, on_status)
 
 
 #: Pre-rename alias. ``run_model_command`` and this module's tests reach it by
@@ -898,8 +948,19 @@ def run_model_command(agent: Any, query: str, out) -> None:
         _write({"type": "final", "answer": _format_model_list(agent)}, out)
         return
 
+    def _status(message: str) -> None:
+        _write(
+            {
+                "type": "status",
+                "status": "working",
+                "message": message,
+                "phase": "reconnecting",
+            },
+            out,
+        )
+
     try:
-        display = _switch_model(agent, arg)
+        display = _switch_model(agent, arg, on_status=_status)
     except RuntimeError as exc:
         logger.warning("model switch to %r refused: %s", arg, exc)
         _write({"type": "error", "detail": str(exc)}, out)

@@ -3,8 +3,9 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
+import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -254,6 +255,21 @@ export async function getSetupStatus(): Promise<SetupRunStatus> {
     return apiFetch('GET', '/setup/status');
 }
 
+/** The Lemonade, chat model and download setup will use. Loads nothing. */
+export async function getSetupPlan(): Promise<SetupPlan> {
+    return apiFetch('GET', '/setup/plan');
+}
+
+/** Pick setup's chat model before it starts; returns the new plan. */
+export async function chooseSetupChatModel(modelId: string): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/chat-model', { model_id: modelId });
+}
+
+/** A new chat's task cards and working folder. */
+export async function getStartScreen(): Promise<StartScreen> {
+    return apiFetch('GET', '/onboarding/start');
+}
+
 // -- Which Lemonade Server GAIA uses ---------------------------------------------
 
 export async function getLemonadeTarget(): Promise<LemonadeTarget> {
@@ -261,7 +277,8 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
 }
 
 /** A Lemonade the user already runs on this PC, or null. */
-export async function detectLemonade(): Promise<{ found: LemonadeFound | null }> {
+/** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
+export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
     return apiFetch('GET', '/lemonade/detect');
 }
 
@@ -1215,4 +1232,26 @@ export async function getScheduleResults(name: string, limit: number = 20): Prom
 
 export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
     return apiFetch('POST', '/schedules/parse', { input, timezone: browserTimeZone() });
+}
+
+// -- Undo a turn's file changes (#5225) --------------------------------------
+
+export async function listTurnChanges(sessionId: string): Promise<{ turns: TurnChanges[] }> {
+    return apiFetch('GET', `/sessions/${encodeURIComponent(sessionId)}/changes`);
+}
+
+export async function getTurnDiff(sessionId: string, turnId: string): Promise<{ turn_id: string; files: FileDiff[] }> {
+    return apiFetch('GET', `/sessions/${encodeURIComponent(sessionId)}/changes/${encodeURIComponent(turnId)}/diff`);
+}
+
+export async function undoTurn(sessionId: string, turnId: string, force = false): Promise<UndoResult> {
+    return apiFetch('POST', `/sessions/${encodeURIComponent(sessionId)}/changes/${encodeURIComponent(turnId)}/undo`, { force });
+}
+
+export async function getUndoSettings(): Promise<UndoSettings> {
+    return apiFetch('GET', '/settings/undo');
+}
+
+export async function updateUndoSettings(retentionDays: number, maxMb: number): Promise<UndoSettings> {
+    return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
 }

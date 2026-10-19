@@ -118,10 +118,10 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 12px;
+    font-size: var(--fs-caption);
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 .doc-status-failed { color: var(--danger); background: var(--danger-dim); }
 .doc-status-cancelled { color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 8%, transparent); }
