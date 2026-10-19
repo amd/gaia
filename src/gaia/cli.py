@@ -4350,11 +4350,15 @@ def _handle_schedule(args):
         print(f"created_at: {s.created_at}")
         print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
         if s.missed_count:
+            from datetime import datetime as _datetime
+
             runs = "run" if s.missed_count == 1 else "runs"
+            # Local time, like next_fire above.
+            latest = _datetime.fromisoformat(s.last_missed).astimezone().isoformat()
             print(
                 f"missed:     {s.missed_count} {runs} in all while the PC was off or "
                 "asleep, or the schedule daemon wasn't running "
-                f"(latest due {s.last_missed})"
+                f"(latest due {latest})"
             )
         return
 

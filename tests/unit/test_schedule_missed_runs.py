@@ -178,4 +178,6 @@ def test_show_says_runs_were_missed(tmp_path, mocker, capsys):
     _handle_schedule(build_parser().parse_args(["schedule", "show", "brief"]))
     out = capsys.readouterr().out
     assert "missed:     3 runs in all while the PC was off or asleep" in out
-    assert "2026-10-18T11:00:00+00:00" in out
+    # In local time, as next_fire is.
+    local = datetime.fromisoformat("2026-10-18T11:00:00+00:00").astimezone()
+    assert f"latest due {local.isoformat()}" in out

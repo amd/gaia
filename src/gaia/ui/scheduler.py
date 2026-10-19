@@ -33,9 +33,28 @@ MISSED_RUN_GRACE_SECONDS = 3600
 #: Longest a waiting timer goes without re-reading the wall clock, so a sleep
 #: or a clock change is noticed this soon after waking.
 WAKE_CHECK_SECONDS = 30.0
-#: Most due times counted for one missed stretch; past it the history entry
-#: says "100000+".
+#: Most clock-face due times walked one by one for a missed stretch; past it
+#: the history entry says "at least" and the latest due time is found from
+#: the last week instead. Interval tasks are counted exactly, by arithmetic.
 _MAX_MISSED_COUNTED = 100_000
+#: Clock-face schedules repeat at least weekly, so the latest due time is in
+#: this window before now.
+_LATEST_DUE_LOOKBACK = timedelta(days=8)
+#: Settings key: when this build first started counting missed runs. Due
+#: times before it were left by an older build that did not keep a task's
+#: time across restarts, so they are not blamed on the PC being off.
+MISSED_SINCE_SETTING = "scheduler_missed_runs_since"
+
+
+@dataclass
+class _DuePlan:
+    """What came due between a task's stored due time and now."""
+
+    missed: int
+    first_missed: Optional[datetime]
+    last_missed: Optional[datetime]
+    at_least: bool
+    run_now: bool
 
 
 def _utcnow() -> datetime:
@@ -823,6 +842,7 @@ class Scheduler:
         self._tasks: Dict[str, ScheduledTask] = {}
         self._lock = asyncio.Lock()
         self._running = False
+        self._missed_since: Optional[datetime] = None
         logger.info("Scheduler initialized")
 
     @property
@@ -846,6 +866,7 @@ class Scheduler:
         self._running = True
         # Semaphore must be created on the running event loop.
         self._run_semaphore = asyncio.Semaphore(self._max_concurrent_runs)
+        self._missed_since = self._load_missed_since()
         await self._load_tasks()
         logger.info("Scheduler started with %d task(s)", len(self._tasks))
 
@@ -1134,8 +1155,10 @@ class Scheduler:
         """Run the timer loop for a single task.
 
         The task runs at its stored ``next_run_at``, so a restart keeps its
-        time. Runs whose time passed while nothing could run them are
-        recorded as missed (see :meth:`_skip_missed`).
+        time. Each due run is claimed in the database before it runs, so
+        servers sharing one database run it once between them; runs whose
+        time passed while nothing could run them are recorded as missed (see
+        :meth:`_plan`).
         """
         try:
             while self._running and task.status == "active":
@@ -1145,9 +1168,24 @@ class Scheduler:
                 if not self._running or task.status != "active":
                     break
 
-                if self._skip_missed(task, due):
+                now = _utcnow()
+                plan = self._plan(task, due, now)
+                claimed = self._following(task, now).isoformat()
+                if not self._db.claim_scheduled_run(task.id, task.next_run_at, claimed):
+                    # Another server sharing this database took this run.
+                    task.next_run_at = self._db.scheduled_task_next_run(task.id)
+                    logger.info(
+                        "Scheduled task '%s': run due %s was taken by another "
+                        "GAIA server",
+                        task.name,
+                        due.isoformat(),
+                    )
                     continue
-                await self._execute_task(task)
+                task.next_run_at = claimed
+                if plan.missed:
+                    self._record_missed(task, plan)
+                if plan.run_now:
+                    await self._execute_task(task)
         except asyncio.CancelledError:
             logger.debug("Timer cancelled for task '%s'", task.name)
             raise
@@ -1181,32 +1219,106 @@ class Scheduler:
                 return
             await asyncio.sleep(min(left, WAKE_CHECK_SECONDS))
 
-    def _skip_missed(self, task: ScheduledTask, due: datetime) -> bool:
-        """Record the runs nothing ran at their time; True to skip this one.
+    def _load_missed_since(self) -> Optional[datetime]:
+        if not hasattr(self._db, "get_setting"):
+            return None
+        stamp = self._db.get_setting(MISSED_SINCE_SETTING)
+        if stamp is None:
+            stamp = _utcnow().isoformat()
+            self._db.set_setting(MISSED_SINCE_SETTING, stamp)
+        return datetime.fromisoformat(stamp)
 
-        Of the due times that have passed, the latest still runs if it is
-        within :data:`MISSED_RUN_GRACE_SECONDS`; every other one goes into
-        the history as missed. Nothing is run twice to catch up.
+    def _missed_floor(self, task: ScheduledTask) -> Optional[datetime]:
+        """Due times before this are not counted as missed."""
+        floors = [self._missed_since]
+        if task.created_at:
+            created = datetime.fromisoformat(task.created_at)
+            floors.append(
+                created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+            )
+        floors = [f for f in floors if f is not None]
+        return max(floors) if floors else None
+
+    def _plan(self, task: ScheduledTask, due: datetime, now: datetime) -> _DuePlan:
+        """Which due times between *due* and *now* nothing ran.
+
+        The latest still runs if it is within :data:`MISSED_RUN_GRACE_SECONDS`;
+        every other one counts as missed, except those before
+        :meth:`_missed_floor`. Nothing is run twice to catch up.
         """
-        now = _utcnow()
-        passed = [due]
-        following = self._following(task, due)
-        while following <= now and len(passed) < _MAX_MISSED_COUNTED:
-            passed.append(following)
-            following = self._following(task, following)
-        runs_now = now - passed[-1] <= timedelta(seconds=MISSED_RUN_GRACE_SECONDS)
-        missed = passed[:-1] if runs_now else passed
-        if missed:
-            self._record_missed(task, missed, more=following <= now)
-        if runs_now:
-            return False
-        task.next_run_at = self._following(task, now).isoformat()
-        self._db_update_task(task)
-        return True
+        floor = self._missed_floor(task)
+        config = self._config(task)
+        grace = timedelta(seconds=MISSED_RUN_GRACE_SECONDS)
+        if config is None or not _is_wall_clock(config):
+            return self._plan_interval(task, due, now, floor, grace)
 
-    def _record_missed(
-        self, task: ScheduledTask, missed: List[datetime], more: bool
-    ) -> None:
+        # Walk the clock-face due times that have passed.
+        counted = 0  # at or after the floor
+        first: Optional[datetime] = None
+        previous: Optional[datetime] = None
+        latest = due
+        walked = 0
+        at_least = False
+        moment = due
+        while moment <= now:
+            walked += 1
+            if floor is None or moment >= floor:
+                counted += 1
+                first = first or moment
+            if walked > 1:
+                previous = latest
+            latest = moment
+            if walked >= _MAX_MISSED_COUNTED:
+                at_least = True
+                previous, latest = self._latest_due(config, now)
+                break
+            moment = compute_next_run(config, after=moment)
+        run_now = now - latest <= grace
+        latest_counted = floor is None or latest >= floor
+        if at_least:
+            # The latest was found past the walked ones, so it is not in counted.
+            missed = counted + (0 if run_now else 1)
+        else:
+            missed = counted - (1 if run_now and latest_counted else 0)
+        return _DuePlan(
+            missed=max(0, missed),
+            first_missed=first if missed > 0 else None,
+            last_missed=(previous if run_now else latest) if missed > 0 else None,
+            at_least=at_least,
+            run_now=run_now,
+        )
+
+    @staticmethod
+    def _latest_due(config: ScheduleConfig, now: datetime):
+        """The last two due times at or before *now*, from the last week."""
+        previous = None
+        latest = None
+        moment = compute_next_run(config, after=now - _LATEST_DUE_LOOKBACK)
+        while moment <= now:
+            previous, latest = latest, moment
+            moment = compute_next_run(config, after=moment)
+        return previous, latest
+
+    @staticmethod
+    def _plan_interval(task, due, now, floor, grace) -> _DuePlan:
+        step = timedelta(seconds=task.interval_seconds)
+        periods = int((now - due) / step) + 1  # due times from due to now
+        latest = due + (periods - 1) * step
+        run_now = now - latest <= grace
+        last_index = periods - 2 if run_now else periods - 1
+        first_index = 0
+        if floor is not None and floor > due:
+            first_index = -(-(floor - due) // step)  # ceil
+        missed = max(0, last_index - first_index + 1)
+        return _DuePlan(
+            missed=missed,
+            first_missed=due + first_index * step if missed else None,
+            last_missed=due + last_index * step if missed else None,
+            at_least=False,
+            run_now=run_now,
+        )
+
+    def _record_missed(self, task: ScheduledTask, plan: _DuePlan) -> None:
         config = self._config(task)
         zone = resolve_zone(config.timezone if config else None)
 
@@ -1214,16 +1326,16 @@ class Scheduler:
             return moment.astimezone(zone).strftime("%Y-%m-%d %H:%M %Z")
 
         reason = "while the PC was off or asleep, or GAIA was closed"
-        if len(missed) == 1:
-            message = f"Missed the run due {when(missed[0])} {reason}."
+        if plan.missed == 1 and not plan.at_least:
+            message = f"Missed the run due {when(plan.first_missed)} {reason}."
         else:
-            count = f"{len(missed)}{'+' if more else ''}"
+            count = f"at least {plan.missed}" if plan.at_least else str(plan.missed)
             message = (
-                f"Missed {count} runs due {when(missed[0])} to "
-                f"{when(missed[-1])} {reason}."
+                f"Missed {count} runs due {when(plan.first_missed)} to "
+                f"{when(plan.last_missed)} {reason}."
             )
         logger.warning("Scheduled task '%s': %s", task.name, message)
-        self._db_store_result(task.id, missed[-1].isoformat(), error=message)
+        self._db_store_result(task.id, plan.last_missed.isoformat(), error=message)
 
     async def _execute_task(self, task: ScheduledTask):
         """Execute a single task run.
