@@ -235,6 +235,21 @@ async def test_a_text_only_turn_is_retried_from_its_question(db):
     assert db.get_message_record(sid, mid)["model_messages"] is None
 
 
+async def test_a_stopped_turn_with_an_added_message_is_retried_from_both(db):
+    session = db.create_session(model="M-GGUF", agent_type="gaia")
+    sid = session["id"]
+    db.add_message(sid, "user", "Which primes are below 12?")
+    db.add_message(sid, "user", "Only the odd ones, please.")
+    mid = db.add_message(sid, "assistant", "3, 5, 7 and 11.")
+
+    _, asked = await _retry(db, sid, mid)
+    messages = asked.call_args.args[1]
+    assert messages[-1] == {
+        "role": "user",
+        "content": "Which primes are below 12?\n\nOnly the odd ones, please.",
+    }
+
+
 async def test_only_the_latest_answer_can_be_retried(db):
     sid, mid = _chat(db)
     db.add_message(sid, "user", "another question")
