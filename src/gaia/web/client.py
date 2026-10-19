@@ -10,6 +10,7 @@ the DNS-rebind TOCTOU window between ``validate_url`` (which calls
 ``urllib3`` would resolve a second time).
 """
 
+import http.client
 import ipaddress
 import os
 import re
@@ -21,8 +22,8 @@ from typing import Dict, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
+import urllib3
 from requests.adapters import HTTPAdapter
-from urllib3.connection import HTTPConnection, HTTPSConnection
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from gaia.logger import get_logger
@@ -102,49 +103,61 @@ def _untrack_socket(sock) -> None:
             del _THREAD_SOCKETS[thread_id]
 
 
-class _TrackedHTTPConnection(HTTPConnection):
-    def _new_conn(self):
-        sock = super()._new_conn()
-        _track_socket(sock)
-        return sock
+def _tracked(connection_cls):
+    """``connection_cls`` with its socket registered from creation through
+    the header read, so a fetch deadline can unblock it."""
 
-    def getresponse(self, *args, **kwargs):
-        sock = self.sock
-        _track_socket(sock)
-        try:
-            return super().getresponse(*args, **kwargs)
-        finally:
-            _untrack_socket(sock)
+    class Tracked(connection_cls):
+        # Both inherited from urllib3's HTTPConnection; pylint misses them.
+        def _new_conn(self):
+            sock = super()._new_conn()  # pylint: disable=no-member
+            _track_socket(sock)
+            return sock
 
+        def getresponse(self, *args, **kwargs):
+            sock = self.sock
+            _track_socket(sock)
+            try:
+                return super().getresponse(*args, **kwargs)  # pylint: disable=no-member
+            finally:
+                _untrack_socket(sock)
 
-class _TrackedHTTPSConnection(HTTPSConnection):
-    # Both inherited from urllib3's HTTPConnection; pylint misses them here.
-    def _new_conn(self):
-        sock = super()._new_conn()  # pylint: disable=no-member
-        _track_socket(sock)
-        return sock
-
-    def getresponse(self, *args, **kwargs):
-        sock = self.sock
-        _track_socket(sock)
-        try:
-            return super().getresponse(*args, **kwargs)  # pylint: disable=no-member
-        finally:
-            _untrack_socket(sock)
+    Tracked.__name__ = Tracked.__qualname__ = f"Tracked{connection_cls.__name__}"
+    return Tracked
 
 
-class _TrackedHTTPConnectionPool(HTTPConnectionPool):
-    ConnectionCls = _TrackedHTTPConnection
+def _tracked_pools(http_pool, https_pool) -> Dict[str, type]:
+    return {
+        scheme: type(
+            f"Tracked{pool.__name__}",
+            (pool,),
+            {"ConnectionCls": _tracked(pool.ConnectionCls)},
+        )
+        for scheme, pool in (("http", http_pool), ("https", https_pool))
+    }
 
 
-class _TrackedHTTPSConnectionPool(HTTPSConnectionPool):
-    ConnectionCls = _TrackedHTTPSConnection
+_TRACKED_POOLS = _tracked_pools(HTTPConnectionPool, HTTPSConnectionPool)
+_TRACKED_SOCKS_POOLS: Dict[str, type] = {}
 
 
-_TRACKED_POOLS = {
-    "http": _TrackedHTTPConnectionPool,
-    "https": _TrackedHTTPSConnectionPool,
-}
+def _pools_for(manager) -> Dict[str, type]:
+    """Tracked pool classes matching ``manager``'s own (plain, or SOCKS)."""
+    try:
+        from urllib3.contrib.socks import (
+            SOCKSHTTPConnectionPool,
+            SOCKSHTTPSConnectionPool,
+            SOCKSProxyManager,
+        )
+    except ImportError:
+        return _TRACKED_POOLS  # PySocks absent: no SOCKS manager can exist
+    if not isinstance(manager, SOCKSProxyManager):
+        return _TRACKED_POOLS
+    if not _TRACKED_SOCKS_POOLS:
+        _TRACKED_SOCKS_POOLS.update(
+            _tracked_pools(SOCKSHTTPConnectionPool, SOCKSHTTPSConnectionPool)
+        )
+    return _TRACKED_SOCKS_POOLS
 
 
 class FetchDeadlineExceeded(requests.exceptions.Timeout):
@@ -232,6 +245,31 @@ class _Deadline:
             response = self._response
             if response is not None:
                 _abort_stream(response)
+
+
+#: What a read cut short by the deadline (its timeout, or the timer's
+#: shutdown) raises. Anything else, a blocked address or a bug, is not
+#: relabelled as a slow server.
+_TRANSPORT_ERRORS = (
+    requests.exceptions.RequestException,
+    OSError,
+    http.client.HTTPException,
+    urllib3.exceptions.HTTPError,
+)
+
+
+def _is_deadline_failure(
+    error: BaseException, deadline: "_Deadline", reading_body: bool = False
+) -> bool:
+    if isinstance(error, _TRANSPORT_ERRORS):
+        return deadline.expired()
+    # The timer closing a response mid-read can surface as one of these from
+    # inside http.client, but only while a body is being read.
+    return (
+        reading_body
+        and isinstance(error, (AttributeError, ValueError))
+        and deadline.fired.is_set()
+    )
 
 
 def _cap_timeout(timeout, remaining: float):
@@ -394,8 +432,9 @@ class PinnedIPAdapter(HTTPAdapter):
 
     def proxy_manager_for(self, proxy, **proxy_kwargs):
         manager = super().proxy_manager_for(proxy, **proxy_kwargs)
-        # The same for requests sent through a proxy.
-        manager.pool_classes_by_scheme = dict(_TRACKED_POOLS)
+        # The same for requests sent through a proxy; a SOCKS proxy keeps its
+        # own pool classes, tracked the same way.
+        manager.pool_classes_by_scheme = dict(_pools_for(manager))
         return manager
 
     def _resolve_first_ip(self, host: str, port: int) -> str:
@@ -655,7 +694,7 @@ class WebClient:
         try:
             response = send(timeout)
         except Exception as e:
-            if deadline.expired():
+            if _is_deadline_failure(e, deadline):
                 raise deadline.error() from e
             raise
         deadline.watch(response)
@@ -675,7 +714,7 @@ class WebClient:
                 deadline.received += len(chunk)
                 yield chunk
         except Exception as e:
-            if deadline.expired():
+            if _is_deadline_failure(e, deadline, reading_body=True):
                 raise deadline.error() from e
             raise
         # An unblocked socket can also read as a clean, truncated end.

@@ -17,6 +17,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+import requests
 
 from gaia.web.client import FetchDeadlineExceeded, WebClient
 
@@ -334,3 +335,114 @@ def test_the_read_order_puts_the_body_through_the_capped_read(monkeypatch):
         httpd.shutdown()
         httpd.server_close()
     assert peak < 16 * (1 << 20)
+
+
+def test_a_blocked_address_is_not_reported_as_a_slow_server(server, monkeypatch):
+    """Only transport failures become the deadline; an SSRF block found after
+    the deadline passed must still say it was blocked."""
+    from gaia.web import client as client_mod
+
+    def blocked(self, host, port):
+        time.sleep(1.3)
+        raise ValueError(f"Blocked: {host} resolves to private/reserved IP")
+
+    monkeypatch.setattr(client_mod.PinnedIPAdapter, "_resolve_first_ip", blocked)
+    box, _ = _bounded(lambda: _client(fetch_deadline=1).get(server + "/fast"))
+    error = box.get("error")
+    assert isinstance(error, ValueError) and "Blocked" in str(error), box
+
+
+def test_a_read_failing_just_before_the_deadline_counts_as_the_deadline():
+    """The read timeout is cut to the time left, so it can fire a tick before
+    the deadline does."""
+    from gaia.web import client as client_mod
+
+    with client_mod._Deadline(60, "http://example.test", "fetch") as deadline:
+        deadline._at = time.monotonic() + 0.1  # a tick from the deadline
+        error = requests.exceptions.ReadTimeout("read timed out")
+        assert client_mod._is_deadline_failure(error, deadline)
+        deadline._at = time.monotonic() + 5
+        assert not client_mod._is_deadline_failure(error, deadline)
+
+
+def test_the_rate_limit_wait_is_not_charged_to_the_deadline(server):
+    """The wait between two fetches to one host is GAIA's own pacing."""
+    client = WebClient(timeout=10, rate_limit=1.5, fetch_deadline=1)
+    client.get(server + "/fast")
+    response = client.get(server + "/fast")  # waits ~1.5 s first
+    assert response.text == "<html>ok</html>"
+
+
+@pytest.fixture
+def socks5_relay(monkeypatch):
+    """A minimal SOCKS5 relay (no auth, CONNECT only)."""
+    import socket
+    import struct
+
+    pytest.importorskip("socks", reason="SOCKS proxies need PySocks")
+    monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
+    hits = []
+
+    def pipe(src, dst):
+        try:
+            while data := src.recv(65536):
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for sock in (src, dst):
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def handle(conn):
+        conn.recv(262)
+        conn.sendall(b"\x05\x00")
+        header = conn.recv(4)
+        if header[3] == 1:
+            host = socket.inet_ntoa(conn.recv(4))
+        else:
+            host = conn.recv(conn.recv(1)[0]).decode()
+        (port,) = struct.unpack(">H", conn.recv(2))
+        hits.append((host, port))
+        upstream = socket.create_connection((host, port))
+        conn.sendall(b"\x05\x00\x00\x01" + socket.inet_aton("0.0.0.0") + b"\x00\x00")
+        threading.Thread(target=pipe, args=(conn, upstream), daemon=True).start()
+        pipe(upstream, conn)
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+
+    def accept():
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
+    yield f"socks5://127.0.0.1:{listener.getsockname()[1]}", hits
+    listener.close()
+
+
+def test_fetches_through_a_socks_proxy_still_work(server, socks5_relay):
+    proxy, hits = socks5_relay
+    response = _client(fetch_deadline=5).get(
+        server + "/fast", proxies={"http": proxy, "https": proxy}
+    )
+    assert response.text == "<html>ok</html>"
+    assert hits, "the request did not go through the proxy"
+
+
+def test_a_socks_proxied_trickle_still_stops_at_the_deadline(server, socks5_relay):
+    proxy, _ = socks5_relay
+    box, elapsed = _bounded(
+        lambda: _client(fetch_deadline=1).get(
+            server + "/slow-headers", proxies={"http": proxy}
+        )
+    )
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+    assert elapsed < 8
