@@ -2006,7 +2006,6 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
-        # Lemonade lists a user. model without the namespace.
         chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
         # A cloud model occupies no local slot: nothing to load, nothing to evict.
         if any(
