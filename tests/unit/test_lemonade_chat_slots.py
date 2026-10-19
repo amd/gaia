@@ -175,6 +175,22 @@ def test_memory_extraction_runs_on_the_side_slot():
     assert SIDE_SLOT != CONVERSATION_SLOT
 
 
+def test_every_background_memory_call_runs_on_the_side_slot():
+    """Consolidation, reconciliation and skill distillation share these kwargs.
+
+    Without a slot they landed on the conversation's, and the user's next turn
+    re-read the whole ~19K-token prompt.
+    """
+    from gaia.agents.base.memory import MemoryMixin
+
+    class Host(MemoryMixin):
+        pass
+
+    host = Host()
+    host.chat = MagicMock(effective_model="Gemma-4-E4B-it-GGUF")
+    assert host._side_request_kwargs()["id_slot"] == SIDE_SLOT
+
+
 def _health(entry):
     return {"status": "ok", "all_models_loaded": [entry]}
 
@@ -354,22 +370,22 @@ def test_requests_to_different_models_do_not_wait_on_each_other():
     "message",
     ["Context size has been exceeded.", "failed to find free space in the KV cache"],
 )
-def test_an_exhausted_kv_pool_is_a_context_overflow(message):
+def test_an_exhausted_kv_pool_is_not_a_context_overflow(message):
+    """Concurrent requests outgrew the shared pool; the conversation did not."""
     from gaia.llm.lemonade_client import is_context_overflow_error
     from gaia.llm.providers.lemonade import (
-        LemonadeContextOverflowError,
+        LemonadeKVCacheSharedError,
         _classify_lemonade_response,
         classify_lemonade_exception,
     )
 
     envelope = {"error": {"code": 500, "message": message, "type": "server_error"}}
     raw = f"Error in chat completions (status 500): {json.dumps(envelope)}"
-    assert is_context_overflow_error(raw)
+    assert not is_context_overflow_error(raw)
     assert isinstance(
         classify_lemonade_exception(LemonadeClientError(raw)),
-        LemonadeContextOverflowError,
+        LemonadeKVCacheSharedError,
     )
     classified, is_error = _classify_lemonade_response(envelope)
-    assert is_error and isinstance(classified, LemonadeContextOverflowError)
-    # A pool exhausted by concurrent requests is not a model loaded too small.
-    assert not classified.retryable
+    assert is_error and isinstance(classified, LemonadeKVCacheSharedError)
+    assert classified.retryable

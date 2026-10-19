@@ -30,6 +30,7 @@ from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.system_context import (
     collect_system_info as _real_collect_system_info,
 )
+from gaia.llm.lemonade_client import SIDE_SLOT
 from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
@@ -2119,21 +2120,22 @@ class TestSystemPromptSizeCap:
         _MARKER = "\n... (memory truncated)"
         assert len(prompt) <= 4000 + len(_MARKER)
 
-    def test_system_prompt_truncation_marker(self, mixin_host):
-        """Truncated system prompt includes '(memory truncated)' marker."""
+    def test_memories_that_do_not_fit_are_counted_not_cut(self, mixin_host):
+        """A memory too long for the cap is left out whole, and the prompt says so."""
         store = mixin_host.memory_store
-        # Force large content: 10 prefs of 2000 chars each will exceed the cap
+        # Distinct words per row: the store merges rows with >80% word overlap.
         for i in range(10):
             store.store(
                 category="preference",
-                content=f"Preference {i}: " + ("very_long_word_to_fill_space " * 80),
+                content=" ".join(f"p{i}word{n}" for n in range(300)),
             )
 
         prompt = mixin_host.get_memory_system_prompt()
-        _MARKER = "\n... (memory truncated)"
-        # The cap is 4000 chars → with 10 * ~2340 char prefs it WILL be truncated
-        assert "memory truncated" in prompt
-        assert len(prompt) <= 4000 + len(_MARKER)
+
+        assert "(10 more stored memories are not listed here" in prompt
+        assert "p0word299" not in prompt
+        assert "memory truncated" not in prompt
+        assert len(prompt) <= 4000
 
     def test_system_prompt_has_instructions_when_no_memory(self, mixin_host):
         """System prompt includes memory instructions even with no user memories."""
@@ -5993,6 +5995,8 @@ class TestSideRequestsDisableThinking:
         assert host.chat.send_messages.called
         for call in host.chat.send_messages.call_args_list:
             assert call.kwargs["chat_template_kwargs"] == _NO_THINKING
+            # Off the conversation's slot, so its prompt cache survives.
+            assert call.kwargs["id_slot"] == SIDE_SLOT
 
     def test_reconciliation_turns_thinking_off(self, host):
         from gaia.agents.base.memory import _embedding_to_blob
@@ -6020,3 +6024,4 @@ class TestSideRequestsDisableThinking:
         assert host.chat.send_messages.called
         kwargs = host.chat.send_messages.call_args.kwargs
         assert kwargs["chat_template_kwargs"] == _NO_THINKING
+        assert kwargs["id_slot"] == SIDE_SLOT

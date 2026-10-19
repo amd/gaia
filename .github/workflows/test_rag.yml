@@ -66,9 +66,6 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    - name: Free disk space
-      uses: ./.github/actions/free-disk-space
-
     - name: Setup Python environment
       uses: ./.github/actions/setup-venv
       with:
