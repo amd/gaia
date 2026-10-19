@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 
+from .process_owner import current_owner, owner_is_gone
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,6 +121,20 @@ CREATE TABLE IF NOT EXISTS messages (
     agent_steps TEXT,
     tokens_prompt INTEGER,
     tokens_completion INTEGER
+);
+
+-- A chat turn that has started and not yet saved its reply. A row left here
+-- when the server starts again belongs to a turn the last run never finished.
+CREATE TABLE IF NOT EXISTS turns_in_progress (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    user_message_id INTEGER NOT NULL,
+    -- The server process running the turn (process_owner.current_owner).
+    owner TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    partial_content TEXT NOT NULL DEFAULT '',
+    -- A message the turn saved before its reply (a policy block notice).
+    placeholder_message_id INTEGER,
+    updated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -288,6 +304,8 @@ class ChatDatabase:
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
+        # The server indexing it, so a restart can tell a dead index from a live one.
+        self._add_column("documents", "indexing_owner", "TEXT")
         # Per-session incognito mode and agent selection.
         self._add_column("sessions", "private", "INTEGER NOT NULL DEFAULT 0")
         self._add_column(
@@ -612,6 +630,7 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_placeholder: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -620,6 +639,10 @@ class ChatDatabase:
         the session without the message (the failure mode of a separate
         ``delete_message`` + ``add_message``). A new id is minted rather than
         reusing ``msg_id`` to keep the delete-then-insert id semantics.
+
+        ``turn_placeholder`` marks the row as saved by the session's running
+        turn ahead of its reply (a policy block), so it is not taken for the
+        reply if the turn is cut off.
         """
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
@@ -658,6 +681,12 @@ class ChatDatabase:
                 (self._now(), session_id),
             )
             new_id = cursor.lastrowid
+            if turn_placeholder:
+                self._conn.execute(
+                    "UPDATE turns_in_progress SET placeholder_message_id = ? "
+                    "WHERE session_id = ?",
+                    (new_id, session_id),
+                )
 
         return new_id or 0
 
@@ -806,6 +835,92 @@ class ChatDatabase:
                 (session_id,),
             ).fetchone()
             return int(row["cnt"])
+
+    # ── Turns in progress ───────────────────────────────────────────────
+
+    def begin_turn(self, session_id: str, user_message_id: int) -> None:
+        """Record that a reply to *user_message_id* has started."""
+        now = self._now()
+        with self._transaction():
+            self._conn.execute(
+                """INSERT OR REPLACE INTO turns_in_progress
+                   (session_id, user_message_id, owner, started_at,
+                    partial_content, updated_at)
+                   VALUES (?, ?, ?, ?, '', ?)""",
+                (session_id, user_message_id, current_owner(), now, now),
+            )
+
+    def save_turn_partial(self, session_id: str, content: str) -> None:
+        """Keep the reply streamed so far, so a crash does not lose it."""
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE turns_in_progress SET partial_content = ?, updated_at = ? "
+                "WHERE session_id = ?",
+                (content, self._now(), session_id),
+            )
+
+    def discard_turn(self, session_id: str) -> None:
+        """Forget a turn whose outcome the caller has already reported."""
+        with self._transaction():
+            self._conn.execute(
+                "DELETE FROM turns_in_progress WHERE session_id = ?", (session_id,)
+            )
+
+    def turns_in_progress(self) -> List[Dict[str, Any]]:
+        """Turns that have not been closed: ``session_id`` and ``owner``."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT session_id, owner FROM turns_in_progress"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def close_turn(self, session_id: str, notice: str) -> Optional[int]:
+        """End a turn, saving *notice* as its reply if it never saved one.
+
+        Whatever the turn had streamed is kept above the notice; an empty
+        notice keeps the streamed text alone. Returns the
+        id of the message written, or None when the turn already had a reply
+        (or its question was deleted) and nothing was written.
+        """
+        with self._transaction():
+            row = self._conn.execute(
+                "SELECT user_message_id, partial_content, placeholder_message_id "
+                "FROM turns_in_progress WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                "DELETE FROM turns_in_progress WHERE session_id = ?", (session_id,)
+            )
+            question = self._conn.execute(
+                "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
+                (row["user_message_id"], session_id),
+            ).fetchone()
+            replied = self._conn.execute(
+                "SELECT 1 FROM messages WHERE session_id = ? AND id > ? "
+                "AND role = 'assistant' AND id IS NOT ? LIMIT 1",
+                (session_id, row["user_message_id"], row["placeholder_message_id"]),
+            ).fetchone()
+            if question is None or replied is not None:
+                return None
+            partial = (row["partial_content"] or "").strip()
+            content = "\n\n".join(part for part in (partial, notice) if part)
+            if not content:
+                raise ValueError(
+                    f"close_turn for session {session_id[:8]} has neither "
+                    "streamed text nor a notice to save as its reply"
+                )
+            now = self._now()
+            cursor = self._conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at) "
+                "VALUES (?, 'assistant', ?, ?)",
+                (session_id, content, now),
+            )
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
+            )
+            return cursor.lastrowid
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -993,8 +1108,11 @@ class ChatDatabase:
             True if the document was found and updated.
         """
         with self._transaction():
-            parts = ["indexing_status = ?"]
-            params: list = [status]
+            parts = ["indexing_status = ?", "indexing_owner = ?"]
+            params: list = [
+                status,
+                current_owner() if status in ("pending", "indexing") else None,
+            ]
             if chunk_count is not None:
                 parts.append("chunk_count = ?")
                 params.append(chunk_count)
@@ -1019,6 +1137,22 @@ class ChatDatabase:
                 params,
             )
             return cursor.rowcount > 0
+
+    def fail_unfinished_indexing(self, error: str) -> List[str]:
+        """Mark documents left pending or indexing by a process that has ended
+        as failed with *error*. Returns their ids."""
+        with self._transaction():
+            rows = self._conn.execute(
+                "SELECT id, indexing_owner FROM documents "
+                "WHERE indexing_status IN ('pending', 'indexing')"
+            ).fetchall()
+            ids = [row["id"] for row in rows if owner_is_gone(row["indexing_owner"])]
+            self._conn.executemany(
+                "UPDATE documents SET indexing_status = 'failed', last_error = ?, "
+                "last_accessed_at = ? WHERE id = ?",
+                [(error, self._now(), doc_id) for doc_id in ids],
+            )
+        return ids
 
     def reindex_document(
         self,

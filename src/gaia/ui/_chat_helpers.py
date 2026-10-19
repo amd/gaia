@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re as _re
+import sqlite3
 import threading
 import time as _time
 from pathlib import Path
@@ -3087,6 +3088,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 "assistant",
                 persisted_policy_block_content,
                 agent_steps=captured_steps if captured_steps else None,
+                turn_placeholder=True,
             )
             return persisted_policy_block_msg_id
 
@@ -3550,8 +3552,26 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
-    async for data in _stream_chat_impl(run, db, session, request):
-        run.emit(data)
+    from gaia.ui.restart_recovery import TurnJournal
+
+    journal = TurnJournal(db, request.session_id)
+    shutting_down = False
+    try:
+        async for data in _stream_chat_impl(run, db, session, request):
+            journal.observe(data)
+            run.emit(data)
+    except asyncio.CancelledError:
+        # Shutdown: the marker stays, and the next start says the turn was cut off.
+        shutting_down = True
+        try:
+            journal.flush()
+        except (RuntimeError, sqlite3.Error) as exc:
+            # The database already closed; the text from the last save stands.
+            logger.warning("Could not save the interrupted turn's text: %s", exc)
+        raise
+    finally:
+        if not shutting_down:
+            journal.close()
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
     # than on subscriber detach.
