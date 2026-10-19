@@ -258,7 +258,8 @@ class TestLemonadeClientMock(unittest.TestCase):
         mock_load.assert_called_once()
         args, kwargs = mock_load.call_args
         self.assertEqual(args[0], TEST_MODEL)  # First arg should be model
-        self.assertEqual(kwargs.get("timeout", None), 60)  # Should have timeout=60
+        # Bounded by GAIA_LLM_LOAD_WAIT: queues behind other apps' loads.
+        self.assertEqual(kwargs.get("timeout"), 600)
         # list_models should also be called when auto_pull=True (default)
         mock_list_models.assert_called_once()
 
@@ -1062,6 +1063,9 @@ class TestLemonadeClientMock(unittest.TestCase):
             ),
             patch.object(self.client, "list_models", return_value={"data": []}),
             patch.object(self.client, "load_model", return_value={"status": "success"}),
+            # Reading the saved context size takes the config file lock, whose
+            # clock would eat the fake monotonic values below.
+            patch("gaia.llm.lemonade_client._chosen_ctx_size", return_value=None),
             patch(
                 "gaia.llm.lemonade_client.time.monotonic",
                 side_effect=lambda: next(monotonic_values),

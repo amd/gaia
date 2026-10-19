@@ -50,6 +50,13 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+from gaia.utils.file_lock import (
+    FileLockError,
+    FileLockTimeout,
+    file_lock,
+    write_bytes_atomic,
+    write_text_atomic,
+)
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -180,6 +187,14 @@ class EmbeddingUnavailableError(RuntimeError):
         else:
             what = f"The embedding model {model} failed"
         super().__init__(f"{what}: {cause}")
+
+
+_CACHE_LOCK_NAME = "rag-cache"
+
+
+def _cache_lock_target(cache_path: str) -> Path:
+    """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
+    return Path(cache_path).parent / _CACHE_LOCK_NAME
 
 
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
@@ -504,7 +519,7 @@ class RAGSDK:
 
             return os.fdopen(fd, mode_str)
 
-        except Exception as _e:
+        except Exception:
             os.close(fd)
             raise
 
@@ -525,17 +540,15 @@ class RAGSDK:
         key_dir = Path.home() / ".gaia" / "cache"
         key_path = key_dir / "hmac.key"
 
-        if key_path.exists():
-            self._hmac_key = key_path.read_bytes()
-            return self._hmac_key
+        # Locked so two first-run processes cannot each mint a key and leave
+        # every cache the other signed failing verification.
+        with file_lock(key_path):
+            if key_path.exists():
+                self._hmac_key = key_path.read_bytes()
+                return self._hmac_key
 
-        key_dir.mkdir(parents=True, exist_ok=True)
-        key = secrets.token_bytes(32)
-        key_path.write_bytes(key)
-        try:
-            key_path.chmod(0o600)
-        except (OSError, AttributeError):
-            pass
+            key = secrets.token_bytes(32)
+            write_bytes_atomic(key_path, key, mode=0o600)
         self.log.info("Generated new HMAC key for cache integrity verification")
         self._hmac_key = key
         return self._hmac_key
@@ -556,10 +569,10 @@ class RAGSDK:
         key = self._get_hmac_key()
         signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
 
-        with open(cache_path, "wb") as f:
-            f.write(json_bytes)
-        with open(cache_path + ".sig", "w", encoding="utf-8") as f:
-            f.write(signature)
+        # One lock over both files, so a reader never pairs new JSON with an old .sig.
+        with file_lock(_cache_lock_target(cache_path)):
+            write_bytes_atomic(cache_path, json_bytes)
+            write_bytes_atomic(cache_path + ".sig", signature.encode("utf-8"))
 
         self.log.debug(f"Saved signed cache: {cache_path}")
 
@@ -582,14 +595,17 @@ class RAGSDK:
         """
         sig_path = cache_path + ".sig"
 
-        if not os.path.exists(sig_path):
-            raise ValueError("Cache signature file missing — cannot verify integrity")
+        with file_lock(_cache_lock_target(cache_path)):
+            if not os.path.exists(sig_path):
+                raise ValueError(
+                    "Cache signature file missing — cannot verify integrity"
+                )
 
-        with open(cache_path, "rb") as f:
-            json_bytes = f.read()
+            with open(cache_path, "rb") as f:
+                json_bytes = f.read()
 
-        with open(sig_path, "r", encoding="utf-8") as f:
-            stored_sig = f.read().strip()
+            with open(sig_path, "r", encoding="utf-8") as f:
+                stored_sig = f.read().strip()
 
         key = self._get_hmac_key()
         expected_sig = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
@@ -2090,7 +2106,7 @@ These positions indicate where to split the text."""
             return text, metadata
 
         # Text-based files
-        elif file_type in [".txt", ".md", ".markdown", ".rst", ".log"]:
+        elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
@@ -3161,20 +3177,18 @@ These positions indicate where to split the text."""
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
+            except FileLockError as e:
+                # Busy, not corrupt: re-extracting would redo another process's work.
+                return self._cache_busy(stats, file_path, e)
             except Exception as e:
+                # A miss, not a delete: re-indexing replaces the entry atomically,
+                # and deleting here could destroy a fresh cache another process
+                # just wrote, or leave none at all if re-indexing then fails.
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
                     print(
                         "  ⚠️  Cache outdated or corrupted, will reindex from scratch"
                     )
-                try:
-                    os.remove(cache_path)
-                except OSError:
-                    pass
-                try:
-                    os.remove(md_cache_path)
-                except OSError:
-                    pass
 
         # Extract and process document
         if self.config.show_stats:
@@ -3377,6 +3391,23 @@ These positions indicate where to split the text."""
             )
             stats["error"] = str(e)
             return stats
+
+    def _cache_busy(
+        self, stats: Dict[str, Any], file_path: str, error: FileLockError
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose cache another process holds locked."""
+        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        if isinstance(error, FileLockTimeout):
+            message += (
+                " Another GAIA process is probably indexing into the same cache; "
+                "index the document again once it finishes."
+            )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.error(message)
+        stats["error"] = message
+        stats["error_type"] = "cache_busy"
+        return stats
 
     def _embedding_failed(
         self, stats: Dict[str, Any], file_path: str, error: EmbeddingUnavailableError
@@ -3681,8 +3712,7 @@ Answer:"""
 """
 
             # Write markdown file
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(markdown_content)
+            write_text_atomic(md_path, markdown_content, mode=0o644)
 
             self.log.debug(f"Saved extracted markdown to {md_path}")
 
@@ -3715,7 +3745,7 @@ Answer:"""
                 f"{default_rag_cache_dir()})."
             )
 
-        with self._state_lock:
+        with self._state_lock, file_lock(cache_dir / _CACHE_LOCK_NAME):
             removed = 0
             if cache_dir.is_dir():
                 for entry in cache_dir.iterdir():

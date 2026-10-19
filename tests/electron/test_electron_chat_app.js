@@ -1369,12 +1369,17 @@ describe('Chat App Integration', () => {
       expect(dialogContent).toContain('<Suspense');
     });
 
-    it('should keep model-server status, context size, custom model, dynamic tools and MCP in Advanced', () => {
+    it('should keep model-server status, custom model, dynamic tools and MCP in Advanced', () => {
       expect(advancedContent).toContain('className="status-grid"');
-      expect(advancedContent).toContain('className="ctx-preset-row"');
       expect(advancedContent).toContain('className="model-override-desc"');
       expect(advancedContent).toContain('Dynamic Tools');
       expect(advancedContent).toContain('mcp-status-connected');
+    });
+
+    it('should choose the context size in Model, sized to what fits, not in Advanced', () => {
+      const modelContent = fs.readFileSync(path.join(settingsDir, 'ModelSettings.tsx'), 'utf8');
+      expect(advancedContent).not.toContain('ctx-preset-row');
+      expect(modelContent).toContain('<ModelContextSize model={activeLocal} />');
     });
 
     it('should have danger zone section in Privacy', () => {

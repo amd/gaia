@@ -32,7 +32,7 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
-from gaia.agents.tools.path_access import readable_entry
+from gaia.agents.tools.path_access import missing_file_error, readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -458,7 +458,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -806,7 +806,7 @@ class FileIOToolsMixin:
 
                 # Read current content
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -1350,7 +1350,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not path.exists():
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 reads = file_read_record(self)
                 refusal = reads.refusal(path)
@@ -1637,7 +1637,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
