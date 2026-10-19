@@ -246,7 +246,7 @@ func (m Model) View() string {
 	case m.loadErr != "":
 		lines = append(lines, m.loadErr)
 	case m.onlyFlagship:
-		lines = append(lines, "Only the flagship is installed. Install another with: gaia hub install <id>")
+		lines = append(lines, "Only the flagship is installed. Install another with: "+catalog.InstallCommand("<id>"))
 	case len(m.rows) > 0:
 		rowLines := make([][]string, len(m.rows))
 		for i, r := range m.rows {

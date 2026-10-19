@@ -149,6 +149,8 @@ _CHANGE = (
 
 #: "ran into a problem", "run out of time": figures of speech, not commands.
 _NOT_IDIOM = r"(?!\s+(?:into|out|across|over)\b)"
+#: "ran two searches", "ran a query": the object makes it a search, not a command.
+_SEARCH_OBJECT = r"(?:\s+[\w`'./\-]+){0,3}?\s+(?:searche?s?|quer(?:y|ies)|lookups?)\b"
 
 #: Work an answer says it did, by the kind of tool that would have done it.
 #: Past tense only: "I will run the tests" promises, it does not report.
@@ -157,7 +159,11 @@ ACTION_CLAIMS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         "searched",
         re.compile(
             _SPEAKER
-            + r"(?:searched|grepped|scanned|looked\s+(?:through|everywhere))\b",
+            + r"(?:searched|grepped|scanned|looked\s+(?:through|everywhere))\b"
+            + r"|"
+            + _SPEAKER
+            + r"(?:ran|did|performed)"
+            + _SEARCH_OBJECT,
             re.IGNORECASE,
         ),
     ),
@@ -176,6 +182,9 @@ ACTION_CLAIMS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             _SPEAKER
             + r"(?:ran|executed)\b"
             + _NOT_IDIOM
+            + r"(?!"
+            + _SEARCH_OBJECT
+            + r")"
             + r"|"
             + _PERFECT
             + r"run\b"

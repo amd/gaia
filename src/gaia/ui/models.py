@@ -129,6 +129,8 @@ class SystemStatus(BaseModel):
     # One message per status probe that failed (catalog, stats, device info,
     # disk space); the matching fields keep their "unknown" defaults.
     probe_warnings: List[str] = Field(default_factory=list)
+    # The folder that holds the chat database; None for an in-memory one.
+    data_dir: Optional[str] = None
 
 
 class LoadedModelInfo(BaseModel):
@@ -193,6 +195,33 @@ class WarmUpStatus(BaseModel):
     error: Optional[str] = None
     model: Optional[str] = None  # what the warm-up loads, once resolved
     device: Optional[str] = None  # npu | gpu | cpu; None when unknown
+
+
+class RunningAnswer(BaseModel):
+    """A chat whose answer is still being written."""
+
+    session_id: str
+    title: Optional[str] = None
+
+
+class RunningIndexJob(BaseModel):
+    """A document still being indexed."""
+
+    document_id: str
+    filename: Optional[str] = None
+
+
+class WorkInProgress(BaseModel):
+    """Work that quitting or unloading the model would cut short."""
+
+    answers: List[RunningAnswer]
+    indexing: List[RunningIndexJob]
+
+
+class UnloadModelResponse(BaseModel):
+    """The model server dropped its models from memory."""
+
+    status: str  # unloaded
 
 
 class InitTaskInfo(BaseModel):
@@ -319,7 +348,7 @@ class AgentInfo(BaseModel):
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
-    # Agent Hub metadata — used by the frontend to render rich discovery cards.
+    # Display metadata in the /api/agents contract; the Agent UI renders none of it.
     category: str = "general"
     tags: List[str] = Field(default_factory=list)
     icon: str = ""  # lucide icon name

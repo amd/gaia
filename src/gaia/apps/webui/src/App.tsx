@@ -14,6 +14,7 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
 import * as api from './services/api';
@@ -24,6 +25,7 @@ import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID } from './utils/newTask';
+import { runWhileVisible } from './utils/visibleInterval';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -175,7 +177,6 @@ function App() {
         setBackendSlow(false);
         setBackendError(null);
         setBackendConnected(true);
-        if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
         // One slow health probe under load is not an outage.
         failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
         const prev = useChatStore.getState().systemStatus;
@@ -190,7 +191,7 @@ function App() {
     const [statusPoller] = useState(() => createStatusPoller((outcome) => applyStatusRef.current(outcome)));
     const checkSystemStatus = statusPoller.check;
 
-    useEffect(() => statusPoller.start(), [statusPoller]);
+    useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -309,7 +310,6 @@ function App() {
         const session = await api.createSession({
             title: 'New Task',
             agent_type: FLAGSHIP_AGENT_ID,
-            device: store.activeDevice,
             document_ids: store.draftDocumentIds,
         });
         store.clearDraftDocuments();
@@ -340,6 +340,22 @@ function App() {
         setCurrentSession(null);
         setMessages([]);
     }, [setCurrentSession, setMessages]);
+
+    // ── Desktop tray: its icon follows this window; its menu acts here ──
+    const openChatFromTray = useCallback((id: string) => {
+        const store = useChatStore.getState();
+        store.closeSettings();
+        if (id !== store.currentSessionId) {
+            void cleanupAbandonedDraft(store.currentSessionId);
+            setMessages([]);
+        }
+        setCurrentSession(id);
+    }, [setCurrentSession, setMessages]);
+    const newChatFromTray = useCallback(() => {
+        useChatStore.getState().closeSettings();
+        newChat();
+    }, [newChat]);
+    useTrayBridge({ openChat: openChatFromTray, newChat: newChatFromTray, refreshStatus: () => void checkSystemStatus() });
 
     const useSkill = useCallback((name: string) => {
         newChat();

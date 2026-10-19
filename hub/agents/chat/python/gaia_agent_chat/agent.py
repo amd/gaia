@@ -694,10 +694,11 @@ class ChatAgent(
             self._start_watching()
 
     def _indexed_documents_line(self) -> str:
-        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed.
+        """``[Indexed documents: a.pdf (/docs/a.pdf), …]``, or "" when none are.
 
-        A document still indexing in the background is not searchable, so it
-        is named on a line of its own instead.
+        Each entry carries its path, so a file tool never has to search for a
+        document the user already attached. A document still indexing in the
+        background is not searchable, so it is named on a line of its own.
         """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
@@ -706,8 +707,11 @@ class ChatAgent(
             return ""
         lines = []
         if self.rag.indexed_files:
-            names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-            lines.append(f"[Indexed documents: {', '.join(names)}]")
+            entries = sorted(
+                {f"{Path(fp).name} ({fp})" for fp in self.rag.indexed_files},
+                key=str.lower,
+            )
+            lines.append(f"[Indexed documents: {', '.join(entries)}]")
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -2629,7 +2633,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,
-            choices: list = None,
+            choices: List[str] = None,
             default_if_no_response: str = None,
             timeout_seconds: int = 300,
             continue_if_no_response: bool = True,
@@ -2803,6 +2807,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.schedule(event_handler, directory, recursive=True)
             observer.start()
             self.observers.append(observer)
+            self.file_handlers.append(event_handler)
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
@@ -2868,6 +2873,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.stop()
             observer.join()
         self.observers.clear()
+        # Each handler reindexes on its own thread; stop those too. A core
+        # without close() reindexes inline, so there is nothing to stop.
+        handlers = self.__dict__.get("file_handlers", [])
+        for handler in handlers:
+            close = getattr(handler, "close", None)
+            if close is not None:
+                close()
+        handlers.clear()
 
     def load_session(self, session_id: str) -> bool:
         """

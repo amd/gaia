@@ -83,7 +83,8 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                             data-section={s.id}
                             className={`settings-nav-item${section === s.id ? ' is-active' : ''}`}
                             aria-current={section === s.id ? 'page' : undefined}
-                            onClick={() => open(s.id)}
+                            // The focus ring follows the selection instead of staying on the tab focused at open.
+                            onClick={(e) => { e.currentTarget.focus(); open(s.id); }}
                         >
                             {s.label}
                         </button>

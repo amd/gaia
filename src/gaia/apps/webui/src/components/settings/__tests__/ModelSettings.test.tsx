@@ -42,10 +42,14 @@ beforeEach(() => {
     mockedApi.getSpending.mockResolvedValue({
         month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
     });
-    useChatStore.setState({ systemStatus: null, detectedDevices: ['gpu'] });
+    useChatStore.setState({ systemStatus: null });
     withProviders(fireworks());
     mockedApi.listProviderModels.mockResolvedValue({ provider: 'local', models: [] });
     mockedApi.getActiveModel.mockResolvedValue(LOCAL_ACTIVE);
+    mockedApi.getContextChoice.mockResolvedValue({
+        model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', chosen: null, automatic: 65536,
+        min: 65536, max_fit: 65536, options: [65536], loaded_ctx: null, memory_source: 'AMD iGPU', note: null,
+    });
 });
 
 describe('ModelSettings provider keys', () => {

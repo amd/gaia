@@ -827,6 +827,31 @@
     "title": "ConnectRequest",
     "type": "object"
   },
+  "ContextRequest": {
+    "description": "``ctx_size`` None returns the model to GAIA's automatic size.",
+    "properties": {
+      "ctx_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ctx Size"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "ContextRequest",
+    "type": "object"
+  },
   "CreateScheduleRequest": {
     "description": "Request to create a new scheduled task.",
     "properties": {
@@ -2882,6 +2907,68 @@
     "title": "QuickLink",
     "type": "object"
   },
+  "RestartRequest": {
+    "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "RestartRequest",
+    "type": "object"
+  },
+  "RunningAnswer": {
+    "description": "A chat whose answer is still being written.",
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "title": "RunningAnswer",
+    "type": "object"
+  },
+  "RunningIndexJob": {
+    "description": "A document still being indexed.",
+    "properties": {
+      "document_id": {
+        "title": "Document Id",
+        "type": "string"
+      },
+      "filename": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Filename"
+      }
+    },
+    "required": [
+      "document_id"
+    ],
+    "title": "RunningIndexJob",
+    "type": "object"
+  },
   "ScheduleListResponse": {
     "description": "List of scheduled tasks.",
     "properties": {
@@ -3468,6 +3555,17 @@
         "default": true,
         "title": "Context Size Sufficient",
         "type": "boolean"
+      },
+      "data_dir": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Data Dir"
       },
       "default_model_is_cloud": {
         "default": false,
@@ -4214,6 +4312,34 @@
     "title": "UndoSettings",
     "type": "object"
   },
+  "UnloadModelRequest": {
+    "properties": {
+      "model_name": {
+        "minLength": 1,
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "UnloadModelRequest",
+    "type": "object"
+  },
+  "UnloadModelResponse": {
+    "description": "The model server dropped its models from memory.",
+    "properties": {
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status"
+    ],
+    "title": "UnloadModelResponse",
+    "type": "object"
+  },
   "UpdateScheduleRequest": {
     "description": "Request to update a scheduled task.",
     "properties": {
@@ -4477,6 +4603,31 @@
       "state"
     ],
     "title": "WarmUpStatus",
+    "type": "object"
+  },
+  "WorkInProgress": {
+    "description": "Work that quitting or unloading the model would cut short.",
+    "properties": {
+      "answers": {
+        "items": {
+          "$ref": "#/components/schemas/RunningAnswer"
+        },
+        "title": "Answers",
+        "type": "array"
+      },
+      "indexing": {
+        "items": {
+          "$ref": "#/components/schemas/RunningIndexJob"
+        },
+        "title": "Indexing",
+        "type": "array"
+      }
+    },
+    "required": [
+      "answers",
+      "indexing"
+    ],
+    "title": "WorkInProgress",
     "type": "object"
   }
 }

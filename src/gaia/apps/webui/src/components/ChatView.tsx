@@ -4,6 +4,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { toolActiveLabel } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -26,6 +27,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -323,8 +325,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [setStreamContent, isStale]);
 
     // Load messages on mount, then poll for external changes (MCP, API)
-    const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastMsgCountRef = useRef<number>(0);
+    // Messages sent from this view; a history load that started before one must not replace it.
+    const sentRef = useRef<number>(0);
 
     useEffect(() => {
         log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
@@ -336,6 +339,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const loadMessages = async (isInitial = false) => {
             if (cancelled || loading) return;
             loading = true;
+            const sentBefore = sentRef.current;
             try {
                 if (!isInitial) {
                     if (useChatStore.getState().isStreaming) return;
@@ -345,7 +349,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 const data = await api.getMessages(sessionId);
                 if (cancelled) return;
                 const msgs = fromApiMessages(data.messages);
-                if (isInitial) {
+                if (isInitial && sentRef.current !== sentBefore) {
+                    // A message went out while this loaded; the turn's refetch, or after an error the next poll, syncs the list.
+                    lastMsgCountRef.current = msgs.length;
+                } else if (isInitial) {
                     setMessages(msgs);
                     lastMsgCountRef.current = msgs.length;
                     log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
@@ -369,11 +376,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         loadMessages(true);
 
-        // Poll every 3s for messages added by external tools (MCP API, etc.)
-        msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
+        // Poll every 3s for messages added by external tools (MCP API, etc.); not while hidden.
+        const stopPoll = setVisibleInterval(() => loadMessages(false), 3_000);
         return () => {
             cancelled = true;
-            if (msgPollRef.current) clearInterval(msgPollRef.current);
+            stopPoll();
         };
     }, [sessionId, setMessages, setLoadingMessages]);
 
@@ -578,6 +585,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 rag_sources: null,
             };
             addMessage(userMsg);
+            sentRef.current += 1;
         } else {
             log.chat.info(`Re-attaching to background run for session=${sessionId}${reconnect ? ` (reconnect ${reconnect})` : ''}`);
         }
@@ -947,7 +955,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
-                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
+                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // The client's own wait notice is not a step of the turn.
                     if (event.phase === 'waiting') return;
                     // Skip "Executing <tool>" messages - redundant with tool_start
@@ -993,7 +1001,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(event.tool ? `Running ${event.tool}` : 'Running a tool');
+                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool), 'tool');
                     }
                 }
             },
@@ -1702,7 +1710,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         inputRef={inputRef}
                         placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
-                        rightControls={<ModelChip disabled={isStreaming} />}
+                        rightControls={<ModelChip />}
                     />
                 </div>
             </div>

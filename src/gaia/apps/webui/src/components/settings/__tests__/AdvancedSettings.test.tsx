@@ -70,6 +70,7 @@ describe('AdvancedSettings', () => {
 
         expect(screen.getByText('Force Re-download')).toBeInTheDocument();
         expect(screen.getByText('Device')).toBeInTheDocument();
-        expect(screen.getByText('Context Size')).toBeInTheDocument();
+        // Context size lives in Settings › Model, sized to what fits (#5213).
+        expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
     });
 });

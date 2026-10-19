@@ -4,8 +4,8 @@
 """What the chat list needs from the backend (#5221): which chats wait on
 the user, how each last turn ended, unread, pin, and eval/scheduled kind."""
 
-import asyncio
 import sqlite3
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -161,22 +161,21 @@ def test_a_plain_api_turn_that_raises_records_failed(client):
     assert client.get(f"/api/sessions/{sid}").json()["last_run_status"] == "failed"
 
 
-def test_a_plain_api_turn_refused_before_it_ran_records_nothing():
-    from gaia.ui.turn_queue import TurnQueue
+def test_a_plain_api_turn_stopped_before_it_ran_records_nothing():
+    from gaia.ui.turn_queue import TurnCancelled, TurnQueue
 
     app = create_app(db_path=":memory:")
     sid = app.state.db.create_session(title="Mine")["id"]
     queue = TurnQueue()
 
-    async def _refused(awaitable, timeout):  # noqa: ARG001
-        awaitable.close()
-        raise asyncio.TimeoutError
+    async def _stopped_in_line(owner, *args, **kwargs):  # noqa: ARG001
+        raise TurnCancelled(owner)
 
     with (
         patch("gaia.ui.routers.chat.turn_queue", queue),
-        patch("gaia.ui.routers.chat.asyncio.wait_for", _refused),
+        patch.object(queue, "acquire", _stopped_in_line),
     ):
-        assert _send_plain(TestClient(app), sid).status_code == 429
+        assert _send_plain(TestClient(app), sid).status_code == 409
     row = app.state.db.get_session(sid)
     assert row["last_run_status"] is None and not row["unread"]
 
@@ -207,7 +206,72 @@ def test_handler_reports_what_the_turn_waits_on():
     h.set_relay_confirmation("r1")
     assert h.waiting_on() == "permission"
     h.set_relay_confirmation(None)
-    h._user_input_events["q1"] = object()
+    h._user_input_events["q1"] = threading.Event()
+    assert h.waiting_on() == "question"
+
+
+class _SlowBackOnTheModel:
+    """A turn slot whose way back onto the model waits until released."""
+
+    def __init__(self):
+        self.in_line = threading.Event()
+        self.admit = threading.Event()
+
+    def step_away(self):
+        return True
+
+    def come_back(self, cancelled):  # noqa: ARG002
+        self.in_line.set()
+        return self.admit.wait(5)
+
+
+def _answered_while_in_line(ask, answer):
+    """Run *ask* on a worker, answer it, and report waiting_on() while in line."""
+    h = SSEOutputHandler()
+    h.turn_slot = _SlowBackOnTheModel()
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault("r", ask(h)))
+    worker.start()
+    for _ in range(200):
+        if h.waiting_on():
+            break
+        threading.Event().wait(0.01)
+    assert h.waiting_on() is not None, "the prompt never registered"
+    answer(h)
+    assert h.turn_slot.in_line.wait(5)
+    seen = h.waiting_on()
+    h.turn_slot.admit.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    return seen, result["r"], h
+
+
+def test_an_answered_permission_is_not_needs_you_while_waiting_in_line():
+    seen, approved, h = _answered_while_in_line(
+        lambda h: h.confirm_tool_execution("write_file", {"file_path": "x"}, 30),
+        lambda h: h.resolve_tool_confirmation(True, confirm_id=h._confirm_id),
+    )
+    assert seen is None and approved is True and h.waiting_on() is None
+
+
+def test_an_answered_question_is_not_needs_you_while_waiting_in_line():
+    def answer(h):
+        with h._user_input_lock:
+            rid = next(iter(h._user_input_events))
+        assert h.resolve_user_input(rid, "blue")
+
+    seen, reply, h = _answered_while_in_line(
+        lambda h: h.request_user_input_blocking("Colour?", timeout_seconds=30),
+        answer,
+    )
+    assert seen is None and reply == "blue" and h.waiting_on() is None
+
+
+def test_a_second_question_still_waiting_keeps_the_chat_needing_you():
+    h = SSEOutputHandler()
+    answered, pending = threading.Event(), threading.Event()
+    answered.set()
+    h._user_input_events.update({"q1": answered, "q2": pending})
     assert h.waiting_on() == "question"
 
 

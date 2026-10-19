@@ -150,8 +150,8 @@ jobs:
 
       # A manifest can agree with the tag and STILL be a lie: the terminal hub
       # needs daemon host API v1.1, which released 0.22.0 does not serve.
-      # --verify-released re-reads what each release shipped from its published
-      # wheel, because this tree is ahead of all of them.
+      # The guard reads what each release shipped from its published PyPI wheel,
+      # because this tree is ahead of all of them.
       - name: Assert each component's declared minimum core can serve it
         shell: bash
         env:
@@ -159,9 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --quiet pyyaml
-          python util/check_component_core_api.py \
-            --verify-released \
-            --release-version "${VERSION}"
+          python util/check_component_core_api.py --release-version "${VERSION}"
 
   # ── Prove the Worker builds, before anything decides to deploy it ───────────
   # Runs on dry runs too, which is the point: the deploy job below is skipped on

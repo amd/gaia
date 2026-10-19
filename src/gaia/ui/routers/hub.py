@@ -135,8 +135,28 @@ def _run_install(
         )
     except installer_mod.InstallError as exc:
         logger.warning("hub: install of %s failed: %s", agent_id, exc)
-    except Exception:  # noqa: BLE001 - record then swallow in the worker
+        _record_failure(agent_id, version, exc)
+    except Exception as exc:  # noqa: BLE001 - record then swallow in the worker
         logger.exception("hub: unexpected error installing %s", agent_id)
+        _record_failure(agent_id, version, exc)
+
+
+def _record_failure(agent_id: str, version: Optional[str], exc: Exception) -> None:
+    """Give the poller a terminal state when install() failed before recording one.
+
+    InstallInProgressError (another process holds the slot) is raised before
+    install() writes any progress, so without this the UI polls "queued" forever.
+    """
+    state = installer_mod.get_install_status(agent_id)
+    if state is None or state.get("status") not in ("failed", "completed"):
+        installer_mod._set_progress(  # noqa: SLF001 - terminal state for the poller
+            agent_id,
+            status="failed",
+            phase="failed",
+            percent=0,
+            version=version,
+            error=str(exc),
+        )
 
 
 @router.post(
@@ -153,10 +173,12 @@ async def install_agent(
     id is running returns 409.
     """
     registry = _registry(request)
-    if installer_mod.is_installing(body.id):
+    # Checked across processes, before the email sidecar is stopped for nothing.
+    if installer_mod.install_in_progress(body.id):
         raise HTTPException(
             status_code=409,
-            detail=f"An install for '{body.id}' is already in progress.",
+            detail=f"An install for '{body.id}' is already in progress "
+            "(here or in another GAIA process). Wait for it to finish, then retry.",
         )
 
     # Resolve the manifest up front so native-agent trust is enforced
@@ -223,6 +245,8 @@ async def uninstall_agent(agent_id: str, request: Request):
         installer_mod.uninstall(agent_id, registry=registry)
     except installer_mod.NotInstalledError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except installer_mod.InstallInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except installer_mod.InstallError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": agent_id, "status": "uninstalled"}

@@ -26,6 +26,7 @@ export interface ApiSchemas {
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
+  ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   DiscoveryCommit: DiscoveryCommit;
@@ -74,6 +75,9 @@ export interface ApiSchemas {
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
+  RestartRequest: RestartRequest;
+  RunningAnswer: RunningAnswer;
+  RunningIndexJob: RunningIndexJob;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -103,11 +107,14 @@ export interface ApiSchemas {
   TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
   UndoSettings: UndoSettings;
+  UnloadModelRequest: UnloadModelRequest;
+  UnloadModelResponse: UnloadModelResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   WarmUpStatus: WarmUpStatus;
+  WorkInProgress: WorkInProgress;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -322,6 +329,13 @@ export interface ConnectRequest {
   auth_header_name?: string | null;
   auth_header_prefix?: string | null;
   base_url?: string | null;
+}
+/**
+ * ``ctx_size`` None returns the model to GAIA's automatic size.
+ */
+export interface ContextRequest {
+  ctx_size?: number | null;
+  model: string;
 }
 /**
  * Request to create a new scheduled task.
@@ -848,6 +862,26 @@ export interface PreflightReport {
   warnings?: string[];
 }
 /**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
+}
+/**
+ * A chat whose answer is still being written.
+ */
+export interface RunningAnswer {
+  session_id: string;
+  title?: string | null;
+}
+/**
+ * A document still being indexed.
+ */
+export interface RunningIndexJob {
+  document_id: string;
+  filename?: string | null;
+}
+/**
  * List of scheduled tasks.
  */
 export interface ScheduleListResponse {
@@ -977,6 +1011,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
+  data_dir?: string | null;
   default_model_is_cloud?: boolean;
   default_model_name?: string | null;
   default_model_size_gb?: number | null;
@@ -1077,6 +1112,15 @@ export interface UndoSettings {
   max_mb: number;
   retention_days: number;
 }
+export interface UnloadModelRequest {
+  model_name: string;
+}
+/**
+ * The model server dropped its models from memory.
+ */
+export interface UnloadModelResponse {
+  status: string;
+}
 /**
  * Request to update a scheduled task.
  */
@@ -1106,4 +1150,11 @@ export interface UserInputRequest {
   request_id: string;
   session_id: string;
   value: string;
+}
+/**
+ * Work that quitting or unloading the model would cut short.
+ */
+export interface WorkInProgress {
+  answers: RunningAnswer[];
+  indexing: RunningIndexJob[];
 }

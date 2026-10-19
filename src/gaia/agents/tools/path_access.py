@@ -10,6 +10,7 @@ The validator expands ``~`` and resolves ``..`` and symlinks before it decides.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.verification import NOT_EXECUTED
@@ -40,6 +41,33 @@ def read_access_error(
     if allowed:
         return None
     return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+
+def missing_file_error(path: Any) -> Dict[str, Any]:
+    """The error for a file that isn't there, with when to stop looking.
+
+    Without the stop, a model handed a wrong absolute path searched folder
+    after folder across the whole drive for minutes before telling the user.
+    """
+    path = str(path)
+    parent = os.path.dirname(path)
+    name = os.path.basename(path)
+    if parent and not os.path.exists(parent):
+        where = f" The folder '{parent}' does not exist either."
+    elif parent:
+        where = f" The folder '{parent}' exists, but the file is not in it."
+    else:
+        where = ""
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": (
+            f"File not found: {path}.{where} If the user may have the location "
+            f"wrong, run one file search for '{name}'. If that finds nothing, stop "
+            "and tell the user the file is not on this PC and ask where it is; "
+            "do not keep searching other folders or drives."
+        ),
+    }
 
 
 def write_access_error(

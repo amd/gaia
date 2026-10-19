@@ -15,6 +15,10 @@
 
 ## 0.2.0
 
+- A file copied or saved into a watched folder is reindexed once it has
+  finished being written, instead of at its first change, so search no longer
+  answers from a half-written copy. Reindexing runs off the file watcher's
+  thread, and `stop_watching` now stops it too.
 - When `generate_image` fails, the prompt asks for its error in a sentence or two
   instead of pointing at an `--sd` flag that does not exist.
 - Requires `amd-gaia>=0.25.0`, the first core release that ships

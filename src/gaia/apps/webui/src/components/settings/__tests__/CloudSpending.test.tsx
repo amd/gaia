@@ -54,6 +54,10 @@ beforeEach(() => {
     mockedApi.getSpending.mockResolvedValue(REPORT);
     mockedApi.setSpendingLimit.mockImplementation(async (limit) => ({ ...REPORT, limit_usd: limit, state: limit ? 'ok' : 'no_limit' }));
     mockedApi.allowSpendingThisMonth.mockResolvedValue({ ...REPORT, limit_usd: 1, state: 'allowed_over' });
+    mockedApi.getContextChoice.mockResolvedValue({
+        model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', chosen: null, automatic: 65536,
+        min: 65536, max_fit: 65536, options: [65536], loaded_ctx: null, memory_source: 'AMD iGPU', note: null,
+    });
 });
 
 describe('formatPrice', () => {

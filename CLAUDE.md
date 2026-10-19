@@ -223,7 +223,7 @@ live the moment that version publishes.
 For a hub agent package (`hub/agents/<id>/{npm,python}/`), the doc surfaces that
 must stay in sync are:
 
-- **`README.md`** — the canonical, integrator-facing doc (rendered on the hub + npm)
+- **`README.md`** — the canonical, integrator-facing doc (rendered on npm)
 - **`SPEC.md`** — the full technical reference
 - **`SKILL.md`** — the AI-assistant integration playbook (Claude Code, etc.)
 - **`CHANGELOG.md`** — the version entry describing the change
@@ -553,7 +553,7 @@ gaia/
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
 │   ├── governance/     # Governance / guardrails layer
-│   ├── hub/            # Agent Hub backend (catalog, install, package, publish)
+│   ├── hub/            # Download-server client: fetch, verify, install agent binaries (gaia init, daemon)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
@@ -581,7 +581,7 @@ gaia/
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
-├── hub/                # Agent Hub packages — agents/<id>/{npm,python}/, skills/, components/
+├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
 ├── scripts/            # Build, install, and launch scripts
 ├── util/               # Repo tooling (lint.py, check_doc_links.py, …)
@@ -739,7 +739,6 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia install` - Install helper (e.g. Lemonade on first run)
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
 - `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
-- `gaia hub` - Browse, install, and uninstall agents from the Agent Hub
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
@@ -748,7 +747,15 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia stats` - Show statistics from the most recent run
 - `gaia memory` - Manage agent memory (onboarding bootstrap, status)
 - `gaia diagnostics` - Bundle logs + system info into a tarball for bug reports
-- `gaia agent {init|version|test|pack|publish|configure|health|status|login|export|import|install|list}` - Author and manage agents
+- `gaia agent {test|configure|health|status|export|import|install|list}` - Manage agents
+
+`gaia hub` and `gaia agent {init|version|pack|publish|login}` still work for scripts
+and release tooling but are hidden from `gaia -h`. **There is no user-facing Agent
+Hub:** GAIA is one agent (the flagship) reached through two apps, the TUI and the
+Agent UI. Don't propose catalog, browse or publish-your-agent features, and don't
+name `gaia hub` in user-facing fix hints — a missing flagship is fixed by `gaia init`.
+`hub.amd-gaia.ai` remains the download server behind `gaia init`, the daemon and
+the installers.
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
@@ -858,7 +865,7 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 **Read the matching skill before starting related work.** Every skill under
 `.claude/skills/<name>/SKILL.md` is auto-discovered by its `description` and invoked with
 the `Skill` tool — run `ls .claude/skills/` to see the current set. They cover releases,
-testing, hub-agent porting and integration, eval scorecards, the weekly audit workflow,
+testing, hub-agent integration, eval scorecards, the weekly audit workflow,
 LemonadeClient changes, GitHub responses, and presentations.
 
 This list is deliberately not enumerated here — a hand-maintained copy drifts the moment

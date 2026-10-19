@@ -66,30 +66,43 @@ def _now() -> str:
 
 
 class _Tokenizer:
-    """cl100k when available, a measured char ratio otherwise.
+    """cl100k when available; otherwise an estimate that leans high.
 
-    Absolute counts differ from Gemma's own tokenizer either way — what this is
-    used for is ratios and deltas (how much a prompt shrank, what fraction of a
-    prompt was cache-eligible), and both estimators preserve those.
+    History trimming and context eviction read this as a size, so the fallback
+    must not undercount: JSON and CJK text run far below 4.28 chars a token, and
+    one token is never more than three UTF-8 bytes of ordinary text (#5066).
     """
 
     def __init__(self) -> None:
         self._enc = None
-        self.name = f"chars/{_CHARS_PER_TOKEN}"
+        self.name = f"max(chars/{_CHARS_PER_TOKEN}, utf8_bytes/3)"
         try:
             import tiktoken
 
             self._enc = tiktoken.get_encoding("cl100k_base")
             self.name = "tiktoken:cl100k_base"
-        except Exception as e:  # noqa: BLE001 - optional dep, name records which
-            logger.debug("tiktoken unavailable, using char-ratio estimate: %s", e)
+        except Exception as e:  # noqa: BLE001 - load failure is named, not hidden
+            logger.warning(
+                "Token counts fall back to an estimate that may overcount: the "
+                "cl100k_base tokenizer data could not load (%s). Check network or "
+                "proxy access, or set TIKTOKEN_CACHE_DIR to a folder holding it.",
+                e,
+            )
 
     def count(self, text: str) -> int:
         if not text:
             return 0
         if self._enc is not None:
-            return len(self._enc.encode(text, disallowed_special=()))
-        return round(len(text) / _CHARS_PER_TOKEN)
+            try:
+                return len(self._enc.encode(text, disallowed_special=()))
+            except UnicodeEncodeError:
+                # Lone surrogates (leniently decoded bytes): count them as U+FFFD.
+                text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+                return len(self._enc.encode(text, disallowed_special=()))
+        return max(
+            round(len(text) / _CHARS_PER_TOKEN),
+            -(-len(text.encode("utf-8", "surrogatepass")) // 3),
+        )
 
 
 _TOKENIZER: Optional[_Tokenizer] = None
