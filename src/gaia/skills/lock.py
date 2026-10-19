@@ -69,7 +69,7 @@ from typing import Any, Iterator, Optional
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillValidationError
-from gaia.utils.file_lock import FileLockError, file_lock
+from gaia.utils.file_lock import FileLockError, file_lock, lock_dir_unwritable
 from gaia.utils.file_lock import write_text_atomic as _write_text_atomic
 
 log = get_logger(__name__)
@@ -189,8 +189,7 @@ class SkillLock:
         if not path.is_file():
             return cls(entries={}, path=path)
         try:
-            with _hold(path):
-                data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(_read_shared(path))
         except FileNotFoundError:
             return cls(entries={}, path=path)
         except (OSError, json.JSONDecodeError) as exc:
@@ -284,6 +283,17 @@ def _hold(path: Path) -> Iterator[None]:
             yield
     except FileLockError as exc:
         raise SkillLockBusyError(str(exc)) from exc
+
+
+def _read_shared(path: Path) -> str:
+    """Read *path* under its lock; a read-only skills root is read without it."""
+    try:
+        with file_lock(path):
+            return path.read_text(encoding="utf-8")
+    except FileLockError as exc:
+        if not lock_dir_unwritable(exc):
+            raise SkillLockBusyError(str(exc)) from exc
+    return path.read_text(encoding="utf-8")
 
 
 def lock_path(skills_root: Path) -> Path:

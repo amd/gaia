@@ -24,6 +24,7 @@ The lock is an OS advisory lock on ``<name>.lock`` beside the target
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 import threading
@@ -52,6 +53,18 @@ class FileLockError(OSError):
 
 class FileLockTimeout(FileLockError, TimeoutError):
     """Another process held a file's lock for longer than the caller would wait."""
+
+
+def lock_dir_unwritable(error: FileLockError) -> bool:
+    """True when *error* means only that the lock file's directory is read-only.
+
+    No process can rename a new file into such a directory, so a caller that
+    only reads may then read without the lock and still never see a partial file.
+    """
+    cause = error.__cause__
+    return isinstance(cause, PermissionError) or (
+        isinstance(cause, OSError) and cause.errno == errno.EROFS
+    )
 
 
 def lock_path_for(target: Union[str, Path]) -> Path:

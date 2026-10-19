@@ -226,6 +226,28 @@ def test_config_save_writes_only_what_this_instance_changed(tmp_path):
     assert doc["default_model"] == "picked-elsewhere"
 
 
+@pytest.mark.parametrize("parent_exists", [True, False])
+def test_config_loaded_before_the_file_exists_keeps_a_later_save(
+    tmp_path, parent_exists
+):
+    """First run: a config loaded from no file must not write its defaults over
+    a key another process saved after the load."""
+    from gaia.config import GaiaConfig
+
+    path = tmp_path / "gaia" / "config.json"
+    if parent_exists:
+        path.parent.mkdir()
+    early = GaiaConfig.load(path)
+    GaiaConfig.save_key("default_model", "picked-elsewhere", path)
+
+    early.lemonade_mode = "external"
+    early.save(path)
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["lemonade_mode"] == "external"
+    assert doc["default_model"] == "picked-elsewhere"
+
+
 def test_config_loads_from_a_directory_it_cannot_write(tmp_path, monkeypatch):
     """No lock file can be made there, and no writer can replace the file either."""
     import errno
@@ -428,15 +450,21 @@ def test_rag_first_run_callers_agree_on_one_hmac_key(tmp_path, monkeypatch):
 
 
 _RAG_CACHE_WORKER = _RAG_SIGNER + """
-import sys, time
+import os, sys, time
 signer = make_signer()
 role, cache_path, writes = sys.argv[1], sys.argv[2], int(sys.argv[3])
+# Written by the reader once enough reads overlapped; on a fast runner a fixed
+# number of writes can finish before the reader's first read returns.
+enough = sys.argv[4]
 failures = reads = 0
 together()
 if role == "write":
-    for i in range(writes):
+    i = 0
+    deadline = time.monotonic() + 60
+    while i < writes or (not os.path.exists(enough) and time.monotonic() < deadline):
         data = {"chunks": [str(i) * 2000], "full_text": "", "metadata": {}}
         signer._save_cache(cache_path, data)
+        i += 1
     finished()
 else:
     while not others_finished():
@@ -446,6 +474,8 @@ else:
         except Exception as e:
             failures += 1
             last = repr(e)
+        if reads == 50:
+            open(enough, "w").close()
 print(failures, reads)
 if failures:
     print(last, file=sys.stderr)
@@ -455,17 +485,22 @@ if failures:
 def test_rag_cache_reader_never_sees_a_half_written_cache(tmp_path):
     cache_path = tmp_path / "rag" / "doc.json"
     cache_path.parent.mkdir()
+    enough = str(tmp_path / "enough-reads")
     # One write first, so both racers share the HMAC key and an initial cache.
+    seed_enough = str(tmp_path / "seed-enough")
+    Path(seed_enough).touch()
     (seed,) = _race(
-        tmp_path, [(_RAG_CACHE_WORKER, "write", str(cache_path), "1")], tag="seed"
+        tmp_path,
+        [(_RAG_CACHE_WORKER, "write", str(cache_path), "1", seed_enough)],
+        tag="seed",
     )
     assert _finish([seed])[0][0] == 0
 
     procs = _race(
         tmp_path,
         [
-            (_RAG_CACHE_WORKER, "write", str(cache_path), "400"),
-            (_RAG_CACHE_WORKER, "read", str(cache_path), "0"),
+            (_RAG_CACHE_WORKER, "write", str(cache_path), "400", enough),
+            (_RAG_CACHE_WORKER, "read", str(cache_path), "0", enough),
         ],
     )
     (w_rc, _, w_err), (r_rc, r_out, r_err) = _finish(procs)

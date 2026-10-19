@@ -156,3 +156,32 @@ def test_failed_swap_names_what_to_close(marketplace, tmp_path, monkeypatch):
         marketplace.install("epsilon", force=True)
     monkeypatch.undo()
     assert "version: 1.0.0" in (target / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_lock_reads_from_a_skills_root_it_cannot_write(tmp_path, monkeypatch):
+    """A read must not need to create the lock file in a read-only root."""
+    import errno
+    import json
+    import os
+
+    from gaia.skills.lock import LOCK_SCHEMA_VERSION, lock_path
+    from gaia.utils import file_lock as file_lock_mod
+
+    lock_path(tmp_path).write_text(
+        json.dumps(
+            {
+                "schema_version": LOCK_SCHEMA_VERSION,
+                "skills": {"demo": {"name": "demo", "version": "1.0.0"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_open = os.open
+
+    def read_only_dir(name, flags, *args):
+        if str(name).endswith(".lock"):
+            raise PermissionError(errno.EACCES, "Permission denied", str(name))
+        return real_open(name, flags, *args)
+
+    monkeypatch.setattr(file_lock_mod.os, "open", read_only_dir)
+    assert SkillLock.load(tmp_path).get("demo").version == "1.0.0"

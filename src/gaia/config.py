@@ -9,7 +9,6 @@ LemonadeManager, the CLI model resolver, and the Agent UI.
 Stored at ``~/.gaia/config.json``.
 """
 
-import errno
 import json
 import logging
 import os
@@ -18,17 +17,14 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Iterator, List, Optional
 
-from gaia.utils.file_lock import FileLockError, file_lock, write_text_atomic
+from gaia.utils.file_lock import (
+    FileLockError,
+    file_lock,
+    lock_dir_unwritable,
+    write_text_atomic,
+)
 
 log = logging.getLogger(__name__)
-
-
-def _cannot_create_in(error: FileLockError) -> bool:
-    """True when the lock failed only because its directory is not writable."""
-    cause = error.__cause__
-    return isinstance(cause, PermissionError) or (
-        isinstance(cause, OSError) and cause.errno == errno.EROFS
-    )
 
 
 def gaia_home() -> Path:
@@ -331,18 +327,18 @@ class GaiaConfig:
         """
         config_file = cls.config_path(path)
         if not config_file.parent.is_dir():
-            return cls()
+            return cls()._snapshot()
         try:
             with file_lock(config_file):
                 text = cls._read_text(config_file)
         except FileLockError as e:
-            if not _cannot_create_in(e):
+            if not lock_dir_unwritable(e):
                 raise GaiaConfigError(str(e)) from e
             # No process can rename a new config into a directory this one
             # cannot write, so an unlocked read cannot see a partial file.
             text = cls._read_text(config_file)
         if text is None:
-            return cls()
+            return cls()._snapshot()
         return cls._from_doc(cls._parse_doc(text, config_file), config_file)
 
     @staticmethod
@@ -423,7 +419,10 @@ class GaiaConfig:
 
     def _snapshot(self) -> "GaiaConfig":
         """Record the values as read, so :meth:`save` writes only what changed."""
-        self._loaded = {f.name: getattr(self, f.name) for f in fields(self)}
+        # Per-instance on purpose; the ClassVar keeps it out of fields().
+        self._loaded = {  # type: ignore[misc]
+            f.name: getattr(self, f.name) for f in fields(self)
+        }
         return self
 
     def _changed(self) -> dict:
