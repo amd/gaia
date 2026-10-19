@@ -221,7 +221,7 @@
 }
 
 .sb-dot.is-running {
-    animation: sb-dot-pulse 1.4s ease-in-out infinite;
+    animation: sb-dot-pulse var(--duration-pulse) var(--ease-in-out) infinite;
 }
 
 .sb-dot.is-queued {

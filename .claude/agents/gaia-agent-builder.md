@@ -97,7 +97,7 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 - [ ] `__init__.py` exposes `build_registration()` returning an `AgentRegistration`, with the agent module imported *inside* the factory so discovery stays cheap
 - [ ] Factory wraps the class with `class_factory(...)`, which filters kwargs to valid dataclass fields
 - [ ] `gaia-agent.yaml` present next to `pyproject.toml` (id, name, version, models, `interfaces:`, `requirements:`) — this is what the hub catalog renders
-- [ ] Adding it to AMD's published set? Append the distribution name to `AGENT_WHEEL_PACKAGES` in `setup.py`; `util/list_agent_packages.py` and the publish workflow read from there
+- [ ] Adding it to AMD's published set? Append the distribution name to `AGENT_WHEEL_PACKAGES` in `setup.py`; `util/list_agent_packages.py` and `build_agent_package.yml` read from there
 
 ### 4. CLI (optional)
 - [ ] Add a subparser in `src/gaia/cli.py` and document in `docs/reference/cli.mdx` — see `cli-developer` for the pattern

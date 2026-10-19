@@ -1128,6 +1128,19 @@ class TestBuildScenarioPrompt:
         )
         assert "test_doc" in prompt
 
+    def test_prompt_answers_permission_prompts_narrowly(self):
+        from gaia.eval.runner import build_scenario_prompt
+
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:4200"
+        )
+        flat = " ".join(prompt.split())
+        assert "start_message(" in flat
+        assert "answer_prompt(" in flat
+        assert 'Never answer "always"' in flat
+        assert 'always "deny", even if the turn objective says otherwise' in flat
+        assert "send_message(" not in flat
+
 
 class TestRunScenarioSubprocess:
     """Tests for run_scenario_subprocess JSON parsing via mocked subprocess."""
@@ -1149,7 +1162,7 @@ class TestRunScenarioSubprocess:
         mock_proc.stdout = stdout
         mock_proc.stderr = stderr
         mock_proc.returncode = returncode
-        mocker.patch("subprocess.run", return_value=mock_proc)
+        mocker.patch("gaia.eval.runner._run_driver", return_value=mock_proc)
 
         with tempfile.TemporaryDirectory() as tmp:
             return run_scenario_subprocess(
@@ -2802,7 +2815,7 @@ class TestRunner:
         from gaia.eval.runner import run_scenario_subprocess
 
         mocker.patch(
-            "subprocess.run",
+            "gaia.eval.runner._run_driver",
             side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=30),
         )
 
@@ -2917,7 +2930,7 @@ class TestRunner:
         mock_proc.stdout = json.dumps(budget_error)
         mock_proc.stderr = ""
         mock_proc.returncode = 0
-        mocker.patch("subprocess.run", return_value=mock_proc)
+        mocker.patch("gaia.eval.runner._run_driver", return_value=mock_proc)
 
         scenario_data = {
             "id": "budget_test",
@@ -3031,7 +3044,7 @@ class TestScorecardPublicAPI:
         mock_proc.stdout = json.dumps(payload)
         mock_proc.stderr = ""
         mock_proc.returncode = 0
-        mocker.patch("subprocess.run", return_value=mock_proc)
+        mocker.patch("gaia.eval.runner._run_driver", return_value=mock_proc)
 
         scenario_data = {
             "id": "multi_turn",

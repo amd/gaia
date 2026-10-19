@@ -184,6 +184,21 @@ class TestErrorEnvelopeCallers:
             result = index_document(filepath="/tmp/x.txt", session_id="sess-1")
         assert "linked_to_session" not in result
 
+    def test_index_document_outlasts_a_slow_index(self):
+        """A large PDF takes minutes to embed; a 120 s client timeout made the
+        driver retry, and every retry re-embedded the document from scratch."""
+        pytest.importorskip("mcp")
+        mcp = self._build_server()
+        index_document = mcp._tool_manager._tools["index_document"].fn
+        resp = MagicMock()
+        resp.json.return_value = {"id": "doc-1", "chunk_count": 6110}
+        resp.raise_for_status.return_value = None
+        with patch("requests.post", return_value=resp) as post:
+            index_document(filepath="/tmp/big.pdf")
+        url = post.call_args.args[0]
+        assert url.endswith("/api/documents/upload-path")
+        assert post.call_args.kwargs["timeout"] >= 600
+
 
 class TestStreamChatModelPin:
     """The /api/chat/send model pin must be provider-aware (eval plan §5c).

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """An eval-only stand-in for a user who says no, then stops answering.
 
-The agent eval drives the Agent UI over HTTP with ``GAIA_AUTO_APPROVE_TOOLS=1``,
-so nothing in it can ever decline a tool — and what the agent does *after* a
+The ``gaia_*`` eval lanes drive the Agent UI with ``GAIA_AUTO_APPROVE_TOOLS=1``,
+so nothing in them can ever decline a tool — and what the agent does *after* a
 "no" is exactly what #4447 needs measured. While a script is set, a shell
 command whose effect matches one of the declined commands is denied the same
 way a user's No is, and every question goes unanswered, as in the run that
