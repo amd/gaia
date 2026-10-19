@@ -14,8 +14,8 @@ Two things these tests deliberately do NOT mock:
 
 import os
 import subprocess
-import time
 import sys
+import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
