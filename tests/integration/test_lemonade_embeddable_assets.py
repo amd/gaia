@@ -23,7 +23,7 @@ import urllib.request
 
 import pytest
 
-from gaia.installer.lemonade_installer import INSTALLER_SHA256
+from gaia.installer.lemonade_installer import INSTALLER_SHA256, LEGACY_MSI_SHA256
 from gaia.llm.lemonade_embedded import _ASSET_TEMPLATES, EMBEDDABLE_SHA256
 from gaia.version import LEMONADE_VERSION
 
@@ -118,4 +118,45 @@ def test_pinned_installer_digest_matches_the_published_asset(published_digests, 
     assert INSTALLER_SHA256[key] == published_digests[name], (
         f"Pinned digest for '{key}' is stale. Update INSTALLER_SHA256 to "
         f"'{published_digests[name]}'."
+    )
+
+
+@pytest.fixture(scope="module")
+def every_release_digest():
+    """Map ``v<tag>/<asset>`` -> sha256 hex for every published release."""
+    if not _github_reachable():
+        pytest.skip("GitHub is unreachable")
+    digests = {}
+    page = 1
+    while True:
+        url = (
+            "https://api.github.com/repos/lemonade-sdk/lemonade/releases"
+            f"?per_page=100&page={page}"
+        )
+        request = urllib.request.Request(url, headers={"User-Agent": "GAIA/1.0"})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                releases = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                pytest.skip("GitHub API rate limit reached")
+            raise
+        if not releases:
+            return digests
+        for release in releases:
+            for asset in release.get("assets", []):
+                digest = asset.get("digest") or ""
+                if digest.startswith("sha256:"):
+                    key = f"{release['tag_name']}/{asset['name']}"
+                    digests[key] = digest.split(":", 1)[1]
+        page += 1
+
+
+@pytest.mark.parametrize("key", sorted(LEGACY_MSI_SHA256))
+def test_legacy_msi_pin_matches_the_published_asset(every_release_digest, key):
+    """Uninstalling an older Lemonade verifies its MSI against these pins."""
+    assert key in every_release_digest, f"No published digest for {key}."
+    assert LEGACY_MSI_SHA256[key] == every_release_digest[key], (
+        f"LEGACY_MSI_SHA256 pins {key} to a digest the release does not publish "
+        f"('{every_release_digest[key]}')."
     )

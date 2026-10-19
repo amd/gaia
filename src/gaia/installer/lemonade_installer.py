@@ -58,6 +58,55 @@ INSTALLER_SHA256 = {
     "v2026.40.0/Lemonade-2026.40.0-Darwin.pkg": "0502d82967b1281580074a622380b1bb03fcbd8faf54466a568e811ebd99485f",
 }
 
+# The Windows installers of every older release GAIA supports (back to
+# LEMONADE_MIN_VERSION). Uninstalling an older Lemonade can fall back to
+# downloading its MSI, which is verified like any other download. Append-only:
+# a version bump moves the outgoing version's two MSI pins here.
+LEGACY_MSI_SHA256 = {
+    "v10.2.0/lemonade-server-minimal.msi": "d4c368d02c124df406c25c4e477cf6c4da7d5d635b8e5e7ba1a9acf80eba3899",
+    "v10.2.0/lemonade.msi": "333d8b11efd3c023fe7c526c41f07bcf2100a94f89078e95f24ed710a9bcb5c7",
+    "v10.3.0/lemonade-server-minimal.msi": "221b0f8867e55366b538f82485a13f381b3a677c988f8cc651c7c6ac09f87b20",
+    "v10.3.0/lemonade.msi": "51bd15a6a622619d2786d708bce9c0fb274b0f1e037d1bd529831d0f5d6bd2de",
+    "v10.4.0/lemonade-server-minimal.msi": "690a8a0a72ada5abb1dd80f023dee35ff40985c4aee1bf2ca33a9845cf4de000",
+    "v10.4.0/lemonade.msi": "20f405484a64e7fb79e9f09d087460abe0ffe4f732a4f069b99c42a06951402b",
+    "v10.5.0/lemonade-server-minimal.msi": "ccc364bcc892159573d487857dbc9904c7a419fc41ec5fe25b13ac0ea8c5514d",
+    "v10.5.0/lemonade.msi": "36c52861703c00a226ca19404e6398d54a2917f623b00dee233ac2def53d58d6",
+    "v10.5.1/lemonade-server-minimal.msi": "44e569b04fb31583e700b6b647b9d6447e71a42c00c7fa80bd8ee489b6a0b50d",
+    "v10.5.1/lemonade.msi": "870af98831dbdb5b5f620895b5709bbc4fff528443007f4127c156980442bb44",
+    "v10.6.0/lemonade-server-minimal.msi": "e3a3d6c426b543af5944614444754adda3fce5851698bde56279a837fd80559a",
+    "v10.6.0/lemonade.msi": "8682d96db5d990385b892539c3f88c6eaded3e42ec6b8ab1779447e31d21ab6c",
+    "v10.7.0/lemonade-server-minimal.msi": "7b54969af637b250f4185390beb9670a81b880127e5808b4e1e4e55aadf49164",
+    "v10.7.0/lemonade.msi": "4b2f61d4fa8c501e278a40c77d4c847194af93f7bbfb9b1c38f04dd9bc2a8977",
+    "v10.8.0/lemonade-server-minimal.msi": "e2b54f5a523f9da0fa01bd36cf11795680ece705b127b150ee6590ea0f1e46b7",
+    "v10.8.0/lemonade.msi": "81118e6a97c2b537216cf49a0a4b74463b97ed02a41ea0aa05e2928446fba979",
+    "v10.8.1/lemonade-server-minimal.msi": "741072f1ec1d1a9666d7ee0f0e42cc24d8c37c17469fbe5d78d63277ccc65a31",
+    "v10.8.1/lemonade.msi": "73b8869ff49e818a54efa9587ef7dd14777a172f7b90325fe1845388a5c5f408",
+    "v10.9.0/lemonade-server-minimal.msi": "4293f6732810566b63eef66d28b4b9ed4cf97bc08da9810c124bfe57bbf1dcfd",
+    "v10.9.0/lemonade.msi": "047b4b69a6b02f4a4f9fe8db00af9a9cabc72198b48c8096cfbee1a602157e8b",
+    "v10.10.0/lemonade-server-minimal.msi": "9699024ec430785cabbc623a0c55b2da8001c1c4776f5f1a0c66cddca0210eb3",
+    "v10.10.0/lemonade.msi": "e3307e1077a56819044afe64c884b3346d87404059ce1b976b0c37353934347b",
+    "v11.0.0/lemonade-server-minimal.msi": "771b9df062017b30af1bf2b804afc1f0c80a3499bbe7d60ea51393b73e38f521",
+    "v11.0.0/lemonade.msi": "ecf07bda142f72e742d81e461e2fc3cbe7fa5f6e7348f5b6dc94ba918ec731bb",
+    "v11.5.0/lemonade-server-minimal.msi": "4611119c862a33f7d9e8cefab16b7a2d4ebac000064ba5310e2b7bc6a9ee72f4",
+    "v11.5.0/lemonade.msi": "29c44042033205b9e993c5d9111e4581465d57f364af4a556e0e7b835b1619bc",
+    "v11.5.1/lemonade-server-minimal.msi": "5b241c166942c8a0511b199b8412b8dc105d7ef8fb32aac67878732573b32fea",
+    "v11.5.1/lemonade.msi": "62380b92ec6ea2c5b01961d4ea11c41af83d2aa94f80b5835895efd5369f58aa",
+    "v11.5.2/lemonade-server-minimal.msi": "2e6329f538ccaca30a81c4dac51f7e88c6c9864ad868a33f66c00634f65a8fe0",
+    "v11.5.2/lemonade.msi": "62cccf94cf4bfd4abd99c2a24101901bb1078640e2973aee3594a9c8a9e578b2",
+    "v11.6.0/lemonade-server-minimal.msi": "1fd3f77691d168c57e9552488dcb293e9f7e783f0ee00e3b9df44c8740a31549",
+    "v11.6.0/lemonade.msi": "76f2dc7215515ebc5f9dc849ab37e467ff7abc8ef6af3577d5c8b25f35175612",
+    "v11.7.0/lemonade-server-minimal.msi": "8b59d9e9a9faa7f3e6f84fb2497681d585cd661ef9037711d9ae570a1fc95927",
+    "v11.7.0/lemonade.msi": "1b5941ca2885c839cf7b3359dd3e15ee28658fe4d23c825bf14c60f78c83639b",
+    "v11.8.0/lemonade-server-minimal.msi": "eac1e709c12fa7a4ca03af5d9a4e992000f9d6ae6c5663b8be746f059f1f9f7b",
+    "v11.8.0/lemonade.msi": "8466f9d423f26273026e0cec7e5aef574a4a2c82293d897b9d01ae5f4465aec1",
+    "v11.8.1/lemonade-server-minimal.msi": "e9f993b541c7495d18b6ee77a683df8d533dba70442ae36cee4b02cf952c95a1",
+    "v11.8.1/lemonade.msi": "1f0510a2dbe62b7456b80da635f2f123cdf8e25a08feeaa4863e4203c9aa2bb5",
+    "v11.9.0/lemonade-server-minimal.msi": "d194c67b3f8a9bcc8e3ed1109c512191ec82130190fba61a0e5adac44efceb98",
+    "v11.9.0/lemonade.msi": "f105e07e12c8c5fa2f54807532ed6fdda13708ca00a3619f24fcb3b7f08c4451",
+    "v2026.39.1/lemonade-server-minimal.msi": "0a6bdc9e49ef819e17f29d4432fa1c78f363cb086d64ffd661b1553de16f09b7",
+    "v2026.39.1/lemonade.msi": "8e778d01b6e5fe10dbee6bc017e58b1b9b35758b7507c1b188d99ba77906d838",
+}
+
 # platform.machine() varies by OS/libc for the same hardware.
 DEB_ARCH_BY_MACHINE = {
     "x86_64": "amd64",
@@ -163,8 +212,12 @@ class InstallResult:
 _MSI_SUCCESS_REBOOT_REQUIRED = (3010, 1641)
 
 
-class _DownloadIntegrityError(Exception):
-    """A downloaded installer is truncated or fails its checksum."""
+class InstallerIntegrityError(RuntimeError):
+    """A downloaded installer is truncated or fails its pinned checksum."""
+
+
+class UnpinnedInstallerError(RuntimeError):
+    """No SHA-256 is pinned for this installer, so GAIA will not fetch it."""
 
 
 def discard_download(path: Path) -> None:
@@ -490,14 +543,18 @@ class LemonadeInstaller:
             Path to downloaded installer
 
         Raises:
-            RuntimeError: If download fails, is truncated, fails its checksum,
-                or the version has no pinned checksum
+            UnpinnedInstallerError: The version has no pinned checksum.
+            InstallerIntegrityError: The download is truncated or fails its
+                checksum.
+            RuntimeError: The download fails.
         """
         url = self.get_download_url()
         release_key = url[len(GITHUB_RELEASE_BASE) + 1 :]
-        expected_sha256 = INSTALLER_SHA256.get(release_key)
+        expected_sha256 = INSTALLER_SHA256.get(release_key) or LEGACY_MSI_SHA256.get(
+            release_key
+        )
         if expected_sha256 is None:
-            raise RuntimeError(
+            raise UnpinnedInstallerError(
                 f"No pinned SHA-256 for the Lemonade installer {release_key}. "
                 "GAIA only runs an installer it can verify; the pins in "
                 "INSTALLER_SHA256 (src/gaia/installer/lemonade_installer.py) "
@@ -526,13 +583,23 @@ class LemonadeInstaller:
 
         self._print_status(f"Downloading from {url}")
 
+        # Deleted on every way out but success, Ctrl-C included.
+        completed = False
         try:
-            # Create request with User-Agent header
+            self._fetch_verified(url, dest_path, expected_sha256)
+            completed = True
+        finally:
+            if not completed:
+                discard_download(dest_path)
+        self._print_status(f"Downloaded to {dest_path}")
+        return dest_path
+
+    def _fetch_verified(self, url: str, dest_path: Path, expected_sha256: str) -> None:
+        """Stream *url* into *dest_path*, then check its length and SHA-256."""
+        try:
             request = urllib.request.Request(
                 url, headers={"User-Agent": "GAIA-Installer/1.0"}
             )
-
-            # Download with progress reporting
             with urllib.request.urlopen(request, timeout=300) as response:
                 total_size = int(response.headers.get("content-length", 0))
                 downloaded = 0
@@ -550,52 +617,37 @@ class LemonadeInstaller:
 
                         if self.progress_callback:
                             self.progress_callback(downloaded, total_size)
-
-            if total_size and downloaded != total_size:
-                raise _DownloadIntegrityError(
-                    f"Download of {url} ended after {downloaded} of {total_size} "
-                    "bytes. The connection dropped mid-transfer; retry the "
-                    "install."
-                )
-            actual = digest.hexdigest()
-            if actual != expected_sha256:
-                raise _DownloadIntegrityError(
-                    f"The Lemonade installer from {url} failed its SHA-256 check: "
-                    f"expected {expected_sha256}, got {actual}. The download is "
-                    "corrupt or was altered in transit (a proxy rewriting it?). "
-                    f"Retry, or download it by hand from {self.release_page_url}."
-                )
-            self._print_status(f"Downloaded to {dest_path}")
-            return dest_path
-
-        except _DownloadIntegrityError as e:
-            dest_path.unlink(missing_ok=True)
-            raise RuntimeError(str(e)) from e
         except urllib.error.HTTPError as e:
-            dest_path.unlink(missing_ok=True)
             if e.code == 404:
                 raise LemonadeAssetError(
                     self._missing_asset_error(url, "was not found (HTTP 404)"),
                     definitive=True,
                 ) from e
-            raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}")
+            raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}") from e
         except urllib.error.URLError as e:
-            dest_path.unlink(missing_ok=True)
-            raise RuntimeError(f"Download failed: {e.reason}")
+            raise RuntimeError(f"Download failed: {e.reason}") from e
         except (ConnectionError, TimeoutError) as e:
-            dest_path.unlink(missing_ok=True)
             # http.client.RemoteDisconnected escapes URLError - see do_open().
             raise RuntimeError(
                 f"Download of {url} dropped mid-transfer: {e}. This is usually a "
                 f"transient network failure - retry the install."
             ) from e
         except Exception as e:
-            dest_path.unlink(missing_ok=True)
-            raise RuntimeError(f"Download failed: {e}")
-        except BaseException:
-            # Ctrl-C mid-download: the unique name means no later run reclaims it.
-            dest_path.unlink(missing_ok=True)
-            raise
+            raise RuntimeError(f"Download failed: {e}") from e
+
+        if total_size and downloaded != total_size:
+            raise InstallerIntegrityError(
+                f"Download of {url} ended after {downloaded} of {total_size} "
+                "bytes. The connection dropped mid-transfer; retry the install."
+            )
+        actual = digest.hexdigest()
+        if actual != expected_sha256:
+            raise InstallerIntegrityError(
+                f"The Lemonade installer from {url} failed its SHA-256 check: "
+                f"expected {expected_sha256}, got {actual}. The download is "
+                "corrupt or was altered in transit (a proxy rewriting it?). "
+                f"Retry, or download it by hand from {self.release_page_url}."
+            )
 
     def install(
         self, installer_path: Optional[Path] = None, silent: bool = True
@@ -1260,9 +1312,9 @@ class LemonadeInstaller:
                 )
 
             installed_version = info.version.lstrip("v")
+            failures = []
 
             # Try both minimal and full MSI variants
-            variant_errors = []
             for use_minimal in [True, False]:
                 variant = "minimal" if use_minimal else "full"
                 try:
@@ -1315,22 +1367,26 @@ class LemonadeInstaller:
                             success=False,
                             error=f"msiexec failed with code {result.returncode}: {result.stderr}",
                         )
+                except (UnpinnedInstallerError, InstallerIntegrityError) as e:
+                    # GAIA will not run an installer it cannot verify.
+                    return InstallResult(
+                        success=False,
+                        error=f"Could not uninstall Lemonade Server v{installed_version}: "
+                        f"{e} Uninstall it from Windows Settings > Apps, or upgrade "
+                        f"to v{LEMONADE_VERSION} first with `gaia init` and retry.",
+                    )
                 except Exception as e:
-                    log.debug(f"Failed to uninstall with {variant} MSI: {e}")
-                    variant_errors.append(f"{variant} MSI: {e}")
+                    log.warning(f"Uninstall with the {variant} MSI failed: {e}")
+                    failures.append(f"{variant} MSI: {e}")
                     continue
 
             # Both strategies failed
-            detail = (
-                " The matching installer could not be used - "
-                + "; ".join(variant_errors)
-                if variant_errors
-                else ""
-            )
+            detail = f" ({'; '.join(failures)})" if failures else ""
             return InstallResult(
                 success=False,
-                error="Could not uninstall: product not found in Windows Installer registry."
-                f"{detail} Try uninstalling manually via Windows Settings > Apps.",
+                error=f"Could not uninstall Lemonade Server v{installed_version}: "
+                f"Windows Installer did not accept either MSI{detail}. Uninstall it "
+                "from Windows Settings > Apps.",
             )
 
         except subprocess.TimeoutExpired:

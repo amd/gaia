@@ -5800,11 +5800,12 @@ Let me know your answer!
                     print("Downloading Lemonade Server...")
                     installer_path = installer.download_installer()
                     print("Installing...")
-                try:
-                    result = installer.install(installer_path, silent=args.silent)
-                finally:
-                    if installer_path is not None:
-                        discard_download(installer_path)
+                result = installer.install(installer_path, silent=args.silent)
+                # A failed install keeps the file: its retry hint names it.
+                if installer_path is not None and result.success:
+                    discard_download(installer_path)
+                elif installer_path is not None:
+                    print(f"   The downloaded installer is kept at {installer_path}")
 
                 if result.success:
                     # Verify installation
