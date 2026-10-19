@@ -517,23 +517,15 @@ def test_non_streaming_tool_ends_on_its_result_like_the_sse_handler():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def sleeping_pc(clock):
-    """The same clocks; :meth:`_Clock.sleep` moves only ``time.monotonic``."""
-    return clock
-
-
 EIGHT_HOURS = 8 * 60 * 60
 
 
 @pytest.mark.asyncio
-async def test_a_turn_the_pc_slept_through_carries_on_after_waking(
-    runtime, sleeping_pc
-):
+async def test_a_turn_the_pc_slept_through_carries_on_after_waking(runtime, clock):
     def script(agent):
         agent.console.print_info("started")
         _wait_until_read(agent.console)
-        sleeping_pc.sleep(EIGHT_HOURS)
+        clock.sleep(EIGHT_HOURS)
         time.sleep(0.5)  # the loop looks at the clock after waking
         agent.console.print_info("still going after the sleep")
         _wait_until_read(agent.console)
@@ -550,12 +542,10 @@ async def test_a_turn_the_pc_slept_through_carries_on_after_waking(
 
 
 @pytest.mark.asyncio
-async def test_a_non_streaming_turn_the_pc_slept_through_carries_on(
-    runtime, sleeping_pc
-):
+async def test_a_non_streaming_turn_the_pc_slept_through_carries_on(runtime, clock):
     def script(agent):
         agent.console.print_info("started")
-        sleeping_pc.sleep(EIGHT_HOURS)
+        clock.sleep(EIGHT_HOURS)
         time.sleep(0.5)
         agent.console.print_info("still going after the sleep")
         return "Finished after the PC woke up."
@@ -568,14 +558,14 @@ async def test_a_non_streaming_turn_the_pc_slept_through_carries_on(
 
 
 @pytest.mark.asyncio
-async def test_silence_after_waking_still_stops_the_turn(runtime, sleeping_pc):
+async def test_silence_after_waking_still_stops_the_turn(runtime, clock):
     def script(agent):
         agent.console.print_info("started")
         _wait_until_read(agent.console)
-        sleeping_pc.sleep(EIGHT_HOURS)
+        clock.sleep(EIGHT_HOURS)
         time.sleep(0.5)
         # Awake again, and silent past the window.
-        sleeping_pc.advance(30)
+        clock.advance(30)
         return agent.wait_for_cancel()
 
     agent = _ScriptedAgent(script)

@@ -111,7 +111,6 @@ class _AbortableStream(httpcore.NetworkStream):
     """A connection whose reads wait in short slices and stop once aborted."""
 
     def __init__(self, inner: httpcore.NetworkStream, activity: ByteActivity):
-        # Deadlines are read on the activity's clock, so they skip sleep too.
         self._inner = inner
         self._activity = activity
 
