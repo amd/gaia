@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -434,7 +435,7 @@ def _pip_timeout() -> float:
         value = float(raw)
     except ValueError:
         value = 0.0
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise InstallError(
             f"{PIP_TIMEOUT_ENV}={raw!r} is not a positive number of seconds. "
             f"Set it to e.g. 1800, or unset it for the "

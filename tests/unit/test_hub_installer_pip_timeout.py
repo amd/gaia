@@ -104,7 +104,7 @@ def test_the_limit_comes_from_the_environment_when_set(monkeypatch):
     assert seen == [1.0, 1800.0]
 
 
-@pytest.mark.parametrize("raw", ["soon", "0", "-5"])
+@pytest.mark.parametrize("raw", ["soon", "0", "-5", "inf", "nan"])
 def test_a_bad_limit_in_the_environment_fails_loudly(monkeypatch, raw):
     monkeypatch.setenv(installer.PIP_TIMEOUT_ENV, raw)
     with pytest.raises(InstallError, match=installer.PIP_TIMEOUT_ENV):
