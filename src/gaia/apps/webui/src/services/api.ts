@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ContextUsage, ChatPerformance, RetryResult, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -99,7 +99,7 @@ export function redactSecrets(body: unknown): unknown {
 }
 
 /** Fetch wrapper with logging, timing, and error handling. */
-async function apiFetch<T>(
+export async function apiFetch<T>(
     method: string,
     path: string,
     body?: unknown,
@@ -1019,34 +1019,7 @@ export async function cancelStream(sessionId: string): Promise<{ cancelled: bool
     return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
 }
 
-/** Hand a message to the session's running turn. Rejects when it was not delivered. */
-export async function sendFollowUp(sessionId: string, text: string): Promise<{ delivered: boolean }> {
-    return apiFetch('POST', '/chat/followup', { session_id: sessionId, text });
-}
-
-export async function getContextUsage(
-    sessionId: string,
-): Promise<({ available: true } & ContextUsage) | { available: false; reason: string }> {
-    return apiFetch('GET', `/chat/context/${encodeURIComponent(sessionId)}`);
-}
-
-/** Each turn's measured timing, the chat's totals, and the model's state now. */
-export async function getChatPerformance(sessionId: string): Promise<ChatPerformance> {
-    return apiFetch('GET', `/chat/performance/${encodeURIComponent(sessionId)}`);
-}
-
-/** Answer the latest question again on another local model; held until one is kept. */
-export async function retryWith(sessionId: string, messageId: number, model: string): Promise<RetryResult> {
-    return apiFetch('POST', '/chat/retry-with', { session_id: sessionId, message_id: messageId, model });
-}
-
-export async function chooseRetry(
-    sessionId: string,
-    messageId: number,
-    keep: 'original' | 'retry',
-): Promise<{ kept: 'original' } | { kept: 'retry'; content: string; stats: RetryResult['stats'] }> {
-    return apiFetch('POST', '/chat/retry-with/choose', { session_id: sessionId, message_id: messageId, keep });
-}
+export * from './chatTurn';
 
 // -- Documents -----------------------------------------------------------------
 

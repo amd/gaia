@@ -385,6 +385,12 @@ export interface RetryResult {
     };
 }
 
+/** GET /api/chat/context: the meter's numbers, or why there are none yet. */
+export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+
+/** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
+export type RetryChoice = { kept: 'original' } | { kept: 'retry'; content: string; stats: RetryResult['stats'] };
+
 export interface Message {
     id: number;
     session_id: string;
