@@ -70,8 +70,9 @@ logger = logging.getLogger(__name__)
 # that expires mid-API-call.
 _EXPIRY_BUFFER_SECONDS = 60
 
-# Long enough for a peer's token POST (10 s timeout) plus its keyring writes.
-_REFRESH_LOCK_TIMEOUT_SECONDS = 30.0
+# A peer's token POST (10 s timeout) plus its keyring writes, leaving room for
+# our own refresh inside get_or_refresh_sync's 30 s bound (_loop.py).
+_REFRESH_LOCK_TIMEOUT_SECONDS = 15.0
 _REFRESH_LOCK_POLL_SECONDS = 0.05
 
 
