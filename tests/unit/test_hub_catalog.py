@@ -111,6 +111,34 @@ def test_offline_fallback_uses_disk_cache(tmp_path):
     assert result.agents[0]["id"] == "cached"
 
 
+@pytest.mark.parametrize("cache_body", ["[]", "42", '"invalid"'])
+def test_offline_malformed_cache_raises_catalog_error(tmp_path, cache_body):
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text(cache_body)
+
+    def failing_fetcher(url):
+        raise ConnectionError("no network")
+
+    with pytest.raises(CatalogError, match="catalog-cache.json") as exc_info:
+        load_index(
+            base_url="https://hub.test",
+            fetcher=failing_fetcher,
+            cache_path=cache,
+            force=True,
+        )
+    assert "Delete it and reconnect" in str(exc_info.value)
+
+    unified = build_catalog(
+        _FakeReg([_Reg("local")]),
+        base_url="https://hub.test",
+        fetcher=failing_fetcher,
+        cache_path=cache,
+        force=True,
+    )
+    assert unified.offline is True
+    assert [agent["id"] for agent in unified.agents] == ["local"]
+
+
 def test_no_network_no_cache_raises(tmp_path):
     def failing_fetcher(url):
         raise ConnectionError("no network")
