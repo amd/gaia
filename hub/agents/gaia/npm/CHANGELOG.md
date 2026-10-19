@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Background memory upkeep no longer wipes the chat's cached prompt.**
+  Memory consolidation, reconciliation and skill distillation ran on the
+  model slot the conversation uses, so the next message re-read the whole
+  ~19K-token prompt (~45 s on Gemma-4-E4B). They now run on the side slot,
+  as memory extraction already did.
+- **Opening a session or switching its model no longer freezes the other
+  sessions.** The sidecar built a new session's agent, and ran a `/model`
+  switch (which builds a new client and checks its server), on its event
+  loop. Every other session's stream stopped for that long, heartbeats
+  included, so the TUI and the daemon relay saw an idle connection. That
+  setup now runs on a worker thread, and a request that goes away mid-setup
+  still releases its session.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

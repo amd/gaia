@@ -333,6 +333,33 @@ def test_initialize_does_not_start_over_a_busy_server(isolated_home, stalled):
     launch.assert_not_called()
 
 
+def test_initialize_reports_a_busy_remote_server_as_busy(isolated_home, stalled):
+    """The install check must not turn a busy remote server into "not
+    reachable" before initialize() gets to say it is busy."""
+    client = lc.LemonadeClient(base_url=stalled.base_url, verbose=False)
+    with (
+        patch.object(client, "host", "lemonade.example"),
+        patch.object(lc, "resolve_lemonade") as resolve,
+        patch.object(client, "launch_server") as launch,
+    ):
+        status = client.initialize(quiet=True)
+    assert status.busy
+    launch.assert_not_called()
+    resolve.assert_not_called()
+
+
+def test_a_remote_server_that_is_down_is_still_not_reachable(isolated_home):
+    """Busy is not down: a remote server with nothing listening stays missing."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    client = lc.LemonadeClient(
+        base_url=f"http://127.0.0.1:{port}/api/v1", verbose=False
+    )
+    with patch.object(client, "host", "lemonade.example"):
+        assert client._check_lemonade_installed() is False
+
+
 def test_auto_start_does_not_launch_over_a_busy_server(isolated_home, stalled):
     with patch.object(lc.LemonadeClient, "launch_server") as launch:
         lc.create_lemonade_client(
@@ -400,3 +427,47 @@ def test_a_slow_but_alive_server_is_not_a_load(isolated_home, fake):
     fake.health_delay = 2
     client = lc.LemonadeClient(base_url=fake.base_url, verbose=False)
     assert client._server_load_in_progress() is None
+
+
+# ── A cloud-model agent on a busy shared server ──────────────────────────
+
+
+def _cloud_agent(base_url):
+    from gaia.agents.base.agent import Agent
+
+    class _CloudAgent(Agent):
+        def _get_system_prompt(self) -> str:
+            return "test"
+
+        def _register_tools(self) -> None:
+            pass
+
+    return _CloudAgent(
+        model_id="fireworks.accounts/fireworks/models/test",
+        base_url=base_url,
+        silent_mode=True,
+    )
+
+
+def test_cloud_model_agent_builds_on_a_busy_server(isolated_home, stalled):
+    """A cloud model never waits on a local load, so a silent server must not
+    fail construction; it is reported busy like every local-model path."""
+    with patch.object(LemonadeManager, "report_busy") as busy:
+        (agent,), errors, elapsed = _run_bounded(
+            lambda: _cloud_agent(stalled.base_url), 1, 30
+        )
+    assert not errors, errors
+    assert agent is not None
+    busy.assert_called_once_with(stalled.base_url, quiet=True)
+
+
+def test_cloud_model_agent_still_fails_on_a_server_that_is_down(isolated_home):
+    """Busy is not down: nothing listening must still raise, not be called busy."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with patch.object(LemonadeManager, "report_busy") as busy:
+        with pytest.raises(lc.LemonadeClientError) as raised:
+            _cloud_agent(f"http://127.0.0.1:{port}/api/v1")
+    assert not isinstance(raised.value, lc.LemonadeUnresponsiveError)
+    busy.assert_not_called()

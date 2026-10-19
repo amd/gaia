@@ -40,3 +40,11 @@ class MigrationError(DaemonError):
     that failed mid-flight. The daemon does not start on this error — better a
     loud refusal the user can act on than a silent proceed over ambiguous state.
     """
+
+
+class LemonadeNotAnsweringError(DaemonError):
+    """GAIA's Lemonade Server process is up but not answering yet.
+
+    The daemon neither starts a second server nor stops this one, so the caller
+    may wait and ask again.
+    """

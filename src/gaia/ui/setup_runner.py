@@ -47,6 +47,7 @@ _STEP_RE = re.compile(r"^Step \d+/\d+:\s*(.+?)\.*$")
 _DOWNLOAD_RE = re.compile(r"^Downloading:\s*(\S+)")
 _FETCH_RE = re.compile(r"^Downloading Lemonade Server v(\S+?)\.*$")
 _PERCENT_RE = re.compile(r"\]\s*(\d{1,3})%")
+_CHAT_MODEL_RE = re.compile(r"^Chat model:\s*(\S+)")
 _LOG_PREFIX_RE = re.compile(r"^\[\d{4}-\d\d-\d\d [\d:]+\]\s*\|")
 
 
@@ -167,6 +168,7 @@ class Progress:
     text: str = ""
     percent: Optional[int] = None
     failed: bool = False
+    chat_model: Optional[str] = None
 
 
 def describe(line: str) -> Optional[Progress]:
@@ -181,6 +183,9 @@ def describe(line: str) -> Optional[Progress]:
     m = _PERCENT_RE.search(line)
     if m:
         return Progress(percent=min(100, int(m.group(1))))
+    m = _CHAT_MODEL_RE.match(line)
+    if m:
+        return Progress(chat_model=m.group(1))
     if line.startswith("❌"):
         return Progress(text=line.lstrip("❌").strip(), failed=True)
     m = _STEP_RE.match(line)
@@ -205,20 +210,45 @@ def describe(line: str) -> Optional[Progress]:
     return None
 
 
-def step_labels(skip_chat_model: bool) -> List[Dict[str, str]]:
+def users_lemonade_url() -> Optional[str]:
+    """The user's own Lemonade when they chose "Use mine", else None."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm import lemonade_choice as choice
+
+    try:
+        info = choice.describe()
+    except (choice.LemonadeChoiceError, GaiaConfigError) as e:
+        raise SetupError(f"Could not read which Lemonade Server GAIA uses: {e}") from e
+    return info["base_url"] if info["mode"] == choice.MODE_EXTERNAL else None
+
+
+def step_labels(
+    skip_chat_model: bool,
+    users_server: Optional[str] = None,
+    chat_model: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """The steps as the user reads them: their server, and the model setup chose."""
+    if skip_chat_model:
+        models = "the embedding model, under 1 GB"
+    elif chat_model:
+        models = f"chat model {chat_model}, plus the embedding model"
+    else:
+        models = "the chat model that fits this PC, plus the embedding model"
     return [
-        {
-            "key": PHASE_SERVER,
-            "label": "Install the local model server",
-            "detail": "about 1 minute",
-        },
-        {
-            "key": PHASE_MODELS,
-            "label": "Download the models",
-            "detail": (
-                "the embedding model, under 1 GB" if skip_chat_model else "about 6 GB"
-            ),
-        },
+        (
+            {
+                "key": PHASE_SERVER,
+                "label": "Use your Lemonade Server",
+                "detail": users_server,
+            }
+            if users_server
+            else {
+                "key": PHASE_SERVER,
+                "label": "Install the local model server",
+                "detail": "about 1 minute",
+            }
+        ),
+        {"key": PHASE_MODELS, "label": "Download the models", "detail": models},
         {"key": PHASE_FINISH, "label": "Check that the models load", "detail": ""},
     ]
 
@@ -228,6 +258,8 @@ class SetupRun:
     """One ``gaia init`` run and what it has reported so far."""
 
     skip_chat_model: bool
+    users_server: Optional[str] = None
+    chat_model: Optional[str] = None
     state: str = "running"  # running | verifying | ready | failed | cancelled
     phase: Optional[str] = None
     text: str = "Starting setup"
@@ -239,7 +271,8 @@ class SetupRun:
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
         steps = []
-        for i, step in enumerate(step_labels(self.skip_chat_model)):
+        labels = step_labels(self.skip_chat_model, self.users_server, self.chat_model)
+        for i, step in enumerate(labels):
             if self.state == "ready" or i < reached:
                 status = "done"
             elif i == reached or (reached < 0 and i == 0):
@@ -260,6 +293,7 @@ class SetupRun:
             "command": run_command(self.skip_chat_model),
             "log_tail": self.log[-40:],
             "skip_chat_model": self.skip_chat_model,
+            "chat_model": None if self.skip_chat_model else self.chat_model,
         }
 
 
@@ -279,7 +313,9 @@ class SetupRunner:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupError("Setup is already running.")
-            run = SetupRun(skip_chat_model=skip_chat_model)
+            run = SetupRun(
+                skip_chat_model=skip_chat_model, users_server=users_lemonade_url()
+            )
             try:
                 self._proc = subprocess.Popen(
                     _gaia_argv(*run_args(skip_chat_model)),
@@ -391,6 +427,9 @@ class SetupRunner:
                 return
             if progress.failed:
                 run.error = progress.text
+                return
+            if progress.chat_model is not None:
+                run.chat_model = progress.chat_model
                 return
             if progress.percent is not None:
                 run.percent = progress.percent

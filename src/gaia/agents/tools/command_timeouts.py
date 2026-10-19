@@ -7,7 +7,7 @@ legitimately take minutes. The model *can* pass ``timeout=`` itself, but nothing
 tells it how long the command it is about to run should take, so it rarely does.
 
 This module answers that question up front: classify the command text, apply the
-class default. Four classes, no hidden heuristics, table below.
+class default. Five classes, no hidden heuristics, table below.
 
 +----------------+---------+------------------------------------------------+
 | class          | default | matches                                        |
@@ -22,6 +22,10 @@ class default. Four classes, no hidden heuristics, table below.
 +----------------+---------+------------------------------------------------+
 | ``network``    |   300 s | ``git clone/fetch/pull/push``, gh, curl, wget, |
 |                |         | ssh/scp/rsync, ``docker pull``, hf downloads   |
++----------------+---------+------------------------------------------------+
+| ``script``     |   600 s | a script run by an interpreter — ``python      |
+|                |         | x.py``, ``python -m pkg``, ``python -c``,      |
+|                |         | node, Rscript, bash/pwsh scripts, ``./x.sh``   |
 +----------------+---------+------------------------------------------------+
 | ``default``    |    30 s | everything else — the read-only allowlist      |
 |                |         | (ls, cat, grep, stat, git status …)            |
@@ -58,18 +62,26 @@ class TimeoutClass:
 TEST = TimeoutClass("test", 900, "test runners")
 BUILD = TimeoutClass("build", 1800, "builds, compiles and package installs")
 NETWORK = TimeoutClass("network", 300, "VCS and network calls")
+SCRIPT = TimeoutClass("script", 600, "scripts run by an interpreter")
 DEFAULT = TimeoutClass("default", 30, "everything else")
 
 #: Every class, keyed by name. The enumerated set the tool description states.
 TIMEOUT_CLASSES: Dict[str, TimeoutClass] = {
-    cls.name: cls for cls in (TEST, BUILD, NETWORK, DEFAULT)
+    cls.name: cls for cls in (TEST, BUILD, NETWORK, SCRIPT, DEFAULT)
 }
+
+# Python launchers. Peeled like wrappers so ``python -m pytest`` stays a test
+# run, but whatever they run that is not a known tool is a script.
+_PYTHON_LAUNCHERS = frozenset({"python", "python3", "py", "pypy", "pypy3"})
 
 # Tokens that front a real command without changing what it is.
 # ``python -m pytest`` is pytest; ``sudo make install`` is make.
-_WRAPPERS = frozenset(
-    {"python", "python3", "py", "pypy", "sudo", "env", "nohup", "time", "npx", "uvx"}
+_WRAPPERS = _PYTHON_LAUNCHERS | frozenset(
+    {"sudo", "env", "nohup", "time", "npx", "uvx"}
 )
+
+# A file run directly (``./run_all.sh``) is a script, whatever its name.
+_SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".bat", ".cmd", ".js", ".rb", ".pl", ".r")
 
 # ``<wrapper> run <the actual command>`` — classify the remainder instead.
 _DELEGATING = frozenset({("uv", "run"), ("poetry", "run"), ("pipx", "run")})
@@ -132,6 +144,79 @@ _BINARY_CLASS: Dict[str, TimeoutClass] = {
     "helm": NETWORK,
     "ping": NETWORK,
 }
+
+# Interpreters: running something is a script, ``node --version`` is not.
+_INTERPRETERS = frozenset(
+    {"node", "ruby", "perl", "php", "rscript", "julia"}
+) | frozenset({"bash", "sh", "zsh", "pwsh", "powershell", "cmd"})
+_SHELLS = frozenset({"bash", "sh", "zsh"})
+
+# Dev servers never exit, so a longer budget only holds the turn longer with
+# nothing to show; they stay ``default``. A server belongs in the background.
+_SERVER_BINARIES = frozenset(
+    {
+        "uvicorn",
+        "gunicorn",
+        "hypercorn",
+        "daphne",
+        "waitress-serve",
+        "http-server",
+        "live-server",
+        "nodemon",
+    }
+)
+# Interpreter flags that take a value, so the value isn't read as the command.
+_VALUE_FLAGS: Dict[str, frozenset] = {
+    "node": frozenset({"-r", "--require", "--import", "--loader", "--env-file"}),
+    "bash": frozenset({"-o", "+o", "-O", "+O"}),
+    "sh": frozenset({"-o", "+o"}),
+    "zsh": frozenset({"-o", "+o"}),
+    "pwsh": frozenset(
+        {
+            "-executionpolicy",
+            "-ep",
+            "-windowstyle",
+            "-version",
+            "-workingdirectory",
+            "-wd",
+            "-inputformat",
+            "-outputformat",
+            "-configurationname",
+            "-settingsfile",
+        }
+    ),
+}
+_VALUE_FLAGS["powershell"] = _VALUE_FLAGS["pwsh"]
+
+_SERVER_SUBCOMMANDS: Dict[str, frozenset] = {
+    "flask": frozenset({"run"}),
+    "streamlit": frozenset({"run"}),
+    "jupyter": frozenset({"lab", "notebook"}),
+    "next": frozenset({"dev", "start"}),
+    "webpack": frozenset({"serve"}),
+    "ng": frozenset({"serve"}),
+    "vite": frozenset({"", "dev", "serve", "preview"}),
+    "mkdocs": frozenset({"serve"}),
+    "hugo": frozenset({"server", "serve"}),
+    "jekyll": frozenset({"serve"}),
+    "npm": frozenset({"start"}),
+    "pnpm": frozenset({"start", "dev"}),
+    "yarn": frozenset({"start", "dev"}),
+}
+# ``npm run dev`` and friends.
+_SERVER_RUN_SCRIPTS = frozenset({"dev", "start", "serve", "preview", "watch"})
+_SERVER_MODULES = frozenset(
+    {"http.server", "uvicorn", "gunicorn", "flask", "streamlit", "jupyter"}
+)
+# ``python app.py`` / ``node server.js``: the conventional server entry points.
+_SERVER_SCRIPT_STEMS = frozenset(
+    {"server", "serve", "app", "wsgi", "asgi", "devserver", "dev_server"}
+)
+_SERVER_LAUNCHERS = frozenset({"node", "deno", "bun", "ts-node"})
+_PATH_BACKSLASH = re.compile(r"\\(?=[A-Za-z0-9_.])")
+_VERSIONED_PYTHON = re.compile(r"(?:python|pypy)\d+(?:\.\d+)*")
+# Flags that hand the interpreter code or a script to run.
+_RUN_FLAGS = frozenset({"-e", "-c", "--eval", "-command", "-file", "-encodedcommand"})
 
 # Multiplexers: the subcommand decides. Anything not listed for a binary falls
 # through to ``default`` — ``git status`` stays a 30s command.
@@ -242,24 +327,153 @@ def command_basename(token: str) -> str:
     return name
 
 
+def _is_python_launcher(binary: str) -> bool:
+    """``python``, ``py``, and versioned ones like ``python3.12``."""
+    return binary in _PYTHON_LAUNCHERS or bool(_VERSIONED_PYTHON.fullmatch(binary))
+
+
+def _operands(binary: str, args: List[str]) -> List[str]:
+    """*args* without flags, or the values of *binary*'s value-taking flags."""
+    value_flags = _VALUE_FLAGS.get(binary, frozenset())
+    operands: List[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg.lower() in value_flags or arg in value_flags:
+            skip = True
+        elif not arg.startswith(("-", "+")) or arg in ("-", "+"):
+            operands.append(arg)
+    return operands
+
+
+def _starts_a_server(binary: str, args: List[str], launched_by_python: bool) -> bool:
+    """Whether the command whose binary is *binary* runs a server.
+
+    Only the command position counts: ``pip install uvicorn`` installs a
+    server, it doesn't run one.
+    """
+    operands = [arg.lower() for arg in _operands(binary, args)]
+    first = operands[0] if operands else ""
+    if binary in _SERVER_BINARIES:
+        return True
+    if launched_by_python and binary in _SERVER_MODULES:  # ``python -m http.server``
+        return True
+    if first in _SERVER_SUBCOMMANDS.get(binary, ()):
+        return True
+    if binary in _RUN_SCRIPT_BINARIES and first == "run":
+        if len(operands) > 1 and operands[1] in _SERVER_RUN_SCRIPTS:
+            return True
+    if binary == "manage.py" and first == "runserver":
+        return True
+    if binary == "php" and (
+        "-s" in (arg.lower() for arg in args) or operands[:2] == ["artisan", "serve"]
+    ):
+        return True
+    if launched_by_python:
+        script = binary
+    elif binary in _SERVER_LAUNCHERS and operands:
+        script = command_basename(operands[0])
+    else:
+        return False
+    stem, _, suffix = script.rpartition(".")
+    return suffix in ("py", "js", "mjs", "ts") and stem in _SERVER_SCRIPT_STEMS
+
+
 def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     """The class of one already-split command, wrappers peeled off."""
+    command_class, launched_by_python = _classify_peeled(tokens)
+    if command_class is DEFAULT and launched_by_python:
+        return SCRIPT
+    return command_class
+
+
+def _classify_peeled(tokens: List[str]) -> Tuple[TimeoutClass, bool]:
+    """``(class, whether a python launcher ran something)`` for one command."""
     index = 0
+    launcher_seen = False
     while index < len(tokens):
         token = tokens[index]
         if _ENV_ASSIGNMENT.fullmatch(token):
             index += 1
             continue
         if token.startswith("-"):  # a flag, incl. python's -m
+            # ``python -c CODE``: the code is the script.
+            if launcher_seen and token == "-c":
+                return SCRIPT, True
             index += 1
             continue
         binary = command_basename(token)
-        if binary in _WRAPPERS:
+        if binary in _WRAPPERS or _is_python_launcher(binary):
+            launcher_seen = launcher_seen or _is_python_launcher(binary)
             index += 1
             continue
         break
     else:
+        return DEFAULT, False
+
+    binary = command_basename(tokens[index])
+    if _starts_a_server(binary, tokens[index + 1 :], launcher_seen):
+        return DEFAULT, False
+    if binary in _INTERPRETERS:
+        return _classify_interpreter(binary, tokens[index + 1 :]), launcher_seen
+    command_class = _classify_binary(tokens, index)
+    # ``npm.cmd test`` is still a test run; only an unknown file is a script.
+    if command_class is DEFAULT and tokens[index].lower().endswith(_SCRIPT_SUFFIXES):
+        return SCRIPT, launcher_seen
+    return command_class, launcher_seen
+
+
+def _classify_interpreter(binary: str, args: List[str]) -> TimeoutClass:
+    """``script`` when *binary* is given something to run, else ``default``.
+
+    A shell handed a command line (``bash -lc "pip install x"``, ``cmd /c
+    build.bat``, ``pwsh -Command "npm ci"``) takes that command line's class.
+    """
+    lowered = [arg.lower() for arg in args]
+    if binary == "cmd":
+        for i, arg in enumerate(lowered):
+            if arg in ("/c", "/k"):
+                return classify_command(" ".join(args[i + 1 :]))
         return DEFAULT
+    value_flags = _VALUE_FLAGS.get(binary, frozenset())
+    if binary in ("pwsh", "powershell"):
+        i = 0
+        while i < len(lowered):
+            arg = lowered[i]
+            if arg in ("-command", "-c"):
+                return classify_command(" ".join(args[i + 1 :]))
+            if arg in ("-file", "-f", "-encodedcommand"):
+                return SCRIPT
+            if arg in value_flags:
+                i += 2  # ``-ExecutionPolicy Bypass``
+                continue
+            if not arg.startswith("-"):
+                # A bare command line is what -Command would run.
+                return classify_command(" ".join(args[i:]))
+            i += 1
+        return DEFAULT
+    if binary in _SHELLS:
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            # ``-o pipefail``, or a cluster ending in o: ``-euo pipefail``.
+            if arg in value_flags or re.fullmatch(r"[-+][a-zA-Z]*[oO]", arg):
+                i += 2
+                continue
+            if not arg.startswith("-"):
+                break  # ``bash run.sh -c cfg.yml``: a script's own flags
+            # ``-c`` alone or in a cluster: ``-lc``, ``-ec``, ``-xec``.
+            if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", arg) and i + 1 < len(args):
+                return classify_command(args[i + 1])
+            i += 1
+    if any(not arg.startswith("-") for arg in args) or _RUN_FLAGS & set(lowered):
+        return SCRIPT
+    return DEFAULT
+
+
+def _classify_binary(tokens: List[str], index: int) -> TimeoutClass:
+    """The class of the command whose binary is ``tokens[index]``."""
 
     binary = command_basename(tokens[index])
     operands: List[Tuple[int, str]] = []
@@ -336,6 +550,9 @@ def _tokenize(command: str) -> List[str]:
     the whole thing is timed as a 30s command. Newlines are preserved as
     separators too, while quoted text remains untouched.
     """
+    # Keep a backslash before a path character, so a Windows path such as
+    # C:\Python\python.exe keeps its separators; an escaped quote still works.
+    command = _PATH_BACKSLASH.sub(r"\\\\", command)
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
     lexer.whitespace_split = True
     lexer.whitespace = " \t\r"

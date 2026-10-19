@@ -13,6 +13,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
 
 from .. import permissions as session_permissions
@@ -392,6 +393,11 @@ async def delete_session(
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
         session_permissions.forget_session(session_id)
+    try:
+        await asyncio.to_thread(file_snapshots.delete_session, session_id)
+    except OSError as e:
+        # The chat is gone; its undo copies expire with the retention limit.
+        logger.error("Could not remove undo history of %s: %s", session_id, e)
     return {"deleted": True}
 
 
