@@ -372,7 +372,18 @@ def test_a_rejected_oversized_request_gets_its_401_without_a_read(serve):
     assert reply.startswith(b"HTTP/1.0 401")
 
 
-def test_a_chunked_body_is_refused_411_instead_of_run_empty(serve, monkeypatch):
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b'Transfer-Encoding: chunked\r\n\r\nf\r\n{"query": "hi"}\r\n0\r\n\r\n',
+        b'Transfer-Encoding: identity\r\nContent-Length: 15\r\n\r\n{"query": "hi"}',
+        b'Transfer-Encoding: gzip\r\nContent-Length: 15\r\n\r\n{"query": "hi"}',
+    ],
+    ids=["chunked", "identity", "gzip-with-length"],
+)
+def test_any_transfer_encoding_is_refused_411_instead_of_run_empty(
+    serve, monkeypatch, framing
+):
     calls = []
 
     class _LLM:
@@ -386,8 +397,7 @@ def test_a_chunked_body_is_refused_411_instead_of_run_empty(serve, monkeypatch):
     reply = _raw_exchange(
         base,
         b"POST /llm HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
-        b"Transfer-Encoding: chunked\r\n\r\n"
-        b'10\r\n{"query": "hi"}\r\n0\r\n\r\n',
+        + framing,
     )
 
     assert reply.startswith(b"HTTP/1.0 411")
