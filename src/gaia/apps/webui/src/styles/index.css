@@ -711,3 +711,23 @@ textarea:focus-visible {
 :root[data-titlebar="mac"] .sb-top {
     padding-left: 84px;
 }
+
+.startup {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--bg-primary);
+}
+
+.startup-text {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.startup .loading-spinner {
+    flex: none;
+    padding: 0;
+}
