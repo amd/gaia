@@ -293,6 +293,102 @@ export interface ContextUsage {
     /** Oldest turns the next overflow drops, by their question. */
     at_risk: string[];
     at_risk_tokens: number;
+    /** Parts of `system` the skills and memory fragments take. */
+    skills?: number;
+    memory?: number;
+    /** Part of `tools` the tool schemas take; the rest is replayed tool activity. */
+    tool_definitions?: number;
+    /** Between turns only: whether the counts came from the model's own tokenizer. */
+    tokenizer?: { exact: true; model: string } | { exact: false; reason: string };
+    /** Between turns only: the panel's categories; their tokens add up to `used`. */
+    categories?: Array<{ key: string; label: string; tokens: number }>;
+    tool_loading?: { loaded: string[]; on_demand: string[] };
+    model?: string | null;
+    /** A cloud model's own window from the catalog, when larger than what GAIA admits. */
+    model_window?: number | null;
+    /** What the agent moved out of the window to keep going; absent when it reports nothing. */
+    context_state?: ContextState | null;
+}
+
+/** The agent's own account of context it put away or summarized (``context_state()``). */
+export interface ContextState {
+    /** Tool results already used, replaced by a re-read handle. */
+    put_away?: { results: number; tokens: number } | null;
+    /** Older turns folded into a rolling summary; originals stay searchable. */
+    summarized?: { turns: number; tokens: number; summary_tokens: number } | null;
+}
+
+/** GET /api/chat/performance/{id}: one turn's measured performance. Null = not measured. */
+export interface TurnPerformance {
+    message_id: number;
+    created_at: string;
+    model: string | null;
+    time: {
+        wall_seconds: number;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tool_seconds: number;
+        waiting_seconds: number;
+        own_seconds: number | null;
+    };
+    first_token_seconds: number | null;
+    /** `server`: the model server's own timing. `client`: measured by GAIA on the stream. */
+    first_token_source?: 'server' | 'client' | null;
+    prefill_tokens_per_second: number | null;
+    /** `client` means derived from GAIA's first-token time, so it includes network time. */
+    prefill_source?: 'server' | 'client' | null;
+    generation_tokens_per_second: number | null;
+    generation_source?: 'server' | 'client' | null;
+    model_calls: number;
+    tokens_in: number | null;
+    tokens_new: number | null;
+    tokens_cached: number | null;
+    tokens_out: number | null;
+    /** The last request's whole templated prompt, as the server counted it. */
+    last_prompt_tokens: number | null;
+    tool_calls: number;
+    /** All tool time the step timer measured, the same total as the time split. */
+    tool_seconds_total?: number;
+    /** A null name is tool time measured outside any recorded step. */
+    tools: Array<{ name: string | null; seconds: number | null }>;
+    loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
+    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** Why a value is unknown, keyed by field. */
+    unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
+}
+
+export interface ChatPerformance {
+    /** The newest answer's id; the last turn is unknown when `turns` has no record of it. */
+    latest_message_id: number | null;
+    turns: TurnPerformance[];
+    totals: {
+        turns: number;
+        wall_seconds: number | null;
+        model_seconds: number | null;
+        gaia_seconds: number | null;
+        tokens_in: number | null;
+        tokens_cached: number | null;
+        tokens_out: number | null;
+        tool_calls: number;
+        loads: number;
+        load_seconds: number | null;
+        usd: number;
+        unpriced_turns: number;
+    };
+    /** The model as Lemonade reports it now. */
+    now: {
+        model: string | null;
+        /** `local`, a cloud provider name, `cloud`, or `unknown`. */
+        provider: string;
+        loaded: boolean | null;
+        device: string | null;
+        backend: string | null;
+        ctx_size: number | null;
+        weights_gb: number | null;
+        kv_cache_gb: number | null;
+        free_gb: number | null;
+        error: string | null;
+    };
 }
 
 /** A retried answer from another model, held until one is kept. */

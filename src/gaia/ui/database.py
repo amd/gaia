@@ -841,13 +841,18 @@ class ChatDatabase:
             messages.append(message)
         return messages
 
-    def latest_message_id(self, session_id: str) -> Optional[int]:
-        """The id of the newest message in a session, or None when it has none."""
+    def latest_message_id(
+        self, session_id: str, role: Optional[str] = None
+    ) -> Optional[int]:
+        """The id of the newest message (of *role*, if given), or None when none."""
+        role_clause = " AND role = ?" if role else ""
+        params = (session_id, role) if role else (session_id,)
         with self._lock:
             row = self._conn.execute(
-                "SELECT id FROM messages WHERE session_id = ? "
-                "ORDER BY created_at DESC, id DESC LIMIT 1",
-                (session_id,),
+                "SELECT id FROM messages WHERE session_id = ?"
+                + role_clause
+                + " ORDER BY created_at DESC, id DESC LIMIT 1",
+                params,
             ).fetchone()
         return row["id"] if row else None
 
@@ -875,6 +880,35 @@ class ChatDatabase:
                         "database."
                     ) from exc
         return record
+
+    def turn_performance(self, session_id: str) -> List[Dict[str, Any]]:
+        """Each answered turn's recorded performance, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, inference_stats FROM messages "
+                "WHERE session_id = ? AND role = 'assistant' "
+                "AND inference_stats IS NOT NULL ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+        turns = []
+        for row in rows:
+            try:
+                stats = json.loads(row["inference_stats"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"Cannot read inference_stats of message {row['id']} in session "
+                    f"{session_id}; inspect the messages table in the chat database."
+                ) from exc
+            performance = stats.get("performance") if isinstance(stats, dict) else None
+            if isinstance(performance, dict):
+                turns.append(
+                    {
+                        "message_id": row["id"],
+                        "created_at": row["created_at"],
+                        **performance,
+                    }
+                )
+        return turns
 
     def replace_answer(
         self,

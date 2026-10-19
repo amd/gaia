@@ -725,16 +725,72 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
 
     agent = cached_session_agent(session_id)
     if agent is None:
+        # Measuring needs the chat's agent, which lives in memory between turns.
+        answered = db.latest_message_id(session_id, role="assistant") is not None
         return {
             "available": False,
-            "reason": "Measured once GAIA has answered in this chat.",
+            "reason": (
+                "Measured again with your next message: GAIA restarted or "
+                "switched models since this chat's last answer."
+                if answered
+                else "Measured once GAIA has answered in this chat."
+            ),
         }
-    from gaia.agents.base.history import context_usage
+    from ..turn_insights import (
+        context_categories,
+        context_state,
+        measure_context,
+        tools_by_load,
+    )
 
     def _measure():
-        return context_usage(agent, model_turns(agent, db, session_id))
+        usage = measure_context(
+            agent, model_turns(agent, db, session_id), getattr(agent, "model_id", None)
+        )
+        usage["categories"] = context_categories(usage)
+        usage["tool_loading"] = tools_by_load(agent)
+        usage["model"] = getattr(agent, "model_id", None)
+        usage["context_state"] = context_state(agent)
+        return usage
 
     return {"available": True, **(await asyncio.to_thread(_measure))}
+
+
+@router.get("/api/chat/performance/{session_id}")
+async def get_chat_performance(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Where each turn's time went, the chat's totals, and the model's state now."""
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    from .._chat_helpers import (
+        cached_session_agent,
+        get_agent_registry,
+        resolve_session_model,
+    )
+    from ..turn_insights import chat_totals, model_now
+
+    agent = cached_session_agent(session_id)
+    model = getattr(agent, "model_id", None) if agent is not None else None
+    if not model:
+        # Before the agent exists, the model the turn will run, not the stored default.
+        model = resolve_session_model(
+            session,
+            session.get("agent_type") or "chat",
+            db.get_setting("custom_model"),
+            get_agent_registry(),
+        )[0]
+
+    def _read():
+        turns = db.turn_performance(session_id)
+        return {
+            # The newest answer; "last turn" is unknown when it has no record.
+            "latest_message_id": db.latest_message_id(session_id, role="assistant"),
+            "turns": turns,
+            "totals": chat_totals(turns),
+            "now": model_now(model),
+        }
+
+    return await asyncio.to_thread(_read)
 
 
 class RetryWithRequest(BaseModel):

@@ -487,14 +487,18 @@ def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
 
 def _load_making_room(
     client, model_id: str, ctx: int, resident: list, may_unload: bool, sse_handler
-) -> None:
-    """Load *model_id*, unloading only this process's other models if it won't fit."""
+) -> list:
+    """Load *model_id*, unloading only this process's other models if it won't fit.
+
+    Returns the names of the models unloaded to make room.
+    """
     from gaia.llm.lemonade_client import InsufficientMemoryError
 
     try:
         client.load_model(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
+        ours = []
     except InsufficientMemoryError:
         wanted = _model_key(model_id)
         ours = [
@@ -522,6 +526,7 @@ def _load_making_room(
             model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
         )
     note_model_loaded(model_id)
+    return ours
 
 
 # ── Lemonade error classification ──────────────────────────────────────────
@@ -2342,7 +2347,9 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _preflight_load(model_id: str, sse_handler, stopped) -> None:
+def _preflight_load(
+    model_id: str, sse_handler, stopped, loads: Optional[list] = None
+) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -2374,6 +2381,9 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     unloaded. When the model won't fit, only models this process loaded are
     unloaded to make room; otherwise the load fails loudly. A Stop
     (``sse_handler.cancelled``) seen after a wait means nothing is loaded.
+
+    A load that happens is appended to *loads*, when given, as
+    ``{"model", "seconds", "replaced"}``.
 
     Note: there is a small TOCTOU window between this check and the
     actual chat request. An eviction in that window fails the turn with an
@@ -2519,6 +2529,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                         return
 
                 client = LemonadeClient(verbose=False)
+                load_started = _time.monotonic()
+                replaced = []
                 # A server the user runs keeps its models: GAIA only loads there.
                 may_unload = not is_users_server(base_url)
                 if may_unload:
@@ -2545,7 +2557,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                                 "Settings -> Load."
                             )
                         client.unload_model(m["model_name"], ignore_if_not_loaded=True)
-                _load_making_room(
+                        replaced.append(m["model_name"])
+                replaced += _load_making_room(
                     client,
                     model_id,
                     required_ctx,
@@ -2553,6 +2566,14 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                     may_unload,
                     sse_handler,
                 )
+                if loads is not None:
+                    loads.append(
+                        {
+                            "model": model_id,
+                            "seconds": round(_time.monotonic() - load_started, 3),
+                            "replaced": replaced,
+                        }
+                    )
             finally:
                 model_load_lock.release()
     except InsufficientMemoryError as exc:
@@ -2587,14 +2608,14 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
 
 
 def _maybe_load_expected_model(
-    model_id: str, sse_handler=None, cancel_event=None
+    model_id: str, sse_handler=None, cancel_event=None, loads: Optional[list] = None
 ) -> None:
     """Load *model_id* at the window a turn needs before it is queried.
 
-    See :func:`_preflight_load` for what is checked, loaded and raised. A
-    turn stopped while this waits (``sse_handler.cancelled`` for Stop, or the
-    turn's own *cancel_event*, which teardown and the idle stop set) loads
-    nothing: whatever the wait raised then, the stop is why, so this returns
+    See :func:`_preflight_load` for what is checked, loaded, recorded in
+    *loads* and raised. A turn stopped while this waits
+    (``sse_handler.cancelled`` for Stop, or the turn's own *cancel_event*,
+    which teardown and the idle stop set) loads nothing: whatever the wait raised then, the stop is why, so this returns
     and the caller sees the turn as stopped.
     """
 
@@ -2604,7 +2625,7 @@ def _maybe_load_expected_model(
         )
 
     try:
-        _preflight_load(model_id, sse_handler, stopped)
+        _preflight_load(model_id, sse_handler, stopped, loads)
     except Exception as exc:
         if not stopped():
             raise
@@ -2965,6 +2986,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    turn_started = _time.monotonic()
     sse_handler = None
     producer = None
     cleanup_done = False
@@ -3134,7 +3156,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
-        result_holder = {"answer": "", "error": None}
+        result_holder = {"answer": "", "error": None, "model_loads": []}
         inbox_holder: dict = {}
         turn_box: dict = {}
 
@@ -3473,7 +3495,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler, cancel_event
+                    _effective_model(agent, model_id),
+                    sse_handler,
+                    cancel_event,
+                    loads=result_holder["model_loads"],
                 )
                 # Stopped while waiting for the model: nothing was loaded,
                 # so the turn must not send its query either.
@@ -3493,6 +3518,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["result"] = result
+                    result_holder["model"] = _effective_model(agent, model_id)
                     result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
@@ -3995,6 +4022,24 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            if isinstance(result_holder.get("result"), dict):
+                from .turn_insights import summarize_turn
+
+                inference_stats = dict(inference_stats or {})
+                try:
+                    inference_stats["performance"] = summarize_turn(
+                        result_holder["result"],
+                        wall_seconds=_time.monotonic() - turn_started,
+                        model_id=result_holder.get("model"),
+                        loads=result_holder["model_loads"],
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    # The answer is still saved; the panel shows the turn as unmeasured.
+                    logger.warning(
+                        "Turn performance for session %s not recorded: %s",
+                        request.session_id,
+                        exc,
+                    )
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
             # Settings › Model shows each model's speed measured on this PC. Not

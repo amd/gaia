@@ -387,7 +387,9 @@ def test_http_turn_persists_evidence_and_restores_it_to_fresh_agent(
     monkeypatch.setattr(helpers, "_agent_registry", registry)
     monkeypatch.setattr(helpers, "_get_cached_agent", lambda *args: None)
     monkeypatch.setattr(helpers, "_store_agent", lambda *args: None)
-    monkeypatch.setattr(helpers, "_maybe_load_expected_model", lambda *args: None)
+    monkeypatch.setattr(
+        helpers, "_maybe_load_expected_model", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
     monkeypatch.setattr("gaia.ui.routers.chat._notify_loop", lambda *args: None)
     stats = MagicMock(status_code=200)

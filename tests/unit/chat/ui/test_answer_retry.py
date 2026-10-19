@@ -320,6 +320,9 @@ async def test_context_measures_the_chat_with_its_agent(db, monkeypatch):
         model_id="M-GGUF", system_prompt="You are GAIA.", _openai_tools=[]
     )
     helpers._store_agent(sid, "M-GGUF", [], agent, "gaia")
+    from gaia.ui import turn_insights
+
+    monkeypatch.setattr(turn_insights, "_loaded_chat_model", lambda *_: "Other-GGUF")
 
     result = await chat.get_context_usage(sid, db)
 
@@ -327,6 +330,8 @@ async def test_context_measures_the_chat_with_its_agent(db, monkeypatch):
     assert result["window"] == 32768
     assert result["turns_in_view"] == 2
     assert result["documents"] > 0
+    assert result["tokenizer"]["exact"] is False
+    assert sum(c["tokens"] for c in result["categories"]) == result["used"]
 
 
 async def test_context_for_an_unknown_chat_is_a_404(db):

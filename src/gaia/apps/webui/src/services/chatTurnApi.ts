@@ -3,7 +3,15 @@
 
 /** Controls for a chat's turns and its tool permissions; re-exported from `api`. */
 
-import type { ActiveRuns, ContextUsageResult, PermissionMode, RetryChoice, RetryResult, SessionPermissions } from '../types';
+import type {
+  ActiveRuns,
+  ChatPerformance,
+  ContextUsageResult,
+  PermissionMode,
+  RetryChoice,
+  RetryResult,
+  SessionPermissions,
+} from '../types';
 import type { FollowUpOutcome } from '../utils/messageQueue';
 import { apiFetch } from './api';
 
@@ -24,6 +32,10 @@ export async function getFollowUpOutcome(sessionId: string): Promise<FollowUpOut
 
 export async function getContextUsage(sessionId: string): Promise<ContextUsageResult> {
     return apiFetch('GET', `/chat/context/${encodeURIComponent(sessionId)}`);
+}
+
+export async function getChatPerformance(sessionId: string): Promise<ChatPerformance> {
+    return apiFetch('GET', `/chat/performance/${encodeURIComponent(sessionId)}`);
 }
 
 export async function retryWith(sessionId: string, messageId: number, model: string): Promise<RetryResult> {

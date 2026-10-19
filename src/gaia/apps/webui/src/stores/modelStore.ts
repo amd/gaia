@@ -196,3 +196,8 @@ export function shortModelName(model: string): string {
     const withoutProvider = /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
     return withoutProvider.slice(withoutProvider.lastIndexOf('/') + 1);
 }
+
+/** A cloud provider's name as people know it; an unknown id is shown as given. */
+export function cloudProviderName(provider: string): string {
+    return provider === 'fireworks' ? 'Fireworks AI' : provider === 'amd' ? 'AMD LLM Gateway' : provider;
+}

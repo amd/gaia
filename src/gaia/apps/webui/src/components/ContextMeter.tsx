@@ -4,6 +4,7 @@
 import { useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Popover } from './Popover';
+import { ContextPanel } from './ContextPanel';
 import type { ContextUsage } from '../types';
 import './ContextMeter.css';
 
@@ -20,10 +21,23 @@ const PARTS = [
     { key: 'query', label: 'Your message' },
 ] as const;
 
+interface ContextMeterProps {
+    usage: ContextUsage | null;
+    unavailable?: string | null;
+    /** With a session, the popover links to the full Context & performance panel. */
+    sessionId?: string;
+    busy?: boolean;
+    onUsage?: (usage: ContextUsage) => void;
+}
+
 /** How full the model's context window is, with a breakdown on click. */
-export function ContextMeter({ usage, unavailable }: { usage: ContextUsage | null; unavailable?: string | null }) {
+export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUsage }: ContextMeterProps) {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
+    const [details, setDetails] = useState(false);
+    const panel = details && sessionId
+        ? <ContextPanel sessionId={sessionId} busy={busy} onUsage={onUsage} onClose={() => setDetails(false)} />
+        : null;
     if (!usage) {
         if (!unavailable) return null;
         return (
@@ -79,10 +93,21 @@ export function ContextMeter({ usage, unavailable }: { usage: ContextUsage | nul
                     <p className="context-meter-note">
                         {usage.turns_in_view} earlier {usage.turns_in_view === 1 ? 'turn is' : 'turns are'} in view
                         {usage.turns_hidden > 0 && `; ${usage.turns_hidden} older ${usage.turns_hidden === 1 ? 'is' : 'are'} out of view`}.
-                        {' '}Estimates. GAIA never summarises your chat; older turns stay saved and can be recalled.
+                        {' '}{usage.tokenizer?.exact ? "Counted with the model's tokenizer." : 'Estimates.'}
+                        {' '}Older turns stay saved and can be recalled.
                     </p>
+                    {sessionId && (
+                        <button
+                            type="button"
+                            className="context-meter-details"
+                            onClick={() => { setOpen(false); setDetails(true); }}
+                        >
+                            Details: context &amp; performance
+                        </button>
+                    )}
                 </div>
             </Popover>
+            {panel}
         </div>
     );
 }
@@ -95,8 +120,8 @@ export function ContextWarning({ usage }: { usage: ContextUsage | null }) {
         <div className="context-warning" role="status">
             <AlertTriangle size={13} aria-hidden="true" />
             <span>
-                The conversation is filling the model's context. A long next reply pushes out the
-                oldest {n === 1 ? 'turn' : `${n} turns`}:{' '}
+                The conversation is filling the model's context. The oldest
+                {n === 1 ? ' turn' : ` ${n} turns`} may drop out of the model's view next:{' '}
                 {usage.at_risk.map((q, i) => (
                     <span key={i}>{i > 0 && ', '}<q>{q}</q></span>
                 ))}

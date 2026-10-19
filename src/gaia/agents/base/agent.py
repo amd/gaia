@@ -2764,6 +2764,31 @@ Do NOT wrap conversational replies in JSON.
         logger.info("[turn] %s", format_summary(record))
         return record
 
+    def _record_step_stats(
+        self,
+        response_stats: Optional[Dict[str, Any]],
+        step: int,
+        step_timer: StepTimer,
+        conversation: List[Dict[str, Any]],
+    ) -> None:
+        """Append this step's backend stats, timed by *step_timer*, to the trace."""
+        perf_stats = response_stats or self.chat.get_stats()
+        # A step whose backend reported no stats still took model time.
+        if not (perf_stats or step_timer.has_llm_calls()):
+            return
+        stats_record = {
+            "type": "stats",
+            "step": step,
+            "performance_stats": perf_stats or {},
+        }
+        step_timer.attach(stats_record)
+        if self._pending_eviction is not None:
+            stats_record.update(self._pending_eviction)
+            self._pending_eviction = None
+        if self._context_evictor is not None:
+            self._context_evictor.note_prompt_tokens(perf_stats)
+        conversation.append({"role": "system", "content": stats_record})
+
     def _attach_step_timer(self) -> StepTimer:
         """Start this turn's step timer and route the SDK's call timings to it."""
         timer = StepTimer()
@@ -10565,6 +10590,9 @@ Do NOT wrap conversational replies in JSON.
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
+                    )
                     continue
 
                 # Otherwise fall through to stats / answer / next iter.
@@ -10817,27 +10845,19 @@ Do NOT wrap conversational replies in JSON.
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
+                    # The step still made its model call and ran its tool.
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
+                    )
 
                     # Break out of tool execution to trigger error recovery prompt
                     continue
 
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
-            perf_stats = response_stats or self.chat.get_stats()
-            # A step whose backend reported no stats still took model time.
-            if perf_stats or step_timer.has_llm_calls():
-                stats_record = {
-                    "type": "stats",
-                    "step": steps_taken,
-                    "performance_stats": perf_stats or {},
-                }
-                step_timer.attach(stats_record)
-                if self._pending_eviction is not None:
-                    stats_record.update(self._pending_eviction)
-                    self._pending_eviction = None
-                if self._context_evictor is not None:
-                    self._context_evictor.note_prompt_tokens(perf_stats)
-                conversation.append({"role": "system", "content": stats_record})
+            self._record_step_stats(
+                response_stats, steps_taken, step_timer, conversation
+            )
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:

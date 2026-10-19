@@ -551,6 +551,39 @@ def test_a_load_refused_for_memory_tells_the_user_what_to_close():
     assert "Lemonade is running" not in str(raised.value)
 
 
+def test_a_load_is_recorded_with_how_long_it_took():
+    """The Context & performance panel lists each load and how long it took."""
+    health = _health_ok([_model("llm", "Other-GGUF")])
+    loads = []
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=health),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_cls.return_value = MagicMock()
+
+        _maybe_load_expected_model(_EXPECTED_LLM, loads=loads)
+
+    assert len(loads) == 1
+    assert loads[0]["model"] == _EXPECTED_LLM
+    # Another app's model stays resident, so nothing was replaced.
+    assert loads[0]["replaced"] == []
+    assert loads[0]["seconds"] >= 0
+
+
+def test_no_load_records_nothing():
+    health = _health_ok([_model("llm", _EXPECTED_LLM, ctx_size=262144)])
+    loads = []
+
+    with patch(_LEMONADE_MANAGER) as mock_mgr, patch(_HTTPX_GET, return_value=health):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model(_EXPECTED_LLM, loads=loads)
+
+    assert loads == []
+
+
 # ---------------------------------------------------------------------------
 # A custom (user.) model is listed by Lemonade without its namespace
 # ---------------------------------------------------------------------------
