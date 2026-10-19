@@ -56,6 +56,7 @@ export interface ApiSchemas {
   InstallRequest: InstallRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
+  LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
   MemorySettingsBody: MemorySettingsBody;
@@ -181,6 +182,7 @@ export interface AgentListResponse {
 export interface AgentStepResponse {
   active?: boolean;
   commandOutput?: CommandOutputResponse | null;
+  currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
   detail?: string | null;
@@ -189,6 +191,8 @@ export interface AgentStepResponse {
   label: string;
   latencyMs?: number | null;
   mcpServer?: string | null;
+  narration?: string | null;
+  planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;
@@ -591,6 +595,12 @@ export interface KnowledgeUpdate {
   entity?: string | null;
   reminded_at?: string | null;
   sensitive?: boolean | null;
+}
+/**
+ * ``limit_usd`` None removes the limit.
+ */
+export interface LimitRequest {
+  limit_usd?: number | null;
 }
 export interface LoadModelRequest {
   ctx_size?: number | null;

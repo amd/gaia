@@ -119,13 +119,15 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 label: 'Using tool',
                 tool: event.tool,
                 detail: event.detail,
+                narration: event.narration,
                 active: true, timestamp: ts,
                 mcpServer: event.mcp_server,
             };
         case 'plan':
             return {
                 id, type: 'plan', label: 'Created plan',
-                planSteps: event.steps, active: false,
+                planSteps: event.steps, planNarrations: event.step_narrations,
+                currentStep: event.current_step, active: false,
                 success: true, timestamp: ts,
             };
         case 'step':
@@ -907,6 +909,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (event.type === 'tool_args') {
                     updateLastToolStep({
                         detail: event.detail || JSON.stringify(event.args),
+                        ...(event.narration ? { narration: event.narration } : {}),
                     });
                     return;
                 }
