@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import types
 
 import psutil
 import pytest
@@ -204,3 +205,170 @@ def test_a_bad_limit_in_the_environment_fails_loudly(monkeypatch, raw):
     monkeypatch.setenv(installer.PIP_TIMEOUT_ENV, raw)
     with pytest.raises(InstallError, match=installer.PIP_TIMEOUT_ENV):
         installer._default_run_pip(["pkg"])
+
+
+def _script(tmp_path, name, body):
+    path = tmp_path / name
+    path.write_text(body)
+    return [sys.executable, str(path)]
+
+
+def test_uv_always_gives_up_on_the_lock_before_gaia_would(monkeypatch, tmp_path):
+    """A user's longer UV_LOCK_TIMEOUT would let uv outwait GAIA's window and
+    turn a clear lock error into a generic "stuck"."""
+    show = _script(
+        tmp_path, "show.py", "import os; print(os.environ['UV_LOCK_TIMEOUT'])\n"
+    )
+    monkeypatch.setenv("UV_LOCK_TIMEOUT", "600")
+    assert installer._run_frontend(show, 15.0).stdout.strip() == "7"
+    monkeypatch.delenv("UV_LOCK_TIMEOUT")
+    assert installer._run_frontend(show, 900.0).stdout.strip() == "300"
+    monkeypatch.setenv("UV_LOCK_TIMEOUT", "30")
+    assert installer._run_frontend(show, 900.0).stdout.strip() == "30"
+
+
+def test_waiting_for_the_cache_lock_shows_in_the_install_status(monkeypatch, tmp_path):
+    waiting = _script(
+        tmp_path,
+        "waiting.py",
+        "import sys, time\n"
+        "sys.stderr.write('Waiting to acquire lock for `cache` (lockfile: x)\\n')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(1.5)\n",
+    )
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [waiting])
+    installer._set_progress(
+        "lockwait", status="running", phase="installing", percent=60
+    )
+    installer._install_context.agent_id = "lockwait"
+    try:
+        installer._default_run_pip(["pkg"])
+    finally:
+        installer._install_context.agent_id = None
+    status = installer.get_install_status("lockwait")
+    assert status["phase"] == "waiting for another install to finish"
+    assert status["percent"] == 60
+
+
+def test_a_grandchild_orphaned_before_the_first_sample_is_killed(monkeypatch, tmp_path):
+    """Its parent exits at once, so no sample ever sees it as a descendant;
+    only the job (Windows) or the session (POSIX) still reaches it."""
+    pid_file = tmp_path / "pid"
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(
+        "import os, sys, time\n"
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]],\n"
+        "                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+    )
+    frontend = _script(
+        tmp_path,
+        "frontend.py",
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable] + sys.argv[1:]).wait()\n"
+        "time.sleep(60)\n",
+    )
+    command = frontend + [str(child), str(grandchild), str(pid_file)]
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 3.0)
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [command])
+
+    error = _run_in_thread(lambda: installer._default_run_pip([]), 40)
+    assert isinstance(error, InstallError), error
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(pid)
+
+
+def test_a_process_that_spins_forever_hits_the_ceiling(monkeypatch, tmp_path):
+    spin = _script(tmp_path, "spin.py", "while True:\n    pass\n")
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setenv(installer.PIP_MAX_ENV, "2")
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [spin])
+    error = _run_in_thread(lambda: installer._default_run_pip([]), 30)
+    assert isinstance(error, InstallError), error
+    assert "still running after 2s" in str(error)
+    assert installer.PIP_MAX_ENV in str(error)
+
+
+def test_a_reused_pid_is_not_counted_as_activity():
+    class Reused:
+        pid = 4242
+
+        def is_running(self):
+            return False  # psutil compares creation times
+
+        def cpu_times(self):
+            raise AssertionError("sampled a process that is not ours")
+
+    class Root:
+        pid = 1
+
+        def children(self, recursive=False):
+            return []
+
+        def is_running(self):
+            return True
+
+        def cpu_times(self):
+            return types.SimpleNamespace(user=1.0, system=0.0)
+
+        def io_counters(self):
+            raise AttributeError
+
+    seen = {4242: Reused()}
+    assert installer._tree_activity(Root(), seen) == 1.0
+    assert 4242 not in seen
+
+
+def test_a_success_whose_leftover_holds_the_output_is_still_a_success(
+    monkeypatch, tmp_path
+):
+    pid_file = tmp_path / "pid"
+    leftover = tmp_path / "leftover.py"
+    leftover.write_text(
+        "import os, sys, time\n"
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    frontend = _script(
+        tmp_path,
+        "frontend.py",
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable] + sys.argv[1:])\n"  # inherits stdout
+        "time.sleep(0.5)\n",
+    )
+    command = frontend + [str(leftover), str(pid_file)]
+    monkeypatch.setattr(installer, "_PIP_PIPE_WAIT_SECONDS", 1.0)
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [command])
+    installer._default_run_pip([])  # must not raise "stuck"
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(pid)
+
+
+def test_the_last_output_in_an_error_starts_at_a_line(monkeypatch, tmp_path):
+    noisy = _script(
+        tmp_path,
+        "noisy.py",
+        "import sys\n"
+        "for i in range(40):\n"
+        "    sys.stderr.write(f'resolving dependency number {i:03d} of many\\n')\n"
+        "sys.stderr.write('error: Could not acquire lock\\n')\n"
+        "sys.exit(2)\n",
+    )
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [noisy])
+    with pytest.raises(InstallError) as excinfo:
+        installer._default_run_pip(["pkg"])
+    last = str(excinfo.value).split("Last output: ", 1)[1]
+    assert last.startswith("resolving dependency number")
+    assert last.endswith("error: Could not acquire lock")

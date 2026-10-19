@@ -419,40 +419,61 @@ def _download_and_verify(
 # ---------------------------------------------------------------------------
 
 
-#: Default for how long one pip/uv install may go without any activity (CPU,
-#: disk or network, across its whole process tree) before it is stopped. A
-#: slow download is activity; a process parked on a lock or a hung build is not.
+#: Default for how long one pip/uv install may go without any activity (CPU or
+#: disk, across its whole process tree) before it is stopped as stuck. A slow
+#: download still uses CPU; a process parked on a lock or a hung build does not.
 PIP_TIMEOUT_SECONDS = 900.0
 
 #: Overrides ``PIP_TIMEOUT_SECONDS``.
 PIP_TIMEOUT_ENV = "GAIA_HUB_PIP_TIMEOUT"
 
+#: Ceiling on one install however busy it is, so a process spinning forever
+#: (which never looks idle) still ends. Far above any real install.
+PIP_MAX_SECONDS = 7200.0
+
+#: Overrides ``PIP_MAX_SECONDS``.
+PIP_MAX_ENV = "GAIA_HUB_PIP_MAX_SECONDS"
+
+#: How long uv may wait for another install's package-cache lock. uv's own
+#: default (300 s), and always under the no-progress window, so uv's clear
+#: lock error arrives before GAIA would have to stop it as stuck.
+UV_LOCK_WAIT_SECONDS = 300
+
 #: How often a running install's process tree is sampled.
 _PIP_POLL_SECONDS = 1.0
 
 #: How long to wait for the output pipes after the installer exits; a stray
-#: grandchild can hold them open.
+#: descendant can hold them open.
 _PIP_PIPE_WAIT_SECONDS = 10.0
 
-#: What uv prints when another uv holds its package-cache lock.
-_UV_LOCK_MARKERS = ("could not acquire lock", "waiting to acquire lock")
+#: What uv prints when another uv holds its package-cache lock: while waiting,
+#: and when it gives up.
+_UV_WAITING_MARKER = "waiting to acquire lock"
+_UV_LOCK_MARKERS = ("could not acquire lock", _UV_WAITING_MARKER)
+
+# The agent whose install is running on this thread, so the pip runner can say
+# in its progress that it is waiting for another install.
+_install_context = threading.local()
 
 
-def _pip_timeout() -> float:
-    raw = os.environ.get(PIP_TIMEOUT_ENV, "").strip()
+def _seconds_from_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return PIP_TIMEOUT_SECONDS
+        return default
     try:
         value = float(raw)
     except ValueError:
         value = 0.0
     if not math.isfinite(value) or value <= 0:
         raise InstallError(
-            f"{PIP_TIMEOUT_ENV}={raw!r} is not a positive number of seconds. "
-            f"Set it to e.g. 1800, or unset it for the "
-            f"{PIP_TIMEOUT_SECONDS:.0f}s default."
+            f"{name}={raw!r} is not a positive number of seconds. Set it to "
+            f"e.g. {default * 2:.0f}, or unset it for the {default:.0f}s default."
         )
     return value
+
+
+def _pip_timeout() -> float:
+    return _seconds_from_env(PIP_TIMEOUT_ENV, PIP_TIMEOUT_SECONDS)
 
 
 def _pip_frontends() -> List[List[str]]:
@@ -468,18 +489,61 @@ def _mentions_uv_lock(output: str) -> bool:
     return any(marker in text for marker in _UV_LOCK_MARKERS)
 
 
+def _uv_lock_timeout(window: float) -> str:
+    """The ``UV_LOCK_TIMEOUT`` for the child: a user's own value is kept only
+    when it is shorter, so uv always gives up before GAIA's window does."""
+    limit = max(1, min(UV_LOCK_WAIT_SECONDS, int(window * 0.5)))
+    raw = os.environ.get("UV_LOCK_TIMEOUT", "").strip()
+    try:
+        user = int(float(raw)) if raw else None
+    except ValueError:
+        user = None
+    if user is not None and 0 < user < limit:
+        return str(user)
+    return str(limit)
+
+
+def _tail(text: str, limit: int = 500) -> str:
+    """The last ``limit`` characters of ``text``, starting at a line."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[-limit:]
+    newline = cut.find("\n")
+    return cut[newline + 1 :] if 0 <= newline < len(cut) - 1 else cut
+
+
+def _report_lock_wait(agent_id: Optional[str]) -> None:
+    logger.warning(
+        "installer: %s is waiting for another install to finish (uv cache lock)",
+        agent_id or "a package install",
+    )
+    if agent_id is None:
+        return
+    state = get_install_status(agent_id) or {}
+    _set_progress(
+        agent_id,
+        status="running",
+        phase="waiting for another install to finish",
+        percent=int(state.get("percent") or 60),
+        version=state.get("version"),
+    )
+
+
 class _PipStuck(Exception):
-    def __init__(self, output: str) -> None:
+    def __init__(self, output: str, reason: str = "idle") -> None:
         super().__init__(output)
         self.output = output
+        self.reason = reason
 
 
 def _tree_activity(root, seen: Dict[int, Any]) -> float:
     """A number that changes whenever anything in ``root``'s tree does work.
 
     Every process ever seen stays in ``seen``, so a grandchild whose parent
-    exited (and which no longer shows up as a descendant) is still counted,
-    and still killed.
+    exited (and which no longer shows up as a descendant) is still counted.
+    A process whose pid was reused since is dropped (``is_running`` compares
+    creation times).
     """
     import psutil
 
@@ -489,24 +553,137 @@ def _tree_activity(root, seen: Dict[int, Any]) -> float:
     except psutil.Error:
         pass  # the root is exiting; the processes already seen are sampled
     total = 0.0
-    for process in seen.values():
+    for pid, process in list(seen.items()):
+        if not process.is_running():
+            del seen[pid]
+            continue
         try:
             cpu = process.cpu_times()
             total += cpu.user + cpu.system
             io = process.io_counters()
         except (psutil.Error, AttributeError):
             continue  # gone, or no I/O counters on this platform (macOS)
-        # read/write_chars include socket traffic on Linux; other_bytes holds
-        # it on Windows.
-        for name in ("read_chars", "write_chars", "read_bytes", "write_bytes"):
+        # CPU time is the main signal (a download decrypts and unpacks). The
+        # I/O counters add file activity; which socket traffic they include,
+        # if any, varies by platform, so nothing relies on it.
+        for name in ("read_bytes", "write_bytes", "read_chars", "write_chars"):
             total += getattr(io, name, 0)
         total += getattr(io, "other_bytes", 0)
     return total
 
 
-def _kill_tree(proc: "subprocess.Popen", seen: Dict[int, Any]) -> None:
+class _ProcessGroup:
+    """Everything an install starts, so it can all be killed together.
+
+    Windows: a Job Object with KILL_ON_JOB_CLOSE. The child starts suspended
+    and is assigned before it runs, so even a grandchild orphaned before the
+    first sample dies with the job. POSIX: the child leads its own session,
+    and ``killpg`` reaches every process left in it.
+    """
+
+    def __init__(self) -> None:
+        self._job = None
+
+    @staticmethod
+    def popen_kwargs() -> Dict[str, Any]:
+        if os.name == "nt":
+            return {"creationflags": 0x00000004}  # CREATE_SUSPENDED
+        return {"start_new_session": True}
+
+    def adopt(self, proc: "subprocess.Popen") -> None:
+        if os.name != "nt":
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll")
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                (n, ctypes.c_ulonglong)
+                for n in (
+                    "ReadOperationCount",
+                    "WriteOperationCount",
+                    "OtherOperationCount",
+                    "ReadTransferCount",
+                    "WriteTransferCount",
+                    "OtherTransferCount",
+                )
+            ]
+
+        class _BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimits),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        try:
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+            limits = _ExtendedLimits()
+            limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
+            if not kernel32.SetInformationJobObject(
+                job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+            ):
+                raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+            if not kernel32.AssignProcessToJobObject(
+                job, wintypes.HANDLE(int(proc._handle))
+            ):
+                raise OSError(
+                    ctypes.get_last_error(), "AssignProcessToJobObject failed"
+                )
+            self._job = job
+        finally:
+            # Always resumed: a child left suspended would never run.
+            ntdll.NtResumeProcess(wintypes.HANDLE(int(proc._handle)))
+
+    def kill(self, proc: "subprocess.Popen") -> None:
+        if os.name == "nt":
+            if self._job is not None:
+                import ctypes
+
+                kernel32 = ctypes.WinDLL("kernel32")
+                kernel32.TerminateJobObject(self._job, 1)
+        else:
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError as e:
+                logger.debug("installer: process group already gone: %s", e)
+
+    def close(self) -> None:
+        if self._job is not None:
+            import ctypes
+
+            ctypes.WinDLL("kernel32").CloseHandle(self._job)
+            self._job = None
+
+
+def _kill_tree(
+    proc: "subprocess.Popen", seen: Dict[int, Any], group: _ProcessGroup
+) -> None:
     import psutil
 
+    group.kill(proc)
     try:
         for process in psutil.Process(proc.pid).children(recursive=True):
             seen.setdefault(process.pid, process)
@@ -514,7 +691,7 @@ def _kill_tree(proc: "subprocess.Popen", seen: Dict[int, Any]) -> None:
         pass  # already gone; kill what was seen
     for process in seen.values():
         try:
-            process.kill()
+            process.kill()  # checks the pid was not reused
         except psutil.Error:
             continue
     proc.kill()
@@ -530,15 +707,16 @@ def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess
 
     Activity is sampled across the whole process tree (``python -m uv`` and a
     ``uv`` shim run the real ``uv`` as a grandchild), so a long download keeps
-    it alive and a process waiting on a lock does not. On any failure the
-    whole tree is killed, including grandchildren already orphaned.
+    it alive and a process waiting on a lock does not. A run is also capped at
+    ``GAIA_HUB_PIP_MAX_SECONDS`` however busy it looks. On any failure the
+    whole tree is killed (see :class:`_ProcessGroup`).
     """
     import psutil
 
+    ceiling = _seconds_from_env(PIP_MAX_ENV, PIP_MAX_SECONDS)
     env = dict(os.environ)
-    # Make current uv give up on another install's cache lock with a clear
-    # error, before the no-progress limit would have to stop it.
-    env.setdefault("UV_LOCK_TIMEOUT", str(max(1, int(timeout * 0.8))))
+    env["UV_LOCK_TIMEOUT"] = _uv_lock_timeout(timeout)
+    group = _ProcessGroup()
     proc = subprocess.Popen(  # noqa: S603 - args are constructed, not shell
         cmd,
         stdout=subprocess.PIPE,
@@ -546,27 +724,34 @@ def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess
         text=True,
         errors="replace",
         env=env,
-        start_new_session=os.name != "nt",
+        **group.popen_kwargs(),
     )
-    output: Dict[str, str] = {}
+    output: Dict[str, List[str]] = {"stdout": [], "stderr": []}
+    # Read here: the context is per thread, and the readers run on their own.
+    agent_id = getattr(_install_context, "agent_id", None)
 
     def read(name: str, stream) -> None:
-        output[name] = stream.read()
+        reported = False
+        for line in iter(stream.readline, ""):
+            output[name].append(line)
+            if not reported and _UV_WAITING_MARKER in line.lower():
+                reported = True
+                _report_lock_wait(agent_id)
 
-    readers = [
-        threading.Thread(target=read, args=(name, stream), daemon=True)
-        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr))
-    ]
-    for reader in readers:
-        reader.start()
+    readers = []
     seen: Dict[int, Any] = {}
     try:
+        group.adopt(proc)
+        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+            reader = threading.Thread(target=read, args=(name, stream), daemon=True)
+            reader.start()
+            readers.append(reader)
         try:
             root = psutil.Process(proc.pid)
         except psutil.NoSuchProcess:
             root = None  # finished before it could be sampled
+        started = last_change = time.monotonic()
         last_activity: Optional[float] = None
-        last_change = time.monotonic()
         while True:
             try:
                 proc.wait(timeout=_PIP_POLL_SECONDS)
@@ -579,21 +764,33 @@ def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess
                 last_activity, last_change = activity, now
             elif now - last_change >= timeout:
                 raise _PipStuck("")
+            if now - started >= ceiling:
+                raise _PipStuck("", reason="ceiling")
         for reader in readers:
             reader.join(_PIP_PIPE_WAIT_SECONDS)
         if any(reader.is_alive() for reader in readers):
-            # A stray descendant holds the pipes; it is part of this install.
-            raise _PipStuck("")
+            # A stray descendant still holds the pipes after the installer
+            # exited. It is part of this install: end it, keep the result.
+            logger.warning(
+                "installer: a process left behind by %s kept its output open; "
+                "stopped it",
+                cmd[0],
+            )
+            _kill_tree(proc, seen, group)
+            for reader in readers:
+                reader.join(_PIP_PIPE_WAIT_SECONDS)
     except BaseException as e:
-        _kill_tree(proc, seen)
+        _kill_tree(proc, seen, group)
         for reader in readers:
             reader.join(_PIP_PIPE_WAIT_SECONDS)
         if isinstance(e, _PipStuck):
-            tail = (output.get("stderr", "") + output.get("stdout", "")).strip()
-            raise _PipStuck(tail[-500:]) from None
+            text = "".join(output["stderr"]) + "".join(output["stdout"])
+            raise _PipStuck(_tail(text), reason=e.reason) from None
         raise
+    finally:
+        group.close()
     return subprocess.CompletedProcess(
-        cmd, proc.returncode, output.get("stdout", ""), output.get("stderr", "")
+        cmd, proc.returncode, "".join(output["stdout"]), "".join(output["stderr"])
     )
 
 
@@ -602,7 +799,7 @@ def _uv_lock_error(frontend: List[str], output: str) -> InstallError:
         f"'{' '.join(frontend)}' could not get the package cache: another install "
         "is using it (another GAIA session, or a uv/pip command in a terminal). "
         "Nothing was changed by this one. Wait for the other install to finish, "
-        "then retry." + (f"\nLast output: {output[-500:]}" if output else "")
+        "then retry." + (f"\nLast output: {output}" if output else "")
     )
 
 
@@ -630,9 +827,18 @@ def _default_run_pip(args: List[str]) -> None:
         except _PipStuck as e:
             if _mentions_uv_lock(e.output):
                 raise _uv_lock_error(frontend, e.output) from e
+            if e.reason == "ceiling":
+                raise InstallError(
+                    f"'{' '.join(frontend)}' was still running after "
+                    f"{_seconds_from_env(PIP_MAX_ENV, PIP_MAX_SECONDS):.0f}s and "
+                    "was stopped. No install takes that long; it is most likely "
+                    "stuck in a loop. Retry, or raise the ceiling with "
+                    f"{PIP_MAX_ENV}=<seconds>."
+                    + (f"\nLast output: {e.output}" if e.output else "")
+                ) from e
             raise InstallError(
-                f"'{' '.join(frontend)}' did no work for {timeout:.0f}s (no CPU, "
-                "disk or network activity) and was stopped as stuck before it "
+                f"'{' '.join(frontend)}' did no work for {timeout:.0f}s (no CPU "
+                "or disk activity) and was stopped as stuck before it "
                 "finished. Retry; if a package build or a very slow connection "
                 f"needs longer, raise the limit with {PIP_TIMEOUT_ENV}=<seconds>."
                 + (f"\nLast output: {e.output}" if e.output else "")
@@ -641,7 +847,7 @@ def _default_run_pip(args: List[str]) -> None:
             return
         output = (proc.stderr or "") + (proc.stdout or "")
         if _mentions_uv_lock(output):
-            raise _uv_lock_error(frontend, output.strip())
+            raise _uv_lock_error(frontend, _tail(output))
         attempts.append(
             f"{' '.join(frontend)} (exit {proc.returncode}): "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
@@ -1431,9 +1637,13 @@ def install(
                     )
                     _install_binary_artifact(artifact_bytes, generic_name, install_dir)
                 elif language == "python":
-                    _install_python_artifact(
-                        artifact_bytes, artifact["filename"], install_dir, run_pip
-                    )
+                    _install_context.agent_id = agent_id
+                    try:
+                        _install_python_artifact(
+                            artifact_bytes, artifact["filename"], install_dir, run_pip
+                        )
+                    finally:
+                        _install_context.agent_id = None
                 else:
                     _install_cpp_artifact(
                         artifact_bytes, artifact["filename"], install_dir
@@ -1470,19 +1680,25 @@ def install(
                     artifact_kind=artifact_kind,
                     executable=generic_name,
                 )
-            except Exception:
-                # Install failed mid-write — restore the backup if we made one so
-                # the user is left with a working previous version, not a stub.
-                _restore_backup_if_present(agent_id, root)
-                # Only a FIRST install is cleared. "No backup" is not the same
-                # question: binary agents deliberately skip the snapshot (they
-                # are replaced in place so a running sidecar's data directory
-                # is not moved out from under it), so treating a missing backup
-                # as a first install would delete a working binary agent and
-                # its sidecar state on a failed UPDATE — most likely when the
-                # agent is running and its executable cannot be replaced.
-                if not updated:
-                    _clear_failed_install(agent_id, root)
+            except Exception as failure:
+                try:
+                    # Install failed mid-write — restore the backup if we made
+                    # one so the user is left with a working previous version,
+                    # not a stub.
+                    _restore_backup_if_present(agent_id, root)
+                    # Only a FIRST install is cleared. "No backup" is not the
+                    # same question: binary agents deliberately skip the
+                    # snapshot (they are replaced in place so a running
+                    # sidecar's data directory is not moved out from under it),
+                    # so treating a missing backup as a first install would
+                    # delete a working binary agent and its sidecar state on a
+                    # failed UPDATE — most likely when the agent is running and
+                    # its executable cannot be replaced.
+                    if not updated:
+                        _clear_failed_install(agent_id, root)
+                except InstallError as cleanup:
+                    # The rollback's own problem must not hide why it ran.
+                    raise InstallError(f"{failure} Also: {cleanup}") from failure
                 raise
 
             # --- hot-register ---

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -1904,3 +1905,40 @@ def test_a_failed_update_never_nests_the_backup_in_a_half_deleted_dir(
         installer._restore_backup_if_present("demo", tmp_path)
     assert not (install_dir / "demo").exists()
     assert (backup / "gaia-agent.yaml").exists()
+
+
+def test_a_failed_rollback_keeps_the_reason_the_install_failed(tmp_path, monkeypatch):
+    manifest = _manifest()
+
+    def attempt(run_pip):
+        return install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=run_pip,
+            install_root=tmp_path,
+            active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+        )
+
+    attempt(lambda args: None)  # a working version to update from
+
+    def lock_conflict(args):
+        raise InstallError("uv could not get the package cache: another install")
+
+    real_rmtree = installer.shutil.rmtree
+    held = installer.agent_install_dir("demo", tmp_path)
+
+    def held_rmtree(path, ignore_errors=False, **kwargs):
+        if Path(path) != held:
+            return real_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+        if not ignore_errors:
+            raise PermissionError(13, "in use by another process", str(path))
+
+    monkeypatch.setattr(installer.shutil, "rmtree", held_rmtree)
+    with pytest.raises(InstallError) as excinfo:
+        attempt(lock_conflict)
+    message = str(excinfo.value)
+    assert "another install" in message
+    assert "Could not remove the failed install" in message
+    assert "could not get the package cache" in str(excinfo.value.__cause__)
