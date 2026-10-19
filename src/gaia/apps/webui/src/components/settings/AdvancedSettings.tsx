@@ -136,31 +136,6 @@ export function AdvancedSettings() {
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
-    const CTX_PRESETS: Array<{ label: string; value: number }> = [
-        { label: '4K', value: 4096 },
-        { label: '8K', value: 8192 },
-        { label: '16K', value: 16384 },
-        { label: '32K', value: 32768 },
-    ];
-    const currentCtx = status?.model_context_size ?? null;
-    const [ctxInput, setCtxInput] = useState<string>('');
-    useEffect(() => {
-        if (currentCtx != null) setCtxInput(String(currentCtx));
-    }, [currentCtx]);
-
-    const parsedCtxSize = (() => {
-        const n = parseInt(ctxInput, 10);
-        return Number.isFinite(n) && n > 0 ? n : null;
-    })();
-    const ctxDirty = parsedCtxSize != null && parsedCtxSize !== currentCtx;
-    const targetModelForReload = status?.model_loaded ?? modelName;
-
-    const applyCtxSize = useCallback(async () => {
-        if (!parsedCtxSize || !targetModelForReload) return;
-        log.system.info(`Reloading ${targetModelForReload} with ctx_size=${parsedCtxSize}`);
-        await loadModel(targetModelForReload, parsedCtxSize);
-    }, [parsedCtxSize, targetModelForReload, loadModel]);
-
     const version = __APP_VERSION__;
 
     // A cloud model runs off this PC: no device, download, load or context to manage.
@@ -365,65 +340,6 @@ export function AdvancedSettings() {
                         </div>
                     )}
                 </section>
-
-                {/* Context Size */}
-                {!cloudModel && (
-                <section className="settings-section">
-                    <h4>Context Size</h4>
-                    <p className="model-override-desc">
-                        Reload the active model with a different context window.
-                        Larger contexts use more memory and slow inference;
-                        going past the model&rsquo;s training length may degrade quality.
-                    </p>
-                    <div className="ctx-preset-row">
-                        {CTX_PRESETS.map((p) => {
-                            const active = parsedCtxSize === p.value;
-                            return (
-                                <button
-                                    key={p.value}
-                                    className={`btn-ctx-preset${active ? ' active' : ''}`}
-                                    onClick={() => setCtxInput(String(p.value))}
-                                    disabled={isLoadingModel}
-                                    type="button"
-                                >
-                                    {p.label}
-                                </button>
-                            );
-                        })}
-                    </div>
-                    <div className="model-input-row">
-                        <input
-                            type="number"
-                            className="model-input"
-                            placeholder={currentCtx != null ? String(currentCtx) : '4096'}
-                            value={ctxInput}
-                            min={512}
-                            step={1024}
-                            onChange={(e) => setCtxInput(e.target.value)}
-                            disabled={isLoadingModel}
-                            aria-label="Context size in tokens"
-                        />
-                        <div className="model-btn-group">
-                            <button
-                                className="btn-model-save"
-                                onClick={() => { void applyCtxSize(); }}
-                                disabled={isLoadingModel || !ctxDirty || !status?.lemonade_running}
-                                aria-label="Reload model with new context size"
-                            >
-                                {isLoadingModel ? (
-                                    <><Loader2 size={13} className="btn-spinner" /> Reloading…</>
-                                ) : (
-                                    'Apply'
-                                )}
-                            </button>
-                        </div>
-                    </div>
-                    <p className="model-status-hint">
-                        Current: <code>{currentCtx != null ? `${currentCtx.toLocaleString()} tokens` : 'unknown'}</code>
-                        {status?.model_loaded && <> on <code>{status.model_loaded}</code></>}.
-                    </p>
-                </section>
-                )}
 
                 {/* Dynamic Tools (Beta) — #1798 */}
                 <section className="settings-section">

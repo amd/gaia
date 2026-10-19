@@ -480,8 +480,25 @@ One window with General (appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
-llama.cpp backend, context size, custom model ID, beta options, MCP servers,
-version and roll back).
+llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
+back).
+
+**Settings → Model** lists each local model with where it runs, such as
+"GPU · Vulkan" or "NPU · FLM". You don't pick the device: each model is built
+for one. A loaded model shows the device Lemonade reports for it, and says so
+plainly if that isn't the expected one (a GPU model that fell back to the CPU
+runs slowly). Each row also shows whether the model fits this PC, its download
+size and the speed measured here. Models this PC can't run are under **Not
+available on this PC**, with the reason. **Context size** goes up to the
+largest window that fits; **Automatic** is GAIA's choice, and a size you pick
+is kept for that model.
+
+The model chip in the composer opens the same list. While GAIA is answering,
+a model you pick there applies to your next message. The **Local · model** pill
+at the bottom of the sidebar shows whether the model is loaded, warming up or
+stopped, where it runs, memory in use and free, and its context window, with a
+**Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
+reloads its model and never starts that server for you.
 
 **Settings → Notifications** picks, for each event (needs your approval, has a
 question, finished), a **Banner**, a **Badge** only, or **Off**, plus a sound

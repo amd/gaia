@@ -1710,7 +1710,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         inputRef={inputRef}
                         placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
-                        rightControls={<ModelChip disabled={isStreaming} />}
+                        rightControls={<ModelChip />}
                     />
                 </div>
             </div>
