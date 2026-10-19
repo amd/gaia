@@ -1530,6 +1530,41 @@ class TestCacheSecurity:
                 assert result2["success"] is True
                 assert len(rag2.chunks) > 0
 
+    def test_failed_verification_misses_without_deleting(self, mock_dependencies):
+        """A mismatch is a miss: the entry another process wrote must survive."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+                assert rag.index_document(str(fake_pdf))["success"] is True
+                cache_path = rag._get_cache_path(str(fake_pdf))
+
+                rag2 = RAGSDK(config)
+                with (
+                    patch.object(
+                        rag2,
+                        "_verify_and_load_cache",
+                        side_effect=ValueError("Cache integrity check failed"),
+                    ),
+                    patch.object(
+                        rag2,
+                        "_extract_text_from_file",
+                        side_effect=RuntimeError("extraction interrupted"),
+                    ),
+                ):
+                    result = rag2.index_document(str(fake_pdf))
+
+                assert result["success"] is False
+                assert os.path.exists(cache_path)
+                assert os.path.exists(cache_path + ".sig")
+                assert rag._verify_and_load_cache(cache_path)["chunks"]
+
 
 class TestClearCacheSafety:
     """clear_cache must only ever delete files the RAG cache wrote (#4194)."""
@@ -1584,7 +1619,8 @@ class TestClearCacheSafety:
         rag.clear_cache()
 
         remaining = sorted(p.name for p in cache_dir.iterdir())
-        assert remaining == sorted(foreign + ["subdir"])
+        # rag-cache.lock is the cross-process lock clear_cache itself holds.
+        assert remaining == sorted(foreign + ["rag-cache.lock", "subdir"])
 
     @pytest.mark.parametrize("target", ["gaia_dir", "home"])
     def test_clear_refuses_gaia_home_and_user_home(self, gaia_home, target):

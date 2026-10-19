@@ -223,6 +223,8 @@ async def uninstall_agent(agent_id: str, request: Request):
         installer_mod.uninstall(agent_id, registry=registry)
     except installer_mod.NotInstalledError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except installer_mod.InstallInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except installer_mod.InstallError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": agent_id, "status": "uninstalled"}

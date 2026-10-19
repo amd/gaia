@@ -193,7 +193,7 @@ def test_install_disk_space_block(tmp_path, monkeypatch):
 
 def test_install_concurrency_guard(tmp_path):
     manifest = _manifest()
-    with installer._install_slot("demo"):  # noqa: SLF001 - simulate in-flight
+    with installer._install_slot("demo", tmp_path):  # noqa: SLF001 - in-flight
         with pytest.raises(InstallInProgressError):
             install(
                 "demo",

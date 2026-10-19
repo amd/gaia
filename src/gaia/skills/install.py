@@ -38,6 +38,7 @@ the signature earned.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import zipfile
@@ -191,8 +192,7 @@ def install_skill(
     destination_root = resolver.user_root
     target = skill_directory(destination_root, name, source=f"install {reference!r}")
 
-    lock = SkillLock.load(destination_root)
-    previous = lock.get(name)
+    previous = SkillLock.load(destination_root).get(name)
     if target.exists() and not force:
         installed = f" (version {previous.version})" if previous else ""
         raise SkillInstallError(
@@ -276,64 +276,82 @@ def install_skill(
             confirmer=confirmer,
         )
 
-        if target.exists():
-            shutil.rmtree(target)
-        destination_root.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_dir, target)
+        # Built in a staging directory and swapped in whole, so a loader in
+        # another process sees the old copy or the new one, never a partial one.
+        staging = _staging_dir(destination_root, name)
+        retired = staging / f"{name}.replaced"
+        try:
+            staged = staging / name
+            shutil.copytree(source_dir, staged)
 
-        # Re-stamp only when the signature did not support the claim, so
-        # `gaia skill info` and the loader read the enforced tier rather than the
-        # publisher's. Rewriting SKILL.md invalidates the bundled
-        # SIGNATURE.json's digest for that file, which is why an install that
-        # honored the claim is left byte-identical and still verifiable; a
-        # downgraded one records its verified provenance in the lock instead.
-        if tier != claimed:
-            skill.gaia.security_tier = tier
-            skill.path = target / SKILL_FILENAME
-            skill.write(target / SKILL_FILENAME)
-            log.info(
-                "Re-stamped '%s' %s from claimed tier '%s' to enforced '%s'; the "
-                "bundled %s no longer matches the rewritten %s (its verified "
-                "provenance is recorded in the skill lock)",
-                name,
-                version,
-                claimed,
-                tier,
-                SIGNATURE_FILENAME,
-                SKILL_FILENAME,
-            )
+            # Re-stamp only when the signature did not support the claim, so
+            # `gaia skill info` and the loader read the enforced tier rather than the
+            # publisher's. Rewriting SKILL.md invalidates the bundled
+            # SIGNATURE.json's digest for that file, which is why an install that
+            # honored the claim is left byte-identical and still verifiable; a
+            # downgraded one records its verified provenance in the lock instead.
+            if tier != claimed:
+                skill.gaia.security_tier = tier
+                skill.path = target / SKILL_FILENAME
+                skill.write(staged / SKILL_FILENAME)
+                log.info(
+                    "Re-stamped '%s' %s from claimed tier '%s' to enforced '%s'; the "
+                    "bundled %s no longer matches the rewritten %s (its verified "
+                    "provenance is recorded in the skill lock)",
+                    name,
+                    version,
+                    claimed,
+                    tier,
+                    SIGNATURE_FILENAME,
+                    SKILL_FILENAME,
+                )
 
-    # Hashed after the re-stamp so the digest describes the bytes that landed,
-    # not the ones in the archive. `gaia skill lock` compares against this.
-    installed_digest = content_digest(target)
+            # Hashed after the re-stamp so the digest describes the bytes that land,
+            # not the ones in the archive. `gaia skill lock` compares against this.
+            installed_digest = content_digest(staged)
 
-    lock.record(
-        LockEntry(
-            name=name,
-            version=version,
-            requested=spec,
-            source=SOURCE_HUB,
-            # Record the origin actually fetched from, not the flag: `base_url` is
-            # None whenever the hub came from GAIA_HUB_URL or the default, and
-            # "which hub did this come from" is the provenance the lock exists for.
-            hub_url=base_url or get_hub_base_url(),
-            artifact_sha256=artifact.sha256,
-            artifact_filename=artifact.filename,
-            content_digest=installed_digest,
-            claimed_tier=claimed,
-            attested_tier=attested,
-            installed_tier=tier,
-            signature={
-                "signed": signature.signed,
-                "key_id": signature.key_id,
-                "publisher": signature.publisher,
-                "role": signature.role,
-            },
-            permissions=list(skill.gaia.permissions),
-            path=str(target),
-        )
-    )
-    lock.save()
+            with SkillLock.locked(destination_root) as lock:
+                if target.exists() and not force:
+                    raise SkillInstallError(
+                        f"Skill '{name}' was installed at {target} by another "
+                        "process while this install ran. Pass --force to "
+                        "replace it."
+                    )
+                previous = lock.get(name) or previous
+                _swap_in(staged, target, retired)
+                try:
+                    lock.record(
+                        LockEntry(
+                            name=name,
+                            version=version,
+                            requested=spec,
+                            source=SOURCE_HUB,
+                            # Record the origin actually fetched from, not the flag: `base_url` is
+                            # None whenever the hub came from GAIA_HUB_URL or the default, and
+                            # "which hub did this come from" is the provenance the lock exists for.
+                            hub_url=base_url or get_hub_base_url(),
+                            artifact_sha256=artifact.sha256,
+                            artifact_filename=artifact.filename,
+                            content_digest=installed_digest,
+                            claimed_tier=claimed,
+                            attested_tier=attested,
+                            installed_tier=tier,
+                            signature={
+                                "signed": signature.signed,
+                                "key_id": signature.key_id,
+                                "publisher": signature.publisher,
+                                "role": signature.role,
+                            },
+                            permissions=list(skill.gaia.permissions),
+                            path=str(target),
+                        )
+                    )
+                    lock.save()
+                except BaseException:
+                    _swap_back(target, retired)
+                    raise
+        finally:
+            _remove_staging(staging, target, retired)
     resolver.reload()
 
     return InstallResult(
@@ -348,6 +366,84 @@ def install_skill(
         permissions=list(skill.gaia.permissions),
         replaced_version=previous.version if previous else "",
     )
+
+
+#: Directory under a skills root holding installs in progress. Discovery reads
+#: only immediate children that hold a SKILL.md, so it is never loaded.
+STAGING_DIRNAME = ".staging"
+
+
+def _staging_dir(destination_root: Path, name: str) -> Path:
+    """A fresh directory on the skills root's filesystem, so the swap is a rename."""
+    parent = destination_root / STAGING_DIRNAME
+    parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"{name}.", dir=parent))
+
+
+def _swap_in(staged: Path, target: Path, retired: Path) -> None:
+    """Replace *target* with *staged* by two renames, restoring it if the second fails."""
+    if target.exists():
+        try:
+            os.replace(target, retired)
+        except OSError as exc:
+            raise SkillInstallError(
+                f"Could not move the installed copy at {target} aside to replace "
+                f"it: {exc}. Close anything using files in it (an editor, a "
+                "running tool) and retry the install."
+            ) from exc
+    try:
+        os.replace(staged, target)
+    except OSError as exc:
+        kept = ""
+        if retired.exists():
+            try:
+                os.replace(retired, target)
+            except OSError as restore_exc:
+                kept = (
+                    f" Restoring the previous copy also failed ({restore_exc}); it "
+                    f"is kept at {retired} — move it back to {target}."
+                )
+        raise SkillInstallError(
+            f"Could not move the new copy into {target}: {exc}.{kept} Close "
+            "anything using the skills folder and retry the install."
+        ) from exc
+
+
+def _swap_back(target: Path, retired: Path) -> None:
+    """Undo a swap whose lock entry could not be saved, so files and lock agree."""
+    try:
+        shutil.rmtree(target)
+        if retired.exists():
+            os.replace(retired, target)
+    except OSError as exc:
+        log.error(
+            "Could not undo the install at %s after its lock entry failed to save: "
+            "%s. The previous copy is kept at %s.",
+            target,
+            exc,
+            retired,
+        )
+
+
+def _remove_staging(staging: Path, target: Path, retired: Path) -> None:
+    if retired.exists() and not target.exists():
+        # The only copy of the previous install; never delete it.
+        log.error(
+            "Kept %s: it holds the previous copy of %s, which could not be put "
+            "back. Move it back by hand.",
+            retired,
+            target,
+        )
+        return
+    try:
+        shutil.rmtree(staging)
+    except OSError as exc:
+        log.warning(
+            "Could not remove the skill staging directory %s: %s. It holds no "
+            "installed skill; delete it by hand.",
+            staging,
+            exc,
+        )
 
 
 def _gate_tier(
@@ -529,12 +625,12 @@ def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> Remove
             "with 'gaia skill list'."
         )
 
-    lock = SkillLock.load(root)
-    entry = lock.get(name)
-    shutil.rmtree(target)
-    was_locked = lock.forget(name)
-    if was_locked:
-        lock.save()
+    with SkillLock.locked(root) as lock:
+        entry = lock.get(name)
+        shutil.rmtree(target)
+        was_locked = lock.forget(name)
+        if was_locked:
+            lock.save()
     resolver.reload()
     log.info("Removed skill '%s' from %s", name, target)
 

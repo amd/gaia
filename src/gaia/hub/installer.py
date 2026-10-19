@@ -54,6 +54,7 @@ from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.file_lock import FileLockTimeout, file_lock, write_text_atomic
 from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
@@ -329,16 +330,31 @@ _IN_PROGRESS: set = set()
 
 
 @contextmanager
-def _install_slot(agent_id: str):
+def _install_slot(agent_id: str, install_root: Optional[Path] = None):
+    """Claim *agent_id* in this process and, through a file lock, in every other.
+
+    The Agent UI, the daemon and ``gaia hub`` can each start an install; the
+    file lock keeps two of them from writing one agent's directory at once.
+    """
+    busy = (
+        f"An install for '{agent_id}' is already in progress. Wait for it "
+        f"to finish (poll GET /api/agents/{agent_id}/install-status)."
+    )
     with _GUARD_LOCK:
         if agent_id in _IN_PROGRESS:
-            raise InstallInProgressError(
-                f"An install for '{agent_id}' is already in progress. Wait for it "
-                f"to finish (poll GET /api/agents/{agent_id}/install-status)."
-            )
+            raise InstallInProgressError(busy)
         _IN_PROGRESS.add(agent_id)
     try:
-        yield
+        root = install_root or default_install_root()
+        try:
+            with file_lock(
+                root / f".{_require_safe_agent_id(agent_id)}.install", timeout=0
+            ):
+                yield
+        except FileLockTimeout as exc:
+            raise InstallInProgressError(
+                f"{busy} Another GAIA process holds {exc.lock_path}."
+            ) from exc
     finally:
         with _GUARD_LOCK:
             _IN_PROGRESS.discard(agent_id)
@@ -860,24 +876,13 @@ def _read_pth_lines(pth_path: Path) -> List[str]:
 
 
 def _write_pth_lines(pth_path: Path, lines: List[str]) -> None:
-    """Write *lines* to *pth_path* atomically (temp file + ``os.replace``),
-    so a crash mid-write never corrupts a ``.pth`` file other packages also
-    rely on. Deletes the file entirely when *lines* is empty."""
+    """Write *lines* to *pth_path* atomically, so a crash mid-write never
+    corrupts a ``.pth`` file other packages also rely on. Deletes the file
+    entirely when *lines* is empty. Caller holds :func:`file_lock` on it."""
     if not lines:
         pth_path.unlink(missing_ok=True)
         return
-    pth_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_name = tempfile.mkstemp(
-        dir=str(pth_path.parent), prefix=".gaia-hub-pth-"
-    )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-        os.replace(str(tmp_path), str(pth_path))
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    write_text_atomic(pth_path, "\n".join(lines) + "\n")
 
 
 def _add_wheel_agent_to_active_env_path(
@@ -895,11 +900,14 @@ def _add_wheel_agent_to_active_env_path(
     pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
     line = str(site_packages)
     try:
-        lines = _read_pth_lines(pth_path)
-        if line in lines:
-            return
-        lines.append(line)
-        _write_pth_lines(pth_path, lines)
+        # Locked: two installs each re-writing the file from their own stale
+        # copy would drop the other's line.
+        with file_lock(pth_path):
+            lines = _read_pth_lines(pth_path)
+            if line in lines:
+                return
+            lines.append(line)
+            _write_pth_lines(pth_path, lines)
         logger.info(
             "installer: added %s to %s (wheel agent importable in any new "
             "process using this environment)",
@@ -929,11 +937,12 @@ def _remove_wheel_agent_from_active_env_path(
     pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
     line = str(site_packages)
     try:
-        lines = _read_pth_lines(pth_path)
-        if line not in lines:
-            return
-        remaining = [entry for entry in lines if entry != line]
-        _write_pth_lines(pth_path, remaining)
+        with file_lock(pth_path):
+            lines = _read_pth_lines(pth_path)
+            if line not in lines:
+                return
+            remaining = [entry for entry in lines if entry != line]
+            _write_pth_lines(pth_path, remaining)
         logger.info("installer: removed %s from %s", line, pth_path)
     except OSError as exc:
         raise InstallError(
@@ -1136,7 +1145,7 @@ def install(
     root = install_root or default_install_root()
     base_url = (base_url or catalog_mod.get_hub_base_url()).rstrip("/")
 
-    with _install_slot(agent_id):
+    with _install_slot(agent_id, root):
         _set_progress(
             agent_id, status="running", phase="resolving", percent=5, version=version
         )
@@ -1414,6 +1423,16 @@ def uninstall(
         NotInstalledError: If the agent is not installed.
     """
     root = install_root or default_install_root()
+    with _install_slot(agent_id, root):
+        _uninstall_locked(agent_id, root, registry, active_env_site_packages)
+
+
+def _uninstall_locked(
+    agent_id: str,
+    root: Path,
+    registry: Any,
+    active_env_site_packages: Optional[Path],
+) -> None:
     install_dir = agent_install_dir(agent_id, root)
     installed = read_sentinel(agent_id, root)
     if installed is None:
@@ -1454,6 +1473,11 @@ def rollback(
         InstallError: If there is no backup to restore.
     """
     root = install_root or default_install_root()
+    with _install_slot(agent_id, root):
+        return _rollback_locked(agent_id, root, registry)
+
+
+def _rollback_locked(agent_id: str, root: Path, registry: Any) -> InstalledAgent:
     current = read_sentinel(agent_id, root)
     if current is not None and current.artifact_kind == ARTIFACT_KIND_BINARY:
         raise InstallError(

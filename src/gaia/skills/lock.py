@@ -61,15 +61,16 @@ whose bytes no longer match.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from gaia.logger import get_logger
-from gaia.skills.errors import SkillValidationError
+from gaia.skills.errors import SkillError, SkillValidationError
+from gaia.utils.file_lock import FileLockError, file_lock
+from gaia.utils.file_lock import write_text_atomic as _write_text_atomic
 
 log = get_logger(__name__)
 
@@ -170,13 +171,28 @@ class SkillLock:
     # -- io ----------------------------------------------------------------
 
     @classmethod
+    @contextmanager
+    def locked(cls, skills_root: Path) -> Iterator["SkillLock"]:
+        """Load the lock and hold it against other processes until the block ends.
+
+        Every read-modify-write goes through this, so two installs (the CLI and
+        the Agent UI, say) cannot each save a copy missing the other's entry.
+        The caller still calls :meth:`save`.
+        """
+        with _hold(lock_path(skills_root)):
+            yield cls.load(skills_root)
+
+    @classmethod
     def load(cls, skills_root: Path) -> "SkillLock":
         """Read the lock under *skills_root*; an absent file yields an empty lock."""
         path = lock_path(skills_root)
         if not path.is_file():
             return cls(entries={}, path=path)
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            with _hold(path):
+                data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return cls(entries={}, path=path)
         except (OSError, json.JSONDecodeError) as exc:
             raise SkillValidationError(
                 f"Skill lock {path} is not readable JSON: {exc}. Fix the file, or "
@@ -224,7 +240,8 @@ class SkillLock:
                 name: self.entries[name].to_dict() for name in sorted(self.entries)
             },
         }
-        write_text_atomic(target, json.dumps(document, indent=2) + "\n")
+        with _hold(target):
+            write_text_atomic(target, json.dumps(document, indent=2) + "\n")
         self.path = target
         log.debug("Wrote skill lock %s (%d entry/entries)", target, len(self.entries))
         return target
@@ -252,14 +269,21 @@ def write_text_atomic(target: Path, text: str) -> None:
     A half-written lock fails every later load, so the old file stays until the
     new one is complete.
     """
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    _write_text_atomic(target, text)
+
+
+class SkillLockBusyError(SkillError):
+    """The skill lock could not be taken (another process holds it, or no access)."""
+
+
+@contextmanager
+def _hold(path: Path) -> Iterator[None]:
+    """Hold the cross-process lock on *path*, or raise SkillLockBusyError."""
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.replace(tmp, target)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        with file_lock(path):
+            yield
+    except FileLockError as exc:
+        raise SkillLockBusyError(str(exc)) from exc
 
 
 def lock_path(skills_root: Path) -> Path:
@@ -280,9 +304,9 @@ def forget_skill(skills_root: Path, name: str) -> bool:
     """
     if not lock_path(skills_root).is_file():
         return False
-    lock = SkillLock.load(skills_root)
-    if not lock.forget(name):
-        return False
-    lock.save()
+    with SkillLock.locked(skills_root) as lock:
+        if not lock.forget(name):
+            return False
+        lock.save()
     log.info("Dropped lock entry for '%s': it was replaced by a local copy", name)
     return True
