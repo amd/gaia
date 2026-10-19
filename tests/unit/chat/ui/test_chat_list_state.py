@@ -4,6 +4,7 @@
 """What the chat list needs from the backend (#5221): which chats wait on
 the user, how each last turn ended, unread, pin, and eval/scheduled kind."""
 
+import asyncio
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -131,6 +132,67 @@ def test_run_outcome_is_read_off_the_emitted_events(frames, status):
 def test_a_malformed_frame_fails_loudly():
     with pytest.raises(ValueError, match="malformed SSE frame"):
         helpers._RunOutcome().observe("data: {not json\n\n")
+
+
+# ── Non-streamed turns ───────────────────────────────────────────────────
+
+
+def _send_plain(client, sid):
+    return client.post(
+        "/api/chat/send", json={"session_id": sid, "message": "hi", "stream": False}
+    )
+
+
+def test_a_plain_api_turn_records_done_and_unread(client):
+    sid = client.post("/api/sessions", json={"title": "Mine"}).json()["id"]
+    with patch("gaia.ui.server._get_chat_response", return_value="ok"):
+        assert _send_plain(client, sid).status_code == 200
+    after = client.get(f"/api/sessions/{sid}").json()
+    assert after["last_run_status"] == "done" and after["unread"] is True
+
+
+def test_a_plain_api_turn_that_raises_records_failed(client):
+    sid = client.post("/api/sessions", json={"title": "Mine"}).json()["id"]
+    with patch(
+        "gaia.ui.server._get_chat_response", side_effect=RuntimeError("model died")
+    ):
+        with pytest.raises(RuntimeError, match="model died"):
+            _send_plain(client, sid)
+    assert client.get(f"/api/sessions/{sid}").json()["last_run_status"] == "failed"
+
+
+def test_a_plain_api_turn_refused_before_it_ran_records_nothing():
+    from gaia.ui.turn_queue import TurnQueue
+
+    app = create_app(db_path=":memory:")
+    sid = app.state.db.create_session(title="Mine")["id"]
+    queue = TurnQueue()
+
+    async def _refused(awaitable, timeout):  # noqa: ARG001
+        awaitable.close()
+        raise asyncio.TimeoutError
+
+    with (
+        patch("gaia.ui.routers.chat.turn_queue", queue),
+        patch("gaia.ui.routers.chat.asyncio.wait_for", _refused),
+    ):
+        assert _send_plain(TestClient(app), sid).status_code == 429
+    row = app.state.db.get_session(sid)
+    assert row["last_run_status"] is None and not row["unread"]
+
+
+def test_a_db_error_recording_the_outcome_does_not_fail_the_answer(client):
+    sid = client.post("/api/sessions", json={"title": "Mine"}).json()["id"]
+    with (
+        patch("gaia.ui.server._get_chat_response", return_value="ok"),
+        patch.object(
+            ChatDatabase,
+            "finish_session_run",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ),
+    ):
+        resp = _send_plain(client, sid)
+    assert resp.status_code == 200 and resp.json()["content"] == "ok"
 
 
 # ── Waiting on the user ──────────────────────────────────────────────────

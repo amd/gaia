@@ -195,6 +195,9 @@ async def send_message(
                 background=BackgroundTask(_release_stream_resources),
             )
         else:
+            from .._chat_helpers import _record_run_outcome
+
+            run_status = "failed"
             try:
                 db.add_message(request.session_id, "user", request.message)
                 model_messages = []
@@ -238,12 +241,14 @@ async def send_message(
                         model_id=session.get("model"),
                     )
                 )
+                run_status = "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,
                     sources=[],
                 )
             finally:
+                _record_run_outcome(db, request.session_id, run_status)
                 session_lock.release()
     finally:
         if holds_turn:
