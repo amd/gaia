@@ -50,8 +50,9 @@
 .perm-card-timer {
     flex-shrink: 0;
     color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: 12px;
+    font-family: var(--font-sans);
+    font-size: var(--fs-label);
+    font-variant-numeric: tabular-nums;
 }
 
 .perm-card-args-toggle {
@@ -130,7 +131,7 @@
 }
 
 .perm-btn.is-suggested {
-    border-color: var(--accent-fill);
+    border-color: var(--accent-solid);
     color: var(--text-primary);
 }
 

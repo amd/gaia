@@ -157,7 +157,7 @@ func printStatus(w io.Writer) error {
 	}
 	fmt.Fprintf(w, "\nInstalled in %s:\n", catalog.InstallRoot())
 	if len(installed.Agents) == 0 {
-		fmt.Fprintln(w, "  (none) — install one with `gaia hub install <id>`")
+		fmt.Fprintf(w, "  (none) — install the GAIA agent with `%s`\n", catalog.InstallCommand(catalog.FlagshipID))
 		return nil
 	}
 	for _, a := range installed.Agents {

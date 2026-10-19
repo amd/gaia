@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.file_snapshots import before_change
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
@@ -508,6 +509,7 @@ class SDToolsMixin:
         filename = f"{safe_prompt}_{model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename
+        before_change(image_path, "generate_image")
         image_path.write_bytes(image_bytes)
 
         return image_path.resolve()

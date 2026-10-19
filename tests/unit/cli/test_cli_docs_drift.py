@@ -83,10 +83,23 @@ def _iter_leaf_commands(
         yield from _iter_leaf_commands(child, prefix + (name,), seen)
 
 
+def _is_hidden(path: tuple[str, ...]) -> bool:
+    """Commands kept for scripts but hidden from help need no reference section."""
+    from gaia.cli import HIDDEN_AGENT_COMMANDS, HIDDEN_TOP_LEVEL_COMMANDS
+
+    if path[0] in HIDDEN_TOP_LEVEL_COMMANDS:
+        return True
+    return path[0] == "agent" and len(path) > 1 and path[1] in HIDDEN_AGENT_COMMANDS
+
+
 def _discover_leaf_commands() -> list[tuple[str, ...]]:
     from gaia.cli import build_parser  # deferred — runs cli.py module side-effects
 
-    return sorted(set(_iter_leaf_commands(build_parser())))
+    return sorted(
+        path
+        for path in set(_iter_leaf_commands(build_parser()))
+        if not _is_hidden(path)
+    )
 
 
 def test_every_leaf_command_is_documented():
@@ -127,7 +140,7 @@ def test_global_options_exclusion_list_matches_the_parser():
     ``unrecognized arguments`` on a third of the CLI. Pin the real list here — a
     subcommand gaining or losing ``parents=[parent_parser]`` must update the doc.
     """
-    from gaia.cli import build_parser
+    from gaia.cli import HIDDEN_TOP_LEVEL_COMMANDS, build_parser
 
     top = next(
         a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)
@@ -135,7 +148,8 @@ def test_global_options_exclusion_list_matches_the_parser():
     rejecting = {
         name
         for name, sub in top.choices.items()
-        if "--no-lemonade-check"
+        if name not in HIDDEN_TOP_LEVEL_COMMANDS
+        and "--no-lemonade-check"
         not in {opt for action in sub._actions for opt in action.option_strings}
     }
     assert rejecting, "no subcommand rejects the flag — parent_parser wiring changed"
@@ -149,7 +163,7 @@ def test_global_options_exclusion_list_matches_the_parser():
         f"'Global Options' section of docs/reference/cli.mdx: {missing}"
     )
 
-    accepting = set(top.choices) - rejecting
+    accepting = set(top.choices) - rejecting - set(HIDDEN_TOP_LEVEL_COMMANDS)
     overclaimed = sorted(n for n in accepting if f"`gaia {n}`" in section)
     assert not overclaimed, (
         "Listed as rejecting the shared flags, but the parser accepts them: "

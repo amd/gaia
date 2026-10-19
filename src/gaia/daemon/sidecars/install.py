@@ -327,7 +327,7 @@ def _require_supervised(
             f"a sidecar"
         ),
         _KNOWN_HUB: (
-            f"'{agent_id}' is published on the Agent Hub but this GAIA build "
+            f"'{agent_id}' is published but this GAIA build "
             f"cannot run it as a sidecar"
         ),
         _KNOWN_AGENT: (
@@ -521,10 +521,10 @@ def start_install(
         raise HubUnavailableError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
         raise HubUnavailableError(
-            f"could not read the Agent Hub manifest for '{agent_id}' from {url}: "
+            f"could not read the published manifest for '{agent_id}' from {url}: "
             f"{exc}. If that is a connection error, check your network or "
             "GAIA_HUB_URL; if it persists, the published manifest may be "
-            "malformed — report it against the hub."
+            "malformed — report it at https://github.com/amd/gaia/issues."
         ) from exc
 
     # Enforced here for a synchronous, distinct 403 (the client can then prompt

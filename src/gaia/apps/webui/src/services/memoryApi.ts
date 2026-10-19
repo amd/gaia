@@ -68,6 +68,8 @@ export interface KnowledgeListParams {
     order?: 'asc' | 'desc';
     offset?: number;
     limit?: number;
+    /** Only entries about the user: no tool lessons, session summaries, errors or system facts. */
+    about_user?: boolean;
 }
 
 export function getKnowledge(params: KnowledgeListParams = {}) {
@@ -254,7 +256,8 @@ export function clearAllMemory() {
 export function reinitializeMemory() {
     return memFetch<{
         cleared: { knowledge: number; tool_history: number; conversations: number };
-        system_context: { stored: number };
+        /** ``error`` is set when memory was cleared but system discovery failed. */
+        system_context: { stored: number; error?: string };
     }>('POST', '/memory/reinitialize');
 }
 

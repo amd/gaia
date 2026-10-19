@@ -222,8 +222,9 @@ asyncio.run(main())
 ```
 
 `turn_view` rebuilds the turn from the same events the browser renders. The
-activity steps are folded the way the UI folds them, and the footer reads like
-the one under an answer, e.g. `12.3s · 42.5 tok/s · 123ms TTFT · 1,234 → 56 tokens`.
+activity steps are folded the way the UI folds them, and the footer holds the
+exact numbers the UI shows when you click the line under an answer, e.g.
+`12.3s · 42.5 tok/s · 123ms TTFT · 1,234 → 56 tokens`.
 Assert on these instead of taking a screenshot.
 
 A few details:

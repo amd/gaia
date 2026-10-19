@@ -437,11 +437,11 @@ export function FileBrowser() {
         : entries;
 
     return (
-        <div className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File Browser">
+        <div className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
             <div className={`modal-panel file-browser-modal ${previewFile ? 'has-preview' : ''}`} onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
                 <div className="modal-header">
-                    <h3><FolderOpen size={18} /> File Browser</h3>
+                    <h3><FolderOpen size={18} /> File browser</h3>
                     <button className="btn-icon" onClick={() => setShowFileBrowser(false)} aria-label="Close">
                         <X size={18} />
                     </button>

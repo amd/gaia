@@ -26,6 +26,9 @@ const fs = require("fs");
 
 const electronMock = require("electron");
 
+// init() requires the restart check main.cjs passes; these tests never reach it.
+const INIT_OPTIONS = { confirmRestart: async () => true };
+
 // The mock is provided by moduleNameMapper → mocks/electron-updater.js.
 // Grab the singleton so we can inspect/reset it per test.
 const { autoUpdater: mockAutoUpdaterInstance } = require("electron-updater");
@@ -270,7 +273,7 @@ describe("installVersion()", () => {
   test("sets allowDowngrade=true, calls setFeedURL with generic provider pointing to tag folder", async () => {
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     const checkSpy = jest
       .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
@@ -288,7 +291,7 @@ describe("installVersion()", () => {
   test("persists the pin to ~/.gaia/update-config.json", async () => {
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
 
@@ -303,7 +306,7 @@ describe("installVersion()", () => {
   test("aborts (throws) and does NOT touch the feed/check when the pin write fails", async () => {
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     // Reset feed state captured during init() so we can assert it stays put.
     mockAutoUpdaterInstance._feedURL = null;
@@ -340,7 +343,7 @@ describe("installVersion()", () => {
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     // Hold checkForUpdates open so the module-level guard stays set while we
     // fire a second (rollback) check.
@@ -379,7 +382,7 @@ describe("pin gating", () => {
 
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
   });
@@ -387,7 +390,7 @@ describe("pin gating", () => {
   test("init() sets autoDownload=true when no pin exists", () => {
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
   });
@@ -410,7 +413,7 @@ describe("clearPin()", () => {
 
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     // Confirm pin is active
     expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
@@ -440,7 +443,7 @@ describe("getState() extended state", () => {
   test("includes currentVersion and pinnedVersion fields", () => {
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     const state = mod.getState();
     expect(state).toHaveProperty("currentVersion");
@@ -457,7 +460,7 @@ describe("getState() extended state", () => {
 
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     const state = mod.getState();
     expect(state.pinnedVersion).toBe("v0.20.0");
@@ -470,7 +473,7 @@ describe("IPC handler registration", () => {
   test("removes all 5 IPC handlers on destroy", () => {
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
     mod.destroy();
 
     expect(electronMock.ipcMain._handlers.has("gaia:update:get-status")).toBe(false);
@@ -494,7 +497,7 @@ describe("gaia:update:resume IPC", () => {
 
     const mod = loadModule();
     const win = makeMockWindow();
-    mod.init(win);
+    mod.init(win, INIT_OPTIONS);
 
     const result = await electronMock.ipcMain.simulateInvoke("gaia:update:resume");
     expect(result).toHaveProperty("pinnedVersion", null);
@@ -518,7 +521,7 @@ describe("gaia:update:install-version IPC tag validation", () => {
 
   beforeEach(() => {
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
     mockAutoUpdaterInstance._feedURL = null;
     mockAutoUpdaterInstance.allowDowngrade = false;
     checkSpy = jest
@@ -586,7 +589,7 @@ describe("gaia:update:install-version IPC tag validation", () => {
 describe("gaia:update:check IPC", () => {
   test("with no feed configured, reports no-channel instead of checking", async () => {
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
     const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
 
     const state = await invoke("gaia:update:check");
@@ -598,7 +601,7 @@ describe("gaia:update:check IPC", () => {
   test("a failing check surfaces the error in the returned state", async () => {
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
     jest
       .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
       .mockRejectedValue(new Error("net::ERR_NAME_NOT_RESOLVED"));

@@ -35,6 +35,10 @@ on:
       - "tests/unit/test_sd_mixin.py"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

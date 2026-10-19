@@ -90,12 +90,27 @@ def _join_url(base: str, name: str) -> str:
     return f"{base.rstrip('/')}/{name.lstrip('/')}"
 
 
+FLAGSHIP_AGENT_ID = "gaia"
+
+
+def install_command(agent_id: str) -> str:
+    """The command that installs *agent_id* when it is missing.
+
+    `gaia init` installs the flagship whenever no install sentinel says it is
+    there; every other agent installs by id.
+    """
+    if agent_id == FLAGSHIP_AGENT_ID:
+        return "gaia init"
+    return f"gaia hub install {agent_id}"
+
+
 def _install_remedy(agent_dir_name: str) -> str:
     return (
-        f"Install it with `gaia hub install {agent_dir_name}` (or `gaia agent "
-        f"install {agent_dir_name}`, or the Agent UI's hub panel), which downloads "
-        "the binary from the Agent Hub and verifies its SHA-256 against the hub "
-        "manifest — independent of this lock. To run from source instead, use dev mode."
+        f"Install it with `{install_command(agent_dir_name)}` (or Install in the "
+        "Agent UI), which downloads the published binary and verifies its SHA-256 "
+        "against the published manifest — independent of this lock. The background "
+        "service reads the install from disk on the agent's next start. To run "
+        "from source instead, use dev mode."
     )
 
 
@@ -154,8 +169,7 @@ def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResul
             f"hub-installed agent binary at {binary_path} does not match the "
             f"SHA-256 its install sentinel recorded:\n"
             f"  expected {sentinel.artifact_sha256}\n  actual   {actual}\n"
-            "The install is corrupt or was tampered with — reinstall the agent "
-            "from the Agent Hub."
+            "The install is corrupt or was tampered with — reinstall the agent."
         )
     logger.info(
         "sidecar fetch: using hub-installed verified binary %s (v%s)",
