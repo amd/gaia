@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -296,7 +297,7 @@ def test_a_scratch_home_is_not_the_default(registered):
 
 
 def test_the_machine_home_is_the_default(monkeypatch, tmp_path):
-    monkeypatch.setattr(lifetime.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / ".gaia" / "host"))
     assert lifetime.is_default_home() is True
 
@@ -337,6 +338,33 @@ def test_the_watch_shuts_an_idle_scratch_daemon_down(registered):
     finally:
         watch.stop()
     assert "nothing has used it" in reasons[0]
+
+
+def test_a_failing_idle_probe_does_not_stop_the_home_checks(registered, caplog):
+    reasons = []
+    done = threading.Event()
+
+    def on_exit(reason):
+        reasons.append(reason)
+        done.set()
+
+    def broken_probe():
+        raise RuntimeError("database is locked")
+
+    watch = lifetime.LifetimeWatch(
+        on_exit, idle=broken_probe, idle_limit=60.0, interval=0.05
+    )
+    with caplog.at_level(logging.ERROR, logger="gaia.daemon.lifetime"):
+        watch.start()
+        try:
+            threading.Event().wait(0.2)
+            assert reasons == []
+            instance_mod.remove_instance()
+            assert done.wait(5), "a failing idle probe killed the lifetime watch"
+        finally:
+            watch.stop()
+    assert "instance.json" in reasons[0]
+    assert any("idle check failed" in r.getMessage() for r in caplog.records)
 
 
 # -- DaemonIdle: what counts as use --------------------------------------------

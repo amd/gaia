@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import os
 import threading
-from pathlib import Path
 from typing import Callable, Optional
 
+from gaia.config import default_gaia_home
 from gaia.daemon import paths
 from gaia.daemon.errors import DaemonStartError
 from gaia.daemon.instance import pid_alive
@@ -88,7 +88,7 @@ def idle_exit_seconds_from_env() -> Optional[float]:
 
 def is_default_home() -> bool:
     """True for the machine's own daemon home, ``~/.gaia/host``."""
-    return paths.host_dir().resolve() == (Path.home() / ".gaia" / "host").resolve()
+    return paths.host_dir().resolve() == (default_gaia_home() / "host").resolve()
 
 
 def exit_reason(
@@ -211,7 +211,12 @@ class LifetimeWatch:
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
-            idle = self._idle() if self._idle is not None else None
+            try:
+                idle = self._idle() if self._idle is not None else None
+            except Exception:  # pylint: disable=broad-exception-caught
+                # A failed probe only delays an idle exit; the home checks must keep running.
+                logger.exception("daemon: idle check failed; will retry")
+                idle = None
             reason = exit_reason(self._exit_with_pid, idle, self._idle_limit)
             if reason is None:
                 continue
