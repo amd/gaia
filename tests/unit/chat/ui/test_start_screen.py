@@ -118,6 +118,54 @@ def test_mail_counts_as_connected_when_any_account_is(monkeypatch):
     assert ss._mail_connected() is False
 
 
+def _refused_keyring(ref):
+    from gaia.connectors.errors import ConnectorsError
+
+    raise ConnectorsError("plaintext keyring backend refused")
+
+
+def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    import gaia.connectors.store as store
+
+    monkeypatch.setattr(store, "peek_connection", _refused_keyring)
+    with caplog.at_level("WARNING"):
+        assert ss._mail_connected() is False
+    assert "plaintext keyring backend refused" in caplog.text
+
+
+def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_path):
+    import gaia.connectors.store as store
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "gaia.ui.routers.skills.list_skills",
+        lambda: {"skills": [{"name": n} for n in STARTER], "invalid": []},
+    )
+    monkeypatch.setattr(store, "peek_connection", _refused_keyring)
+    app = FastAPI()
+    app.include_router(onboarding.router)
+    app.dependency_overrides[get_db] = lambda: _Db([])
+    response = TestClient(app).get("/api/onboarding/start")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["cards"]) == ss.MAX_CARDS
+    assert body["working_folder"]["name"] == tmp_path.name
+    assert not body.get("skills_error")
+
+
+def test_a_non_keyring_error_still_fails_loudly(monkeypatch):
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    import gaia.connectors.store as store
+
+    def boom(ref):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(store, "peek_connection", boom)
+    with pytest.raises(RuntimeError):
+        ss._mail_connected()
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

@@ -138,13 +138,18 @@ def working_folder() -> Dict[str, Any]:
 
 
 def _mail_connected() -> bool:
+    from gaia.connectors.errors import ConnectorsError
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
 
-    for connector_id in MAIL_CONNECTORS:
-        spec = REGISTRY.get(connector_id)
-        if peek_connection(spec.oauth_provider_ref or spec.id) is not None:
-            return True
+    try:
+        for connector_id in MAIL_CONNECTORS:
+            spec = REGISTRY.get(connector_id)
+            if peek_connection(spec.oauth_provider_ref or spec.id) is not None:
+                return True
+    except ConnectorsError as e:
+        # The inbox card is a hint; an unreadable keyring must not blank the screen.
+        logger.warning("New-chat inbox card skipped: can't read connections: %s", e)
     return False
 
 
