@@ -8,12 +8,13 @@ current uv gives up after ``UV_LOCK_TIMEOUT`` with "Could not acquire lock".
 Either way the install used to hang, or fall through to ``python -m uv``
 (which waits on the same lock) and end with "install uv". Now the child gets
 ``UV_LOCK_TIMEOUT``, a lock failure gets its own error and stops there, and a
-run is stopped only after ``GAIA_HUB_PIP_TIMEOUT`` seconds with no CPU, disk
-or network activity anywhere in its process tree.
+run is stopped only after ``GAIA_HUB_PIP_TIMEOUT`` seconds with no CPU or
+disk activity anywhere in its process tree.
 """
 
 from __future__ import annotations
 
+import shutil
 import sys
 import threading
 import time
@@ -456,3 +457,110 @@ def test_the_last_output_in_an_error_starts_at_a_line(monkeypatch, tmp_path):
     last = str(excinfo.value).split("Last output: ", 1)[1]
     assert last.startswith("resolving dependency number")
     assert last.endswith("error: Could not acquire lock")
+
+
+# The line uv itself prints while parked on the lock, once RUST_LOG enables it.
+_REAL_UV_WAIT_LINE = (
+    "INFO Waiting to acquire shared lock for `C:/cache` at `cache\\.lock`"
+)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        _REAL_UV_WAIT_LINE,
+        "INFO Waiting to acquire exclusive lock for `/home/u/.cache/uv`",
+        "Waiting to acquire lock for `cache` (lockfile: x)",
+    ],
+)
+def test_every_form_of_the_uv_wait_line_is_recognised(line):
+    assert installer._mentions_uv_lock(line, still_running=True)
+    assert not installer._mentions_uv_lock(line)
+
+
+def test_uv_is_asked_to_log_its_lock_wait_unless_the_user_chose(monkeypatch, tmp_path):
+    """uv only prints the wait at info level; without it the status never shows."""
+    show = _script(
+        tmp_path, "rust_log.py", "import os; print(os.environ.get('RUST_LOG'))\n"
+    )
+    monkeypatch.delenv("RUST_LOG", raising=False)
+    assert installer._run_frontend(show, 15.0).stdout.strip() == "uv_fs=info"
+    monkeypatch.setenv("RUST_LOG", "debug")
+    assert installer._run_frontend(show, 15.0).stdout.strip() == "debug"
+
+
+def _hold_lock(path):
+    """Hold ``path`` the way another uv would hold its cache lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    if sys.platform == "win32":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 2**31 - 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return handle
+
+
+def _release_lock(handle):
+    if sys.platform == "win32":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 2**31 - 1)
+    handle.close()
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH")
+def test_real_uv_held_lock_shows_the_wait_then_names_the_lock(monkeypatch, tmp_path):
+    cache = tmp_path / "uv-cache"
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache))
+    monkeypatch.delenv("RUST_LOG", raising=False)
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 6.0)  # uv waits 3 s
+    monkeypatch.setattr(
+        installer, "_pip_frontends", lambda: [["uv", "pip", "install"], _IDLE]
+    )
+    installer._set_progress("realuv", status="running", phase="installing", percent=60)
+    installer._install_context.agent_id = "realuv"
+    handle = _hold_lock(cache / ".lock")
+    try:
+        with pytest.raises(InstallError) as excinfo:
+            installer._default_run_pip(
+                ["--offline", "--target", str(tmp_path / "t"), "gaia-no-such-pkg"]
+            )
+    finally:
+        _release_lock(handle)
+        installer._install_context.agent_id = None
+    assert "another install is using it" in str(excinfo.value)
+    status = installer.get_install_status("realuv")
+    assert status["phase"] == "waiting for another install to finish"
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv on PATH")
+def test_real_uv_that_got_the_lock_then_failed_reports_the_real_error(
+    monkeypatch, tmp_path
+):
+    cache = tmp_path / "uv-cache"
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache))
+    monkeypatch.delenv("RUST_LOG", raising=False)
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 60.0)
+    fallback = _script(tmp_path, "fallback.py", "import sys; sys.exit(3)\n")
+    monkeypatch.setattr(
+        installer, "_pip_frontends", lambda: [["uv", "pip", "install"], fallback]
+    )
+    handle = _hold_lock(cache / ".lock")
+    releaser = threading.Timer(2.0, _release_lock, args=(handle,))
+    releaser.start()
+    try:
+        with pytest.raises(InstallError) as excinfo:
+            installer._default_run_pip(
+                ["--offline", "--target", str(tmp_path / "t"), "gaia-no-such-pkg"]
+            )
+    finally:
+        releaser.join()
+    message = str(excinfo.value)
+    assert "another install is using it" not in message
+    assert "gaia-no-such-pkg" in message

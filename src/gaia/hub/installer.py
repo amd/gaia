@@ -446,9 +446,9 @@ _PIP_POLL_SECONDS = 1.0
 #: descendant can hold them open.
 _PIP_PIPE_WAIT_SECONDS = 10.0
 
-#: What uv prints when another uv holds its package-cache lock: while waiting,
-#: and when it gives up.
-_UV_WAITING_MARKER = "waiting to acquire lock"
+#: What uv prints when another uv holds its package-cache lock: while waiting
+#: ("Waiting to acquire shared lock for ..."), and when it gives up.
+_UV_WAITING = re.compile(r"waiting to acquire (?:\w+ )?lock")
 _UV_GAVE_UP_MARKER = "could not acquire lock"
 
 # The agent whose install is running on this thread, so the pip runner can say
@@ -492,7 +492,7 @@ def _mentions_uv_lock(output: str, *, still_running: bool = False) -> bool:
     text = output.lower()
     if _UV_GAVE_UP_MARKER in text:
         return True
-    return still_running and _UV_WAITING_MARKER in text
+    return still_running and _UV_WAITING.search(text) is not None
 
 
 def _uv_lock_timeout(window: float) -> str:
@@ -699,11 +699,12 @@ def _kill_tree(
     import psutil
 
     group.kill(proc)
-    try:
-        for process in psutil.Process(proc.pid).children(recursive=True):
-            seen.setdefault(process.pid, process)
-    except psutil.Error:
-        pass  # already gone; kill what was seen
+    if proc.returncode is None:  # once reaped, its pid may belong to another
+        try:
+            for process in psutil.Process(proc.pid).children(recursive=True):
+                seen.setdefault(process.pid, process)
+        except psutil.Error:
+            pass  # already gone; kill what was seen
     for process in seen.values():
         try:
             process.kill()  # checks the pid was not reused
@@ -731,6 +732,8 @@ def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess
     ceiling = _seconds_from_env(PIP_MAX_ENV, PIP_MAX_SECONDS)
     env = dict(os.environ)
     env["UV_LOCK_TIMEOUT"] = _uv_lock_timeout(timeout)
+    # uv logs its lock wait only at info level; this enables just that module.
+    env.setdefault("RUST_LOG", "uv_fs=info")
     group = _ProcessGroup()
     proc = subprocess.Popen(  # noqa: S603 - args are constructed, not shell
         cmd,
@@ -749,7 +752,7 @@ def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess
         reported = False
         for line in iter(stream.readline, ""):
             output[name].append(line)
-            if not reported and _UV_WAITING_MARKER in line.lower():
+            if not reported and _UV_WAITING.search(line.lower()):
                 reported = True
                 _report_lock_wait(agent_id)
 
