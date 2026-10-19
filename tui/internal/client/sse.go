@@ -521,7 +521,7 @@ func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error 
 		return fmt.Errorf("could not encode the answer for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/respond",
 			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
@@ -531,6 +531,7 @@ func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error 
 		},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("answer the '%s' agent's question", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -593,7 +594,7 @@ func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) er
 		return fmt.Errorf("could not encode the confirmation decision for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/confirm",
 			url.PathEscape(s.agentID), url.PathEscape(runID)),
@@ -603,6 +604,7 @@ func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) er
 		},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver the '%s' agent's confirmation decision", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -631,17 +633,32 @@ type confirmRequest struct {
 	Approved bool `json:"approved"`
 }
 
+// do sends r through the daemon and keeps the instance that answered, so after
+// a daemon restart on a new port every later call goes straight to it.
+func (s *SSEClient) do(ctx context.Context, inst *daemon.Instance, r daemon.Request) (*http.Response, error) {
+	resp, used, err := s.daemon.Do(ctx, inst, r)
+	if used != nil && used != inst {
+		s.mu.Lock()
+		if s.inst == inst {
+			s.inst = used
+		}
+		s.mu.Unlock()
+	}
+	return resp, err
+}
+
 // postCancel POSTs /v1/<agent>/query/{runID}/cancel and returns the response,
 // or an error if the request itself could not be delivered. Shared by
 // cancelRun (best-effort, fire-and-forget) and Cancel (the caller-facing,
 // error-reporting seam — #2901).
 func (s *SSEClient) postCancel(ctx context.Context, inst *daemon.Instance, runID string) (*http.Response, error) {
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
 			url.PathEscape(s.agentID), url.PathEscape(runID)),
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
+		RunScoped:  true,
 	})
 	return resp, err
 }
@@ -779,7 +796,7 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		return fmt.Errorf("could not encode the '%s' follow-up: %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/followup",
 			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
@@ -787,6 +804,7 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver a follow-up to the '%s' run", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("could not deliver the follow-up to the '%s' agent: %w", s.agentID, err)
@@ -1136,7 +1154,7 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 		return fmt.Errorf("could not encode the permission decision for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+	resp, err := s.do(context.Background(), inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/tool_decision",
 			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
@@ -1144,6 +1162,7 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver the '%s' agent's permission decision", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -1197,7 +1216,7 @@ func (s *SSEClient) SetFullAccess(enabled bool) error {
 		return fmt.Errorf("could not encode the full-access setting for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+	resp, err := s.do(context.Background(), inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/sessions/%s/bypass",
 			url.PathEscape(s.agentID), url.PathEscape(sessionID)),
@@ -1205,6 +1224,7 @@ func (s *SSEClient) SetFullAccess(enabled bool) error {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("change the '%s' agent's full-access setting", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err

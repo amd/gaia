@@ -109,6 +109,9 @@ type fakeRelay struct {
 	bypassStatus   int
 	auths          []string
 	versionHits    int
+	// sidecarGone models a daemon that restarted: it has no sidecar, so every
+	// relay route answers 503 until the agent is ensured again.
+	sidecarGone bool
 }
 
 // confirmCall is one recorded POST .../query/{run_id}/confirm.
@@ -201,6 +204,15 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	f.mu.Lock()
+	gone := f.sidecarGone
+	f.mu.Unlock()
+	if gone && strings.HasPrefix(r.URL.Path, "/v1/") {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"detail":"no running sidecar for this agent. Start it first"}`))
+		return
+	}
+
 	switch {
 	case r.URL.Path == "/daemon/v1/status":
 		w.Header().Set("Content-Type", "application/json")
@@ -208,6 +220,9 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasSuffix(r.URL.Path, "/ensure"):
 		w.Header().Set("Content-Type", "application/json")
+		f.mu.Lock()
+		f.sidecarGone = false
+		f.mu.Unlock()
 		fmt.Fprintf(w, `{"port":51999,"token":%q,"state":"running"}`, sidecarBearer)
 		if f.onEnsure != nil {
 			f.onEnsure()
