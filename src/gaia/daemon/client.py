@@ -66,6 +66,10 @@ BUSY_PROBE_TIMEOUT_S = 10.0
 #: not busy: the next start replaces it.
 HUNG_AFTER_S = 120.0
 
+#: Unanswered probes further apart than this belong to separate busy spells, so
+#: a marker left from a spell that ended unobserved never counts toward hung.
+BUSY_SPELL_GAP_S = HUNG_AFTER_S / 2
+
 #: Where the start of a daemon's current unanswered spell is recorded.
 BUSY_MARKER_NAME = "busy_since.json"
 
@@ -170,21 +174,28 @@ def _busy_marker(host_dir: Optional[Path]) -> Path:
 
 
 def _busy_since(inst: DaemonInstance, host_dir: Optional[Path]) -> float:
-    """When this daemon's current unanswered spell began; starts one if new."""
+    """When this daemon's current unanswered spell began; starts one if new.
+
+    Records this unanswered probe too, so a later one more than
+    :data:`BUSY_SPELL_GAP_S` after it starts a new spell.
+    """
     import json
 
     marker = _busy_marker(host_dir)
+    now = time.time()
+    since = now
     try:
         data = json.loads(marker.read_text(encoding="utf-8"))
-        if int(data["pid"]) == inst.pid:
-            return float(data["since"])
+        if int(data["pid"]) == inst.pid and now - float(data["last"]) <= (
+            BUSY_SPELL_GAP_S
+        ):
+            since = float(data["since"])
     except FileNotFoundError:
         pass
     except (OSError, ValueError, KeyError, TypeError) as e:
         logger.warning("daemon: ignoring unreadable %s (%s); starting over", marker, e)
-    now = time.time()
-    paths.atomic_write_json(marker, {"pid": inst.pid, "since": now})
-    return now
+    paths.atomic_write_json(marker, {"pid": inst.pid, "since": since, "last": now})
+    return since
 
 
 def _clear_busy(host_dir: Optional[Path]) -> None:
@@ -223,6 +234,8 @@ def _answers(
         since = _busy_since(inst, host_dir)
         if time.time() - since < HUNG_AFTER_S and patient:
             state, _ = probe_state(inst, timeout=max(timeout, BUSY_PROBE_TIMEOUT_S))
+            if state == "busy":
+                since = _busy_since(inst, host_dir)
     if state != "busy":
         _clear_busy(host_dir)
         return state == "live"

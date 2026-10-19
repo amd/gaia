@@ -256,15 +256,19 @@ def test_a_busy_daemon_fails_a_lemonade_start_with_the_start_error(monkeypatch):
     assert isinstance(err.value.__cause__, DaemonBusyError)
 
 
-def _busy_for(seconds: float, pid: int = 4242) -> None:
-    """Record that the registered daemon has been busy for *seconds*."""
+def _busy_for(seconds: float, pid: int = 4242, last_ago: float = 1.0) -> None:
+    """Record that the registered daemon has been busy for *seconds*, last
+    seen unanswered *last_ago* seconds ago."""
     import json
 
     from gaia.daemon import paths
 
     paths.ensure_host_dir()
     (paths.host_dir() / daemon_client.BUSY_MARKER_NAME).write_text(
-        json.dumps({"pid": pid, "since": time.time() - seconds}), encoding="utf-8"
+        json.dumps(
+            {"pid": pid, "since": time.time() - seconds, "last": time.time() - last_ago}
+        ),
+        encoding="utf-8",
     )
 
 
@@ -288,6 +292,29 @@ def test_a_hung_daemon_is_named_as_hung_to_callers_that_only_attach(monkeypatch)
 
     assert "so it is hung" in str(err.value)
     assert "gaia daemon restart" in str(err.value)
+
+
+def test_an_old_busy_spell_does_not_make_a_new_one_hung(monkeypatch):
+    """A spell that ended with nobody probing leaves its marker behind; the
+    next slow probe hours later starts a new spell, not a kill."""
+    inst, _calls, killed, spawned = _stale_registry(monkeypatch, [("busy", None)])
+    _busy_for(3600, last_ago=3600 - 5)
+
+    with pytest.raises(DaemonBusyError) as err:
+        daemon_client.start_or_attach()
+
+    assert not isinstance(err.value, DaemonHungError)
+    assert killed == [] and spawned == []
+
+
+def test_probes_within_the_gap_keep_one_spell(monkeypatch):
+    _stale_registry(monkeypatch, [("busy", None)])
+    _busy_for(
+        daemon_client.HUNG_AFTER_S + 1, last_ago=daemon_client.BUSY_SPELL_GAP_S - 5
+    )
+
+    with pytest.raises(DaemonHungError):
+        daemon_client.attach()
 
 
 def test_a_busy_spell_is_forgotten_once_the_daemon_answers(monkeypatch):
