@@ -4569,6 +4569,14 @@ def main():
                     sys.exit(2)
 
             try:
+                from gaia.stream_timeout import stream_timeout_from_env
+
+                stream_timeout_from_env()
+            except ValueError as e:
+                # A bad GAIA_STREAM_TIMEOUT: the remedy, not a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
+            try:
                 run_telegram(
                     token=args.token,
                     allowed_users=allowed,

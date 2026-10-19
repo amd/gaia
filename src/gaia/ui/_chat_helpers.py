@@ -43,6 +43,12 @@ from gaia.llm.inference_location import (
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
+from gaia.stream_timeout import (
+    DEFAULT_STREAM_TIMEOUT_SECONDS,
+    MAX_STREAM_TIMEOUT_SECONDS,
+    STREAM_TIMEOUT_ENV,
+    stream_timeout_from_env,
+)
 from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
@@ -240,11 +246,11 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
-_STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
-# Longer than one model call may stay silent (an hour of slow local prefill),
-# so a quiet model is always ended by the LLM layer, not by this limit.
-_DEFAULT_STREAM_TIMEOUT_SECONDS = 4500
-_MAX_STREAM_TIMEOUT_SECONDS = 86400
+# Shared with the messaging bridges (gaia.stream_timeout).
+_STREAM_TIMEOUT_ENV = STREAM_TIMEOUT_ENV
+_DEFAULT_STREAM_TIMEOUT_SECONDS = DEFAULT_STREAM_TIMEOUT_SECONDS
+_MAX_STREAM_TIMEOUT_SECONDS = MAX_STREAM_TIMEOUT_SECONDS
+_stream_timeout_from_env = stream_timeout_from_env
 # How often a waiting turn checks whether it has gone idle.
 _IDLE_POLL_SECONDS = 0.2
 # How long an ended turn waits for its agent thread before freeing the model.
@@ -261,37 +267,6 @@ def stuck_producer(session_id: str) -> Optional[threading.Thread]:
         _stopping_sessions.pop(session_id, None)
         return None
     return thread
-
-
-def _stream_timeout_from_env() -> int:
-    """Resolve the turn's no-progress limit in seconds from ``GAIA_STREAM_TIMEOUT``.
-
-    A turn is stopped only after this long without progress; a turn that keeps
-    making progress has no time limit. Unset or empty returns the 4500 s
-    default. Any other value must be a whole number of seconds from 1 to 86400.
-
-    Raises:
-        ValueError: the variable is set to a non-integer or out-of-range value.
-    """
-    raw = os.environ.get(_STREAM_TIMEOUT_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_STREAM_TIMEOUT_SECONDS
-    remedy = (
-        f"Set it to a whole number of seconds from 1 to "
-        f"{_MAX_STREAM_TIMEOUT_SECONDS} (e.g. {_STREAM_TIMEOUT_ENV}=1800), or "
-        f"unset it for the {_DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
-        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
-    )
-    try:
-        value = int(raw)
-    except ValueError as e:
-        raise ValueError(
-            f"{_STREAM_TIMEOUT_ENV}={raw!r} is not a whole number of seconds. "
-            f"{remedy}"
-        ) from e
-    if not 1 <= value <= _MAX_STREAM_TIMEOUT_SECONDS:
-        raise ValueError(f"{_STREAM_TIMEOUT_ENV}={value} is out of range. {remedy}")
-    return value
 
 
 # Read once at import so a bad value stops the Agent UI server at startup.
