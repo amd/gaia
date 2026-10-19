@@ -419,7 +419,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | Agent Hub R2 (`release_components.yml`) | publishes | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
 | Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
-| Context7 refresh, `release` branch, release-notes bot | run | skipped |
+| `release` branch, release-notes bot | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
 `version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they need a numeric-only version); the RC carries the one-step Windows setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`, built by `publish.yml`'s `rc-windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the pre-release and turns the run red via `rc-windows-setup-missing`.
@@ -440,7 +440,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git push origin v<version>-rc1
    ```
 
-3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. There is no `refresh-context7` job to wait for; `redeploy-website-rc` asks the website to rebuild so the RC entry appears.
+3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website-rc` asks the website to rebuild so the RC entry appears.
 
 4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
    ```bash
@@ -514,9 +514,7 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
 5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel. Watch to completion.
 
-6. **`refresh-context7` is the terminal job and may legitimately fail — that is not a release failure.** This job runs *after* PyPI, npm, GitHub Release, and the desktop installers are already published. Context7's API rejects refresh requests inside a short cooldown window (observed: ~3–6 days between releases) with HTTP 429 (rate-limited); the workflow tolerates 429 and treats any other status as a hard failure. If the job is red, the release is still live. Open the job log, read the `Response body:` block between the `::stop-commands::` markers, and either accept the cooldown reason or file a follow-up about a new rejection cause. Do **not** delete or re-tag — see the recovery guidance in the Notes section below.
-
-7. **Never add `set -x` or `curl -v` to the `refresh-context7` step** to "debug" a failure. GHA only masks the verbatim secret value; `curl -v` prints the `Authorization: Bearer <token>` header, which is a transformed form that GHA's masking does not catch. Read the captured response body instead — it carries the same diagnostic signal without the leak risk.
+6. **Context7 is not refreshed by the release.** GAIA's docs exceed the size Context7 refreshes automatically (its API answers HTTP 403 "exceeds the size limit for automatic refresh"), so the pipeline no longer asks. If Context7's copy of the docs is stale after a release, request a manual refresh with an issue on https://github.com/upstash/context7. It never blocks or reddens a release.
 
 ---
 
