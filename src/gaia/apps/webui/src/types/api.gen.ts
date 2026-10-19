@@ -551,6 +551,7 @@ export interface InferenceStatsResponse {
   input_tokens?: number;
   model?: string | null;
   output_tokens?: number;
+  place?: string | null;
   retried?: boolean | null;
   seconds?: number | null;
   steps?: number | null;

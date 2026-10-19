@@ -274,8 +274,11 @@ and where that model runs.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail. "Steps" is the agent's own count, the same figure the TUI and
   evals report.
-- **The line under an answer** shows its time and the tokens the whole turn
-  read and wrote, across every model call. Files the answer names by full path,
+- **The line under an answer** says how long it took, where it ran and when
+  the first word came ("Answered in 40 s on your GPU · first word in 1 s", or
+  "via Fireworks AI" for a cloud model). Click it for the exact numbers,
+  including the tokens the whole turn read and wrote across every model call.
+  Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
 - **"Getting GAIA ready… 12s"** under the message box means a local model is
   reading GAIA's instructions ahead of your first message, so that message
@@ -376,7 +379,7 @@ The question appears above the message box with three answers:
 
 - **Allow once**
 - **Always allow** *this exact action* in this chat (offered only when the action
-  is narrow enough to name, e.g. `write_file on notes.md`)
+  is narrow enough to name, e.g. *writing notes.md*)
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says

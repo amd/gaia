@@ -517,6 +517,8 @@ class InferenceStatsResponse(BaseModel):
     seconds: Optional[float] = None
     # True only for an answer kept from "Retry with…".
     retried: Optional[bool] = None
+    # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
+    place: Optional[str] = None
 
 
 class MessageResponse(BaseModel):
