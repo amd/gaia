@@ -4,6 +4,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useSessionPanelStore, type PanelSectionId } from '../../stores/sessionPanelStore';
+import { scrollBehavior } from '../../utils/motion';
 
 interface PanelSectionProps {
     id: PanelSectionId;
@@ -25,7 +26,7 @@ export function PanelSection({ id, title, summary, children }: PanelSectionProps
     const bodyId = `sp-section-${id}`;
 
     useEffect(() => {
-        if (focus?.section === id) ref.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+        if (focus?.section === id) ref.current?.scrollIntoView?.({ block: 'start', behavior: scrollBehavior() });
     }, [focus, id]);
 
     return (
