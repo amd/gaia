@@ -10,15 +10,15 @@
 #           failure there is a regression signal, not noise.
 #   hard  - ten tasks strong Claude agents rarely solve on the leaderboard and
 #           that separated GAIA configurations in measured runs. On dispatch.
-#           The nightly schedule is off: every run since 2026-10-14 failed with
-#           Fireworks answering HTTP 404 for the model. Put it back once a
-#           dispatch of `hard` passes the model preflight below.
+#           The nightly schedule is off: every run failed with HTTP 404 for the
+#           model. Put it back once a dispatch of `hard` passes the model
+#           preflight below.
 #
 # The model is DeepSeek V4.1 Flash on Fireworks, reached through GAIA's own
 # embedded Lemonade, so no GPU is needed and the Linux runner's Docker grades
-# natively. Lemonade reads LEMONADE_FIREWORKS_API_KEY from its environment; the
-# agent never sees it (the eval harness strips secret-named variables from the
-# agent's environment).
+# natively. The preflight registers Fireworks with that Lemonade, which reads
+# LEMONADE_FIREWORKS_API_KEY from its environment; the agent never sees it (the
+# eval harness strips secret-named variables from the agent's environment).
 #
 # Results are reported in the job summary and uploaded, not gated: no
 # expectations exist yet for this runner, and none are hand-authored. Commit
@@ -104,9 +104,9 @@ jobs:
           gaia lemonade embedded start --timeout 180
           gaia lemonade embedded status
 
-      # One tiny request before ten 40-minute tasks. A model Fireworks itself
-      # will not serve skips a PR run with a warning (no PR can fix it) and fails
-      # a dispatch; a key or GAIA routing fault fails both.
+      # Connects Fireworks, then one tiny request before ten 40-minute tasks. A
+      # model Fireworks itself will not serve skips a PR run with a warning (no PR
+      # can fix it) and fails a dispatch; a key or routing fault fails both.
       - name: Require the model to answer
         id: model
         run: |

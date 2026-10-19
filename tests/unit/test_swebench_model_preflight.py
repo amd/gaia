@@ -52,7 +52,7 @@ def test_a_refused_key_fails_even_on_a_pr(event, direct):
 def test_fireworks_serving_but_lemonade_not_is_gaia_breakage(event, via_lemonade):
     # The 404 a PR would skip on must not hide a Lemonade routing regression.
     d = pf.decide(event, MODEL, via_lemonade, 200)
-    assert d.fail and "routing is broken" in d.message
+    assert d.fail and "does not route it" in d.message
 
 
 @pytest.mark.parametrize("direct", [400, 422])
@@ -84,6 +84,7 @@ def test_main_writes_ready_false_and_exits_zero_on_a_pr_outage(tmp_path, monkeyp
     out, summary = tmp_path / "out", tmp_path / "summary"
     codes = iter([404, 404])
     monkeypatch.setattr(pf, "probe", lambda *a, **k: next(codes))
+    monkeypatch.setattr(pf, "register_fireworks", lambda *a, **k: None)
     for k, v in {
         "SWE_MODEL": MODEL,
         "LEMONADE_BASE_URL": "http://127.0.0.1:1/api/v1",
@@ -102,6 +103,7 @@ def test_main_writes_ready_false_and_exits_zero_on_a_pr_outage(tmp_path, monkeyp
 def test_main_exits_one_on_a_dispatch_outage(tmp_path, monkeypatch):
     codes = iter([404, 404])
     monkeypatch.setattr(pf, "probe", lambda *a, **k: next(codes))
+    monkeypatch.setattr(pf, "register_fireworks", lambda *a, **k: None)
     for k, v in {
         "SWE_MODEL": MODEL,
         "LEMONADE_BASE_URL": "http://127.0.0.1:1/api/v1",
@@ -118,3 +120,66 @@ def test_main_exits_one_on_a_dispatch_outage(tmp_path, monkeypatch):
 
 def test_probe_reports_zero_when_nothing_answers():
     assert pf.probe("http://127.0.0.1:1/chat/completions", "k", MODEL, timeout=2) == 0
+
+
+def _env(monkeypatch, tmp_path, event="pull_request"):
+    for k, v in {
+        "SWE_MODEL": MODEL,
+        "LEMONADE_BASE_URL": "http://127.0.0.1:1/api/v1/",
+        "LEMONADE_API_KEY": "lemonade-key",
+        "LEMONADE_FIREWORKS_API_KEY": "fw-key",
+        "GITHUB_EVENT_NAME": event,
+        "GITHUB_OUTPUT": str(tmp_path / "out"),
+    }.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+
+def test_registration_sends_lemonades_cloud_install_shape(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        pf,
+        "_post",
+        lambda url, key, payload, timeout: sent.append((url, key, payload))
+        or (200, "{}"),
+    )
+    assert pf.register_fireworks("http://h/api/v1", "lemonade-key") is None
+    url, key, payload = sent[0]
+    assert url == "http://h/api/v1/install"
+    # Lemonade's key, never the Fireworks one: Lemonade reads that from its env.
+    assert key == "lemonade-key"
+    assert payload["backend"] == "cloud" and payload["provider"] == "fireworks"
+    assert payload["base_url"] == "https://api.fireworks.ai/inference/v1"
+    assert "api_key" not in payload
+
+
+@pytest.mark.parametrize("status", [0, 400, 401, 404, 500])
+def test_a_refused_registration_fails_even_on_a_pr(status, tmp_path, monkeypatch):
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setattr(pf, "_post", lambda *a, **k: (status, "nope"))
+    probed = []
+    monkeypatch.setattr(pf, "probe", lambda *a, **k: probed.append(a) or 200)
+    assert pf.main() == 1
+    assert not probed, "no model probe after Lemonade refused the provider"
+    assert (tmp_path / "out").read_text() == "ready=false\n"
+
+
+def test_main_probes_lemonade_then_fireworks_with_the_right_keys(tmp_path, monkeypatch):
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setattr(pf, "register_fireworks", lambda *a, **k: None)
+    calls = []
+    codes = iter([404, 200])
+    monkeypatch.setattr(
+        pf,
+        "probe",
+        lambda url, key, model, **k: calls.append((url, key, model)) or next(codes),
+    )
+    assert pf.main() == 1  # Fireworks serves it, Lemonade does not: GAIA's problem
+    assert calls == [
+        ("http://127.0.0.1:1/api/v1/chat/completions", "lemonade-key", MODEL),
+        (
+            pf.FIREWORKS_CHAT_URL,
+            "fw-key",
+            "accounts/fireworks/models/deepseek-v4p1-flash",
+        ),
+    ]
