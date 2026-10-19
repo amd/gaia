@@ -58,11 +58,15 @@ class _ScriptedAgent:
         self.raise_on_query = False
         self.block = None  # optional threading.Event to park the loop on
         self.approved = None  # outcome of a gated_call, once answered
+        self.streaming = False  # GaiaAgentConfig's default
 
     #: When set, the loop asks for approval of this (tool, args) before
     #: answering — the real handler emits needs_confirmation and blocks the
     #: agent thread, exactly as the base loop does for a gated tool.
     gated_call = None
+
+    #: When set, the run is stopped part-way through its streamed answer.
+    stop_midway = False
 
     def process_query(self, query, max_steps=None):
         if self.block is not None:
@@ -80,6 +84,18 @@ class _ScriptedAgent:
             raise RuntimeError("scripted failure")
         if self.saw_cancelled:
             return {"answer": "stopped before doing any work"}
+        if self.streaming and self.stop_midway:
+            # Stop lands mid-generation: the base loop breaks out of the
+            # stream and returns no text; the handler flushes its held tail.
+            self.console.print_streaming_text("A bicycle ")
+            self._cancel_event.set()
+            self.console.print_streaming_text('{"answer": "half-wri')
+            return {"status": "cancelled", "result": ""}
+        if self.streaming:
+            # What the base loop does with a streamed model call.
+            for piece in ("ans", "wered: ", query):
+                self.console.print_streaming_text(piece)
+            self.console.print_streaming_text("", end_of_stream=True)
         return {"answer": f"answered: {query}"}
 
     def close(self):
@@ -330,6 +346,59 @@ def test_one_terminal_event_per_run(built):
     client, _ = built
     r = client.post("/v1/gaia/query", json=_body())
     assert len(_terminals(r)) == 1, _events(r)
+
+
+# ---------------------------------------------------------------------------
+# Streamed model calls
+#
+# The sidecar built its agent with streaming off, so every relayed turn made
+# unstreamed model calls: no ``token`` events reached the UI, Stop could not
+# cut a call short, and gateway models that only accept streamed requests
+# (gemini-3.x, GLM) failed every turn.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("session_id", [None, "s-stream"])
+def test_a_query_streams_its_answer_as_tokens(built, session_id):
+    client, agents = built
+    body = _body(session_id=session_id) if session_id else _body()
+
+    r = client.post("/v1/gaia/query", json=body)
+
+    assert r.status_code == 200, r.text
+    assert agents[0].streaming is True
+    events = _events(r)
+    types = [e["type"] for e in events]
+    deltas = [e["delta"] for e in events if e["type"] == "token"]
+    assert "".join(deltas) == "answered: hello", events
+    assert types.index("token") < types.index("final"), types
+
+
+def test_a_retained_session_streams_even_if_its_agent_was_turned_off(built):
+    """The flag is re-asserted per turn, not trusted from construction."""
+    client, agents = built
+    assert client.post("/v1/gaia/query", json=_body(session_id="s-2")).status_code == 200
+    agents[0].streaming = False
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-2"))
+
+    assert len(agents) == 1
+    assert any(e["type"] == "token" for e in _events(r)), _events(r)
+
+
+def test_a_run_stopped_mid_answer_ends_cleanly(built, monkeypatch):
+    """Stop can now land mid-call. The stopped turn must end with the same
+    empty final the stdio transport sends — not a "this is a bug" error — and
+    the half-written tail flushed at teardown must not reach the wire."""
+    client, agents = built
+    monkeypatch.setattr(_ScriptedAgent, "stop_midway", True)
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    events = _events(r)
+    sent = "".join(e["delta"] for e in events if e["type"] == "token")
+    assert "half-wri" not in sent, events
+    assert _terminals(r) == [{"type": "final", "answer": ""}], events
 
 
 # ---------------------------------------------------------------------------

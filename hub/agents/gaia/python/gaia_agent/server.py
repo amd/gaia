@@ -478,6 +478,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     Surfacing that message beats inventing a generic error.
     """
     if isinstance(result, dict):
+        if result.get("status") == "cancelled":
+            # Stopped mid-generation: the loop returns no text by design, and
+            # the stdio transport ends the same turn with an empty final.
+            return {"type": "final", "answer": ""}
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -1030,6 +1034,9 @@ async def query(request: QueryRequest):
             agent = build_query_agent(**kwargs)
             one_shot_agent = agent
         agent.console = handler
+        # Streamed model calls are what put `token` events on this wire and let
+        # Stop cut a call short; some gateway models also refuse unstreamed ones.
+        agent.streaming = True
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
@@ -1166,6 +1173,10 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "token" and run.cancel_event.is_set():
+                        # A stopped answer's tail — e.g. a half-written JSON
+                        # reply flushed at teardown — is not answer text.
+                        continue
                     yield _sse(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
