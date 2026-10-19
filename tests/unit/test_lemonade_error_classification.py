@@ -517,9 +517,13 @@ def test_agent_extract_lemonade_user_message_typed_in_cycle() -> None:
 # specific phrases is ALSO present (corroboration). A bare load failure must
 # classify as NOT corrupt and surface as an actionable error.
 
+import threading
+import time
 from unittest.mock import patch
 
 from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_LOAD_RETRIES,
+    MODEL_LOAD_RETRY_BACKOFF,
     LemonadeClient,
     LemonadeClientError,
     ModelDownloadCancelledError,
@@ -623,10 +627,20 @@ class TestLoadModelCorruptRouting:
             "llama-server failed to start"
         )
 
+        # Patching time.sleep reaches every thread; record only this test's.
+        real_sleep, test_thread, backoffs = time.sleep, threading.get_ident(), []
+
+        def _sleep(seconds):
+            if threading.get_ident() == test_thread:
+                backoffs.append(seconds)
+            else:
+                real_sleep(seconds)
+
         with (
             patch.object(client, "_send_request", side_effect=send_error),
             patch.object(client, "delete_model") as mock_delete,
             patch.object(client, "pull_model_stream") as mock_pull,
+            patch("gaia.llm.lemonade_client.time.sleep", side_effect=_sleep),
         ):
             with pytest.raises(LemonadeClientError) as exc_info:
                 client.load_model(
@@ -636,6 +650,12 @@ class TestLoadModelCorruptRouting:
         # The destructive repair path must NOT have been touched.
         mock_delete.assert_not_called()
         mock_pull.assert_not_called()
+
+        # It backed off on the escalating schedule before giving up.
+        assert backoffs == [
+            MODEL_LOAD_RETRY_BACKOFF * n
+            for n in range(1, DEFAULT_MODEL_LOAD_RETRIES + 1)
+        ]
 
         # Error must name what failed so the user can act on it.
         assert "Qwen3-Coder-30B-A3B-Instruct-GGUF" in str(exc_info.value)

@@ -3,9 +3,8 @@
 """Shared "agent wheel not installed" messaging.
 
 The ``gaia-agent-*`` wheels (gaia, chat, email) are built
-and packaged (``hub/agents/<id>/python/``) but publishing them to PyPI is
-still paused (see ``.github/workflows/publish_agents.yml``, tracked by
-#1179 / #1513). Until that lands, ``pip install gaia-agent-<id>`` and
+and packaged (``hub/agents/<id>/python/``) but are not published to PyPI
+(#1179 / #1513). Until they are, ``pip install gaia-agent-<id>`` and
 ``pip install "amd-gaia[agents]"`` both fail on a clean environment (#2240)
 -- so every call site that used to recommend them needs to point at the one
 install path that actually resolves today: pip installing straight from the

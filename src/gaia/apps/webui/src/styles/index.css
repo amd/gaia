@@ -154,9 +154,21 @@
 
     --sidebar-w: 260px;
     --content-w: 760px;
-    --ease: cubic-bezier(0.22, 1, 0.36, 1);
-    --duration: 200ms;
-    --duration-fast: 120ms;
+    /* Motion — every animation and transition takes its timing from here
+       (enforced by styles/__tests__/motion.test.ts). */
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);       /* things arriving or settling */
+    --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1); /* loops: pulse, shimmer */
+    --ease-linear: linear;                         /* spinners */
+    --ease-step: steps(2, start);                  /* cursor blink */
+    --duration-fast: 120ms;   /* hover, press, small state changes */
+    --duration: 200ms;        /* rows, popovers, toasts */
+    --duration-slow: 320ms;   /* panels and height changes */
+    --duration-spin: 900ms;   /* one spinner turn */
+    --duration-blink: 1s;
+    --duration-pulse: 1.6s;   /* breathing dots, skeletons */
+    --duration-shimmer: 2.4s; /* the live status sweep */
+    --stagger: 80ms;          /* gap between siblings entering together */
+    --toast-hold: 2.5s;
 }
 
 [data-theme="dark"] {
@@ -408,7 +420,7 @@ textarea:focus-visible {
     box-shadow: var(--shadow-lg);
     display: flex; flex-direction: column;
     overflow: hidden;
-    animation: slideUp 250ms var(--ease);
+    animation: slideUp var(--duration) var(--ease);
 }
 
 .modal-header {
@@ -496,7 +508,7 @@ textarea:focus-visible {
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 /* ── Toast Notification ──────────────────────────────────────────── */
@@ -516,7 +528,7 @@ textarea:focus-visible {
     font-weight: 500;
     font-family: var(--font-sans);
     box-shadow: var(--shadow-lg);
-    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 2.5s forwards;
+    animation: toastIn var(--duration) var(--ease), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
     backdrop-filter: blur(12px);
 }
@@ -543,13 +555,13 @@ textarea:focus-visible {
 }
 /* Traveling wave for the "Thinking..." dots (used globally). */
 .thinking-dots span {
-    animation: loadingDotGlow 2.4s ease-in-out infinite;
+    animation: loadingDotGlow var(--duration-shimmer) var(--ease-in-out) infinite;
     opacity: 0.15;
     color: var(--accent);
 }
 .thinking-dots span:nth-child(1) { animation-delay: 0s; }
-.thinking-dots span:nth-child(2) { animation-delay: 0.5s; }
-.thinking-dots span:nth-child(3) { animation-delay: 1.0s; }
+.thinking-dots span:nth-child(2) { animation-delay: calc(var(--duration-shimmer) * 0.2); }
+.thinking-dots span:nth-child(3) { animation-delay: calc(var(--duration-shimmer) * 0.4); }
 
 @keyframes loadingDotGlow {
     0%, 15% { opacity: 0.15; }
@@ -566,10 +578,13 @@ textarea:focus-visible {
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
+    /* Near-zero, not none: elements still land on their final frame, and delays
+       still hold (a toast's fade-out waits its turn). */
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
     [data-theme="dark"] #root::after {
         display: none;
@@ -577,7 +592,7 @@ textarea:focus-visible {
 }
 
 /* ── Small shared pieces ────────────────────────────────────────── */
-.spin { animation: spin 0.9s linear infinite; }
+.spin { animation: spin var(--duration-spin) var(--ease-linear) infinite; }
 
 .link-btn {
     color: var(--accent);

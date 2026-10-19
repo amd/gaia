@@ -16,10 +16,15 @@ import platform
 import re
 import shutil
 import subprocess
+import threading
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
+
+import psutil
 
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
@@ -68,9 +73,10 @@ _NGROK_AUTHTOKEN_REJECTED_HINT = (
 )
 
 _NGROK_SESSION_LIMIT_HINT = (
-    "ngrok is already running elsewhere. Free ngrok plans allow only 1 "
-    "active tunnel at a time. Stop any other ngrok processes (check your "
-    "dashboard at https://dashboard.ngrok.com/agents) and try again."
+    "Another ngrok agent is already using your ngrok account's only session "
+    "(free plans allow 1). GAIA leaves it running because GAIA did not start "
+    "it. Stop that ngrok, or end its session at "
+    "https://dashboard.ngrok.com/agents, then try again."
 )
 
 
@@ -193,21 +199,31 @@ def _check_ngrok_authtoken_configured() -> bool:
     return False
 
 
-def _parse_ngrok_error(stderr_text: str) -> str:
-    """Translate ngrok stderr/stdout into a user-friendly error message.
+_NGROK_PORT_CONFLICT_HINT = (
+    "ngrok's local port (4040) is already in use. Another ngrok "
+    "process may still be running -- stop it and try again."
+)
 
-    Detects the most common failure modes (missing authtoken, session
-    limit reached, network issues) and returns instructions the user
-    can act on.  Falls back to the first line of raw output if nothing
-    matches.
-    """
-    text = (stderr_text or "").strip()
-    if not text:
-        return (
-            "ngrok exited without output. Try running the command manually to "
-            "see the error: ngrok http 4200"
-        )
 
+def _unrecovered_port_conflict(text: str) -> bool:
+    lines = text.lower().splitlines()
+    conflicts = [
+        i
+        for i, line in enumerate(lines)
+        if "address already in use" in line or "bind: address already" in line
+        # Windows: WSAEADDRINUSE
+        or "only one usage of each socket address" in line
+    ]
+    if not conflicts:
+        return False
+    return not any(
+        "starting web service" in line and "lvl=eror" not in line
+        for line in lines[conflicts[-1] + 1 :]
+    )
+
+
+def _known_ngrok_error(text: str) -> Optional[str]:
+    """The hint for a recognised ngrok failure in ``text``, else None."""
     low = text.lower()
 
     # ERR_NGROK_107: authtoken is well-formed but rejected (revoked,
@@ -221,6 +237,15 @@ def _parse_ngrok_error(stderr_text: str) -> str:
     ):
         return _NGROK_AUTHTOKEN_REJECTED_HINT
 
+    # Session limit before the generic auth branch: ngrok prefixes it with
+    # "authentication failed:".
+    if (
+        "err_ngrok_108" in low
+        or "simultaneous ngrok" in low
+        or "limited to 1 simultaneous" in low
+    ):
+        return _NGROK_SESSION_LIMIT_HINT
+
     # ERR_NGROK_4018 or generic authtoken issues -- malformed or missing.
     if (
         "err_ngrok_4018" in low
@@ -231,20 +256,9 @@ def _parse_ngrok_error(stderr_text: str) -> str:
     ):
         return _NGROK_AUTHTOKEN_HINT
 
-    # Simultaneous session limit (ERR_NGROK_108).
-    if (
-        "err_ngrok_108" in low
-        or "simultaneous ngrok" in low
-        or "limited to 1 simultaneous" in low
-    ):
-        return _NGROK_SESSION_LIMIT_HINT
-
-    # Local port conflict (4040 web interface or bind address in use).
-    if "address already in use" in low or "bind: address already" in low:
-        return (
-            "ngrok's local port (4040) is already in use. Another ngrok "
-            "process may still be running -- stop it and try again."
-        )
+    # Local port conflict, unless ngrok then bound its web service elsewhere.
+    if _unrecovered_port_conflict(text):
+        return _NGROK_PORT_CONFLICT_HINT
 
     # Network / DNS problems. The "connection refused" branch is filtered to
     # the ngrok hostname so generic "connection refused" from a local service
@@ -277,9 +291,118 @@ def _parse_ngrok_error(stderr_text: str) -> str:
             "intercepting TLS. Fix the clock / disable the proxy and retry."
         )
 
-    # Fallback: first non-empty line, truncated.
+    return None
+
+
+def _parse_ngrok_error(stderr_text: str) -> str:
+    """Translate ngrok stderr/stdout into a user-friendly error message.
+
+    Detects the most common failure modes (missing authtoken, session
+    limit reached, network issues) and returns instructions the user
+    can act on.  Falls back to the first line of raw output if nothing
+    matches.
+    """
+    text = (stderr_text or "").strip()
+    if not text:
+        return (
+            "ngrok exited without output. Try running the command manually to "
+            "see the error: ngrok http 4200"
+        )
+    known = _known_ngrok_error(text)
+    if known:
+        return known
     first_line = next((ln for ln in text.splitlines() if ln.strip()), text)
     return f"ngrok failed to start: {first_line[:300]}"
+
+
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _logfmt_field(line: str, key: str) -> Optional[str]:
+    """The value of ``key`` in one logfmt line, unquoted."""
+    m = re.search(rf'(?:^|\s){re.escape(key)}=("(?:[^"\\]|\\.)*"|\S+)', line)
+    return m.group(1).strip('"') if m else None
+
+
+def _terminate_tree(process, grace: float, handle=None) -> None:
+    """End ``process`` and everything it started.
+
+    ngrok may run through a wrapper (``ngrok.cmd``, a package-manager shim);
+    ending only the wrapper leaves the real agent running with our pipes.
+    ``handle`` is the ``psutil.Process`` taken at spawn: it knows the
+    process's start time, so a reused pid is never walked for children.
+    """
+    try:
+        children = (
+            handle.children(recursive=True)
+            if handle is not None and handle.is_running()
+            else []
+        )
+    except psutil.NoSuchProcess:
+        children = []
+    process.terminate()
+    for child in children:
+        try:
+            child.terminate()
+        except psutil.NoSuchProcess:
+            continue
+    try:
+        process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        logger.warning("ngrok didn't terminate gracefully, killing...")
+        process.kill()
+        process.wait(timeout=3)
+    _, alive = psutil.wait_procs(children, timeout=grace)
+    for child in alive:
+        try:
+            child.kill()
+        except psutil.NoSuchProcess:
+            continue
+    _, still = psutil.wait_procs(alive, timeout=3)
+    if still:
+        logger.warning(
+            "ngrok child process(es) %s survived a kill",
+            ", ".join(str(c.pid) for c in still),
+        )
+
+
+def _process_handle(process):
+    """A ``psutil.Process`` for our child, or None.
+
+    Only taken while the child is unreaped: until then its pid can't be reused.
+    """
+    pid = getattr(process, "pid", None)
+    if pid is None or process.poll() is not None:
+        return None
+    try:
+        return psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return None
+
+
+def _shut_down(process, readers: list, grace: float, handle=None) -> None:
+    """Stop ngrok, then close only the pipes whose reader has finished.
+
+    Closing a pipe a reader is blocked on waits for that reader's lock, which
+    would hang until the process holding the pipe's other end exits.
+    """
+    try:
+        _terminate_tree(process, grace, handle)
+    except (OSError, psutil.Error, subprocess.SubprocessError) as exc:
+        logger.warning("Error stopping ngrok: %s", exc)
+    for pipe, reader in readers:
+        reader.join(timeout=2)
+        if reader.is_alive():
+            logger.warning("An ngrok pipe is still held open; leaving it to exit")
+            continue
+        try:
+            pipe.close()
+        except OSError as exc:
+            logger.debug("Closing an ngrok pipe failed: %s", exc)
+
+
+class _StaleNgrokError(RuntimeError):
+    """A stale GAIA ngrok agent is running and cannot be stopped."""
 
 
 class TunnelManager:
@@ -312,6 +435,13 @@ class TunnelManager:
         self._error: Optional[str] = None
         self._public_ip: Optional[str] = None
         self._start_lock = asyncio.Lock()
+        # ngrok's log lines, read as they arrive: a full pipe would stall it.
+        self._output: deque = deque(maxlen=2000)
+        self._output_lock = threading.Lock()
+        self._readers: list = []
+        self._handle = None  # psutil.Process for self._process, taken at spawn
+        # ngrok pids GAIA couldn't inspect; named if GAIA's agent then fails.
+        self._uninspectable: list = []
 
     @property
     def active(self) -> bool:
@@ -401,22 +531,17 @@ class TunnelManager:
         await self._fetch_public_ip()
 
         # Kill any stale ngrok processes (free tier only allows 1)
-        await self._kill_stale_ngrok()
+        try:
+            await self._kill_stale_ngrok()
+        except _StaleNgrokError as exc:
+            self._error = str(exc)
+            logger.error("Tunnel start aborted: a stale ngrok could not be stopped")
+            return self.get_status()
 
         # Generate auth token
         self._token = str(uuid.uuid4())
 
-        # Build ngrok command. --log=stdout --log-format=logfmt makes
-        # ngrok emit structured logs to stdout/stderr so we can surface
-        # meaningful errors instead of staring at a hung process.
-        base_args = [
-            "http",
-            "--log=stdout",
-            "--log-format=logfmt",
-        ]
-        if self.domain:
-            base_args += ["--domain", self.domain]
-        cmd = [ngrok_path, *base_args, str(self.port)]
+        cmd = [ngrok_path, *self._ngrok_args()]
 
         logger.info("Starting ngrok: %s", " ".join(cmd))
 
@@ -429,6 +554,8 @@ class TunnelManager:
                 stdin=subprocess.PIPE,
                 **windows_hidden_popen_kwargs(),
             )
+            self._handle = _process_handle(self._process)
+            self._start_output_readers()
 
             # Poll ngrok's local API to get the tunnel URL
             self._url = await self._poll_ngrok_api()
@@ -488,24 +615,11 @@ class TunnelManager:
         """
         if self._process:
             logger.info("Stopping ngrok tunnel...")
-            try:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    logger.warning("ngrok didn't terminate gracefully, killing...")
-                    self._process.kill()
-                    self._process.wait(timeout=3)
-            except Exception as e:
-                logger.warning("Error stopping ngrok: %s", e)
-            finally:
-                for pipe in (self._process.stdout, self._process.stderr):
-                    if pipe:
-                        try:
-                            pipe.close()
-                        except OSError as exc:
-                            logger.debug("Closing an ngrok pipe failed: %s", exc)
-                self._process = None
+            process, readers = self._process, self._readers
+            handle = self._handle or _process_handle(process)
+            self._handle = None
+            self._process = None
+            await asyncio.to_thread(_shut_down, process, readers, 5.0, handle)
 
         self._url = None
         self._started_at = None
@@ -531,36 +645,105 @@ class TunnelManager:
 
         return None
 
-    async def _kill_stale_ngrok(self) -> None:
-        """Kill any stale ngrok processes (free tier only allows 1 session).
+    def _is_our_tunnel(self, tunnel: dict) -> bool:
+        """Whether an ngrok API tunnel forwards to this server's port.
 
-        Uses exact-process-name matching (``pkill -x`` / ``taskkill /im``) on
-        purpose: a broader ``pkill -f ngrok`` would match command lines like
-        ``vim ngrok.md`` or ``python ngrok_client.py``, including the user's
-        own unrelated work. Exact match still catches every legitimate
-        ``ngrok`` agent process — the only thing the free-tier session-limit
-        cleanup actually needs to clear.
+        The user's own ngrok may answer on :4040 too; never hand out its URL.
         """
+        addr = str((tunnel.get("config") or {}).get("addr") or "").strip()
+        if addr == str(self.port):
+            return True
         try:
-            if platform.system() == "Windows":
-                subprocess.run(
-                    ["taskkill", "/f", "/im", "ngrok.exe"],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                    **windows_hidden_popen_kwargs(),
+            parts = urlsplit(addr if "://" in addr else f"http://{addr}")
+            port = parts.port
+        except ValueError:
+            return False
+        return parts.hostname in _LOCAL_HOSTS and port == self.port
+
+    def _explain_exit(self, output: str) -> str:
+        """The user-facing reason GAIA's agent failed, naming any ngrok it
+        couldn't inspect when that one may be holding the session or port."""
+        message = _parse_ngrok_error(output)
+        return self._name_uninspectable(message)
+
+    def _name_uninspectable(self, message: str) -> str:
+        if self._uninspectable and message in (
+            _NGROK_SESSION_LIMIT_HINT,
+            _NGROK_PORT_CONFLICT_HINT,
+        ):
+            pids = ", ".join(str(pid) for pid in self._uninspectable)
+            message += (
+                f" An ngrok process GAIA can't inspect (pid {pids}, perhaps run "
+                "elevated or as another user) may be the one holding it."
+            )
+        return message
+
+    def _ngrok_args(self) -> list:
+        """ngrok's arguments for this tunnel, after the executable.
+
+        ``--log=stdout --log-format=logfmt`` makes ngrok emit structured logs so
+        we can surface meaningful errors instead of staring at a hung process.
+        It also marks the agent as GAIA's: see :meth:`_kill_stale_ngrok`.
+        """
+        args = ["http", "--log=stdout", "--log-format=logfmt"]
+        if self.domain:
+            args += ["--domain", self.domain]
+        return [*args, str(self.port)]
+
+    async def _kill_stale_ngrok(self) -> None:
+        """Kill ngrok agents GAIA started for this tunnel (free tier allows 1).
+
+        Matches by exact argument list and kills by PID, so the user's own
+        ngrok tunnels are never touched. If one of those holds the free-tier
+        session, ngrok exits with ERR_NGROK_108 and the status says so.
+        """
+        if self._process is not None:
+            await self.stop()
+        stale = await asyncio.to_thread(self._find_stale_gaia_ngrok)
+        for proc in stale:
+            logger.info("Stopping a stale GAIA ngrok agent (pid %d)", proc.pid)
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied as exc:
+                raise _StaleNgrokError(
+                    f"A stale GAIA ngrok agent (pid {proc.pid}) holds the tunnel "
+                    "but GAIA is not allowed to stop it. End it in Task Manager "
+                    "(or `kill` it), then start the tunnel again."
+                ) from exc
+        if stale:
+            _, alive = await asyncio.to_thread(psutil.wait_procs, stale, 3)
+            if alive:
+                pids = ", ".join(str(p.pid) for p in alive)
+                raise _StaleNgrokError(
+                    f"A stale GAIA ngrok agent (pid {pids}) is still running 3 s "
+                    "after GAIA killed it. End it in Task Manager (or `kill` "
+                    "it), then start the tunnel again."
                 )
-            else:
-                subprocess.run(
-                    ["pkill", "-x", "ngrok"],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                )
-            # Brief pause to let the process fully die
-            await asyncio.sleep(0.5)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            logger.debug("Could not clear stale ngrok processes: %s", e)
+
+    def _find_stale_gaia_ngrok(self) -> list:
+        """ngrok processes whose arguments are exactly this tunnel's.
+
+        A GAIA agent for another port or domain is left alone: it may belong
+        to another live GAIA server.
+        """
+        expected = self._ngrok_args()
+        stale = []
+        self._uninspectable = []
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            name = (proc.info.get("name") or "").lower()
+            if name not in ("ngrok", "ngrok.exe"):
+                continue
+            cmdline = proc.info.get("cmdline")
+            if cmdline is None:
+                # AccessDenied or a zombie: likely the user's own (elevated or
+                # another account). Leave it; name it if our agent then fails.
+                self._uninspectable.append(proc.pid)
+                continue
+            if cmdline[1:] == expected:
+                stale.append(proc)
+        return stale
 
     async def _fetch_public_ip(self) -> None:
         """Fetch the server's public IP (for ngrok interstitial password)."""
@@ -576,27 +759,67 @@ class TunnelManager:
             logger.debug("Could not fetch public IP: %s", e)
             self._public_ip = None
 
-    def _drain_ngrok_output(self) -> str:
-        """Best-effort drain of ngrok's stdout+stderr for error reporting.
-
-        Called after ngrok has exited or been terminated.  Returns combined
-        stdout+stderr text (truncated if excessively long, and with any
-        plausible authtoken values masked so error logs are safe to share).
-        """
-        combined = []
-        for pipe_name in ("stdout", "stderr"):
-            pipe = getattr(self._process, pipe_name, None) if self._process else None
+    def _start_output_readers(self) -> None:
+        with self._output_lock:
+            self._output.clear()
+        self._readers = []
+        for pipe in (self._process.stdout, self._process.stderr):
             if pipe is None:
                 continue
-            try:
-                # Since ngrok has exited (or we just killed it), read() won't
-                # block -- all data is already in the kernel buffer.
-                raw = pipe.read() or b""
-                if raw:
-                    combined.append(raw.decode("utf-8", errors="replace"))
-            except Exception as e:
-                logger.debug("Error draining ngrok %s: %s", pipe_name, e)
-        text = "\n".join(combined).strip()
+            reader = threading.Thread(
+                target=self._read_pipe, args=(pipe,), name="ngrok-output", daemon=True
+            )
+            reader.start()
+            self._readers.append((pipe, reader))
+
+    def _read_pipe(self, pipe) -> None:
+        try:
+            for raw in iter(pipe.readline, b""):
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                with self._output_lock:
+                    self._output.append(line)
+        except (OSError, ValueError) as exc:
+            # stop() closed the pipe; nothing left to read.
+            logger.debug("ngrok output reader stopped: %s", exc)
+
+    def _output_lines(self) -> list:
+        with self._output_lock:
+            return list(self._output)
+
+    def _logged_web_addr(self) -> Optional[str]:
+        """The local API address GAIA's own agent bound, if it has yet.
+
+        The last non-error "starting web service" line: ngrok moves on to the
+        next port when one is taken.
+        """
+        found = None
+        for line in self._output_lines():
+            if "starting web service" in line and "lvl=eror" not in line:
+                found = _logfmt_field(line, "addr") or found
+        return found
+
+    def _logged_tunnel_url(self) -> Optional[str]:
+        """The https URL GAIA's own agent logged for a tunnel to our port."""
+        for line in self._output_lines():
+            if "started tunnel" not in line:
+                continue
+            url = _logfmt_field(line, "url") or ""
+            addr = _logfmt_field(line, "addr") or ""
+            if url.startswith("https://") and self._is_our_tunnel(
+                {"config": {"addr": addr}}
+            ):
+                return url
+        return None
+
+    def _drain_ngrok_output(self) -> str:
+        """ngrok's stdout+stderr for error reporting, once it has exited.
+
+        Truncated if long, with plausible authtoken values masked so error
+        logs are safe to share.
+        """
+        for _pipe, reader in self._readers:
+            reader.join(timeout=2)
+        text = "\n".join(self._output_lines()).strip()
         text = _mask_ngrok_secrets(text)
         # Truncate to keep logs manageable; friendly parser takes first line.
         return text[:4000]
@@ -606,8 +829,9 @@ class TunnelManager:
     ) -> Optional[str]:
         """Poll ngrok's local API to get the tunnel URL.
 
-        ngrok exposes a local API at http://127.0.0.1:4040/api/tunnels
-        that we can query to find the public HTTPS URL.
+        Reads the URL from GAIA's own agent's log first, then its local API
+        at the ``web addr`` it logged. It never guesses :4040: another agent
+        may own it, and its tunnels are not GAIA's.
 
         Args:
             timeout: Maximum time to wait in seconds.
@@ -624,7 +848,7 @@ class TunnelManager:
 
             # Check if ngrok process died
             if self._process and self._process.poll() is not None:
-                stderr = self._drain_ngrok_output()
+                stderr = await asyncio.to_thread(self._drain_ngrok_output)
                 # We deliberately do NOT log the captured stderr content,
                 # even after _mask_ngrok_secrets masks plausible authtokens:
                 # CodeQL's py/clear-text-logging-sensitive-data rule treats
@@ -638,19 +862,28 @@ class TunnelManager:
                     elapsed,
                     len(stderr or ""),
                 )
-                self._error = _parse_ngrok_error(stderr)
+                self._error = self._explain_exit(stderr)
                 return None
+
+            logged = self._logged_tunnel_url()
+            if logged:
+                return logged
 
             import httpx
 
+            api = self._logged_web_addr()
+            if api is None:
+                continue
             try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
-                    resp = await client.get("http://127.0.0.1:4040/api/tunnels")
+                    resp = await client.get(f"http://{api}/api/tunnels")
                     if resp.status_code == 200:
                         data = resp.json()
                         tunnels = data.get("tunnels", [])
                         for tunnel in tunnels:
-                            if tunnel.get("proto") == "https":
+                            if tunnel.get("proto") == "https" and self._is_our_tunnel(
+                                tunnel
+                            ):
                                 url = tunnel.get("public_url")
                                 if url:
                                     return url
@@ -666,13 +899,10 @@ class TunnelManager:
         stderr = ""
         try:
             if self._process and self._process.poll() is None:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=2)
-                stderr = self._drain_ngrok_output()
+                await asyncio.to_thread(
+                    _terminate_tree, self._process, 2.0, self._handle
+                )
+                stderr = await asyncio.to_thread(self._drain_ngrok_output)
                 # See note above: do NOT log captured stderr content (CodeQL's
                 # clear-text-logging rule). Length-only is a safe diagnostic.
                 logger.error(
@@ -682,13 +912,14 @@ class TunnelManager:
         except Exception as e:
             logger.debug("Error terminating timed-out ngrok: %s", e)
 
-        if stderr:
-            self._error = _parse_ngrok_error(stderr)
+        known = _known_ngrok_error(stderr) if stderr else None
+        if known:
+            self._error = self._name_uninspectable(known)
         else:
             self._error = (
-                "ngrok started but didn't open a public tunnel within 15s. "
-                "Common causes: authtoken rejected, network blocked, or "
-                "ngrok servers unreachable. Run 'ngrok http 4200' manually "
-                "to see the real error."
+                f"GAIA's ngrok agent didn't open a public tunnel within "
+                f"{timeout:.0f}s. Check your internet connection and ngrok "
+                "authtoken, then retry. To see ngrok's own error, run "
+                f"`ngrok http {self.port}` in a terminal."
             )
         return None

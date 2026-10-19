@@ -7,7 +7,7 @@
     position: relative;
     width: 100%;
     padding: 10px 0;
-    animation: msgFadeIn 240ms var(--ease) both;
+    animation: msgFadeIn var(--duration) var(--ease) both;
 }
 
 @keyframes msgFadeIn {
@@ -250,7 +250,7 @@
     color: var(--accent);
     text-decoration: none;
     border-bottom: 1px solid transparent;
-    transition: border-color 200ms var(--ease);
+    transition: border-color var(--duration) var(--ease);
 }
 .md-link:hover {
     border-bottom-color: var(--accent);
@@ -332,6 +332,9 @@
     overflow-x: auto;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
+    /* The page-wide thumb matches the table border; a wide table needs a visible cue. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-muted) transparent;
 }
 .md-table {
     width: 100%;
@@ -523,7 +526,7 @@
     /* Pixelated terminal aesthetic - sharp edges */
     border-radius: 0;
     image-rendering: pixelated;
-    animation: cursorBlink 600ms steps(2, start) infinite;
+    animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */
@@ -574,13 +577,14 @@
     border-top: 1px solid var(--border);
     font-size: 10.5px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     opacity: 0;
-    transition: opacity 180ms var(--ease);
+    transition: opacity var(--duration-fast) var(--ease);
     pointer-events: none;
     user-select: none;
 }
-.msg:hover .msg-stats {
+.msg:hover .msg-stats,
+.msg-stats:focus-within {
     opacity: 1;
     pointer-events: auto;
     user-select: text;
@@ -592,6 +596,18 @@
 }
 .msg:hover .msg-stats-ts {
     opacity: 1;
+}
+/* Reads as text; a click shows the exact numbers */
+.msg-stats-summary {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.msg-stats-summary:hover {
+    color: var(--text-secondary);
 }
 /* Separator dots between stat items */
 .msg-stats > span + span::before {
