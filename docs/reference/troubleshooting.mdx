@@ -142,8 +142,34 @@ icon: "bug"
       it with `LEMONADE_BASE_URL`.
     - **`exited immediately` / `did not answer`** — the server started but failed. Its own
       error is in `~/.gaia/lemonade/lemond.log`.
+    - **`could not bind port …: it was taken by another program first`** — another
+      program took each port GAIA picked before the server could bind it. GAIA tries three
+      ports, and logs each retry. Free a port and start it there with
+      `gaia lemonade embedded start --port <port>`. With `--port`, the error reads
+      **`it is in use by another program`** instead, and GAIA does not try another port.
+    - **`busy loading or swapping a model; requests wait for it`** in
+      `gaia lemonade embedded status` — its health check is slow while a model loads or
+      unloads. It is working: don't stop it.
+    - **`is running but not answering on port …`** — the server answers nothing, or its
+      model backends have done no work for over 5 minutes. Check
+      `~/.gaia/lemonade/lemond.log`; if it shows no progress, run
+      `gaia lemonade embedded stop`, then start it again.
 
     To start over with a fresh copy, run `gaia init --force-reinstall`.
+  </Accordion>
+
+  <Accordion title="GAIA says the Lemonade Server is stuck or not answering" icon="hourglass">
+    A Lemonade Server that is loading or swapping a model answers its health check
+    slowly, so GAIA waits for it rather than calling it down. It reports one of these
+    only when the server answers nothing, or its model backends have done no work at all
+    for 5 minutes. Waiting longer will not help.
+
+    - **`GAIA's Lemonade Server … is running but stuck`** or **`Embedded Lemonade … is
+      running but not answering`** — GAIA's own server. Check
+      `~/.gaia/lemonade/lemond.log` for what it was doing. If it shows no progress, run
+      `gaia lemonade embedded stop`, then start it again (or run `gaia init`).
+    - **`… is stuck rather than loading a model`** — the Lemonade you installed. Restart
+      it with the command the error names, then retry.
   </Accordion>
 
   <Accordion title="gaia init can't install the GAIA agent from the Agent Hub" icon="store">
