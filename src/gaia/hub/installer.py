@@ -365,6 +365,20 @@ def is_installing(agent_id: str) -> bool:
         return agent_id in _IN_PROGRESS
 
 
+def install_in_progress(agent_id: str, install_root: Optional[Path] = None) -> bool:
+    """True when this process or another one holds *agent_id*'s install slot."""
+    if is_installing(agent_id):
+        return True
+    root = install_root or default_install_root()
+    try:
+        with file_lock(
+            root / f".{_require_safe_agent_id(agent_id)}.install", timeout=0
+        ):
+            return False
+    except FileLockTimeout:
+        return True
+
+
 # ---------------------------------------------------------------------------
 # Progress tracking (polling endpoint)
 # ---------------------------------------------------------------------------

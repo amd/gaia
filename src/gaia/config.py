@@ -334,8 +334,8 @@ class GaiaConfig:
         except FileLockError as e:
             if not lock_dir_unwritable(e):
                 raise GaiaConfigError(str(e)) from e
-            # No process can rename a new config into a directory this one
-            # cannot write, so an unlocked read cannot see a partial file.
+            # The directory is read-only to this user, so none of their GAIA
+            # processes can replace the file mid-read.
             text = cls._read_text(config_file)
         if text is None:
             return cls()._snapshot()

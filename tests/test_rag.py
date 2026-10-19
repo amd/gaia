@@ -1565,6 +1565,52 @@ class TestCacheSecurity:
                 assert os.path.exists(cache_path + ".sig")
                 assert rag._verify_and_load_cache(cache_path)["chunks"]
 
+    def test_busy_cache_lock_is_an_error_not_a_reindex(
+        self, mock_dependencies, monkeypatch
+    ):
+        """A lock another process holds must not pass for a corrupt cache."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+        import threading
+
+        from gaia.rag.sdk import _cache_lock_target
+        from gaia.utils import file_lock as file_lock_mod
+
+        monkeypatch.setattr(file_lock_mod, "LOCK_TIMEOUT_SECONDS", 0.2)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+                assert rag.index_document(str(fake_pdf))["success"] is True
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                held, release = threading.Event(), threading.Event()
+
+                def other_process():
+                    with file_lock_mod.file_lock(_cache_lock_target(cache_path)):
+                        held.set()
+                        release.wait(30)
+
+                holder = threading.Thread(target=other_process)
+                holder.start()
+                held.wait(10)
+                rag2 = RAGSDK(config)
+                try:
+                    with patch.object(
+                        rag2,
+                        "_extract_text_from_file",
+                        side_effect=AssertionError("re-extracted a valid cache"),
+                    ):
+                        result = rag2.index_document(str(fake_pdf))
+                finally:
+                    release.set()
+                    holder.join()
+
+                assert result["success"] is False
+                assert result["error_type"] == "cache_busy"
+                assert "Another GAIA process" in result["error"]
+
 
 class TestClearCacheSafety:
     """clear_cache must only ever delete files the RAG cache wrote (#4194)."""

@@ -265,6 +265,11 @@ def test_config_loads_from_a_directory_it_cannot_write(tmp_path, monkeypatch):
         return real_open(name, flags, *args)
 
     monkeypatch.setattr(file_lock_mod.os, "open", read_only_dir)
+    monkeypatch.setattr(
+        file_lock_mod.os,
+        "access",
+        lambda p, mode: False if Path(p) == tmp_path else os.path.exists(p),
+    )
     assert GaiaConfig.load(path).profile == "npu"
 
 

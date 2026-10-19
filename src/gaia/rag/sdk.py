@@ -50,7 +50,12 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 from gaia.security import PathValidator
-from gaia.utils.file_lock import file_lock, write_bytes_atomic, write_text_atomic
+from gaia.utils.file_lock import (
+    FileLockError,
+    file_lock,
+    write_bytes_atomic,
+    write_text_atomic,
+)
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -2977,6 +2982,9 @@ These positions indicate where to split the text."""
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
+            except FileLockError as e:
+                # Busy, not corrupt: re-extracting would redo another process's work.
+                return self._cache_busy(stats, file_path, e)
             except Exception as e:
                 # A miss, not a delete: re-indexing replaces the entry atomically,
                 # and deleting here could destroy a fresh cache another process
@@ -3185,6 +3193,22 @@ These positions indicate where to split the text."""
             )
             stats["error"] = str(e)
             return stats
+
+    def _cache_busy(
+        self, stats: Dict[str, Any], file_path: str, error: FileLockError
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose cache another process holds locked."""
+        message = (
+            f"Could not read the cached index for {Path(file_path).name}: {error} "
+            "Another GAIA process is probably indexing into the same cache; "
+            "index the document again once it finishes."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.error(message)
+        stats["error"] = message
+        stats["error_type"] = "cache_busy"
+        return stats
 
     def _embedding_failed(
         self, stats: Dict[str, Any], file_path: str, error: EmbeddingUnavailableError

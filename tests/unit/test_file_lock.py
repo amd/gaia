@@ -123,9 +123,35 @@ def test_replace_held_too_long_names_the_file(tmp_path, monkeypatch):
     def always_held(src, dst):
         raise PermissionError(13, "Access is denied", str(dst))
 
-    monkeypatch.setattr(mod, "LOCK_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(mod, "REPLACE_RETRY_SECONDS", 0.1)
     monkeypatch.setattr(mod.os, "replace", always_held)
     target = tmp_path / "out.json"
     with pytest.raises(PermissionError, match="another program has it open"):
         write_text_atomic(target, "{}\n")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_holder_waiting_out_renames_never_outlasts_a_waiter():
+    """A skill swap does three renames under the lock; waiters must outlast it."""
+    from gaia.utils import file_lock as mod
+
+    assert 3 * mod.REPLACE_RETRY_SECONDS < mod.LOCK_TIMEOUT_SECONDS
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only attribute")
+def test_a_read_only_target_fails_at_once_instead_of_waiting(tmp_path):
+    import stat
+    import time
+
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "out.json"
+    target.write_text("{}", encoding="utf-8")
+    os.chmod(target, stat.S_IREAD)
+    try:
+        started = time.monotonic()
+        with pytest.raises(PermissionError, match="marked read-only"):
+            write_text_atomic(target, '{"a": 1}\n')
+        assert time.monotonic() - started < mod.REPLACE_RETRY_SECONDS
+    finally:
+        os.chmod(target, stat.S_IWRITE | stat.S_IREAD)

@@ -38,7 +38,6 @@ the signature earned.
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 import zipfile
@@ -80,6 +79,7 @@ from gaia.skills.tiers import (
     enforce_tier_ceiling,
 )
 from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.file_lock import replace_retrying
 
 log = get_logger(__name__)
 
@@ -280,6 +280,7 @@ def install_skill(
         # another process sees the old copy or the new one, never a partial one.
         staging = _staging_dir(destination_root, name)
         retired = staging / f"{name}.replaced"
+        undo_incomplete = False
         try:
             staged = staging / name
             shutil.copytree(source_dir, staged)
@@ -348,10 +349,12 @@ def install_skill(
                     )
                     lock.save()
                 except BaseException:
-                    _swap_back(target, retired)
+                    undo_incomplete = not _swap_back(
+                        target, retired, staging / f"{name}.failed"
+                    )
                     raise
         finally:
-            _remove_staging(staging, target, retired)
+            _remove_staging(staging, target, retired, undo_incomplete)
     resolver.reload()
 
     return InstallResult(
@@ -384,7 +387,7 @@ def _swap_in(staged: Path, target: Path, retired: Path) -> None:
     """Replace *target* with *staged* by two renames, restoring it if the second fails."""
     if target.exists():
         try:
-            os.replace(target, retired)
+            replace_retrying(target, retired)
         except OSError as exc:
             raise SkillInstallError(
                 f"Could not move the installed copy at {target} aside to replace "
@@ -392,12 +395,12 @@ def _swap_in(staged: Path, target: Path, retired: Path) -> None:
                 "running tool) and retry the install."
             ) from exc
     try:
-        os.replace(staged, target)
+        replace_retrying(staged, target)
     except OSError as exc:
         kept = ""
         if retired.exists():
             try:
-                os.replace(retired, target)
+                replace_retrying(retired, target)
             except OSError as restore_exc:
                 kept = (
                     f" Restoring the previous copy also failed ({restore_exc}); it "
@@ -409,25 +412,35 @@ def _swap_in(staged: Path, target: Path, retired: Path) -> None:
         ) from exc
 
 
-def _swap_back(target: Path, retired: Path) -> None:
-    """Undo a swap whose lock entry could not be saved, so files and lock agree."""
+def _swap_back(target: Path, retired: Path, failed: Path) -> bool:
+    """Undo a swap whose lock entry could not be saved, so files and lock agree.
+
+    The new copy is renamed aside rather than deleted, so a file in it that
+    another program holds open cannot leave a half-deleted skill in place.
+    Returns False when the previous copy is not back at *target*.
+    """
     try:
-        shutil.rmtree(target)
+        replace_retrying(target, failed)
         if retired.exists():
-            os.replace(retired, target)
+            replace_retrying(retired, target)
+        return True
     except OSError as exc:
         log.error(
             "Could not undo the install at %s after its lock entry failed to save: "
-            "%s. The previous copy is kept at %s.",
+            "%s. The previous copy is kept at %s; move it back to %s by hand.",
             target,
             exc,
             retired,
+            target,
         )
+        return False
 
 
-def _remove_staging(staging: Path, target: Path, retired: Path) -> None:
-    if retired.exists() and not target.exists():
-        # The only copy of the previous install; never delete it.
+def _remove_staging(
+    staging: Path, target: Path, retired: Path, undo_incomplete: bool
+) -> None:
+    if undo_incomplete or (retired.exists() and not target.exists()):
+        # Holds the only copy of the previous install; never delete it.
         log.error(
             "Kept %s: it holds the previous copy of %s, which could not be put "
             "back. Move it back by hand.",
