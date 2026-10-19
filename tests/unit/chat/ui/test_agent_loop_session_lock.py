@@ -249,6 +249,25 @@ async def test_a_timed_out_tick_mid_model_call_keeps_the_model_until_it_stops(
         unstick.set()
 
 
+async def test_a_timed_out_tick_stuck_outside_any_tool_frees_the_model_in_time(
+    env, monkeypatch
+):
+    monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.2)
+    monkeypatch.setattr("gaia.ui.agent_threads.STOPPED_RUN_MODEL_GRACE_SECONDS", 0.5)
+    loop, session, agent = _make("chat")
+    unstick = threading.Event()
+    # Hung in setup or a request that never yields: no tool, no token to stop at.
+    agent.process_query = lambda _message: unstick.wait(30) and "late"
+    try:
+        await asyncio.wait_for(
+            loop._run_step(AgentTrigger("idle_tick", session["id"])), 5
+        )
+        assert not agent_loop_mod.turn_queue.locked(), "held the GPU forever"
+        assert loop._app_state.session_locks[session["id"]].locked()
+    finally:
+        unstick.set()
+
+
 async def test_a_tick_cancelled_at_shutdown_keeps_its_session_until_it_stops(env):
     loop, session, agent = _make("chat")
     unstick = threading.Event()

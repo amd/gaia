@@ -516,7 +516,7 @@ class AgentLoop:
             )
             if not finished:
                 logger.error(
-                    "AgentLoop: tick for session %s is stuck in a tool after it "
+                    "AgentLoop: tick for session %s is still running after it "
                     "was stopped; freeing the model and holding the session "
                     "until its thread exits",
                     session_id[:8],

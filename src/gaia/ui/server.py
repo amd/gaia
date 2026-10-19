@@ -323,8 +323,8 @@ class _ScheduledRuns:
                 worker, console, what="Scheduled run"
             ):
                 logger.error(
-                    "Scheduled run is stuck in a tool after its %gs timeout; "
-                    "freeing the model (it calls the model no more)",
+                    "Scheduled run is still running after its %gs timeout; "
+                    "freeing the model while its thread winds down",
                     self._timeout,
                 )
             raise asyncio.TimeoutError(

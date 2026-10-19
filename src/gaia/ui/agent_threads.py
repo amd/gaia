@@ -57,8 +57,18 @@ def run_in_own_thread(fn: Callable[[], Any], *, name: str) -> asyncio.Future:
     return future
 
 
+# A stopped model call ends at its next token; a run stuck anywhere else (agent
+# setup, a hung MCP server, a request that never yields) must not keep the GPU.
+STOPPED_RUN_MODEL_GRACE_SECONDS = 60.0
+
+
 async def wait_until_off_the_model(
-    worker: asyncio.Future, console, *, what: str, log_every: float = 60.0
+    worker: asyncio.Future,
+    console,
+    *,
+    what: str,
+    log_every: float = 60.0,
+    max_wait: float | None = None,
 ) -> bool:
     """After telling *worker*'s agent to stop, wait while it may use the model.
 
@@ -66,8 +76,12 @@ async def wait_until_off_the_model(
     token once its console is cancelled). Returns True once the thread has
     finished, or False as soon as it is inside a tool (*console*'s
     ``tool_running()``): outside any model call, and, told to stop, it starts
-    no other, so the caller can free the model while the tool returns.
+    no other, so the caller can free the model while the tool returns. Also
+    returns False after *max_wait* seconds (default
+    ``STOPPED_RUN_MODEL_GRACE_SECONDS``) wherever the thread is stuck.
     """
+    if max_wait is None:
+        max_wait = STOPPED_RUN_MODEL_GRACE_SECONDS
     waited = 0.0
     while True:
         done, _ = await asyncio.wait({worker}, timeout=0.5)
@@ -76,6 +90,15 @@ async def wait_until_off_the_model(
         if console is not None and console.tool_running():
             return False
         waited += 0.5
+        if waited >= max_wait:
+            logger.error(
+                "%s still running %.0f s after it was stopped, outside any tool "
+                "(stuck in agent setup or a model request that never answers); "
+                "freeing the model while its thread winds down",
+                what,
+                waited,
+            )
+            return False
         if waited % log_every == 0:
             logger.warning(
                 "%s still stopping after %.0f s; it keeps the model until its "
