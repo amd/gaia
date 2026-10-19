@@ -243,3 +243,32 @@ def test_a_gh_failure_stops_the_run(rc, repo, tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as excinfo:
         run_main(rc, tmp_path)
     assert "HTTP 401" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("code", [0, 1])
+def test_a_pr_lookup_reply_that_is_not_json_stops_the_run(rc, monkeypatch, code):
+    """Exit 0 with garbage used to mean every commit silently lost its PR text."""
+
+    def fake(args):
+        return subprocess.CompletedProcess(args, code, "<html>502</html>", "")
+
+    monkeypatch.setattr(rc, "_run", fake)
+    commits = [{"sha": "a", "date": "", "subject": "x (#5)", "pr": 5, "paths": []}]
+    with pytest.raises(SystemExit) as excinfo:
+        rc.fetch_prs("amd/gaia", commits)
+    assert "not JSON" in str(excinfo.value)
+
+
+def test_a_true_merge_commit_lists_its_paths(rc, repo, tmp_path, monkeypatch):
+    """A real merge on main must show its files, whatever the git version."""
+    root, _ = repo
+    git(root, "checkout", "-q", "-b", "side")
+    (root / "src" / "gaia" / "merged.py").write_text("x", encoding="utf-8")
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "side work")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "side", "-m", "Merge side (#9)")
+    stub_gh(rc, monkeypatch)
+    text, paths, _ = run_main(rc, tmp_path)
+    assert "src/gaia/merged.py" in paths.splitlines()
+    assert "`src/gaia/merged.py`" in text

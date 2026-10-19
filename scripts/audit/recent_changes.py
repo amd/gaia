@@ -101,6 +101,9 @@ def read_commits(selector: list[str]) -> list[dict]:
             "git",
             "log",
             "--first-parent",
+            # Implied by --first-parent since git 2.31; explicit so an older git still
+            # lists a merge commit's paths.
+            "--diff-merges=first-parent",
             f"--format={COMMIT_SEP}%H{FIELD_SEP}%cI{FIELD_SEP}%s",
             "--name-only",
             *selector,
@@ -152,9 +155,14 @@ def fetch_prs(
         args += ["-f", f"owner={owner}", "-f", f"name={name}"]
         completed = _run(args)
         try:
-            data = json.loads(completed.stdout or "{}")
-        except json.JSONDecodeError:
-            data = {}
+            data = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"`gh api graphql` (PR lookup) exited {completed.returncode} with "
+                f"output that is not JSON: {completed.stdout[:300]!r} "
+                f"{completed.stderr.strip()[:300]}\nThe audit's recent-changes context "
+                "could not be built; fix this rather than auditing without it."
+            ) from exc
         errors = data.get("errors") or []
         # A "(#N)" that names an issue, not a PR, is NOT_FOUND; that commit keeps its
         # subject. Anything else means the lookup itself broke.

@@ -255,6 +255,10 @@ def _gh_json(args: list[str]) -> Any:
     return json.loads(completed.stdout)
 
 
+#: What fetch_backlog() returns, and so what a --backlog-file snapshot must hold.
+BACKLOG_KEYS = frozenset({"open_issues", "filed", "suppressed", "closed_duplicates"})
+
+
 def _capped(issues: list[Any], what: str, limit: int) -> list[Any]:
     """`gh issue list` stops at --limit without saying so: treat a full page as cut."""
     if len(issues) >= limit:
@@ -901,6 +905,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.backlog_file:
         backlog = json.loads(args.backlog_file.read_text(encoding="utf-8"))
+        missing = BACKLOG_KEYS - set(backlog)
+        if missing:
+            raise SystemExit(
+                f"{args.backlog_file} has no {sorted(missing)}: it predates this "
+                "script's backlog format. Re-save the snapshot from fetch_backlog() "
+                "rather than guessing the missing lists are empty."
+            )
     else:
         backlog = fetch_backlog(args.repo, args.label, args.limit, args.closed_cap)
 

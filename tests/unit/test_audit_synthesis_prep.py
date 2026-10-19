@@ -2183,3 +2183,30 @@ def test_main_routes_a_redirected_key_to_already_filed(prep, tmp_path):
     worklist = json.loads(out.read_text(encoding="utf-8"))
     assert worklist["counts"]["already_filed"] == 1
     assert worklist["clusters"][0]["existing_issues"] == [4331]
+
+
+def test_an_old_backlog_snapshot_is_refused_by_name(prep, tmp_path):
+    """A snapshot missing a list must not be read as "that list is empty"."""
+    findings_dir = tmp_path / "findings"
+    write_findings(findings_dir, "findings-docs.json", [make_finding()])
+    backlog_file = tmp_path / "backlog.json"
+    backlog_file.write_text(
+        json.dumps({"open_issues": [], "filed": [], "suppressed": []}),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        prep.main(
+            [
+                "--findings-dir",
+                str(findings_dir),
+                "--repo",
+                "amd/gaia",
+                "--out",
+                str(tmp_path / "out.json"),
+                "--dossier",
+                str(tmp_path / "dossier.md"),
+                "--backlog-file",
+                str(backlog_file),
+            ]
+        )
+    assert "closed_duplicates" in str(excinfo.value)
