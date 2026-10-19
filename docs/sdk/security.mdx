@@ -66,6 +66,43 @@ it gets none.
   the CLI must not become standing access for every later Agent UI session.
 </Warning>
 
+### Narrowing the scope for a run
+
+`GAIA_ALLOWED_PATHS` (absolute paths joined with `os.pathsep`) narrows every
+`PathValidator` the process builds, whatever scope its host computed. An
+evaluation harness uses it so the agent cannot read answer keys stored outside
+the task folder.
+
+```python
+import os
+
+from gaia.security import PathValidator
+
+os.environ["GAIA_ALLOWED_PATHS"] = "/home/user/evals/task-17"
+
+v = PathValidator(allowed_paths=["/home/user"])
+v.allowed_paths                       # {PosixPath('/home/user/evals/task-17')}
+v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
+```
+
+- The scope becomes the overlap of the host's scope and the list. An entry
+  outside the host's scope is logged and ignored; it never widens.
+- Later grants are held to it too: `add_allowed_path`, approval prompts (including
+  an approve-everything harness or full access), and persisted CLI grants.
+- The scratch directory set by `set_scratch_dir` stays allowed even when it sits
+  outside the list, so `run_python` helper scripts keep working.
+- `ChatAgent` (and so `GaiaAgent`) narrows its `allowed_paths` once at
+  construction, so its validator, the RAG SDK and the code-index ceilings agree.
+- An empty value, an empty entry, a relative path or a missing folder raises
+  `AllowedPathsEnvError` (a `ValueError`) when the validator is built. The Agent UI
+  server and the flagship sidecar check it before they start serving.
+
+<Warning>
+  This confines GAIA's tools, not code they run. A `run_python` script or shell
+  command can still open any file the OS user can read. Real isolation needs OS-level
+  separation: a separate user account, a container, or a VM.
+</Warning>
+
 ---
 
 ## 18.2 Symlink Detection

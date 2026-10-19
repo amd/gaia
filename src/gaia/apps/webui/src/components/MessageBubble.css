@@ -332,6 +332,9 @@
     overflow-x: auto;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
+    /* The page-wide thumb matches the table border; a wide table needs a visible cue. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-muted) transparent;
 }
 .md-table {
     width: 100%;
@@ -480,6 +483,9 @@
     white-space: pre;
     word-wrap: normal;
     overflow-wrap: normal;
+    /* The page-wide scrollbar is invisible on the code background; a wide row needs a visible cue. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-code-dim) transparent;
 }
 
 .code-block code {
@@ -550,6 +556,15 @@
 .thinking-indicator .cursor {
     width: 6px;
     height: 12px;
+}
+
+.thinking-indicator-hint {
+    display: block;
+    margin-top: 4px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: normal;
 }
 
 /* Inference stats footer — visible only on hover */

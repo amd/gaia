@@ -115,6 +115,25 @@ export function requiresFreshConsent(tool: string | undefined): boolean {
     || tool === PATH_ACCESS_TOOL;
 }
 
+/**
+ * How many earlier prompts in this chat asked the same thing and were allowed:
+ * same tool, same "always" scope, same risk. Only counts when "always" is on
+ * offer, so the prompt can point at it instead of asking a tenth time.
+ */
+export function repeatedAllowCount(notifications: GaiaNotification[], prompt: GaiaNotification): number {
+  if (!prompt.alwaysScope || !prompt.sessionId || requiresFreshConsent(prompt.tool)) return 0;
+  if (prompt.risk === 'destructive') return 0;
+  return notifications.filter((n) =>
+    n.id !== prompt.id
+    && n.type === 'permission_request'
+    && n.sessionId === prompt.sessionId
+    && n.response === 'allow'
+    && n.tool === prompt.tool
+    && n.alwaysScope === prompt.alwaysScope
+    && n.risk === prompt.risk
+  ).length;
+}
+
 // ── State Interface ──────────────────────────────────────────────────────
 
 interface NotificationState {

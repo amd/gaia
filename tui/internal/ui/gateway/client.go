@@ -157,6 +157,9 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		body = bytes.NewReader(nil)
 	}
 
+	if err := lemonade.RefuseRequest(method, path); err != nil {
+		return err
+	}
 	base, err := c.target()
 	if err != nil {
 		return err
@@ -167,7 +170,11 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		return fmt.Errorf("could not build request for %s: %w", url, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := lemonade.APIKeyFor(base); key != "" {
+	key, err := lemonade.APIKeyFor(context.Background(), base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
@@ -324,6 +331,9 @@ func (r installResult) foundNone() bool {
 // Install registers the gateway with Lemonade as a cloud provider.
 func (c *Client) Install(baseURL string) (installResult, error) {
 	var result installResult
+	if err := lemonade.RefuseSetupChange("register the AMD LLM Gateway there"); err != nil {
+		return result, err
+	}
 	body := map[string]any{
 		"backend":  "cloud",
 		"provider": Provider,

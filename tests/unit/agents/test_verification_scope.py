@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, TurnCancel
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -698,6 +698,17 @@ def test_cancel_event_path_carries_the_statement(agent):
     assert _scope_line(result["result"]) == SENTINEL
 
 
+def test_a_limit_that_stopped_the_turn_says_why(agent):
+    event = TurnCancel()
+    event.cancel("This turn ran for 75 minutes without progress, so GAIA stopped it.")
+    agent._cancel_event = event
+    _stub_chat(agent, _answer("never reached"))
+    result = _with_sentinel(agent, "do something", max_steps=5)
+    assert result["result"].startswith("This turn ran for 75 minutes without progress")
+    assert "stopped before it finished" not in result["result"]
+    assert _scope_line(result["result"]) == SENTINEL
+
+
 def test_llm_connection_error_path_carries_the_statement(agent):
     _stub_chat(agent, ConnectionError("connection refused"))
     result = _with_sentinel(agent, "hello", max_steps=3)
@@ -861,7 +872,7 @@ EXECUTION_EVIDENCE_CASES = [
         {
             **NOT_EXECUTED,
             "status": "error",
-            "error": "Command 'python3.14' is not available to this agent.",
+            "error": "'python3.14 -c' is not allowed: it runs code passed on the command line.",
             "has_errors": True,
         },
         False,
@@ -1019,8 +1030,8 @@ REJECTION_RESULT = {
     **NOT_EXECUTED,
     "status": "error",
     "error": (
-        "Command 'python3.14' is not available to this agent. It is granted "
-        "only to a skill that declares 'shell:execute:python3.14'."
+        "Not run: `python3.14 -m pytest tests/` needs your approval, and "
+        "nothing in this run can ask you."
     ),
     "has_errors": True,
 }

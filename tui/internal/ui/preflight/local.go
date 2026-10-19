@@ -78,12 +78,45 @@ type LocalOptions struct {
 	// launch — see checkLemonade.
 	ClaudeMode bool
 	Model      string
+	// ChatProvider is where the user chose to run chat — "local", "fireworks",
+	// "amd", or another Lemonade provider — empty when no choice is known. A
+	// cloud provider with no Model yet is connected before anything downloads.
+	ChatProvider string
+	// AskWhereChatRuns makes a first run with no known choice open on "where
+	// should chat run?", so the chat-model download is never chosen by default.
+	// Set by the interactive gate only: a headless run has nobody to ask.
+	AskWhereChatRuns bool
 }
 
 // NewLocalRunner builds the runner for an agent the TUI spawns itself.
 func NewLocalRunner(opts LocalOptions) Runner { return localRunner{opts: opts} }
 
 type localRunner struct{ opts LocalOptions }
+
+// WithChatProvider is this runner once the user has said where chat runs.
+func (l localRunner) WithChatProvider(provider string) Runner {
+	l.opts.ChatProvider = provider
+	return l
+}
+
+// chatChosen reports whether anything already says where chat runs.
+func (l localRunner) chatChosen() bool {
+	return l.opts.ClaudeMode || l.opts.Model != "" || l.opts.ChatProvider != ""
+}
+
+// asksWhereChatRuns reports whether a first run should open on the choice.
+func (l localRunner) asksWhereChatRuns() bool {
+	return l.opts.AskWhereChatRuns && !l.chatChosen()
+}
+
+// unconnectedCloud is the cloud provider the user chose before picking one of
+// its models, or "" — that provider still has to be connected.
+func (l localRunner) unconnectedCloud() string {
+	if l.opts.ClaudeMode || l.opts.Model != "" || !lemonade.IsCloudProvider(l.opts.ChatProvider) {
+		return ""
+	}
+	return l.opts.ChatProvider
+}
 
 func (l localRunner) Label() string { return "local" }
 
@@ -95,7 +128,10 @@ func (l localRunner) Rows(cfg Config) []Row {
 		rows = append(rows, Row{Key: KeyClaudeCredential, Label: "Claude credential"})
 	}
 	modelLabel := modelRowLabel
-	if l.skipChatModel() && l.pickedLocalModel() == "" {
+	switch {
+	case l.unconnectedCloud() != "":
+		modelLabel = lemonade.Label(l.unconnectedCloud())
+	case l.skipChatModel() && l.pickedLocalModel() == "":
 		modelLabel = "Embeddings"
 	}
 	rows = append(rows,
@@ -113,6 +149,15 @@ func (l localRunner) Rows(cfg Config) []Row {
 // failure, the same way the daemon walk does: "the models are not downloaded"
 // is meaningless when the program that would use them is not on the machine.
 func (l localRunner) Check(ctx context.Context, cfg Config) Report {
+	var models []gaiainit.Model
+	rep := l.walk(ctx, cfg, &models)
+	if l.asksWhereChatRuns() && len(rep.Steps()) > 0 {
+		rep = withChatStep(rep, chatOptions(downloadSize(models), l.localFit(ctx, rep, models)))
+	}
+	return rep
+}
+
+func (l localRunner) walk(ctx context.Context, cfg Config, models *[]gaiainit.Model) Report {
 	cfg = cfg.withDefaults()
 	rep := Report{AgentID: cfg.AgentID, AgentName: cfg.AgentName, Rows: l.Rows(cfg)}
 
@@ -121,9 +166,10 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 		steps = append(steps, l.checkClaudeCredential)
 	}
 	steps = append(steps, l.checkLemonade, func(ctx context.Context, cfg Config) Row {
-		row, chat, chatID := l.verifyModels(ctx, cfg)
+		row, chat, chatID, st := l.verifyModelsStatus(ctx, cfg)
 		rep.Chat = chat
 		rep.ChatModel = chatID
+		*models = st.Models
 		return row
 	})
 	for _, step := range steps {
@@ -303,6 +349,36 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row := Row{Key: KeyLemonade}
 
+	choice, err := lemonade.ReadChoice()
+	if err != nil {
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "GAIA's config cannot be read"
+		row.Detail = err.Error() + "."
+		row.Raw = err.Error()
+		return row
+	}
+	if external, active, err := lemonade.SavedExternal(); active {
+		if err != nil {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Line = "your Lemonade Server is not set"
+			row.Detail = err.Error() + "."
+			row.Raw = err.Error()
+			return row
+		}
+		// The user's own server: GAIA starts nothing for it, whatever it finds.
+		return l.checkExternalLemonade(ctx, row, external)
+	}
+	if awaitsGAIALemonade(choice) {
+		return gaiaLemonadeMissingRow(row)
+	}
+	if offersRunningLemonade(choice) {
+		if found, ok := detectRunningLemonade(ctx); ok {
+			return offerRow(found)
+		}
+	}
+
 	base, reachable, probe := probeLemonade(ctx)
 	row.Raw = probe
 
@@ -434,8 +510,8 @@ func readEmbeddedLemonade() *embeddedLemonade {
 //
 // LEMONADE_API_KEY wins when set, so an explicitly configured credential is
 // never overridden by whatever a local state file happens to hold.
-func lemonadeAPIKey() string {
-	return lemonade.APIKeyFor(lemonade.ResolveBaseURL(""))
+func lemonadeAPIKey() (string, error) {
+	return lemonade.APIKeyFor(context.Background(), lemonade.ResolveBaseURL(""))
 }
 
 // It returns the base URL it settled on, whether it answered, and a trace for
@@ -478,7 +554,12 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
 		}
-		if key := lemonade.APIKeyFor(b); key != "" {
+		key, err := lemonade.APIKeyFor(ctx, b)
+		if err != nil {
+			traces = append(traces, err.Error())
+			continue
+		}
+		if key != "" {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
 		resp, err := probeClient.Do(req)
@@ -507,7 +588,7 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 // model — on a large PC the hardware default is an 82 GB download they may have
 // picked Gemma precisely to avoid.
 func (l localRunner) skipChatModel() bool {
-	return l.opts.ClaudeMode || l.opts.Model != ""
+	return l.opts.ClaudeMode || l.opts.Model != "" || lemonade.IsCloudProvider(l.opts.ChatProvider)
 }
 
 // pickedLocalModel is the local chat model the user chose, or "".
@@ -657,14 +738,28 @@ func (l localRunner) localChatModel() string {
 // verifySkipsChatModel reports that the check has no local chat model to load:
 // chat runs on Claude or in the cloud. A picked local model is still loaded.
 func (l localRunner) verifySkipsChatModel() bool {
-	return l.opts.ClaudeMode || lemonade.IsCloudID(l.opts.Model)
+	return l.opts.ClaudeMode || lemonade.IsCloudID(l.opts.Model) || l.unconnectedCloud() != ""
 }
 
 // verifyModels answers the model row by LOADING the models, not listing them: an
 // embedder llama-server cannot start is "downloaded" and still breaks document
 // search and memory on the first turn. It also returns the chat line for the
 // hand-off, empty when there is nothing proven to name.
-func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, string) {
+func (l localRunner) verifyModels(ctx context.Context, cfg Config) (Row, string, string) {
+	row, chat, chatID, _ := l.verifyModelsStatus(ctx, cfg)
+	return row, chat, chatID
+}
+
+// verifyModelsStatus is verifyModels plus what setup reported about each model,
+// which sizes the local option of the "where should chat run?" step.
+func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, string, string, gaiainit.Status) {
+	if provider := l.unconnectedCloud(); provider != "" {
+		return connectProviderRow(provider), "", "", gaiainit.Status{}
+	}
+	return l.verifyModelsWith(ctx)
+}
+
+func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string, gaiainit.Status) {
 	row := Row{Key: KeyModel}
 
 	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel())
@@ -684,7 +779,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 			Where:   installDocs,
 		}
 		row.Raw = err.Error()
-		return row, "", ""
+		return row, "", "", st
 
 	case err != nil:
 		// Verify only ever wraps ErrUnanswered today; anything else reaching
@@ -694,7 +789,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 		row.Line = "could not be checked"
 		row.Detail = err.Error()
 		row.Raw = err.Error()
-		return row, "", ""
+		return row, "", "", st
 
 	case st.Ready:
 		row.State = StateOK
@@ -702,26 +797,26 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 		switch {
 		case l.opts.ClaudeMode:
 			row.Line = "embedder loads — chat runs on Claude"
-			return row, "Claude", ""
+			return row, "Claude", "", st
 		case lemonade.IsCloudID(l.opts.Model):
 			if missing, ok := checkCloudModel(ctx, l.opts.Model, row); !ok {
-				return missing, "", ""
+				return missing, "", "", st
 			}
 			row.Line = "embedder loads — chat uses " + l.opts.Model
-			return row, l.opts.Model + " (in the cloud)", ""
+			return row, l.opts.Model + " (in the cloud)", "", st
 		}
 		chat, ok := st.Chat()
 		if !ok {
 			row.Line = "loads"
-			return row, "", ""
+			return row, "", "", st
 		}
 		row.Line = chat.ID + sizeSuffix(chat.SizeGB) + " and the embedder load"
-		return row, describeChat(chat), chat.ID
+		return row, describeChat(chat), chat.ID, st
 	}
 
 	switch st.Stage {
 	case gaiainit.StageLoad:
-		return l.loadFailedRow(st), "", ""
+		return l.loadFailedRow(st), "", "", st
 	case gaiainit.StageServer:
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
@@ -735,13 +830,13 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 			Where:   installDocs,
 		}
 		row.Raw = row.Detail
-		return row, "", ""
+		return row, "", "", st
 	}
 
 	// Setup leaves a picked model alone, so a missing one is not a setup step.
 	if l.pickedLocalModel() != "" {
 		if picked := l.checkPickedModel(ctx, row); picked.State != StateOK {
-			return picked, "", ""
+			return picked, "", "", st
 		}
 	}
 
@@ -750,8 +845,23 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 	row.FirstRun = true
 	row.Disposition = status.DispositionHalt
 	row.Line = "not downloaded yet"
-	row.Step = l.downloadStep(st.Models)
+	// Only what the server lacks: a model it already has is never offered again.
+	missing := st.Missing()
+	if len(missing) > 0 && len(missing) < len(st.Models) {
+		var ids []string
+		for _, m := range missing {
+			ids = append(ids, m.ID)
+		}
+		row.Line = strings.Join(ids, ", ") + " not downloaded yet"
+	}
+	row.Step = l.downloadStep(missing)
 	row.Detail = "Downloaded once, then reused by every GAIA session."
+	remedy := "Setup downloads what is missing and starts the local server."
+	if base, active, err := lemonade.SavedExternal(); active && err == nil {
+		row.Detail = "Setup downloads what is missing onto your Lemonade Server at " + base +
+			"; models it already has are not downloaded again."
+		remedy = "Setup downloads what is missing."
+	}
 	if l.skipChatModel() {
 		row.Line = "embedding models not downloaded"
 		row.Detail = "Chat uses your selected remote provider. Setup downloads local embedding models for document search and memory."
@@ -761,12 +871,12 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 	}
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
-		Action:  "Setup downloads what is missing and starts the local server.",
+		Action:  remedy,
 		Command: gaiainit.RunCommand(l.skipChatModel()),
 		Where:   installDocs,
 	}
 	row.Raw = strings.Join(st.Reasons, "\n")
-	return row, "", ""
+	return row, "", "", st
 }
 
 // loadFailedRow is a model that is downloaded and will not load — a real
@@ -817,22 +927,35 @@ func (l localRunner) loadFailedRow(st gaiainit.Status) Row {
 // downloadStep is the model row's first-run step, sized from what Verify
 // reported when the server could say, otherwise from the profile.
 func (l localRunner) downloadStep(models []gaiainit.Model) string {
+	switch size := downloadSize(models); {
+	case l.unconnectedCloud() != "":
+		return connectStep(l.unconnectedCloud())
+	case l.asksWhereChatRuns():
+		return "download what your choice needs"
+	case size != "":
+		return fmt.Sprintf("download the models (%s)", size)
+	case l.skipChatModel():
+		return embeddingStep
+	}
+	return "download the models (" + gaiainit.ProfileSize + ")"
+}
+
+// embeddingStep is the model step when chat does not run on a local model.
+const embeddingStep = "download the embedding model (under 1 GB)"
+
+// downloadSize is what models add up to, or "" when any size is unreported.
+func downloadSize(models []gaiainit.Model) string {
 	var total float64
-	known := len(models) > 0
 	for _, m := range models {
 		if m.SizeGB == nil {
-			known = false
-			break
+			return ""
 		}
 		total += *m.SizeGB
 	}
-	switch {
-	case known:
-		return fmt.Sprintf("download the models (%s)", formatGB(total))
-	case l.skipChatModel():
-		return "download the embedding model (under 1 GB)"
+	if len(models) == 0 {
+		return ""
 	}
-	return "download the models (" + gaiainit.ProfileSize + ")"
+	return formatGB(total)
 }
 
 func formatGB(gb float64) string {
@@ -879,6 +1002,12 @@ var lemonadeNotInstalled = func() bool {
 }
 
 func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
+	switch kind {
+	case FixUseRunningLemonade:
+		return l.useRunningLemonade(ctx)
+	case FixUseGAIALemonade:
+		return l.useGAIALemonade()
+	}
 	if !runsSetup(kind) {
 		return FixResult{Err: errNoFix}
 	}
@@ -892,6 +1021,10 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	command := gaiainit.RunCommand(l.skipChatModel())
 	if kind == FixInstallServer {
 		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
+		// Setup saves "GAIA's own" itself, once that server runs.
+		if choice, err := lemonade.ReadChoice(); err == nil && awaitsGAIALemonade(choice) {
+			start, command = gaiainit.StartGAIAServerOnly, gaiainit.GAIAServerOnlyCommand()
+		}
 	}
 
 	ch, cancel, err := start()

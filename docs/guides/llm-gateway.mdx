@@ -27,8 +27,8 @@ Windows, Keychain on macOS, SecretService on Linux — so it is encrypted at res
 scoped to your user account. GAIA refuses to fall back to a plaintext keyring backend,
 so it cannot quietly become a readable file.
 
-It is never written to a GAIA file. `~/.gaia/gateway.json` records the base URL and
-which models you enabled, and has no field a secret could occupy.
+It is never written to a GAIA file. `~/.gaia/gateway.json` records the base URL,
+which models you enabled, and what GAIA learned about them, and has no field a secret could occupy.
 
 Lemonade itself holds the token in memory only and forgets it on restart. GAIA notices
 and restores it from the credential store, which is why you are not asked again.
@@ -65,7 +65,8 @@ Type `/gateway` in chat (or pick it from the `/` command palette).
     on-prem, so it costs nothing per token.
 
     To use a different one: <kbd>space</kbd> enables a model, <kbd>enter</kbd> makes it
-    active. Preferred models are marked `*` and sorted first.
+    active. Preferred models are marked `*` and sorted first. A model whose last call
+    returned "not found" is marked `(unavailable)` and is never picked for you.
   </Step>
 </Steps>
 
@@ -78,11 +79,34 @@ gaia gateway install                 # defaults to the AMD gateway
 gaia gateway auth                    # prompts without echo
 gaia gateway models                  # what the gateway offers
 gaia gateway use amd.Claude-Opus-5   # make it the default
-gaia gateway test "Say hello"        # end-to-end round trip
+gaia gateway test "Say hello"        # end-to-end round trip on the active model
+gaia gateway test --model amd.Gemma-4-31B "Say hello"   # ...or on a specific one
 ```
 
-`gaia gateway status` shows registration, auth state, discovered model count, and your
-current selection.
+`gaia gateway test` names the model it is testing. If the gateway answers "not found"
+(HTTP 404) for it, the test names the model and a few deployed ones to switch to with
+`gaia gateway use <id>`.
+
+`gaia gateway status` shows registration, auth state, discovered model count, your
+current selection, and whether the active model's last call failed.
+
+### When a model stops being served
+
+Gateways retire and rename models. When a call to a gateway model returns HTTP 404,
+GAIA records it in `~/.gaia/gateway.json` with the time, and a later successful call
+clears it. GAIA never switches to another model on its own; it tells you instead:
+
+- `gaia chat`, `gaia llm`, and `gaia prompt` print one warning line when your saved
+  default model is the one that failed.
+- `gaia gateway status` and `gaia gateway models` mark it unavailable.
+- The TUI's `/gateway` screen marks it `(unavailable)`, says so under the list when it is
+  the active model, and never auto-selects it.
+- A chat turn in the Agent UI or the TUI ends with an error that names the model and
+  says retrying won't help. The Agent UI points you to its model menu (or to
+  **Settings > Advanced > Custom model ID** if you typed the ID there); the TUI points
+  you to `/model`.
+
+A 401 or 403 is an authentication problem, not a missing model, so it is not recorded.
 
 ### Gateways with a different auth header
 
@@ -140,6 +164,7 @@ This is why the default is a model that streams: `DeepSeek-V4.1-Flash`, or
 | `has no cloud-provider API` | Lemonade is older than 11.8.0. Run `gaia init`. |
 | The probe returns 404 or redirects | Wrong host. `llm.amd.com` is the SSO portal; the API is `llm-api.amd.com/Unified/v1`. |
 | `auth` succeeds but discovers 0 models | The gateway rejected the key. Lemonade stores it without validating, so this is where a bad key first shows. Run `scripts/diagnose-gateway-auth.ps1`. |
+| `The selected cloud model is unavailable (HTTP 404)` | The gateway no longer serves that model, or your account cannot use it. Run `gaia gateway models`, then `gaia gateway use <id>` with a deployed one. `gaia gateway test --model <id>` checks a model before you switch. |
 | A gateway model answers all at once instead of streaming | Expected. The gateway does not stream that model, so GAIA switched to a non-streaming call and said so. See [Models that cannot stream](#models-that-cannot-stream). |
 
 ## What the gateway offers

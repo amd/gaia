@@ -7,10 +7,11 @@ the model varies its arguments on every call:
 
 * **Work after the answer.** Once the turn has produced an answer, a tool call
   that touches nothing the request touched — no file it named, read, searched
-  or changed, no scratchpad table it built, and no test run — is new work the
-  user did not ask for. It is
-  not run; the model is told to finish and offer the work instead. A second
-  such call ends the turn with a closing answer.
+  or changed, no scratchpad table it built, no page its own results linked, no
+  file in the agent's scratch directory, and no test run — is new work the
+  user did not ask for. It is not run; the model is told to finish and offer
+  the work instead. A second such call ends the turn with a closing answer.
+  A reply forced by running out of plan budget is not an answer.
 * **The same tool failing with different arguments.** A tool the framework
   rejected ``limit`` times in a row, with no file changed in between, is not
   run again: the model is told to change approach. Calling it once more ends
@@ -20,11 +21,19 @@ the model varies its arguments on every call:
 
 from __future__ import annotations
 
+import json
 import os
+import posixpath
 import re
 from typing import Any, Dict, Optional, Set
 
-from gaia.agents.base.completion import mentioned_paths
+from gaia.agents.base.completion import mentioned_paths, save_obligations
+from gaia.agents.base.tool_outcome import (
+    FAILED_STATUSES,
+    tool_result_dict,
+    tool_result_error_fields,
+    tool_result_failed,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     is_mutating_tool,
@@ -71,6 +80,8 @@ _PATH_ARG_KEYS = (
 )
 #: Arguments naming a scratchpad table — state a turn builds up without a path.
 _TABLE_ARG_KEYS = ("table_name",)
+_URL_ARG_KEYS = ("url",)
+_URL_RE = re.compile(r"https?://[^\s\"'<>`)\]\\]+", re.I)
 _SQL_ARG_KEYS = ("sql",)
 #: Reviewing the change just made is part of the request.
 _REVIEW_COMMAND_RE = re.compile(r"^\s*git\s+(?:--no-pager\s+)?(?:diff|status)\b")
@@ -98,6 +109,11 @@ def _norm(path: str, root: str) -> str:
     return os.path.normcase(os.path.normpath(joined))
 
 
+def _within(path: str, folder: str) -> bool:
+    """Whether normalized *path* lies strictly inside normalized *folder*."""
+    return path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
 def _relative(path: str, root: str) -> str:
     try:
         return os.path.relpath(path, root)
@@ -111,8 +127,21 @@ def _slashed(text: str) -> str:
     return text.lower() if os.name == "nt" else text
 
 
+def _url_key(url: str) -> str:
+    return url.strip().rstrip("/.,;:").lower()
+
+
+def _urls_in(value: Any) -> Set[str]:
+    try:
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        text = str(value)
+    return {_url_key(m) for m in _URL_RE.findall(text)}
+
+
 def _error_brief(result: Any) -> str:
-    if isinstance(result, dict):
+    result = tool_result_error_fields(result)
+    if result:
         for key in ("error", "message", "stderr"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -148,13 +177,10 @@ def _streak_key(tool: str, args: Dict[str, Any]) -> str:
 
 def _is_tool_failure(result: Any) -> bool:
     """The tool refused or broke; a program exiting non-zero does not count."""
-    if (
-        not isinstance(result, dict)
-        or "return_code" in result
-        or result.get("rate_limited") is True
-    ):
+    data = tool_result_dict(result)
+    if data is not None and ("return_code" in data or data.get("rate_limited") is True):
         return False
-    return result.get("status") in ("error", "denied") or result.get("success") is False
+    return tool_result_failed(result, FAILED_STATUSES)
 
 
 class TurnScopeGuard:
@@ -174,9 +200,13 @@ class TurnScopeGuard:
         self.last_error: Dict[str, str] = {}
         self.corrected: Set[str] = set()
         self.paths: Set[str] = set()
+        #: Output folders the request or a check named: what's inside them is in scope.
+        self.folders: Set[str] = set()
         self.tables: Set[str] = set()
+        self.urls: Set[str] = set()
+        self.scratch: Optional[str] = None
 
-    def begin_turn(self, query: str, root: str) -> None:
+    def begin_turn(self, query: str, root: str, scratch: Any = None) -> None:
         self.root = root
         self.answered = False
         self.turn_should_end = False
@@ -187,7 +217,10 @@ class TurnScopeGuard:
         self.last_error = {}
         self.corrected = set()
         self.paths = {_norm(p, root) for p in mentioned_paths(query or "")}
+        self.folders = self._output_folders(save_obligations(query or "")[0])
         self.tables = set()
+        self.urls = _urls_in(query or "")
+        self.scratch = _norm(str(scratch), root) if scratch else None
 
     def mark_answered(self) -> None:
         """The turn has produced an answer; later calls must serve it."""
@@ -200,7 +233,24 @@ class TurnScopeGuard:
 
     def widen(self, text: str) -> None:
         """Paths a check names (a missing deliverable) become part of the request."""
-        self.paths |= {_norm(p, self.root) for p in mentioned_paths(text or "")}
+        named = mentioned_paths(text or "")
+        self.paths |= {_norm(p, self.root) for p in named}
+        self.folders |= self._output_folders(named)
+
+    def _output_folders(self, paths: Any) -> Set[str]:
+        """Deliverable paths whose contents are in scope; never the working root.
+
+        Any of them may be a folder; a file contains nothing, so it adds nothing.
+        """
+        root = _norm(self.root, self.root)
+        return {
+            path
+            for path in (_norm(p, self.root) for p in paths)
+            if path != root and not _within(root, path)
+        }
+
+    def _in_output_folder(self, paths: Set[str]) -> bool:
+        return any(_within(p, folder) for p in paths for folder in self.folders)
 
     def _call_paths(self, args: Dict[str, Any]) -> Set[str]:
         return {
@@ -216,6 +266,33 @@ class TurnScopeGuard:
         return {
             value.strip().lower()
             for key in _TABLE_ARG_KEYS
+            if isinstance((value := args.get(key)), str) and value.strip()
+        }
+
+    def _in_scratch(self, paths: Set[str]) -> bool:
+        if not self.scratch:
+            return False
+        prefix = self.scratch.rstrip(os.sep) + os.sep
+        return any(p == self.scratch or p.startswith(prefix) for p in paths)
+
+    def _command_in_scratch(self, normalized: str) -> bool:
+        if not self.scratch:
+            return False
+        # A path that only starts with the scratch name, or climbs out of it, is not in it.
+        scratch = _slashed(self.scratch).rstrip("/")
+        pattern = re.escape(scratch) + r"([^\s\"'`;|&<>]*)"
+        for rest in re.findall(pattern, normalized):
+            if rest and not rest.startswith("/"):
+                continue
+            resolved = posixpath.normpath(scratch + rest)
+            if resolved == scratch or resolved.startswith(scratch + "/"):
+                return True
+        return False
+
+    def _call_urls(self, args: Dict[str, Any]) -> Set[str]:
+        return {
+            _url_key(value)
+            for key in _URL_ARG_KEYS
             if isinstance((value := args.get(key)), str) and value.strip()
         }
 
@@ -241,7 +318,14 @@ class TurnScopeGuard:
     def related(self, tool: str, args: Dict[str, Any]) -> bool:
         if tool in _ALWAYS_RELATED or verification_check_label(tool, args):
             return True
-        if self._call_paths(args) & self.paths:
+        paths = self._call_paths(args)
+        if paths & self.paths or self._in_output_folder(paths):
+            return True
+        # Helper files in the agent's own scratch directory serve the request.
+        if self._in_scratch(paths):
+            return True
+        # A page the request named, or one this turn's own results linked.
+        if self._call_urls(args) & self.urls:
             return True
         # A table this turn already built is the request's own data.
         if self._touches_known_table(args):
@@ -255,6 +339,8 @@ class TurnScopeGuard:
             ):
                 return True
             normalized = _slashed(text)
+            if self._command_in_scratch(normalized):
+                return True
             for path in self.paths:
                 rel = _slashed(_relative(path, self.root))
                 if not rel.startswith("..") and rel in normalized:
@@ -312,3 +398,4 @@ class TurnScopeGuard:
         if not self.answered or self.related(tool, args):
             self.paths |= self._call_paths(args)
             self.tables |= self._call_tables(args)
+            self.urls |= _urls_in(result)

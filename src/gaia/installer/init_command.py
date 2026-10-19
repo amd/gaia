@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
@@ -288,6 +288,8 @@ class ModelLoad:
     size_gb: Optional[float]
     loaded: bool
     error: Optional[str] = None
+    #: Whether the server already has it; None when not checked.
+    downloaded: Optional[bool] = None
 
 
 @dataclass
@@ -433,19 +435,36 @@ HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     """``model_ids`` plus the chat model ``profile`` needs on this machine.
 
-    The chat model is added, never swapped in for Gemma: the vision and
-    document-image paths still load Gemma by name. ``resolve_chat`` is only
-    called for hardware-chosen profiles, so the others never probe Lemonade.
+    ``resolve_chat`` returns a :class:`ChatModelChoice`, and is only called for
+    hardware-chosen profiles, so the others never probe Lemonade. A chat model
+    the hardware picked is added beside Gemma, which the image tools load by
+    name. A ``default_model`` the user chose replaces Gemma: the image tools
+    then download Gemma the first time they are used (:func:`skipped_gemma`).
     """
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
 
     ids = list(model_ids)
     if profile in ("sd", "npu"):
         return ids
-    chat = resolve_chat() if profile in HARDWARE_CHAT_PROFILES else DEFAULT_MODEL_NAME
+    if profile not in HARDWARE_CHAT_PROFILES:
+        chat = DEFAULT_MODEL_NAME
+    else:
+        choice = resolve_chat()
+        chat = choice.model_id
+        if choice.user_set and not _model_ids_match(chat, DEFAULT_MODEL_NAME):
+            ids = [m for m in ids if not _model_ids_match(m, DEFAULT_MODEL_NAME)]
     if chat not in ids:
         ids.append(chat)
     return ids
+
+
+def skipped_gemma(profile: str, model_ids) -> bool:
+    """Whether *profile* lists Gemma but *model_ids* left it to download on use."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return DEFAULT_MODEL_NAME in INIT_PROFILES[profile]["models"] and (
+        DEFAULT_MODEL_NAME not in model_ids
+    )
 
 
 def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
@@ -610,25 +629,32 @@ def check_setup_status(
             model_ids,
             lambda: resolve_init_chat_model(
                 client, reset_corrupt=False, enforce_fit=False
-            ).model_id,
+            ),
         )
 
     if skip_chat_model:
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
     reasons = []
+    downloaded: Dict[str, bool] = {}
     for model_id in model_ids:
         try:
             available = client.check_model_available(model_id)
         except LemonadeClientError as e:
             reasons.append(f"Could not check model '{model_id}': {e}")
             continue
+        downloaded[model_id] = bool(available)
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
     if reasons:
-        # Sizes let a caller say what the download will cost before it starts.
-        models = [_describe_model(client, m) for m in model_ids] if load else []
+        # Sizes let a caller say what the download will cost before it starts;
+        # ``downloaded`` lets it leave out models the server already has.
+        models = (
+            [_describe_model(client, m, downloaded.get(m)) for m in model_ids]
+            if load
+            else []
+        )
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
         return SetupStatus(ready=True, reasons=[])
@@ -650,16 +676,18 @@ def check_setup_status(
     return SetupStatus(ready=True, reasons=[], models=models)
 
 
-def _describe_model(client, model_id: str) -> "ModelLoad":
-    """A not-yet-downloaded model and its download size."""
+def _describe_model(
+    client, model_id: str, downloaded: Optional[bool] = None
+) -> "ModelLoad":
+    """A model setup needs, its download size, and whether the server has it."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
     role = "embedding" if is_embedding_model_id(model_id) else "chat"
     try:
         size_gb = client.get_model_info(model_id)["size_gb"]
     except LemonadeClientError as e:
-        return ModelLoad(model_id, role, None, False, str(e))
-    return ModelLoad(model_id, role, size_gb, False)
+        return ModelLoad(model_id, role, None, False, str(e), downloaded)
+    return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
 def _load_model_once(client, model_id: str) -> "ModelLoad":
@@ -773,6 +801,8 @@ class InitCommand:
         skip_webui_build: bool = False,
         skip_chat_model: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
+        lemonade_url: Optional[str] = None,
+        gaia_lemonade: bool = False,
     ):
         """
         Initialize the init command.
@@ -797,7 +827,20 @@ class InitCommand:
                 still need Lemonade's embedder (see hub/agents/gaia/python/
                 gaia_agent/stdio.py). Ignored when skip_models is already set.
             progress_callback: Optional callback for progress updates
+            lemonade_url: Use the Lemonade Server the user already runs at
+                this URL, and save that choice; GAIA installs no server.
+            gaia_lemonade: Use GAIA's own Lemonade, and save that choice.
         """
+        if lemonade_url and gaia_lemonade:
+            raise ValueError(
+                "Choose one: --lemonade-url uses your Lemonade Server, "
+                "--gaia-lemonade uses GAIA's own."
+            )
+        self.lemonade_url = lemonade_url
+        self.gaia_lemonade = gaia_lemonade
+        self._chose_now = False
+        # GAIA's own was chosen; saved only once that server is running.
+        self._gaia_choice_pending = False
         self.profile = profile.lower()
         # This machine's chat model, resolved once so download and verify agree.
         self._chat_choice: Optional[ChatModelChoice] = None
@@ -814,9 +857,13 @@ class InitCommand:
         self.progress_callback = progress_callback
 
         # A configured server is someone else's to run; init only checks it.
+        # An explicit choice is applied first, in run(), so a broken saved
+        # setting can't stop the flag that fixes it.
         from gaia.llm.lemonade_client import configured_lemonade_url
 
-        self._lemonade_base_url = configured_lemonade_url()
+        self._lemonade_base_url = (
+            None if (lemonade_url or gaia_lemonade) else configured_lemonade_url()
+        )
         if self.remote and not self._lemonade_base_url:
             raise ValueError(
                 "--remote needs LEMONADE_BASE_URL set to the server to use, e.g. "
@@ -1091,6 +1138,8 @@ class InitCommand:
 
         try:
             step_num = 1
+            if not self._choose_lemonade():
+                return 1
             self._print_step(step_num, total_steps, "Starting Lemonade Server...")
             if not self._ensure_lemonade_ready():
                 return 1
@@ -1246,6 +1295,140 @@ class InitCommand:
                 traceback.print_exc()
             return 1
 
+    def _choose_lemonade(self) -> bool:
+        """Settle which Lemonade this machine uses before anything is installed.
+
+        An explicit ``--lemonade-url`` / ``--gaia-lemonade`` is saved as given.
+        Otherwise, on a first setup (no choice saved, GAIA's own not installed,
+        no ``LEMONADE_BASE_URL``), a new-enough Lemonade already answering on
+        this machine is offered. ``--yes`` never adopts one on its own: it
+        installs GAIA's as before and says how to switch.
+
+        Returns:
+            False after printing why the chosen server can't be used.
+        """
+        from gaia.llm import lemonade_choice as choice
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        try:
+            if self.gaia_lemonade:
+                self._gaia_choice_pending = True
+                self._print("   Using GAIA's own Lemonade Server.")
+            elif self.lemonade_url:
+                if not self._adopt_external(self.lemonade_url):
+                    return False
+            elif self._should_offer_existing():
+                found = choice.detect_running_lemonade()
+                if found is not None and not self._offer_existing(found):
+                    return False
+        except choice.LemonadeChoiceError as e:
+            self._print_error(str(e))
+            return False
+        if not self._tell_daemon():
+            return False
+        # GAIA's own, chosen but not yet running, wins over a saved server;
+        # LEMONADE_BASE_URL still wins over both.
+        if self._gaia_choice_pending and choice.env_override_note() is None:
+            self._lemonade_base_url = None
+        else:
+            self._lemonade_base_url = configured_lemonade_url()
+        if self._lemonade_base_url:
+            hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
+            if hostname not in ("localhost", "127.0.0.1", "::1"):
+                self.remote = True
+        return True
+
+    def _tell_daemon(self) -> bool:
+        """A running daemon must stop (or start) GAIA's own server to match."""
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_choice import apply_to_daemon
+
+        if not (self.lemonade_url or self._chose_now) or self._gaia_choice_pending:
+            return True
+        try:
+            apply_to_daemon()
+        except DaemonError as e:
+            self._print_error(f"Saved, but the running GAIA daemon did not switch: {e}")
+            return False
+        return True
+
+    def _should_offer_existing(self) -> bool:
+        from gaia.llm.lemonade_choice import saved_mode
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        return (
+            not self._lemonade_base_url
+            and saved_mode() is None
+            and not EmbeddedLemonade().is_installed()
+        )
+
+    def _offer_existing(self, found) -> bool:
+        """Offer the Lemonade found running; save the answer either way."""
+        from gaia.llm import lemonade_choice as choice
+
+        if found.status == choice.TOO_OLD:
+            self._print(f"   {found.message()}")
+            self._print("   Setting up GAIA's own Lemonade Server instead.")
+            return True
+        label = (
+            f"Lemonade Server v{found.version}"
+            if found.version
+            else "A Lemonade Server"
+        )
+        if self.yes:
+            self._print(
+                f"   {label} is already running at {found.url}. GAIA is setting "
+                "up its own; to use yours instead, run: "
+                f"gaia lemonade connect {found.url}"
+            )
+            return True
+        self._print(f"   {label} is already running at {found.url}.")
+        self._print(
+            "   GAIA can use it instead of installing its own, so this PC keeps "
+            "one server and one copy of each model."
+        )
+        self._chose_now = True
+        if self._prompt_yes_no("Use your Lemonade Server?", default=True):
+            return self._adopt_external(found.url)
+        self._gaia_choice_pending = True
+        self._print("   Setting up GAIA's own Lemonade Server.")
+        return True
+
+    def _adopt_external(self, url: str) -> bool:
+        """Save the user's server as GAIA's, asking for its key if it needs one."""
+        from gaia.llm import lemonade_choice as choice
+
+        # GAIA's own exported key (env.sh) must never go to someone else's server.
+        own = os.environ.get("GAIA_LEMONADE_EMBEDDED", "").strip() == "1"
+        key = None if own else os.environ.get("LEMONADE_API_KEY", "").strip() or None
+        result = choice.probe(url, key)
+        if result.status == choice.NEEDS_KEY and not self.yes and stdin_is_tty():
+            import getpass
+
+            self._print(f"   {result.message()}")
+            key = getpass.getpass("   API key: ").strip() or None
+            result = choice.probe(url, key)
+        if not result.usable:
+            self._print_error(result.message())
+            return False
+        choice.use_external(result.url, key)
+        self._print_success(
+            f"Using your Lemonade Server v{result.version} at {result.url} "
+            "(saved). GAIA will not install or start its own."
+        )
+        self._print(
+            "   GAIA registers its embedding model there and loads its models "
+            "there; it does not change the server's own settings. To go back: "
+            "gaia config set lemonade_mode gaia"
+        )
+        return True
+
+    @staticmethod
+    def _uses_saved_server() -> bool:
+        from gaia.llm.lemonade_choice import external_mode_active
+
+        return external_mode_active()
+
     def _ensure_lemonade_ready(self) -> bool:
         """Get a Lemonade Server answering: the configured one, or GAIA's own.
 
@@ -1262,6 +1445,7 @@ class InitCommand:
 
     def _check_configured_server(self) -> bool:
         """Check the server ``LEMONADE_BASE_URL`` names: reachable and new enough."""
+        from gaia.llm.lemonade_choice import switch_back_hint
         from gaia.llm.lemonade_client import (
             LemonadeClient,
             LemonadeClientError,
@@ -1273,18 +1457,15 @@ class InitCommand:
             health = LemonadeClient(base_url=url, verbose=self.verbose).health_check()
         except LemonadeClientError as e:
             self._print_error(f"Lemonade Server at {url} is not reachable: {e}")
-            self._print(
-                "   Start that server, or unset LEMONADE_BASE_URL so `gaia init` "
-                "sets up GAIA's own."
-            )
+            self._print(f"   Start that server, or {switch_back_hint()}.")
             return False
 
         too_old = configured_server_too_old(health, self.profile, url)
         if too_old:
             self._print_error(f"{too_old}.")
             self._print(
-                "   Upgrade that server, or unset LEMONADE_BASE_URL so `gaia init` "
-                "sets up GAIA's own."
+                "   Upgrade it from https://lemonade-server.ai, or "
+                f"{switch_back_hint()}."
             )
             return False
 
@@ -1342,7 +1523,35 @@ class InitCommand:
         self._print_success(
             f"Lemonade Server v{status.version} running on port {status.port}"
         )
+        if self._gaia_choice_pending:
+            # Saved only now: until it runs, "GAIA's own" would name nothing.
+            from gaia.llm.lemonade_choice import use_gaia
+
+            use_gaia()
+            self._gaia_choice_pending = False
+            self._print_success("Saved: GAIA uses its own Lemonade Server.")
+        self._hand_server_to_daemon()
         return True
+
+    def _hand_server_to_daemon(self) -> None:
+        """Make the GAIA daemon the owner of the server init just started.
+
+        The daemon then stops it with ``gaia daemon stop`` or after the idle
+        timeout, instead of it running until the next reboot. Init registers as
+        a client so the idle timeout cannot fire during a long model download.
+        """
+        from gaia.daemon import client as daemon_client
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_service import hold_lemonade_open
+
+        try:
+            daemon_client.ensure_lemonade()
+            hold_lemonade_open("cli", "gaia init")
+        except DaemonError as e:
+            self._print_warning(
+                "The GAIA daemon could not take over Lemonade Server, so it keeps "
+                f"running until you run `gaia lemonade embedded stop`: {e}"
+            )
 
     def _server_problem_hint(self) -> str:
         """Where to look when the server misbehaves after it started."""
@@ -1485,6 +1694,11 @@ class InitCommand:
         if choice.model_id != DEFAULT_MODEL_NAME:
             config.default_model = choice.model_id
 
+    def _chat_model_choice(self, client) -> "ChatModelChoice":
+        """This machine's :class:`ChatModelChoice`; says why on first resolution."""
+        self._chat_model(client)
+        return self._chat_choice
+
     def _chat_model(self, client) -> str:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
@@ -1525,6 +1739,13 @@ class InitCommand:
         Returns:
             True if all models downloaded, False on failure
         """
+        if self.force_models and self._uses_saved_server():
+            self._print_error(
+                "--force-models deletes models, and GAIA doesn't delete models "
+                "from your own Lemonade Server. Delete them there, then re-run "
+                "`gaia init`."
+            )
+            return False
         try:
             from gaia.llm.lemonade_client import LemonadeClient
 
@@ -1544,8 +1765,16 @@ class InitCommand:
             # NPU profile uses FLM models exclusively — don't append GGUF model.
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
-                    self.profile, model_ids, lambda: self._chat_model(client)
+                    self.profile, model_ids, lambda: self._chat_model_choice(client)
                 )
+                if skipped_gemma(self.profile, model_ids):
+                    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+                    self._print(
+                        f"   Not downloading {DEFAULT_MODEL_NAME}: your "
+                        f"default_model is {self._chat_choice.model_id}. Questions "
+                        "about images download it (~6 GB) the first time you ask one."
+                    )
 
             # A Claude-backed session never calls the local chat LLM — only
             # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
@@ -1677,22 +1906,37 @@ class InitCommand:
             )
 
             if is_llm and min_ctx:
-                from gaia.llm.lemonade_client import resolve_ctx_size
+                from gaia.llm.lemonade_client import (
+                    PIN_UNLOAD_SETTLE_DEADLINE_S,
+                    resolve_ctx_size,
+                )
 
                 min_ctx = resolve_ctx_size(
                     model=model_id, device="npu" if self.profile == "npu" else "gpu"
                 )
-                # Force unload if already loaded to ensure recipe_options are saved
-                if client.check_model_loaded(model_id):
-                    client.unload_model()
+                # A user's own server keeps its models and saved options; one
+                # saved with "Use mine" is never unloaded either.
+                users_server = bool(self._lemonade_base_url)
+                # Unload just this model so its recipe_options are saved; the
+                # embedder stays loaded instead of being reloaded after it.
+                # Wait until it is gone, or the load's free-memory check would
+                # count its memory as neither free nor its own.
+                if not self._uses_saved_server() and client.check_model_loaded(
+                    model_id
+                ):
+                    client.unload_model(model_id)
+                    client._wait_model_state(
+                        model_id,
+                        present=False,
+                        deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S,
+                    )
 
-                # Load with explicit context size and save it
                 client.load_model(
                     model_id,
                     auto_download=False,
                     prompt=False,
                     ctx_size=min_ctx,
-                    save_options=True,
+                    save_options=not users_server,
                 )
 
                 # Verify context size was set correctly by reading it back
@@ -1827,11 +2071,17 @@ class InitCommand:
             min_ctx = profile_config.get("min_context_size")
             # Loading an undownloaded model makes Lemonade pull it, unannounced.
             if min_ctx and not self.skip_chat_model and not self.skip_models:
-                from gaia.llm.lemonade_client import resolve_ctx_size
+                from gaia.llm.lemonade_client import (
+                    fit_ctx_to_free_memory,
+                    resolve_ctx_size,
+                )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
-                min_ctx = resolve_ctx_size(
-                    device="npu" if self.profile == "npu" else "gpu"
+                # The window the chat model gets in the memory free right now.
+                min_ctx = fit_ctx_to_free_memory(
+                    self._chat_model(client),
+                    resolve_ctx_size(device="npu" if self.profile == "npu" else "gpu"),
+                    client.base_url,
                 )
 
                 self.console.print()
@@ -1863,7 +2113,7 @@ class InitCommand:
             # Same chat model the download step set up (NPU and SD bring their own).
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
-                    self.profile, model_ids, lambda: self._chat_model(client)
+                    self.profile, model_ids, lambda: self._chat_model_choice(client)
                 )
 
             if self.skip_chat_model:
@@ -2421,6 +2671,8 @@ def run_init(
     remote: bool = False,
     skip_webui_build: bool = False,
     skip_chat_model: bool = False,
+    lemonade_url: Optional[str] = None,
+    gaia_lemonade: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2436,6 +2688,8 @@ def run_init(
         skip_webui_build: Skip the Agent UI frontend build step entirely
         skip_chat_model: Skip the profile's chat LLM, keep any embedding model
             (see InitCommand's docstring — for a Claude-backed session)
+        lemonade_url: Use (and save) the Lemonade Server the user runs here
+        gaia_lemonade: Use (and save) GAIA's own Lemonade Server
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -2451,6 +2705,8 @@ def run_init(
             remote=remote,
             skip_webui_build=skip_webui_build,
             skip_chat_model=skip_chat_model,
+            lemonade_url=lemonade_url,
+            gaia_lemonade=gaia_lemonade,
         )
         return cmd.run()
     except ValueError as e:

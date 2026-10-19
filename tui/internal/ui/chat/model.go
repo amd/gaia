@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -144,7 +145,14 @@ var (
 	// answer is the brightest text on screen — that is what marks it.
 	answerPanelStyle = lipgloss.NewStyle().
 				Foreground(theme.Text).
-				PaddingLeft(2)
+				PaddingLeft(answerGutter)
+)
+
+// answerGutter is the answer's left padding; userPrefix labels a question.
+// Both are chrome a selection copy leaves out (msgSpan.gutter).
+const (
+	answerGutter = 2
+	userPrefix   = "▶ You: "
 )
 
 type ChatModel struct {
@@ -237,10 +245,11 @@ type ChatModel struct {
 	cancelFn  context.CancelFunc
 	agentName string
 	agentID   string
-	// agentVersion is the synchronous value known at construction time (the
-	// catalog's installed version) — see renderIdentityChip for the live
-	// refinement once the peer's own version has been probed.
+	// agentVersion and gaiaVersion are what the running agent reported in its
+	// model-state ping. Never seeded from the catalog: an install record can
+	// name a different build than the one answering.
 	agentVersion string
+	gaiaVersion  string
 	dev          bool
 
 	width  int
@@ -342,10 +351,17 @@ type ChatModel struct {
 	lastClickRow int
 	lastClickAt  time.Time
 	// msgSpans maps content rows to the message drawn there, recorded by
-	// updateViewport as it lays the transcript out. Double-click-to-copy reads
-	// it; nothing else may, since it is only valid for the layout that
+	// updateViewport as it lays the transcript out. Double-click-to-copy,
+	// selection copy and /copy read it; it is only valid for the layout that
 	// produced it.
 	msgSpans []msgSpan
+	// vpContent is the exact string the viewport was last given, so a
+	// selection is cut from the same rows the user saw highlighted.
+	vpContent string
+	// sel is the in-app drag selection (selection.go); pick is /copy's
+	// message picker (copycmd.go).
+	sel  textSelection
+	pick messagePicker
 
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
@@ -514,6 +530,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	ti.ShowLineNumbers = false
 	// The default "┃ " prompt sits beside the block cursor and reads as a second one.
 	ti.Prompt = "› "
+	ti.KeyMap = composerKeyMap(ti.KeyMap)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -540,15 +557,24 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	return m.applyLaunchFullAccess().applyLaunchClaude()
 }
 
+// composerKeyMap adds the Windows word-delete keys to the textarea defaults.
+// Ctrl+Backspace arrives as ctrl+h (^H on a VT terminal, and from the patched
+// Windows console reader), so ctrl+h stops meaning a one-character delete.
+func composerKeyMap(km textarea.KeyMap) textarea.KeyMap {
+	km.DeleteCharacterBackward = key.NewBinding(key.WithKeys("backspace"), key.WithHelp("backspace", "delete character backward"))
+	km.DeleteWordBackward = key.NewBinding(key.WithKeys("ctrl+h", "alt+backspace", "ctrl+w"), key.WithHelp("ctrl+backspace", "delete word backward"))
+	km.DeleteWordForward = key.NewBinding(key.WithKeys("ctrl+delete", "alt+delete", "alt+d"), key.WithHelp("ctrl+delete", "delete word forward"))
+	return km
+}
+
 // NewChatModelForFlagship creates the ChatModel the TUI boots into.
 //
 // setupVerified says the readiness gate in front of this launch already ran
 // `gaia init --check` and it passed, so the first-boot gate must not ask again
 // — see ChatModel.setupVerified.
-func NewChatModelForFlagship(c client.AgentClient, agentID, agentName, agentVersion string, dev, setupVerified bool) ChatModel {
+func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, dev, setupVerified bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	m.agentVersion = agentVersion
 	m.setupVerified = setupVerified
 	return m.applyFirstBootGate()
 }
@@ -556,10 +582,9 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName, agentVers
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
 // CanReturnToHub) for a real catalog agent, so agentID is the catalog id
 // rather than NewChatModel's default of the display name.
-func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName, agentVersion string, dev bool) ChatModel {
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	m.agentVersion = agentVersion
 	return m.applyFirstBootGate()
 }
 
@@ -1141,7 +1166,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case components.ConfirmationDecidedMsg:
-		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID {
+		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID || m.confirmation.Seq() != msg.Seq {
 			// Stale — a decision for a confirmation that is no longer up (already
 			// resolved by the run ending first, or superseded). Drop it, same as a
 			// stale question answer.
@@ -1176,6 +1201,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.updateViewport()
 		return m, nil
+
+	case selectScrollTickMsg:
+		return m.onSelectScrollTick()
 
 	case clipboardResultMsg:
 		m.messages = append(m.messages, Message{
@@ -1330,6 +1358,16 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// /copy's picker owns the arrows, Enter and Esc while it is open; any
+	// other key closes it and then does what it always does.
+	if m.pick.open {
+		next, cmd, handled := m.handlePickKey(msg)
+		if handled {
+			return next, cmd
+		}
+		m = next
+	}
+
 	// Bubble Tea v1.3.10 enables bracketed paste by default, so a terminal
 	// paste already arrives here as one KeyMsg — multi-line content and all —
 	// rather than a burst of keystrokes. Handled explicitly (not left to the
@@ -1404,6 +1442,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.streaming && m.cancelPending {
 			return m.forceLocalAbort()
 		}
+		if m.sel.active {
+			m.sel = textSelection{}
+			return m, nil
+		}
 		// Idle. This used to quit, which made Esc
 		// an unadvertised one-keystroke way to destroy the session — on the key
 		// people press to mean "never mind", and most reachable in the seconds
@@ -1433,10 +1475,19 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		query := strings.TrimSpace(m.input.Value())
 		if query == "" {
+			if m.sel.active && !m.sel.dragging {
+				return m, m.copySelection()
+			}
 			return m, nil
 		}
 		m.input.Reset()
 		m.syncComposerHeight()
+
+		// Copying is local and read-only: there is no reason to make it wait
+		// for the turn to end.
+		if isCopyCommand(query) {
+			return m.submit(query)
+		}
 
 		// The agent is still working. Where this goes depends on what the
 		// agent on the other end can take:
@@ -1781,6 +1832,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
+
+	case "/copy":
+		return m.startMessagePick()
+
+	case "/copy all":
+		return m, copyToClipboard(transcriptMarkdown(m.messages, m.agentName), "transcript")
 
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
@@ -2262,6 +2319,10 @@ func (m *ChatModel) resize() {
 		m.logPeakWidth = m.width
 		m.logPeakRows = 0
 	}
+	// A reflow moves every row, so a selection would land on different text.
+	if m.viewport.Width != vpWidth {
+		m.sel = textSelection{}
+	}
 	m.viewport.Width = vpWidth
 	m.input.SetWidth(vpWidth - 2)
 	// Width first: the modal's height depends on how its summary wraps, and one
@@ -2372,10 +2433,43 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 
 // msgSpan is the half-open content-row range [start, end) one message occupies
 // in the laid-out transcript, and which message that is.
+//
+// [bodyStart, bodyEnd) and gutter mark which of those cells are the message
+// itself rather than chrome — an error's title band, the timing line under an
+// answer, the "▶ You:" label — so a selection copy can leave the chrome out.
 type msgSpan struct {
-	start int
-	end   int
-	index int
+	start     int
+	end       int
+	index     int
+	bodyStart int
+	bodyEnd   int
+	gutter    int
+}
+
+// copyRegion fills in span's body rows and gutter for msg.
+func (m ChatModel) copyRegion(msg *Message, span msgSpan) msgSpan {
+	span.bodyStart, span.bodyEnd = span.start, span.end
+	switch msg.Role {
+	case RoleUser:
+		span.gutter = displayWidth(userPrefix)
+	case RoleAssistant:
+		span.gutter = answerGutter
+		if m.answerStats(msg) != "" {
+			span.bodyEnd--
+		}
+		if block := m.turnMetricsBlock(msg); block != "" {
+			span.bodyEnd -= strings.Count(block, "\n") + 1
+		}
+	case RoleStatus:
+		span.gutter = 2
+	case RoleError:
+		span.bodyStart++ // the title band
+		span.gutter = 2
+	}
+	if span.bodyEnd < span.bodyStart {
+		span.bodyEnd = span.bodyStart
+	}
+	return span
 }
 
 func (m *ChatModel) updateViewport() {
@@ -2424,7 +2518,7 @@ func (m *ChatModel) updateViewport() {
 		// By index, not by value: rendering a card memoizes onto the message.
 		write(m.renderMessage(&m.messages[i], seen))
 		write("\n")
-		m.msgSpans = append(m.msgSpans, msgSpan{start: start, end: line, index: i})
+		m.msgSpans = append(m.msgSpans, m.copyRegion(&m.messages[i], msgSpan{start: start, end: line, index: i}))
 		if spacedAfter(m.messages[i].Role) {
 			write("\n")
 		}
@@ -2485,7 +2579,8 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	m.viewport.SetContent(linkify(sb.String(), m.viewport.Width))
+	m.vpContent = linkify(sb.String(), m.viewport.Width)
+	m.viewport.SetContent(m.vpContent)
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}
@@ -2504,7 +2599,7 @@ func (m ChatModel) renderWelcome() string {
 	// header draws.
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
-		Render("Connected to: " + m.agentIdentity())
+		Render("Connected to: " + m.agentIdentity() + m.coreVersionSuffix())
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -2636,7 +2731,7 @@ func (m ChatModel) answerStats(msg *Message) string {
 	if msg.Duration <= 0 {
 		return ""
 	}
-	stats := []string{fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
+	stats := []string{msg.DurationLabel + fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
 	if !m.dev {
 		return stats[0]
 	}
@@ -2689,7 +2784,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		//
 		// Continuations hang under the TEXT, not column 0: flush left, a wrapped
 		// question's second line read as stray output under it.
-		const prefix = "▶ You: "
+		const prefix = userPrefix
 		indent := strings.Repeat(" ", displayWidth(prefix))
 		body := msg.Content
 		if m.width > 0 {
@@ -3488,7 +3583,7 @@ func (m ChatModel) View() string {
 
 	header := m.renderHeader()
 	divider := dividerStyle.Render(strings.Repeat("─", m.width))
-	vpView := m.viewport.View()
+	vpView := m.highlightSelection(m.viewport.View())
 	if m.warming && !m.warmHidden {
 		vpView = m.renderWarmUpStage(m.viewport.Height)
 	}
@@ -3676,14 +3771,13 @@ func (m ChatModel) renderHeader() string {
 // capitalizes the display name, so the header never disagrees with itself on
 // two different launches of the same agent.
 //
-// version prefers a live probe of the peer's own reported version over the
-// value known at construction time (the catalog's installed version), read
-// through an optional interface so this package never has to import the
-// client that implements it.
+// The version only ever comes from the running agent: the HTTP peer's probe,
+// else the stdio agent's model-state ping. With neither there is no version,
+// never a guess from an install record.
 func (m ChatModel) agentIdentity() string {
 	version := m.agentVersion
 	if v, ok := m.client.(interface{ AgentVersion() string }); ok {
-		if live := v.AgentVersion(); live != "" {
+		if live := reportedVersion(v.AgentVersion()); live != "" {
 			version = live
 		}
 	}
@@ -3692,6 +3786,25 @@ func (m ChatModel) agentIdentity() string {
 		identity += " v" + version
 	}
 	return identity
+}
+
+// versionMax caps a reported version so a broken agent cannot crowd the header.
+const versionMax = 32
+
+// reportedVersion is a version an agent sent, made safe for one header row: no
+// control bytes or escapes, no leading "v" (the header adds its own), capped.
+func reportedVersion(v string) string {
+	v = strings.Join(strings.Fields(clean(v)), " ")
+	v = strings.TrimLeft(v, "vV")
+	return truncateRunes(v, versionMax)
+}
+
+// coreVersionSuffix names the GAIA core the running agent runs on, when it said.
+func (m ChatModel) coreVersionSuffix() string {
+	if m.gaiaVersion == "" {
+		return ""
+	}
+	return " (GAIA core " + m.gaiaVersion + ")"
 }
 
 // renderIdentityChip is agentIdentity styled as a header segment.

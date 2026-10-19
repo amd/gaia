@@ -30,8 +30,11 @@ be automatically available to all test files.
 
 import os
 import subprocess
+import sys
+import tempfile
 import time
 import webbrowser
+from pathlib import Path
 
 import pytest
 import requests
@@ -74,22 +77,92 @@ def _block_real_browser_launch():
         setattr(webbrowser, name, original)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_email_corpus():
+_EMAIL_CORPUS_DIR = Path(__file__).parent / "fixtures" / "email"
+_BUILD_EMAIL_CORPUS = """
+try:
+    from tests.fixtures.email.generate_mbox import ensure_corpus
+except ImportError:
+    raise SystemExit(0)
+ensure_corpus()
+"""
+
+
+def pytest_sessionstart(session):
     """Rebuild the email-triage corpus from its committed seed before any test.
 
     ``synthetic_inbox.mbox`` + ``ground_truth.json`` are generated artifacts (not
     committed — fully derived from ``vendor_corpus_seed.jsonl``), so a fresh
-    checkout has the seed but not the corpus. This session-autouse fixture
-    materialises them once so email unit/integration tests find their inputs. It
-    no-ops when the email agent extra isn't installed (those tests don't run
-    here); a missing committed seed still raises loudly inside ``ensure_corpus``.
+    checkout has the seed but not the corpus. This materialises them once so
+    email unit/integration tests find their inputs. It no-ops when the email
+    agent extra isn't installed (those tests don't run here); a missing
+    committed seed still raises loudly inside ``ensure_corpus``.
+
+    Under pytest-xdist only the controller builds it, before any worker starts:
+    several workers rewriting the same mbox would corrupt it. It runs in a
+    child interpreter because importing the generator puts the email agent on
+    ``sys.path``, which would change which test files collect.
+    """
+    if hasattr(session.config, "workerinput"):
+        return
+    if all(
+        (_EMAIL_CORPUS_DIR / name).exists()
+        for name in ("synthetic_inbox.mbox", "ground_truth.json")
+    ):
+        return
+    subprocess.run(
+        [sys.executable, "-c", _BUILD_EMAIL_CORPUS],
+        cwd=_EMAIL_CORPUS_DIR.parents[2],
+        check=True,
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_email_corpus():
+    """Check the corpus is in place, and import its generator after collection.
+
+    The controller already built the corpus (see ``pytest_sessionstart``), so
+    ``ensure_corpus`` is a no-op here; the import still puts the email agent on
+    ``sys.path`` for the rest of the session, as it always has.
     """
     try:
         from tests.fixtures.email.generate_mbox import ensure_corpus
     except ImportError:
         return
     ensure_corpus()
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_free_memory: read this machine's free memory instead of a fixed "
+        "64 GB machine (its dependencies must be mocked)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _fixed_machine_memory(request, monkeypatch):
+    """Judge every load and preload as on a roomy 64 GB machine.
+
+    Window sizes, load refusals and the Agent UI's startup preload follow the
+    memory free on the machine running the test; without this the suite would
+    pass on a workstation and fail on a 16 GB CI runner. Opt out with
+    ``@pytest.mark.real_free_memory``.
+    """
+    from gaia.llm import lemonade_client, model_fit
+
+    monkeypatch.setattr(lemonade_client, "_FITTED_CTX_CACHE", {})
+    monkeypatch.setattr(lemonade_client, "_SYSTEM_INFO_CACHE", {})
+    if request.node.get_closest_marker("real_free_memory"):
+        return
+    monkeypatch.setattr(
+        model_fit,
+        "read_os_memory",
+        lambda: model_fit.OsMemory(ram_total_gb=64.0, ram_available_gb=48.0),
+    )
+    monkeypatch.setattr(model_fit, "ram_total_gb", lambda: 64.0)
+    monkeypatch.setattr(
+        lemonade_client, "_free_memory_snapshot", lambda url: (None, {})
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -116,16 +189,20 @@ def _reset_model_broker_state():
         broker_client._discovery_enabled = False
         broker_client._attached = None
         broker_client._broker_unsupported = False
-        broker_client._held.depth = 0
-        broker_client._held.model = None
+        broker_client._held.set(None)
 
     _reset()
     yield
     _reset()
 
 
+@pytest.fixture(scope="session")
+def _hub_installer_active_env_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("hub-installer-active-env")
+
+
 @pytest.fixture(autouse=True)
-def _isolate_hub_installer_active_env_pth(tmp_path_factory, monkeypatch):
+def _isolate_hub_installer_active_env_pth(_hub_installer_active_env_root, monkeypatch):
     """Redirect ``gaia.hub.installer``'s active-environment ``.pth`` target (#2358).
 
     ``installer.install()``/``uninstall()`` write/remove an absolute
@@ -147,11 +224,19 @@ def _isolate_hub_installer_active_env_pth(tmp_path_factory, monkeypatch):
     except ImportError:
         yield
         return
-    fake_site_packages = tmp_path_factory.mktemp("hub-installer-active-env")
+    # Made on first use, and not via a numbered mktemp: that lists the whole
+    # basetemp, so one per test made the suite's run time quadratic.
+    made = []
+
+    def _fake_site_packages():
+        if not made:
+            made.append(Path(tempfile.mkdtemp(dir=_hub_installer_active_env_root)))
+        return made[0]
+
     monkeypatch.setattr(
         hub_installer,
         "_default_active_env_site_packages",
-        lambda: fake_site_packages,
+        _fake_site_packages,
     )
     yield
 

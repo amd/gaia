@@ -28,9 +28,10 @@ import pytest
     ],
 )
 def test_powershell_switches_cannot_hide_executable_body(command):
+    # Never vouched for: refused, or shown verbatim for a one-time yes.
     error = ShellToolsMixin()._validate_shell_command(command)[0]
     assert error is not None
-    assert error.get("tier") == TIER_REFUSE, error
+    assert error.get("tier") in (TIER_REFUSE, TIER_CONFIRM_ONCE), error
 
 
 @pytest.mark.parametrize(
@@ -54,6 +55,7 @@ from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
     DEVELOPER_COMMANDS,
     TIER_CONFIRM,
+    TIER_CONFIRM_ONCE,
     TIER_REFUSE,
     ShellToolsMixin,
     _is_lone_granted_segment,
@@ -178,13 +180,13 @@ class TestBlockedCommands:
 
 
 class TestGitSubcommands:
-    def test_git_push_is_refused_outright(self):
-        # #3374 made push/reset/rebase refusals the git grant itself will not
-        # run, so no prompt can honestly offer them.
+    def test_git_push_is_asked_once_and_a_forced_push_is_refused(self):
+        # Outside the git policy, so it is shown verbatim for a one-time yes.
         result = validate("git push origin main")
-        assert result is not None
-        assert result["tier"] == TIER_REFUSE
-        assert "push" in result["error"].lower() or "grant" in result["error"].lower()
+        assert result["tier"] == TIER_CONFIRM_ONCE
+        assert result["risk_note"] == "Sends your commits to the remote repository."
+        # Discarding remote history is never offered.
+        assert validate("git push --force origin main")["tier"] == TIER_REFUSE
 
     def test_git_commit_needs_confirmation(self):
         result = validate("git commit -m 'msg'")
@@ -488,16 +490,33 @@ class TestPowerShellFiltering:
 
 
 def refused(command: str) -> bool:
-    """True when the full validator refuses *command* outright.
+    """True when the full validator never vouches for *command*.
 
-    A block here must be ``TIER_REFUSE``: a ``TIER_CONFIRM`` one would reach the
-    confirmation prompt and run on a yes, which is not what these probes pin.
+    A block here is ``TIER_REFUSE`` or ``TIER_CONFIRM_ONCE``: refused, or shown
+    verbatim with a risk note for a one-time yes. Never ``TIER_CONFIRM``, whose
+    prompt offers "always" for a command family these probes do not describe.
     """
     error, _ = ShellToolsMixin()._validate_shell_command(command)
     if error is None:
         return False
-    assert error.get("tier") == TIER_REFUSE, error
+    assert error.get("tier") in (TIER_REFUSE, TIER_CONFIRM_ONCE), error
     return True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -e ZQBjAGgAbwA=",
+        "powershell -ec ZQBjAGgAbwA=",
+        "powershell -enc ZQBjAGgAbwA=",
+        "powershell -encod ZQBjAGgAbwA=",
+        "powershell -EncodedCommand ZQBjAGgAbwA=",
+    ],
+)
+def test_an_encoded_script_is_refused_outright(command):
+    """No prompt can show what an encoded script runs, so none is offered."""
+    error, _ = ShellToolsMixin()._validate_shell_command(command)
+    assert error is not None and error["tier"] == TIER_REFUSE, error
 
 
 class TestUnspacedAmpersandIsAnOperator:
@@ -751,12 +770,13 @@ class TestDeveloperBinariesRefusedByDefault:
         result = check("make build", bypass=False)
         assert "not in the allowed list for security reasons" in result["error"]
 
-    def test_gh_default_refusal_still_points_at_the_skill_grant(self):
-        # gh has a BINARY_POLICIES entry, so its refusal is the grant message,
-        # not the allowlist one. Bypass is an additional path to gh, not a
+    def test_gh_default_block_is_the_policy_one(self):
+        # gh has a BINARY_POLICIES entry, so its block comes from that policy,
+        # not the allowlist. Bypass is an additional path to gh, not a
         # replacement for skill_granted_binaries.
         result = check("gh issue list", bypass=False)
-        assert "shell:execute:gh" in result["error"]
+        assert result["tier"] == TIER_CONFIRM
+        assert "'gh' runs only after you approve" in result["error"]
 
 
 class TestBypassIsStillASet:
@@ -807,13 +827,16 @@ class TestOperatorsUnderBypass:
             "ls\necho hi",
         ],
     )
-    def test_shell_only_operators_still_refused_by_default(self, command):
+    def test_shell_only_operators_are_never_run_unasked_by_default(self, command):
         # What bypass actually lifts now: redirection, backgrounding,
         # substitution and the newline — the operators that only a shell can
-        # act on, and that no per-segment check can judge.
+        # act on, and that no per-segment check can judge. By default they are
+        # a one-time approval of the exact line; a line break is refused, since
+        # the line would not read on screen the way it runs.
         result = check(command, bypass=False)
         assert result is not None
-        assert "Shell operators" in result["error"]
+        expected = TIER_REFUSE if "\n" in command else TIER_CONFIRM_ONCE
+        assert result["tier"] == expected, result
 
     def test_a_pipe_is_refused_for_its_binary_not_for_the_pipe(self):
         # Pipes were never blocked. `pytest -q | tail -20` is refused with
@@ -823,11 +846,11 @@ class TestOperatorsUnderBypass:
         assert result is not None
         assert "Shell operators" not in result["error"]
         assert "pytest" in result["error"]
-        # The grant id is only the refusal a machine with pytest on PATH gets;
-        # where it is absent the "not installed" refusal fires first. Either
-        # way the pipe is not the reason, which is what this test is about.
+        # Asking is only the answer a machine with pytest on PATH gets; where it
+        # is absent the "not installed" refusal fires first. Either way the
+        # pipe is not the reason, which is what this test is about.
         if shutil.which("pytest"):
-            assert "shell:execute:pytest" in result["error"]
+            assert result["tier"] == TIER_CONFIRM
 
 
 class TestPerSegmentWalkSurvivesBypass:
@@ -1090,8 +1113,9 @@ class TestExecutorUnderBypass:
 
         result = run(f"echo first > {target}", working_directory=str(tmp_path))
 
+        # Nobody approved this exact line, so it never reaches a shell.
         assert result["status"] == "error"
-        assert "Shell operators" in result["error"]
+        assert "needs your approval" in result["error"]
         assert not target.exists()
 
     def test_a_redirect_runs_under_bypass(self, shell_tool, tmp_path):
@@ -1220,12 +1244,12 @@ class TestRedirectionOnTheGrantedPath:
         assert check("gh issue list > out.txt", bypass=True) is None
         assert check("make build > out.txt", bypass=True) is None
 
-    def test_without_bypass_the_operator_blocklist_gets_there_first(self):
-        # The refusal only has to exist under bypass; by default `>` never
-        # reaches tokenisation at all.
+    def test_without_bypass_the_line_is_asked_about_once(self):
+        # By default an operator line runs only as the shell reads it, after a
+        # one-time yes — so the argv-only refusal above does not apply.
         error = check_granted("gh issue list > out.txt", bypass=False)
         assert error is not None
-        assert "Shell operators" in error["error"]
+        assert error["tier"] == TIER_CONFIRM_ONCE
 
     def test_the_pre_flight_and_the_executor_share_one_answer(self):
         # Extracted precisely so the refusal above and the executor's `use_shell`
@@ -1326,18 +1350,20 @@ class TestTiers:
 
     @pytest.mark.parametrize(
         "command",
-        [
-            "git -c core.pager=evil.sh status",
-            "git --exec-path=/tmp/evil status",
-            "powershell -EncodedCommand aQBlAHgA",
-        ],
+        ["git -c core.pager=evil.sh status", "git --exec-path=/tmp/evil status"],
     )
-    def test_an_undescribable_escalation_is_refused(self, command):
-        assert validate(command)["tier"] == TIER_REFUSE
+    def test_an_uninspectable_call_is_asked_about_once(self, command):
+        assert validate(command)["tier"] == TIER_CONFIRM_ONCE
 
-    @pytest.mark.parametrize("command", ["echo hi > f", "cat 'unterminated"])
-    def test_what_the_runner_cannot_execute_is_refused(self, command):
-        error, _ = _Host()._validate_shell_command(command)
+    def test_an_encoded_script_is_refused(self):
+        assert validate("powershell -EncodedCommand aQBlAHgA")["tier"] == TIER_REFUSE
+
+    def test_a_shell_operator_line_is_asked_about_once(self):
+        error, _ = _Host()._validate_shell_command("echo hi > f")
+        assert error["tier"] == TIER_CONFIRM_ONCE
+
+    def test_what_the_runner_cannot_parse_is_refused(self):
+        error, _ = _Host()._validate_shell_command("cat 'unterminated")
         assert error["tier"] == TIER_REFUSE
 
     def test_a_block_with_no_tier_is_refused_not_asked(self, monkeypatch):
@@ -1370,8 +1396,12 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh auth token",
         ],
     )
-    def test_a_refused_invocation_stays_refused_by_path_or_alias(self, command):
-        assert refusal(command) is not None
+    def test_a_refused_invocation_stays_unvouched_by_path_or_alias(self, command):
+        error, _ = _Host()._validate_shell_command(command)
+        assert error is not None
+        # An encoded script is refused by any spelling; the rest are asked once.
+        encoded = "-enc" in command.lower()
+        assert error["tier"] == (TIER_REFUSE if encoded else TIER_CONFIRM_ONCE), error
         assert refusal(command, full_access=True) is not None
 
     @pytest.mark.parametrize(
@@ -1412,11 +1442,13 @@ class TestConfirmableCommandsReachThePrompt:
     @pytest.mark.parametrize(
         "command", ["git -c core.pager=evil.sh status", "echo hi > f"]
     )
-    def test_an_escalation_is_refused_until_full_access_lifts_the_gates(self, command):
-        # Refused by default. Full access replaces the read-only policy with
-        # DEVELOPER_COMMANDS and lifts the operator block (#3373, #3374) — a
-        # set that already runs arbitrary code, so these are inside it.
-        assert refusal(command) is not None
+    def test_an_escalation_is_asked_about_once_until_full_access(self, command):
+        # By default it reaches the prompt as a one-time approval. Full access
+        # replaces the read-only policy with DEVELOPER_COMMANDS and lifts the
+        # operator block (#3373, #3374), so it runs unasked there.
+        error, _ = _Host()._validate_shell_command(command)
+        assert error["tier"] == TIER_CONFIRM_ONCE
+        assert refusal(command) is None
         assert refusal(command, full_access=True) is None
 
 
@@ -1433,12 +1465,18 @@ class TestBlanketApproval:
     ):
         error = refusal("rm notes.txt")
         assert error is not None
-        assert "GAIA_AUTO_APPROVE_TOOLS" in error["hint"]
+        assert error["tier"] == TIER_REFUSE
+        assert "`rm notes.txt` needs your approval" in error["error"]
+        assert "run the request interactively" in error["error"]
 
-    def test_an_embedders_opt_in_is_refused_the_same_way(self):
-        error = refusal("rm notes.txt", auto_approve=True)
+    def test_an_embedders_opt_in_is_refused_the_same_way(self, caplog):
+        with caplog.at_level("INFO", logger="gaia.agents.tools.shell_tools"):
+            error = refusal("rm notes.txt", auto_approve=True)
         assert error is not None
-        assert "auto_approve_gated_tools" in error["hint"]
+        assert "needs your approval" in error["error"]
+        # Which switch made the run unattended is for the log, not the user.
+        assert "auto_approve_gated_tools" not in error["error"]
+        assert "auto_approve_gated_tools" in caplog.text
 
     def test_the_no_prompt_list_still_runs_under_either(self, env_pre_approves):
         assert refusal("git status") is None

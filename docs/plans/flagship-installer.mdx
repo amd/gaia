@@ -99,7 +99,9 @@ coincidental: both come from reading the same policy file, not from guessing.
 ### Why the freeze stays small
 
 The freeze's `EXCLUDES` list drops `torch`, `transformers`, `sentence_transformers`,
-`scipy`, `pandas`, and the rest of the ML stack. This works **only because** the
+`scipy`, and the rest of the ML stack. (`pandas` and `matplotlib` were excluded too
+until #5088: the binary is the only Python `run_python` has, so they are bundled
+for user scripts now.) This works **only because** the
 agent's triage/chat/RAG-embedding paths all go over HTTP to Lemonade — nothing in the
 sidecar's reachable import graph needs an in-process model. The email agent (the
 reference this was modeled on) documents its frozen size at ~90 MB with the same

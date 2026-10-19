@@ -97,28 +97,13 @@ const NAMED_UTILITY = new RegExp(
 const ALLOWED: Array<{ path: string; literal: string; why: string }> = [
   {
     path: '/src/layouts/Layout.astro',
-    literal: '#17161C',
+    literal: '#000000',
     why: '<meta name="theme-color"> cannot read a custom property; pinned to --g-bg by tokens.contrast.test.ts',
-  },
-  {
-    path: '/src/layouts/Layout.astro',
-    literal: '#F5F2EC',
-    why: 'same <meta>, light canvas',
-  },
-  {
-    path: '/src/components/ThemeToggle.astro',
-    literal: '#17161C',
-    why: 'the toggle rewrites that same <meta> from JS, where var() does not resolve',
-  },
-  {
-    path: '/src/components/ThemeToggle.astro',
-    literal: '#F5F2EC',
-    why: 'same <meta>, light canvas',
   },
   {
     path: '/src/pages/hub/[id].astro',
     literal: 'bg-black/',
-    why: 'fullscreen lightbox scrim — pure black in both themes, not a theme colour',
+    why: 'fullscreen lightbox scrim — pure black over any page, not a palette colour',
   },
 ];
 

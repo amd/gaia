@@ -130,6 +130,17 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 			Where:   daemonLog(),
 		}
 	}
+	// Without this an absent route read as "<op> failed: <the whole skew
+	// paragraph>" with a "check the service" remedy that cannot fix it.
+	var missing *daemon.RouteMissingError
+	if errors.As(err, &missing) {
+		return Diagnosis{
+			Cause:   "GAIA's background service is out of date.",
+			Remedy:  "Upgrade the installed GAIA core, then press r. A restart brings the same version back.",
+			Command: "pip install --upgrade amd-gaia",
+			Where:   daemonLog(),
+		}
+	}
 	var stale *daemon.StaleError
 	if errors.As(err, &stale) {
 		switch stale.Kind {

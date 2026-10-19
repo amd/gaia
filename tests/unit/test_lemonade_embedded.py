@@ -429,6 +429,20 @@ class TestStatus:
         assert status.running is False
         assert status.base_url is None
 
+    def test_recorded_health_asks_the_recorded_port_with_its_key(
+        self, manager, monkeypatch
+    ):
+        assert manager.recorded_health() == (False, None)
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        asked = []
+        monkeypatch.setattr(
+            EmbeddedLemonade,
+            "_health",
+            lambda self, port, key: asked.append((port, key)) or {"status": "ok"},
+        )
+        assert manager.recorded_health() == (True, {"status": "ok"})
+        assert asked == [(4321, "k")]
+
     def test_unreadable_state_file_is_discarded(self, manager):
         manager.root.mkdir(parents=True, exist_ok=True)
         manager.state_path.write_text("{ not json", encoding="utf-8")
@@ -440,7 +454,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: False)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "other"
         )
         assert manager.status().running is False
         assert not manager.state_path.exists(), "dead instance left a stale state file"
@@ -453,7 +467,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         status = manager.status()
@@ -490,7 +504,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         with pytest.raises(EmbeddedLemonadeError) as exc:
@@ -506,8 +520,8 @@ class TestStatus:
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
             EmbeddedLemonade,
-            "_daemon_alive",
-            staticmethod(lambda p: not killed),
+            "_identify",
+            lambda self, pid, port, key: "other" if killed else "own",
         )
         monkeypatch.setattr(EmbeddedLemonade, "_kill_tree", staticmethod(killed.append))
 
@@ -570,7 +584,7 @@ class TestUninstall:
         )
         monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda pid: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         with pytest.raises(EmbeddedLemonadeError, match="embedded Lemonade.*running"):

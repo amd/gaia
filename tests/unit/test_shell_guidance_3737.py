@@ -116,7 +116,9 @@ class TestGitGlobalFlags:
         run = _run_tool(_Host(tmp_path))
         result = run(command=f"git -C {shlex.quote(str(tmp_path))} status")
         # Not a repo, so git exits non-zero — but it ran, and was not refused.
-        assert result["status"] == "success", result
+        assert result["return_code"] != 0, result
+        assert result["status"] == "error", result
+        assert f"exited with code {result['return_code']}" in result["error"]
 
     @pytest.mark.parametrize("host_cls", [_Host, _HostWithoutArgScan])
     def test_dash_c_outside_allowed_paths_is_refused(self, tmp_path, host_cls):
@@ -126,9 +128,11 @@ class TestGitGlobalFlags:
         outside.mkdir()
         run = _run_tool(host_cls(allowed))
         result = run(command=f"git -C {shlex.quote(str(outside))} status")
+        # A one-time approval naming the folder; nobody here can give it.
         assert result["status"] == "error"
         assert result["executed"] is False
-        assert "Access denied" in result["error"]
+        assert "needs your approval" in result["error"]
+        assert "outside" in result["error"]
 
     def test_relative_dash_c_escape_is_refused_without_the_arg_scan(self, tmp_path):
         allowed = tmp_path / "allowed"

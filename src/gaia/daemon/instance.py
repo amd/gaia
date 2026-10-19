@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from gaia.daemon import paths
@@ -65,13 +66,13 @@ def write_instance(inst: DaemonInstance) -> None:
     paths.atomic_write_json(paths.instance_path(), inst.to_dict())
 
 
-def read_instance() -> Optional[DaemonInstance]:
+def read_instance(path: Optional[Path] = None) -> Optional[DaemonInstance]:
     """Load instance.json, or ``None`` if absent/corrupt.
 
     A corrupt or truncated file is treated as "no trustworthy instance" and logged
     (not silently ignored) — the caller then reclaims via a fresh start.
     """
-    path = paths.instance_path()
+    path = path or paths.instance_path()
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:

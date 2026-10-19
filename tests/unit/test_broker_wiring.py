@@ -64,16 +64,14 @@ def _clean_broker_env(monkeypatch):
             os.environ.pop(var, None)
 
     _clear()
-    broker_client._held.depth = 0
-    broker_client._held.model = None
+    broker_client._held.set(None)
     monkeypatch.setattr(broker_client, "_discovery_enabled", False)
     monkeypatch.setattr(broker_client, "_attached", None)
     monkeypatch.setattr(broker_client, "_broker_unsupported", False)
     monkeypatch.setattr("gaia.daemon.client.attach", lambda *a, **k: None)
     yield
     _clear()
-    broker_client._held.depth = 0
-    broker_client._held.model = None
+    broker_client._held.set(None)
 
 
 class _LocalBroker:
@@ -525,6 +523,336 @@ def test_streaming_chat_holds_the_lease_across_the_whole_generation(monkeypatch)
     assert not broker_client.holding_lease()
 
 
+# ── Streaming lease under stall, retry, Stop, errors and concurrency ─────────
+#
+# The stream is read on the watchdog's worker thread, so these pin that the
+# lease is visible there, survives a retried attempt, and ends on every exit.
+
+
+class _Delta:
+    role = "assistant"
+    content = "x"
+
+
+class _Choice:
+    index = 0
+    finish_reason = None
+    delta = _Delta()
+
+
+class _Chunk:
+    id = "0"
+    created = 0
+    model = "m1"
+    choices = [_Choice()]
+
+
+def _install_fake_openai(monkeypatch, attempts):
+    """Each ``create`` call returns the next iterable in *attempts*."""
+    attempts = list(attempts)
+
+    class _FakeOpenAI:
+        def __init__(self, *a, **k):
+            self.chat = self
+
+        @property
+        def completions(self):
+            return self
+
+        def create(self, **kwargs):
+            return attempts.pop(0)
+
+    monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", _FakeOpenAI)
+
+
+def _streaming_client(monkeypatch):
+    client = _bare_chat_client()
+    client._retry_sleep = lambda seconds: None
+    monkeypatch.setattr(
+        client, "_ensure_model_loaded", lambda model, auto_download=True: None
+    )
+    return client
+
+
+def _stream(client, model="m1", timeout=None):
+    return client.chat_completions(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=timeout,
+    )
+
+
+class _Stalls:
+    """An attempt that goes silent until the test lets it go."""
+
+    def __init__(self, observed: List[Tuple[str, bool]]):
+        self.release = threading.Event()
+        self._observed = observed
+
+    def __iter__(self):
+        self._observed.append(("stalled", broker_client.holding_lease()))
+        self.release.wait(10)
+        self._observed.append(("after_release", broker_client.holding_lease()))
+        return
+        yield  # pragma: no cover - makes this a generator
+
+
+class _Yields:
+    def __init__(self, observed: List[Tuple[str, bool]], n: int = 3):
+        self._observed = observed
+        self._n = n
+
+    def __iter__(self):
+        for _ in range(self._n):
+            self._observed.append(("chunk", broker_client.holding_lease()))
+            yield _Chunk()
+
+
+class _RefusesConnection:
+    def __iter__(self):
+        import httpx
+        import openai
+
+        raise openai.APIConnectionError(
+            request=httpx.Request("POST", "http://127.0.0.1:0/api/v1")
+        )
+        yield  # pragma: no cover - makes this a generator
+
+
+@pytest.mark.parametrize("first_attempt", ["stall", "connection_error"])
+def test_streaming_lease_is_held_through_a_retried_attempt(monkeypatch, first_attempt):
+    """A failed first attempt and its retry run under the ONE original lease.
+
+    Dropping the lease between attempts would let another client swap the
+    model in the gap, and the retry would then answer from the wrong model.
+    A local model's prefill stall is not retried, so the stall case marks the
+    limits retryable to drive the retrier through it.
+    """
+    from gaia.llm import lemonade_client as lc
+
+    if first_attempt == "stall":
+        real_limits = lc.stall_limits
+        monkeypatch.setattr(
+            lc,
+            "stall_limits",
+            lambda *, remote, request_budget: real_limits(
+                remote=True, request_budget=request_budget
+            ),
+        )
+        monkeypatch.setenv("GAIA_LLM_STREAM_IDLE_TIMEOUT", "0.3")
+
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    observed: List[Tuple[str, bool]] = []
+    during_backoff: List[bool] = []
+    client._retry_sleep = lambda s: during_backoff.append(broker_client.holding_lease())
+    stall = _Stalls(observed)
+    first = stall if first_attempt == "stall" else _RefusesConnection()
+    _install_fake_openai(monkeypatch, [first, _Yields(observed)])
+
+    try:
+        chunks = list(_stream(client, timeout=30))
+    finally:
+        stall.release.set()
+
+    assert len(chunks) == 3
+    assert client.last_request_retries == 1
+    if first_attempt == "stall":
+        assert observed[0] == ("stalled", True)
+    assert [o for o in observed if o[0] == "chunk"] == [("chunk", True)] * 3
+    assert during_backoff and all(during_backoff)
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
+def test_streaming_lease_is_released_after_a_stall_failure(monkeypatch):
+    """A local model that never answers fails the turn and frees the slot.
+
+    The abandoned reader is still blocked when the lease ends; once it wakes it
+    must see the lease as gone, not keep acting as its holder.
+    """
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    observed: List[Tuple[str, bool]] = []
+    stall = _Stalls(observed)
+    _install_fake_openai(monkeypatch, [stall])
+
+    try:
+        with pytest.raises(LemonadeClientError, match="no output within"):
+            list(_stream(client, timeout=0.3))
+        assert len(local.acquired) == 1 and len(local.released) == 1
+        assert not broker_client.holding_lease()
+        # The slot is genuinely free: another holder gets it at once.
+        other = local.broker.acquire("m2", holder="other", timeout=1)
+        local.broker.release(other.lease_id)
+    finally:
+        stall.release.set()
+
+    deadline = time.monotonic() + 5
+    while len(observed) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert observed == [("stalled", True), ("after_release", False)]
+
+
+def test_streaming_lease_is_released_after_stop_during_a_stall(monkeypatch):
+    """Stop pressed while the model is silent frees the slot."""
+    from gaia.llm.retry import model_retry_notices
+
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    observed: List[Tuple[str, bool]] = []
+    stall = _Stalls(observed)
+    _install_fake_openai(monkeypatch, [stall])
+    stopped = threading.Event()
+
+    try:
+        with model_retry_notices(lambda notice: None, is_cancelled=stopped.is_set):
+            gen = _stream(client, timeout=30)
+            threading.Timer(0.2, stopped.set).start()
+            with pytest.raises(Exception, match="Stopped"):
+                list(gen)
+    finally:
+        stall.release.set()
+
+    assert observed[0] == ("stalled", True)
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
+def test_streaming_lease_is_released_when_the_consumer_stops_reading(monkeypatch):
+    """Closing the stream after the first chunk (UI Stop) frees the slot."""
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    observed: List[Tuple[str, bool]] = []
+    _install_fake_openai(monkeypatch, [_Yields(observed, n=50)])
+
+    gen = _stream(client)
+    next(gen)
+    assert broker_client.holding_lease()
+    gen.close()
+
+    assert observed[0] == ("chunk", True)
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
+def test_streaming_lease_is_released_after_an_exception_mid_stream(monkeypatch):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    observed: List[Tuple[str, bool]] = []
+
+    class _Breaks:
+        def __iter__(self):
+            observed.append(("chunk", broker_client.holding_lease()))
+            yield _Chunk()
+            raise RuntimeError("connection reset mid-answer")
+
+    _install_fake_openai(monkeypatch, [_Breaks()])
+
+    got = []
+    with pytest.raises(LemonadeClientError, match="connection reset"):
+        for chunk in _stream(client):
+            got.append(chunk)
+
+    assert len(got) == 1
+    assert observed == [("chunk", True)]
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
+def test_streaming_lease_is_held_while_a_slow_consumer_drains(monkeypatch):
+    """The reader can finish long before the consumer does; the lease must
+    last until the consumer has the final chunk, not until the socket ends."""
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    observed: List[Tuple[str, bool]] = []
+    _install_fake_openai(monkeypatch, [_Yields(observed, n=4)])
+
+    consumer_view = []
+    for _ in _stream(client, timeout=0.3):
+        time.sleep(0.15)
+        consumer_view.append((broker_client.holding_lease(), len(local.released)))
+
+    assert observed == [("chunk", True)] * 4
+    assert consumer_view == [(True, 0)] * 4
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
+def test_two_concurrent_streams_never_hold_the_slot_together(monkeypatch):
+    """Two streams for different models on two threads: the broker grants one
+    at a time, each stream holds its own lease for every chunk, and neither
+    thread's lease leaks into the other."""
+    local = _LocalBroker(monkeypatch)
+    active = []
+    peak = []
+    acquire, release = broker_client.acquire_lease, broker_client.release_lease
+
+    def _acquire(model, **kw):
+        lease = acquire(model, **kw)
+        active.append(lease["lease_id"])
+        peak.append(len(active))
+        return lease
+
+    def _release(lease_id, **kw):
+        active.remove(lease_id)
+        release(lease_id, **kw)
+
+    monkeypatch.setattr(broker_client, "acquire_lease", _acquire)
+    monkeypatch.setattr(broker_client, "release_lease", _release)
+
+    observed = {"m1": [], "m2": []}
+
+    class _Slow:
+        def __init__(self, model):
+            self.model = model
+
+        def __iter__(self):
+            for _ in range(5):
+                observed[self.model].append(broker_client.holding_lease())
+                time.sleep(0.02)
+                yield _Chunk()
+
+    class _PerModelOpenAI:
+        def __init__(self, *a, **k):
+            self.chat = self
+
+        @property
+        def completions(self):
+            return self
+
+        def create(self, **kwargs):
+            return _Slow(kwargs["model"])
+
+    monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", _PerModelOpenAI)
+    client = _streaming_client(monkeypatch)
+    results, errors = {}, []
+
+    def _run(model):
+        try:
+            results[model] = len(list(_stream(client, model=model)))
+            results[model + "_after"] = broker_client.holding_lease()
+        except BaseException as e:  # noqa: BLE001 - surfaced by the assert
+            errors.append(e)
+
+    threads = [threading.Thread(target=_run, args=(m,)) for m in ("m1", "m2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+
+    assert not errors
+    assert results == {"m1": 5, "m2": 5, "m1_after": False, "m2_after": False}
+    assert observed == {"m1": [True] * 5, "m2": [True] * 5}
+    assert max(peak) == 1
+    assert len(local.acquired) == 2 and len(local.released) == 2
+
+
 # ── The wired call sites ─────────────────────────────────────────────────────
 
 
@@ -540,6 +868,9 @@ def test_rag_embedder_warmup_holds_one_lease_across_unload_and_load(monkeypatch)
     held_during: List[Tuple[str, bool]] = []
 
     class _Client:
+        def is_users_server(self):
+            return False
+
         def unload_model(self, model, ignore_if_not_loaded=False):
             held_during.append(("unload", broker_client.holding_lease()))
 

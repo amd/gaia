@@ -50,11 +50,11 @@ from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
-    FAILED_TOOL_STATUSES,
     SSEOutputHandler,
     _format_tool_args,
     _strip_balanced_json_blobs,
     _summarize_tool_result,
+    tool_result_failed,
 )
 from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
@@ -147,7 +147,7 @@ def _derive_success(data: Any) -> bool:
     """Whether the tool worked, by the same rule the in-process handler uses."""
     if _is_summary_view(data) and isinstance(data.get("success"), bool):
         return data["success"]
-    return not (isinstance(data, dict) and data.get("status") in FAILED_TOOL_STATUSES)
+    return not tool_result_failed(data)
 
 
 def _kind_re() -> "re.Pattern":

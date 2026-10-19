@@ -24,6 +24,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -179,6 +180,18 @@ class GatewayState:
     # tokens. Nothing advertises it, so it is learned by trying; remembering it
     # means the empty stream is paid once ever rather than once per launch.
     non_streaming_models: List[str] = field(default_factory=list)
+    # Models whose last call came back "not found" (HTTP 404) from the cloud
+    # provider, keyed by id: ``{"status": 404, "at": "<UTC ISO time>"}``. A
+    # later successful call clears the entry. Nothing switches models on it —
+    # it exists so the user is told before the next turn fails the same way.
+    unavailable_models: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def unavailable(self, model_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """The recorded failure for *model_id*, or None when none is recorded."""
+        if not model_id:
+            return None
+        entry = self.unavailable_models.get(model_id)
+        return dict(entry) if entry else None
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "GatewayState":
@@ -197,6 +210,11 @@ class GatewayState:
             enabled_models=list(raw.get("enabled_models") or []),
             active_model=raw.get("active_model"),
             non_streaming_models=list(raw.get("non_streaming_models") or []),
+            unavailable_models={
+                str(k): dict(v)
+                for k, v in (raw.get("unavailable_models") or {}).items()
+                if isinstance(v, dict)
+            },
         )
 
     def save(self, path: Optional[Path] = None) -> None:
@@ -207,6 +225,7 @@ class GatewayState:
             "enabled_models": self.enabled_models,
             "active_model": self.active_model,
             "non_streaming_models": sorted(self.non_streaming_models),
+            "unavailable_models": dict(sorted(self.unavailable_models.items())),
         }
         target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         # Preferences, not secrets — but this sits next to config.json in a
@@ -245,6 +264,41 @@ def clear_default_model_if(model_id: Optional[str]) -> bool:
             f"Removed the gateway model but could not clear GAIA's default "
             f"model ({e}). Run `gaia config set default_model <id>` to fix it."
         ) from e
+
+
+def mark_model_unavailable(model_id: str, status: int = 404) -> None:
+    """Record that the cloud provider answered *status* for *model_id*."""
+    if not model_id:
+        return
+    state = GatewayState.load()
+    state.unavailable_models[model_id] = {
+        "status": status,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    state.save()
+
+
+def clear_model_unavailable(model_id: Optional[str]) -> bool:
+    """Drop a recorded failure for *model_id*. True when one was recorded."""
+    if not model_id:
+        return False
+    state = GatewayState.load()
+    if state.unavailable_models.pop(model_id, None) is None:
+        return False
+    state.save()
+    return True
+
+
+def describe_unavailable(model_id: str, entry: Dict[str, Any]) -> str:
+    """One plain line saying *model_id* last failed, and what to do about it."""
+    when = str(entry.get("at") or "").replace("T", " ").rstrip("Z")
+    when = f" on {when} UTC" if when else ""
+    return (
+        f"{model_id} answered HTTP {entry.get('status', 404)}{when} — it is not "
+        f"deployed, was renamed, or your account lost access. Pick another with "
+        f"`gaia gateway models` then `gaia gateway use <id>`, or recheck it with "
+        f"`gaia gateway test --model {model_id}`."
+    )
 
 
 # Slot name in the OS credential store. Namespaced by provider so a second
@@ -405,8 +459,13 @@ class GatewayManager:
         timeout: int = _REQUEST_TIMEOUT,
         redact: bool = False,
     ) -> Dict[str, Any]:
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
         base_url = self.base_url
         url = f"{base_url}/{path.lstrip('/')}"
+        refusal = setup_change_refusal(url, method, payload)
+        if refusal:
+            raise GatewayError(refusal)
         self.log.debug(f"{method} {url}" + ("" if redact else f" {payload or ''}"))
         try:
             response = requests.request(
@@ -675,8 +734,22 @@ class GatewayManager:
         key: it stores one without validating it, so a revoked token reports
         authenticated and discovers nothing. Reporting that as success sends the
         caller looking for a missing model instead of an expired key.
+
+        Raises:
+            GatewayError: GAIA uses the user's own server and its gateway
+                provider isn't working; GAIA hands that server no token.
         """
+        from gaia.llm.lemonade_choice import is_users_server
+
         status = self.status()
+        if is_users_server(self.base_url) and not (
+            status.authenticated and status.models_discovered
+        ):
+            from gaia.llm.cloud_keys import users_server_provider_message
+
+            raise GatewayError(
+                users_server_provider_message(self.base_url, GATEWAY_PROVIDER)
+            )
         if not status.installed:
             return False
         if status.authenticated:

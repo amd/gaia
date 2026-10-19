@@ -17,9 +17,15 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
 from gaia.agents.tools.path_access import read_access_error
-from gaia.agents.tools.search_scope import root_depth, search_roots
+from gaia.agents.tools.search_scope import (
+    confine_roots,
+    in_env_scope,
+    root_depth,
+    search_roots,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -745,6 +751,11 @@ class FileSystemToolsMixin:
                                 for r in index_results
                                 if _path_in_roots(r.get("path", ""), scope_roots)
                             ][:max_results]
+                        index_results = [
+                            r
+                            for r in index_results
+                            if in_env_scope(self, r.get("path", ""))
+                        ]
                         if index_results:
                             lines = [
                                 f"Found {len(index_results)} result(s) from index:\n"
@@ -763,7 +774,9 @@ class FileSystemToolsMixin:
 
                 # Filesystem search
                 # Determine search roots based on scope
-                search_roots = _get_search_roots(scope)
+                search_roots = [
+                    str(r) for r in confine_roots(self, _get_search_roots(scope))
+                ]
                 resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
                 query_lower = query.lower()
@@ -1609,7 +1622,7 @@ class FileSystemToolsMixin:
                     import PyPDF2 as _pdf
                 except ImportError:
                     return (
-                        "PDF reading requires pypdf. " "Install with: pip install pypdf"
+                        f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
                     )
 
             try:

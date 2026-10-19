@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
@@ -197,7 +198,7 @@ def _require_safe_agent_id(agent_id: str) -> str:
 
 
 def default_install_root() -> Path:
-    return Path.home() / ".gaia" / "agents"
+    return gaia_agents_dir()
 
 
 def agent_install_dir(agent_id: str, install_root: Optional[Path] = None) -> Path:

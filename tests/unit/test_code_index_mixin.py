@@ -15,6 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.install_hints import missing_extra_hint
 
 
 @pytest.fixture(autouse=True)
@@ -132,7 +133,9 @@ class TestToolsWhenCodeIndexUnavailable:
             make_harness(tmp_path)
             fn = _TOOL_REGISTRY["index_codebase"]["function"]
             result = json.loads(fn())
-            assert "pip install -e '.[rag]'" in result["error"]
+            # Editable checkouts and wheel installs get different commands.
+            assert "[rag]" in result["error"]
+            assert missing_extra_hint("rag") in result["error"]
 
 
 # ---------------------------------------------------------------------------

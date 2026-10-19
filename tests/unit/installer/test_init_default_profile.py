@@ -258,6 +258,7 @@ class TestGoTuiContract:
             "size_gb": 0.3,
             "loaded": False,
             "error": "boom",
+            "downloaded": None,
         }
 
     def test_load_failed_exit_code_is_three(self):
@@ -332,7 +333,7 @@ class TestGoTuiContract:
         assert exc.value.code == 2
         assert "explained problem" in capsys.readouterr().err
 
-    def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self):
+    def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self, tmp_path):
         """End-to-end on the argv gaiainit.CheckArgs builds. An unrecognised
         flag exits 2, which the TUI reports as "could not determine" — this
         catches that before a user sees it."""
@@ -343,7 +344,9 @@ class TestGoTuiContract:
             text=True,
             timeout=180,
             cwd=REPO_ROOT,
-            env={**_child_env()},
+            # A tmp home: against an installed GAIA the check starts a daemon
+            # for the real Lemonade Server, which then outlives the test.
+            env={**_child_env(), "GAIA_HOME": str(tmp_path)},
         )
         assert proc.returncode in (0, 1), (
             f"`gaia {' '.join(argv)}` exited {proc.returncode}; "

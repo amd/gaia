@@ -415,3 +415,17 @@
     font-size: 12px;
     border-style: dashed;
 }
+
+.render-needs-input--expired {
+    border-style: dashed;
+}
+
+.render-needs-input--expired .render-needs-input__question {
+    color: var(--text-secondary);
+}
+
+.render-needs-input__expired-note {
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin: 8px 0 0;
+}

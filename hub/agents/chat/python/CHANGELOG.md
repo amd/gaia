@@ -2,6 +2,8 @@
 
 ## 0.2.0
 
+- When `generate_image` fails, the prompt asks for its error in a sentence or two
+  instead of pointing at an `--sd` flag that does not exist.
 - Requires `amd-gaia>=0.25.0`, the first core release that ships
   `gaia.agents.tools.path_access`, which the agent imports at start. With an
   older core the agent fails at import.
@@ -9,9 +11,45 @@
   stopped-state address `localhost:13305`. Without a configured `base_url` the
   agent takes the port the server actually starts on, so its first turn answers
   instead of failing with "Couldn't reach the local LLM".
+- `run_python` with no project and a working directory outside the allowed
+  paths (the Agent UI server's own folder) runs in the agent's scratch
+  directory instead of being refused, and its result names that directory. A
+  project outside the allowed paths is still refused.
 - `run_python`, `execute_python_file` and the Windows notification fallback start
   their child process without GAIA's internal credentials, as core's shell and
   MCP children already do.
+- `run_python` and `execute_python_file` run inside a frozen (PyInstaller)
+  agent. There `sys.executable` is the agent binary, so they now re-launch it
+  with `--gaia-run-python-file`, which its entry point must hand to
+  `gaia_agent_chat.python_runner.run_python_file` before parsing argv.
+- A Python run that exits non-zero now returns `status: "error"` with an
+  `error` naming the exit code and the last stderr line, instead of
+  `status: "success"`.
+- `run_python` and `execute_python_file` default to a 120 s run (was 60 s) and
+  accept `timeout` up to 1800 s; a larger value is refused, not clamped. The
+  agent waits out the requested time instead of abandoning the call at its
+  180 s default. A run that times out or is stopped kills its whole process
+  tree (a Job Object on Windows, so orphaned grandchildren die too), and its
+  result lists `files_modified` — the files that changed while it ran, with
+  `files_modified_complete: false` when the bounded search stopped early — so
+  a half-written file is checked rather than reported as finished. Nothing is
+  deleted. A script that exits while a process it started still holds its
+  output no longer waits out the timeout: those processes are stopped and the
+  result carries a `note`.
+  `gaia_agent_chat.python_runner.dispatch` before parsing argv. `dispatch`
+  also runs the `python -m/-c/<file>` forms a script uses to start
+  `sys.executable`, and refuses `-m pip` with the bundled-library list. Both
+  tool descriptions name the bundled libraries.
+- The agent reads its MCP server list from `$GAIA_HOME/mcp_servers.json`, not
+  always `~/.gaia/mcp_servers.json`, so a run with its own `GAIA_HOME` no longer
+  starts the user's MCP servers.
+- A Python run that exits non-zero now returns `status: "error"` with an
+  `error` naming the exit code and the last stderr line, instead of
+  `status: "success"`.
+- A script that prints a character outside the Windows console codec (`✓`,
+  CJK, emoji) no longer crashes with `UnicodeEncodeError` when the agent runs
+  from source: both tools ask the child for UTF-8 output, which is what they
+  decode.
 - Every file tool now checks the same allowed-folders rule as `read_file`:
   listing and searching folders (`list_files` included), indexing documents,
   watching folders, and the files `text_to_speech` and the export tools save. A folder you
@@ -60,3 +98,10 @@
   `--use-chatgpt` and `use_chatgpt=True` now fail with migration guidance before
   inference. Configure a local or on-prem model in Lemonade and use its server
   URL and catalog model ID. The OpenAI Python HTTP-client dependency is retained.
+- `list_windows` reports a failed `tasklist`, `wmctrl` or `osascript` as an
+  error naming its exit code, instead of an empty list or a generic message.
+  `notify_desktop`'s Windows fallback waits briefly and reports a PowerShell
+  that exited non-zero, and `open_url` reports when no browser could be opened.
+- Missing-package hints (`psutil`, `pyperclip`, `plyer`) give a working install
+  command, and in a frozen build say the package isn't bundled rather than
+  suggesting `pip install`.

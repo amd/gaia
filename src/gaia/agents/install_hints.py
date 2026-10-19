@@ -3,9 +3,8 @@
 """Shared "agent wheel not installed" messaging.
 
 The ``gaia-agent-*`` wheels (gaia, chat, email) are built
-and packaged (``hub/agents/<id>/python/``) but publishing them to PyPI is
-still paused (see ``.github/workflows/publish_agents.yml``, tracked by
-#1179 / #1513). Until that lands, ``pip install gaia-agent-<id>`` and
+and packaged (``hub/agents/<id>/python/``) but are not published to PyPI
+(#1179 / #1513). Until they are, ``pip install gaia-agent-<id>`` and
 ``pip install "amd-gaia[agents]"`` both fail on a clean environment (#2240)
 -- so every call site that used to recommend them needs to point at the one
 install path that actually resolves today: pip installing straight from the
@@ -140,6 +139,20 @@ def format_command(argv: Sequence[str]) -> str:
     return " ".join(f'"{a}"' if _NEEDS_QUOTES.search(a) else a for a in argv)
 
 
+#: Why nothing can be installed into a frozen (PyInstaller) GAIA binary.
+FROZEN_NO_INSTALL = (
+    "Python packages can't be installed into this GAIA build: it is a "
+    "self-contained binary, not a Python interpreter, so pip has nothing to "
+    "install into. Use a source install of GAIA to add packages "
+    "(https://amd-gaia.ai/docs/guides/install)."
+)
+
+
+def _frozen() -> bool:
+    """Whether this is a PyInstaller build, where ``sys.executable`` is the app."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def resolve_pip_frontend() -> PipFrontend:
     """Pick the installer that can actually write into this interpreter.
 
@@ -149,8 +162,11 @@ def resolve_pip_frontend() -> PipFrontend:
     finds no environment and ``python -m pip`` does not exist.
 
     Raises:
-        PackageInstallerUnavailableError: pip is missing and no uv binary exists.
+        PackageInstallerUnavailableError: pip is missing and no uv binary
+            exists, or this is a frozen build with no interpreter to install into.
     """
+    if _frozen():
+        raise PackageInstallerUnavailableError(FROZEN_NO_INSTALL)
     if _pip_available():
         prefix = (sys.executable, "-m", "pip", "install")
         return PipFrontend(argv=prefix, display=prefix)
@@ -259,7 +275,10 @@ def pip_install_hint(*args: str) -> str:
 
     With no installer available yet, the text says to install uv first and
     then gives the uv command -- never a command that cannot run as printed.
+    A frozen build has no interpreter to install into, so it says that instead.
     """
+    if _frozen():
+        return FROZEN_NO_INSTALL
     try:
         return format_command([*resolve_pip_frontend().display, *args])
     except PackageInstallerUnavailableError:
@@ -267,6 +286,31 @@ def pip_install_hint(*args: str) -> str:
             ["uv", "pip", "install", "--python", sys.executable, *args]
         )
         return f"install uv ({_UV_INSTALL_DOCS}), then run: {command}"
+
+
+def missing_package_hint(*packages: str) -> str:
+    """How to get *packages* a tool needs, true for this kind of install.
+
+    A frozen build can only use what was bundled into it, so there the text
+    says the package is missing from the build rather than naming an install
+    command that would run the binary itself.
+    """
+    names = ", ".join(packages)
+    if _frozen():
+        return f"{names} isn't bundled in this GAIA build. {FROZEN_NO_INSTALL}"
+    return f"Install with: {pip_install_hint(*packages)}"
+
+
+def missing_extra_hint(*extras: str) -> str:
+    """How to add GAIA's optional *extras* (e.g. ``rag``), true for this install.
+
+    From source this is the install command for this interpreter; a frozen
+    build says the feature isn't bundled instead.
+    """
+    if _frozen():
+        names = ", ".join(f"GAIA[{e}]" for e in extras)
+        return f"{names} isn't bundled in this GAIA build. {FROZEN_NO_INSTALL}"
+    return f"Install with: {pip_install_hint(*gaia_extras_install_args(extras))}"
 
 
 def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:

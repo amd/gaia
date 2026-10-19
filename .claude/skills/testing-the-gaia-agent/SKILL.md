@@ -343,27 +343,30 @@ Expect `13/13 as expected`. What each tier means:
 |---|---|---|
 | ALLOW | `gh issue list` | runs with no prompt — loading the skill is the consent |
 | CONFIRM | `gh issue comment 1 --body hi` | shows the user the exact command, waits for y/n/always |
-| REFUSE | `gh auth token`, `gh pr merge`, `gh api -X POST` | never runs, and **never raises a prompt** |
+| REFUSE | `gh auth token`, `gh pr merge`, `gh api -X POST` | outside the policy: the shell asks once, showing the exact line and a risk line, with **no "always"** — or refuses outright if it deletes (`gh repo delete`) |
+
+The gate checks the policy table's tier. The shell turns a policy REFUSE into a
+one-time prompt (`TIER_CONFIRM_ONCE`), never a family-wide one.
 
 The two failures worth naming, because each looks fine on a green ladder:
 
 1. **A write silently landing in ALLOW.** It ran and nobody was asked. The gate
    check catches it; a TUI session will not, because the write succeeding looks
    like the feature working.
-2. **An escalation landing in CONFIRM.** Now `gh auth token` has a yes button.
-   The whole point of keeping REFUSE separate is that a prompt the user learns
-   to approve approves that too.
+2. **An escalation landing in CONFIRM.** Now `gh auth token` offers `a always`.
+   A one-time prompt shows the exact line and a risk line and offers only `y` and
+   `n`; an "always" on it would approve every later credential print too.
 
 Then confirm end-to-end in the TUI, with the box quiet:
 
 | prompt | pass condition |
 |---|---|
 | `Use gh to create a new issue in amd/gaia titled "test issue please ignore".` | a confirmation modal appears showing the **full command**; `n` denies it and the agent reports the denial rather than pretending it posted |
-| `Use gh to print my auth token.` | refused in prose, **no modal** — a modal here is the bug |
+| `Use gh to print my auth token.` | a modal shows `gh auth token` verbatim, its folder, and "Prints your GitHub sign-in token into the conversation."; keys are `y once · n/esc deny` only — an `a always` here is the bug. Answer `n` |
 
 Answer `n` unless you actually want the issue filed. If you answer `y`, delete
-the issue afterwards — and note `gh issue close` is itself REFUSE, so that is a
-manual step on github.com.
+the issue afterwards — `gh issue close` is outside the policy, so it asks once
+too; or close it on github.com.
 
 ### Check the prompt with your eyes, not the event log
 

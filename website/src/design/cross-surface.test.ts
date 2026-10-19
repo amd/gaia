@@ -1,15 +1,17 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// The website, the Agent UI and the TUI are claimed to paint the same copper
-// and the same status hues. Nothing enforced that claim, so the two ambers
-// drifted apart (#e3b341 here vs #E5B567 there) while every contrast test on
-// both sides stayed green — each value clears its floor, they just are not the
-// same colour.
+// The website, the Agent UI and the TUI are claimed to paint the same status
+// hues, and the Agent UI and the TUI the same copper. Nothing enforced that
+// claim, so the two ambers drifted apart (#e3b341 here vs #E5B567 there) while
+// every contrast test on both sides stayed green — each value clears its floor,
+// they just are not the same colour.
 //
 // This reads the other two surfaces' token files from the repo and compares the
 // literals directly, because "same assistant" is a claim about equality, not
-// about contrast.
+// about contrast. The website's accent is AMD red, not the copper — see "The
+// website" in docs/spec/gaia-design-language.mdx — so only its status hues are
+// paired here.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
@@ -39,26 +41,16 @@ const WEBSITE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const WEBSITE_SRC = resolve(fileURLToPath(new URL('../', import.meta.url)));
 
 /**
- * Website role → the Agent UI role it must equal.
- *
- * The status hues inside the code panel, plus the copper the primary button is
- * painted with. The syntax-only colours (purple, cyan) and the info blue have
- * no Agent UI counterpart by design (the app has no terminal pane to paint
- * info lines in), and the surface/text roles differ on purpose: the panels are
- * near-black but not the same near-black.
+ * Website role → the Agent UI role it must equal: the status hues inside the
+ * code panel. A green "ok" means the same thing in the browser and in the app,
+ * so it is the same green. The syntax-only colours (purple, cyan) and the info
+ * blue have no Agent UI counterpart by design (the app has no terminal pane to
+ * paint info lines in), and the accent differs on purpose (AMD red on the site).
  */
 const SHARED: Record<string, string> = {
-  '--g-code-accent': '--code-accent',
   '--g-code-green': '--code-success',
   '--g-code-amber': '--code-warning',
   '--g-code-danger': '--code-danger',
-  // The primary button. Its resting fill, its hover step and the text on top
-  // are the same three literals on both surfaces — a reader who clicks Download
-  // on the site and Send in the app is looking at one control, not two.
-  '--g-accent': '--accent',
-  '--g-accent-fill': '--accent-fill',
-  '--g-accent-fill2': '--accent-fill-hover',
-  '--g-on-accent': '--accent-fill-text',
 };
 
 /**
@@ -98,10 +90,10 @@ function readGoTokens(source: string): Map<string, string[]> {
   return out;
 }
 
-/** TUI token → the website and Agent UI roles carrying the same literal. */
-const THREE_SURFACE: Array<[string, string, string]> = [
-  ['Accent', '--g-accent', '--accent'],
-  ['AccentFillBG', '--g-accent-fill', '--accent-fill'],
+/** TUI token → the Agent UI role carrying the same literal. */
+const APP_AND_TUI: Array<[string, string]> = [
+  ['Accent', '--accent'],
+  ['AccentFillBG', '--accent-fill'],
 ];
 
 const website = readFileSync(WEBSITE_TOKENS, 'utf8');
@@ -125,21 +117,21 @@ describe('status hues are one set of literals across both surfaces', () => {
   });
 });
 
-// The TUI is the third surface and the one that cannot import a stylesheet, so
-// its copper is a hand-typed Go literal. A retune that lands on two surfaces and
-// misses the terminal is invisible to every contrast test on all three.
-describe('the copper is one literal on all three surfaces', () => {
+// The TUI cannot import a stylesheet, so its copper is a hand-typed Go literal.
+// A retune that lands in the app and misses the terminal is invisible to every
+// contrast test on both. This suite already reads both files, so it holds the
+// pair even though the website no longer wears the copper.
+describe('the copper is one literal in the Agent UI and the TUI', () => {
   it('can still parse theme.go', () => {
     // A rename or a reshaped declaration must fail here, not skip every pair.
     expect([...tui.keys()]).toEqual(
-      expect.arrayContaining(THREE_SURFACE.map(([goToken]) => goToken)),
+      expect.arrayContaining(APP_AND_TUI.map(([goToken]) => goToken)),
     );
   });
 
-  it.each(THREE_SURFACE)('%s equals %s equals %s', (goToken, siteToken, appToken) => {
-    // A mode-invariant role is declared once on the web and twice in Go.
+  it.each(APP_AND_TUI)('%s equals %s', (goToken, appToken) => {
+    // Order is light-then-dark in both files; a mode-invariant role collapses.
     const expected = [...new Set(tui.get(goToken)!)];
-    expect(readValues(website, siteToken), `${siteToken} drifted from the TUI`).toEqual(expected);
     expect(readValues(agentUi, appToken), `${appToken} drifted from the TUI`).toEqual(expected);
   });
 

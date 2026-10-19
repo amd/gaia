@@ -9,10 +9,13 @@ import time
 from typing import Callable, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
+from ..inference_location import provider_phrase
 from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    CloudModelUnavailableError,
+    LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     active_profile_ctx_size,
@@ -237,6 +240,21 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
     )
 
 
+class LemonadeStreamCutOffError(LemonadeError):
+    """A streamed reply ended before the server said the reply was finished.
+
+    The stream closed with no ``finish_reason`` and no usage chunk, so what
+    arrived is a fragment — half an answer, or half a tool call — and must
+    never be used as if it were the whole reply.
+    """
+
+    user_message = (
+        "The model's reply stopped partway through: the connection closed "
+        "before the model finished. Send the message again. If it keeps "
+        "happening, check the model server or gateway log for dropped streams."
+    )
+
+
 class LemonadeModelNotFoundError(LemonadeError):
     """The requested model is not installed on this Lemonade Server (HTTP 404).
 
@@ -281,6 +299,56 @@ class LemonadeCloudAccountError(LemonadeError):
         "Your cloud provider refused the request: the account may be suspended, "
         "out of credit, or over its spending limit. Retrying won't help — check "
         "billing in the provider's console, then send the message again."
+    )
+
+
+#: How a TUI user picks another model. The Agent UI swaps this exact sentence
+#: for :data:`AGENT_UI_MODEL_SWITCH_HINT` (``gaia.ui._chat_helpers``).
+TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
+AGENT_UI_MODEL_SWITCH_HINT = (
+    "Pick another model from the model menu next to the Send button. If you "
+    "typed this model ID yourself, clear it under Settings > Advanced > "
+    "Custom model ID."
+)
+
+
+class LemonadeCloudModelUnavailableError(LemonadeError):
+    """The cloud provider answered 404 for the model (not deployed, renamed,
+    or no access). Retrying the same model can never succeed."""
+
+    retryable = False
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        self.provider = provider
+        model = f"`{model_id}`" if model_id else "The selected cloud model"
+        where = provider_phrase(provider) if provider else "its cloud provider"
+        super().__init__(
+            user_message=(
+                f"{model} isn't available on {where} (HTTP 404): it isn't "
+                "deployed there, was renamed, or your account has no access "
+                f"to it. Trying again won't help. {TUI_MODEL_SWITCH_HINT}"
+            ),
+            payload=payload,
+        )
+
+
+class LemonadeAuthRejectedError(LemonadeError):
+    """The key was rejected (HTTP 401/403) by the cloud provider or Lemonade.
+
+    A wrong key or missing model access never recovers on retry; the message
+    raised by the client already names the fix, so it is carried verbatim.
+    """
+
+    retryable = False
+    user_message = (
+        "The request was rejected as unauthorized. Run /provider in the TUI "
+        "to reconnect the provider, or verify LEMONADE_API_KEY."
     )
 
 
@@ -397,10 +465,16 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
     cur: Optional[BaseException] = exc
     seen: set = set()
+    chain_text: List[str] = []
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, LemonadeAuthError):
+            return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CloudModelUnavailableError):
+            return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        chain_text.append(str(cur))
         cur = cur.__cause__ or cur.__context__
 
     raw = str(exc)
@@ -412,6 +486,21 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if refused:
         return LemonadeCloudAccountError(user_message=refused.group(0).strip())
+    # ``CloudModelUnavailableError`` flattened to text by a wrapper.
+    if "selected cloud model is unavailable (http 404)" in " ".join(chain_text).lower():
+        return LemonadeCloudModelUnavailableError()
+    # A ``LemonadeAuthError`` flattened to text by a wrapper; stop at the sentence
+    # naming LEMONADE_API_KEY so a wrapper's own trailing advice is dropped.
+    rejected = re.search(
+        r"(?:cloud authentication or access was denied \(http 40[13]\)"
+        r"|lemonade returned 401 unauthorized"
+        r"|lemonade rejected the api key \(401 unauthorized\))"
+        r"[^\n]*?lemonade_api_key[^\n.]*\.",
+        "\n".join(chain_text),
+        re.IGNORECASE,
+    )
+    if rejected:
+        return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
@@ -809,6 +898,12 @@ class LemonadeProvider(LLMClient):
     def get_last_ttft_seconds(self) -> Optional[float]:
         return self._last_ttft_seconds
 
+    def get_last_retry_count(self) -> Optional[int]:
+        """Retries the backend needed for the most recent request; a stream's
+        count is final once it has been consumed."""
+        count = getattr(self._backend, "last_request_retries", None)
+        return count if isinstance(count, int) else None
+
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)
         self._model = model_name
@@ -833,6 +928,7 @@ class LemonadeProvider(LLMClient):
         next_progress = time.perf_counter()
         next_reasoning_progress: Optional[float] = None
         finish_reason = ""
+        usage_seen = False
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
 
@@ -847,6 +943,7 @@ class LemonadeProvider(LLMClient):
             # only token accounting a streamed turn gets — see the
             # stream_options request in lemonade_client.
             if chunk.get("usage"):
+                usage_seen = True
                 self._capture_usage(chunk["usage"], timings=None)
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
@@ -924,6 +1021,17 @@ class LemonadeProvider(LLMClient):
                             yield text
         self._last_reasoning = "".join(reasoning_seen) or None
         self._last_finish_reason = finish_reason or None
+        if not finish_reason and not usage_seen:
+            # Before the tool_calls envelope: a half-built call must never run.
+            logger.warning(
+                "Stream from %s ended with no finish_reason and no usage after "
+                "%d text, %d reasoning and %d tool-call fragments",
+                self._last_model,
+                len(text_seen),
+                len(reasoning_seen),
+                len(tool_calls),
+            )
+            raise LemonadeStreamCutOffError()
         # Close any unclosed thinking block at end of stream
         if in_thinking:
             yield close_thinking()

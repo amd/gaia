@@ -109,10 +109,12 @@ interface AgentActivityProps {
     isActive: boolean;
     /** Whether this is the inline version (during streaming) or the summary version (after). */
     variant?: 'inline' | 'summary';
+    /** The agent's own step count; rows (thinking, plans, tools) are not steps. */
+    agentStepCount?: number;
 }
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
-export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount }: AgentActivityProps) {
     // Always start collapsed — thinking text is shown via ThinkingIndicator
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
@@ -233,8 +235,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
-    // Progress-status rows aren't saved with the turn; counting them made the total drop on finish.
-    const stepCount = displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
+    // Messages saved before the agent's count was recorded only have their rows to go by.
+    const stepCount = agentStepCount && agentStepCount > 0
+        ? agentStepCount
+        : displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
@@ -369,7 +373,8 @@ export function linkifyPaths(text: string): React.ReactNode {
     // A quoted path ('C:\My Docs\a.txt') runs to its closing quote, spaces
     // included, and the quotes stay outside the link. An unquoted one
     // (C:\...\file.ext, (C:\Users\...)) stops at whitespace or punctuation.
-    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
+    // The lookbehind keeps the "s:/" in "https://" from reading as a drive.
+    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|(?<![\w/\\])[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -700,7 +705,7 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
     }, [output]);
 
     const hasOutput = !!(output.stdout || output.stderr);
-    const isError = output.returnCode !== 0;
+    const isError = output.returnCode !== 0 && !output.expectedExit;
 
     return (
         <div className={`cmd-output ${isError ? 'cmd-error' : ''}`}>
@@ -715,7 +720,12 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                         <span className="cmd-duration">{output.durationSeconds.toFixed(1)}s</span>
                     )}
                     {output.returnCode !== 0 && (
-                        <span className="cmd-exit-code">exit {output.returnCode}</span>
+                        <span
+                            className={`cmd-exit-code${isError ? '' : ' cmd-exit-expected'}`}
+                            title={output.expectedExit ?? undefined}
+                        >
+                            exit {output.returnCode}
+                        </span>
                     )}
                     {hasOutput && (
                         <button

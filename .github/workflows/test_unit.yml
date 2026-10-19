@@ -22,6 +22,9 @@ on:
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
       - 'util/test_lane_allowlist.yml'
+      # Every test session runs the root conftest; this checks it left no daemon.
+      - 'conftest.py'
+      - 'util/check_no_daemons.py'
       - 'installer/tui/**'
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -50,6 +53,9 @@ on:
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
       - 'util/test_lane_allowlist.yml'
+      # Every test session runs the root conftest; this checks it left no daemon.
+      - 'conftest.py'
+      - 'util/check_no_daemons.py'
       - 'installer/tui/**'
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -80,9 +86,8 @@ jobs:
   unit-tests:
     name: Unit Tests (Linux, py3.12)
     runs-on: ubuntu-latest
-    # Grown past the old 30-min budget from normal test-suite growth (was 26min
-    # on 2026-09-26, timing out consistently by 2026-09-29) — not a hang.
-    timeout-minutes: 45
+    # Sized to suite growth, not a hang: ~44 min passing by 2026-10-13.
+    timeout-minutes: 60
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
@@ -93,7 +98,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
@@ -125,7 +130,7 @@ jobs:
           # tests/unit/eval/test_pdf_document_generator.py and
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
@@ -159,7 +164,8 @@ jobs:
           echo "=== Running Unit Tests ==="
           echo "These are fast tests for core SDK components"
           echo ""
-          pytest tests/unit/ -v --tb=short \
+          # One worker per vCPU; worksteal evens out the few long tests.
+          pytest tests/unit/ -n logical --dist=worksteal -v --tb=short --durations=50 \
             --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
 
       - name: Run CLI tool-confirmation integration tests
@@ -234,7 +240,12 @@ jobs:
           echo "=== Running Daemon Integration Tests ==="
           echo "Real python -m gaia.daemon lifecycle + sidecar supervision (#2142)"
           echo ""
-          pytest tests/integration/test_daemon.py tests/integration/test_daemon_sidecars.py -v --tb=short
+          pytest tests/integration/test_daemon.py tests/integration/test_daemon_sidecars.py \
+            tests/integration/test_daemon_lifetime.py -v --tb=short
+
+      - name: Check no GAIA daemon outlived the tests
+        if: ${{ !cancelled() }}
+        run: python util/check_no_daemons.py
 
       - name: Unit test summary
         if: always()
@@ -390,13 +401,13 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
           # The Linux unit-tests job's set — see its install step for why each
           # one is needed. A missing one skips files that Linux runs.
-          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
@@ -412,7 +423,13 @@ jobs:
       - name: Run unit tests (macOS)
         env:
           GAIA_MEMORY_DISABLED: "1"
-        run: pytest tests/unit/ --timeout=60 -v --tb=short
+        # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
+        # down beside other workers, and on Windows a timeout kills the worker.
+        run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+
+      - name: Check no GAIA daemon outlived the tests
+        if: ${{ !cancelled() }}
+        run: python util/check_no_daemons.py
 
   # GAIA is Windows/NPU-first; this is the only hosted Windows run of the suite.
   unit-tests-windows:
@@ -430,17 +447,14 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        run: |
-          irm https://astral.sh/uv/install.ps1 | iex
-          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        shell: pwsh
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         shell: bash
         run: |
           # The Linux unit-tests job's set — see its install step for why each
           # one is needed.
-          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
@@ -458,4 +472,17 @@ jobs:
         shell: bash
         env:
           GAIA_MEMORY_DISABLED: "1"
-        run: pytest tests/unit/ --timeout=60 -v --tb=short
+        # 180 s, not 60: a few CLI-spawning tests take 30-50 s alone and slow
+        # down beside other workers, and on Windows a timeout kills the worker.
+        run: pytest tests/unit/ -n logical --dist=worksteal --timeout=180 -v --tb=short --durations=50
+
+      - name: Run daemon lifetime integration tests (Windows)
+        shell: bash
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        # Windows is where a deleted test home lingers, held open by the log.
+        run: pytest tests/integration/test_daemon_lifetime.py -v --tb=short --timeout=300
+
+      - name: Check no GAIA daemon outlived the tests
+        if: ${{ !cancelled() }}
+        run: python util/check_no_daemons.py

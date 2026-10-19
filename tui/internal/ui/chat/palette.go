@@ -40,6 +40,8 @@ var paletteCommands = []paletteCommand{
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 	{"/cost", "What this session has spent; /cost help for rates"},
+	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
+	{"/copy all", "Copy the whole conversation as markdown"},
 	{"/agents", "List installed agents and switch this session to one"},
 }
 
@@ -177,7 +179,8 @@ func (m *ChatModel) syncPalette() {
 // re-filters) for these; everything else closes it (see handlePaletteKey).
 func palettePassThroughKey(t tea.KeyType) bool {
 	switch t {
-	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight:
+	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight,
+		tea.KeyCtrlH, tea.KeyCtrlW, tea.KeyCtrlDelete:
 		return true
 	}
 	return false

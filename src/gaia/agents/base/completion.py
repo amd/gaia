@@ -9,7 +9,6 @@ Reading every byte establishes observation, not semantic extraction recall.
 from __future__ import annotations
 
 import ast
-import json
 import ntpath
 import os
 import re
@@ -17,6 +16,8 @@ import stat
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from gaia.agents.base.tool_outcome import tool_result_dict
 
 WRITE_TOOLS = frozenset(
     {
@@ -172,7 +173,15 @@ _ADMITS_UNSAVED = re.compile(
     r"refused|permission)\b",
     re.I,
 )
-_DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+", re.I)
+_DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+|\s*(?:→|->|=>)\s*", re.I)
+# A path named as where content comes from: "the items from minutes.txt".
+_SOURCE = re.compile(r"\b(?:from|of|using|based on)\s+", re.I)
+# A target named without a path: "in minutes.txt as a markdown file".
+_UNNAMED_TARGET = re.compile(
+    r"^(?:(?:a|an|the|new|separate|another|markdown|text|csv|json)\s+)*"
+    r"(?:file|document|doc|spreadsheet|folder|directory)\b",
+    re.I,
+)
 # Words allowed between a destination preposition and its path.
 _LEAD = re.compile(
     r"^\s*(?:(?:a|an|the|this|that|your|my|new|file|folder|directory|called|named)"
@@ -181,16 +190,27 @@ _LEAD = re.compile(
 )
 
 
+# Files checked under one requested folder for script-written outputs.
+_MAX_FOLDER_FILES = 2000
+# Above this, a script output may be checked in part instead of read whole.
+_FULL_READ_LIMIT = 64 * 1024
+# How much of a script file is searched for the outputs it names.
+_MAX_SCRIPT_CHARS = 1_000_000
+
+
+def _inside(path: str, folder: str) -> bool:
+    return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
+
+
+def _in_named_folder(path: str, names: set[str]) -> bool:
+    """Whether a folder above *path* has one of the bare *names*."""
+    parent = ntpath.dirname(path.replace("/", "\\"))
+    parts = {os.path.normcase(p) for p in parent.split("\\") if p}
+    return bool(parts & names)
+
+
 def _payload(value: Any) -> dict:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except ValueError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+    return tool_result_dict(value) or {}
 
 
 def _path_token(match: re.Match) -> str | None:
@@ -274,12 +294,52 @@ def destination_paths(text: str, prepositions: re.Pattern = _DESTINATION) -> lis
         if prepositions is not _DESTINATION:
             return []
         return list(dict.fromkeys(_scan_paths(clause, immediate=False)))
-    # The last preposition that names a path: "to clean logs/app.log" names none.
-    for destination in reversed(destinations):
-        paths = _scan_paths(clause[destination.end() :], immediate=True)
-        if paths:
-            return list(dict.fromkeys(paths))
-    return []
+    # Every named output counts: "the tracker as a.xlsx and the email as b.md".
+    hits = [
+        (destination.group().strip().lower(), paths, index)
+        for index, destination in enumerate(destinations)
+        if (paths := _scan_paths(clause[destination.end() :], immediate=True))
+    ]
+    # "the notes in notes.txt as out.md": a place that runs straight into
+    # another target is where the content is read from.
+    kept = [
+        paths
+        for preposition, paths, index in hits
+        if preposition not in {"in", "at"}
+        or not _leads_into_target(clause, destinations, index)
+    ]
+    return list(dict.fromkeys(path for paths in kept for path in paths))
+
+
+def _leads_into_target(clause: str, destinations: list, index: int) -> bool:
+    """Whether only paths sit between *index*'s preposition and another target."""
+    if index + 1 >= len(destinations):
+        return False
+    following = destinations[index + 1]
+    after = clause[following.end() :]
+    if not (_scan_paths(after, immediate=True) or _UNNAMED_TARGET.match(after)):
+        return False  # "in notes.txt in the morning" names no other target
+    between = clause[destinations[index].end() : following.start()]
+    between = between[_LEAD.match(between).end() :]
+    return all(
+        _path_token(match) is not None
+        or match.group().lower().strip(",") in {"and", "or", "file", ""}
+        for match in _TARGET.finditer(between)
+    )
+
+
+def _source_paths(text: str) -> set[str]:
+    """Paths *text* names only as where content comes from ("from minutes.txt").
+
+    A path also named a second time is kept: "the fixed notes.txt to notes.txt".
+    """
+    named = [path for match in _TARGET.finditer(text) if (path := _path_token(match))]
+    return {
+        path
+        for match in _SOURCE.finditer(text)
+        for path in _scan_paths(text[match.end() :], immediate=True)
+        if named.count(path) == 1
+    }
 
 
 def _instructions(query: str):
@@ -323,10 +383,24 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
         file_object = verb in _STORAGE_VERBS | {"write"} and _FILE_OBJECT.search(
             _RELATIVE_CLAUSE.split(tail)[0]
         )
+        sources = _source_paths(tail)
+        found = [path for path in found if path not in sources]
         if found or file_object:
             requested = True
             paths.extend(found)
     return list(dict.fromkeys(paths)), requested
+
+
+def named_outputs(query: str) -> list[str]:
+    """Every file the request asks to produce, including "write out/log.csv".
+
+    Wider than save_obligations, which also demands a readback of each path.
+    """
+    paths = list(save_obligations(query)[0])
+    for verb, tail in _instructions(query):
+        if verb == "write":
+            paths.extend(_scan_paths(tail, True, True))
+    return list(dict.fromkeys(paths))
 
 
 def save_instructed(query: str) -> bool:
@@ -348,6 +422,10 @@ class FileEvidence:
     inferred: bool = False
     # Read in full and matched exactly by the framework; a rewrite clears it.
     verified: bool = False
+    # Written by a script, which may produce more than any reader can page through.
+    by_script: bool = False
+    # Shown in part since its latest write: a range read, head/tail, a summary.
+    spot_checked: bool = False
 
     def page(self, start: int, end: int, total: int | None) -> None:
         self.ranges.append((start, end))
@@ -381,8 +459,11 @@ def _normalize_key(path: str, base: str) -> str:
 class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
-    def __init__(self, query: str, root: str | None, scratch: Any = None):
+    def __init__(
+        self, query: str, root: str | None, scratch: Any = None, validator: Any = None
+    ):
         self.root = root or os.getcwd()
+        self.validator = validator
         # The agent's scratch folder is deleted on close: never the user's save.
         self.scratch = self.key(str(scratch)) if scratch else None
         self.files: dict[str, FileEvidence] = {}
@@ -399,7 +480,10 @@ class CompletionEvidence:
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
-        self.exec_windows: list[tuple[int, int, bool]] = []
+        # (started ns, ended ns, succeeded, ledger sequence) per executor run.
+        self.exec_windows: list[tuple[int, int, bool, int]] = []
+        # (ledger sequence, what the run named) for runs that printed something.
+        self.summaries: list[tuple[int, str]] = []
         self._exec_started = 0
 
     def key(self, path: str, root: str | None = None) -> str:
@@ -457,19 +541,20 @@ class CompletionEvidence:
                                 paths.add(self.key(value))
                             except ValueError:  # embedded NUL: never a path
                                 continue
-        snapshots = {}
-        for path in paths:
-            if validator is not None:
-                allowed, _ = validator.validate_read(path, prompt_user=False)
-            else:
-                try:
-                    root = os.path.realpath(self.root)
-                    allowed = os.path.commonpath((root, os.path.realpath(path))) == root
-                except (ValueError, OSError):
-                    allowed = False
-            if allowed:
-                snapshots[path] = self._stamp(path)
-        return snapshots
+        return {
+            path: self._stamp(path) for path in paths if self._readable(path, validator)
+        }
+
+    def _readable(self, path: str, validator: Any = None) -> bool:
+        """Whether the read boundary allows inspecting *path*, without prompting."""
+        if validator is not None:
+            allowed, _ = validator.validate_read(path, prompt_user=False)
+            return bool(allowed)
+        try:
+            root = os.path.realpath(self.root)
+            return os.path.commonpath((root, os.path.realpath(path))) == root
+        except (ValueError, OSError):
+            return False
 
     def record(
         self,
@@ -487,7 +572,9 @@ class CompletionEvidence:
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
         if tool in _EXEC_TOOLS:
-            self.exec_windows.append((self._exec_started, time.time_ns(), successful))
+            self.exec_windows.append(
+                (self._exec_started, time.time_ns(), successful, self.sequence)
+            )
         for path, old in (before or {}).items():
             current = self._stamp(path)
             if current is _UNOBSERVABLE or old is _UNOBSERVABLE:
@@ -507,7 +594,10 @@ class CompletionEvidence:
                     self.removed.add(path)
                 if current is not None:
                     self.files[path] = FileEvidence(
-                        path, self.sequence if successful else 0, True
+                        path,
+                        self.sequence if successful else 0,
+                        True,
+                        by_script=tool in _EXEC_TOOLS,
                     )
         data = _payload(result)
         paths = []
@@ -541,7 +631,58 @@ class CompletionEvidence:
                 key,
                 self.sequence if successful else 0,
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
+                by_script=tool in _EXEC_TOOLS,
             )
+        if tool in _EXEC_TOOLS and successful:
+            self._note_summaries(args, data)
+
+    def _note_summaries(self, args: dict, data: dict) -> None:
+        """A successful run that names a script output and prints something checked it.
+
+        ``wc -l out.csv``, ``head out.csv`` or a pandas row count: what it
+        printed is the observation. A run that rewrote the file is a new
+        write, not a check of it.
+        """
+        printed = data.get("stdout")
+        nested = data.get("command_output")
+        if not isinstance(printed, str) and isinstance(nested, dict):
+            printed = nested.get("stdout")
+        if not isinstance(printed, str) or not printed.strip():
+            return
+        text = " ".join(
+            value
+            for key in ("code", "command", "script")
+            if isinstance((value := args.get(key)), str)
+        )
+        script = args.get("file_path")
+        if isinstance(script, str) and self._readable(self.key(script), self.validator):
+            try:
+                with open(self.key(script), encoding="utf-8", errors="replace") as f:
+                    text += " " + f.read(_MAX_SCRIPT_CHARS)
+            except OSError:
+                pass
+        if not text:
+            return
+        self.summaries.append((self.sequence, os.path.normcase(text)))
+
+    def unwritten_requests(self) -> list[str]:
+        """Files the user asked for that no successful write has produced yet.
+
+        A bare name ("bom.xlsx") counts as written wherever it landed, matching
+        how :meth:`gaps` judges it.
+        """
+        written = {key for key, item in self.files.items() if item.written}
+        written_names = {os.path.normcase(ntpath.basename(key)) for key in written}
+        pending = []
+        for path in self.requested:
+            if self.key(path) in written:
+                continue
+            if ntpath.basename(path) == path and (
+                os.path.normcase(path) in written_names
+            ):
+                continue
+            pending.append(path)
+        return pending
 
     def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
         """Remember a write the user or the path allowlist turned down."""
@@ -575,12 +716,69 @@ class CompletionEvidence:
         if not isinstance(stamp, tuple):
             return None
         during = [
-            ok for start, end, ok in self.exec_windows if start <= stamp[3] <= end
+            (ok, run)
+            for start, end, ok, run in self.exec_windows
+            if start <= stamp[3] <= end
         ]
-        if not during or not all(during):
+        if not during or not all(ok for ok, _ in during):
             return None
-        self.files[key] = FileEvidence(key, self.sequence, True, inferred=True)
+        # Dated by the run that wrote it, so a later run can be its check.
+        self.files[key] = FileEvidence(
+            key, max(run for _, run in during), True, inferred=True, by_script=True
+        )
         return self.files[key]
+
+    def written_files(self) -> list[str]:
+        """Files this turn wrote that are still on disk, outside the scratch folder.
+
+        A requested file a script wrote without naming it counts too; it is
+        not recorded, so the completion gate's view of the turn is unchanged.
+        """
+        keys = [key for key, item in self.files.items() if item.written]
+        for path in self.requested:
+            key = self.key(path)
+            stamp = None if key in self.files else self._stamp(key)
+            if isinstance(stamp, tuple) and any(
+                ok and start <= stamp[3] <= end
+                for start, end, ok, _ in self.exec_windows
+            ):
+                keys.append(key)
+        scratch = (self.scratch or "").rstrip("/\\")
+        return [
+            key
+            for key in dict.fromkeys(keys)
+            if key not in self.removed
+            and not (scratch and key.startswith((scratch + "/", scratch + "\\")))
+            and os.path.isfile(key)
+        ]
+
+    def _find_executor_writes(self, key: str) -> None:
+        """Record what a script wrote at *key*, or inside it when it is a folder.
+
+        A script builds its output paths at run time, so no tool reports them;
+        the file's modification time inside a successful run is the evidence.
+        """
+        if not any(window[2] for window in self.exec_windows):
+            return
+        if not self._readable(key, self.validator):
+            return
+        if os.path.isfile(key):
+            if key not in self.files:
+                self._written_by_executor(key)
+            return
+        if not os.path.isdir(key):
+            return
+        seen = 0
+        for folder, _, names in os.walk(key):
+            for name in names:
+                seen += 1
+                if seen > _MAX_FOLDER_FILES:
+                    return
+                path = self.key(os.path.join(folder, name))
+                if path not in self.files and not (
+                    self.scratch and _inside(path, self.scratch)
+                ):
+                    self._written_by_executor(path)
 
     def delivered(self, tool: str, args: dict, original: Any, delivered: Any) -> None:
         data = _payload(delivered)
@@ -608,6 +806,8 @@ class CompletionEvidence:
         if item is None or not item.written or raw.get("is_binary"):
             return
         content = raw.get("content")
+        if isinstance(content, str) and content.strip():
+            item.spot_checked = True
         # A numbered line window is not the file's bytes: never a full readback.
         if not isinstance(content, str) or raw.get("start_line") is not None:
             return
@@ -682,9 +882,12 @@ class CompletionEvidence:
             shown.update((self.key(p), p) for p in paths if ntpath.basename(p) == p)
             claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
-
-        def inside(path: str, folder: str) -> bool:
-            return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
+        for path in required:
+            if not any(
+                item.written and (key == path or _inside(key, path))
+                for key, item in self.files.items()
+            ):
+                self._find_executor_writes(path)
 
         bare_names = {os.path.basename(path) for path in bare}
 
@@ -692,22 +895,27 @@ class CompletionEvidence:
             # A named folder is fulfilled by the files written inside it.
             return (
                 path in required
-                or any(inside(path, f) for f in required)
+                or any(_inside(path, f) for f in required)
                 or os.path.normcase(ntpath.basename(path)) in bare_names
+                or (
+                    _in_named_folder(path, bare_names)
+                    and not (self.scratch and _inside(path, self.scratch))
+                )
             )
 
-        written_names = {
-            os.path.basename(key)
+        written = [
+            key
             for key, item in self.files.items()
-            if item.written and not (self.scratch and inside(key, self.scratch))
-        }
+            if item.written and not (self.scratch and _inside(key, self.scratch))
+        ]
+        written_names = {os.path.basename(key) for key in written}
 
         def refusal(path: str) -> str | None:
             """Why the user's side turned down the write this obligation names."""
             for key, reason in self.refused.items():
                 if (
                     key == path
-                    or inside(key, path)
+                    or _inside(key, path)
                     or (
                         path in bare and os.path.basename(key) == os.path.basename(path)
                     )
@@ -716,10 +924,16 @@ class CompletionEvidence:
             return None
 
         for path in sorted(required):
-            if path in bare and os.path.basename(path) in written_names:
+            if path in bare and (
+                os.path.basename(path) in written_names
+                # "Saved in `reports`": a bare folder name, wherever it is.
+                or any(
+                    _in_named_folder(key, {os.path.basename(path)}) for key in written
+                )
+            ):
                 continue
             written_inside = any(
-                item.written and inside(key, path) for key, item in self.files.items()
+                item.written and _inside(key, path) for key, item in self.files.items()
             )
             if not written_inside and (
                 path not in self.files or not self.files[path].written
@@ -754,7 +968,7 @@ class CompletionEvidence:
                 item.direct
                 and item.written
                 and not item.inferred
-                and not (self.scratch and inside(item.path, self.scratch))
+                and not (self.scratch and _inside(item.path, self.scratch))
                 for item in self.files.values()
             )
         ):
@@ -777,11 +991,30 @@ class CompletionEvidence:
                 and (data_output or requested(item.path))
                 and not item.observed
                 and not item.verified
+                and not self._large_and_checked(item)
             ):
                 gaps.append(
                     f"`{item.path}` has not been read back completely after its latest write."
                 )
         return gaps
+
+    def _large_and_checked(self, item: FileEvidence) -> bool:
+        """A large script output shown in part counts; a small one is read whole."""
+        named = re.compile(
+            rf"(?<![\w.-]){re.escape(os.path.basename(item.path))}(?![\w-])"
+        )
+        if not item.by_script or not (
+            item.spot_checked
+            or any(
+                run > item.written and named.search(text)
+                for run, text in self.summaries
+            )
+        ):
+            return False
+        try:
+            return os.path.getsize(item.path) > _FULL_READ_LIMIT
+        except OSError:
+            return False
 
     def cleanup_gaps(self, answer: str) -> list[str]:
         """A deletion claim needs a concrete path observed disappearing."""
@@ -853,8 +1086,19 @@ class CompletionEvidence:
         return gaps
 
 
+def caveated_answer(answer: str | None, gaps: list[str]) -> str:
+    """Keep the model's answer and name what could not be confirmed after it."""
+    if not answer or not answer.strip():
+        return incomplete_answer(gaps)
+    if all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
+        return f"{answer.rstrip()}\n\n" + "\n".join(gaps)
+    return f"{answer.rstrip()}\n\nI couldn't confirm all of this:\n\n" + "\n".join(
+        f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps
+    )
+
+
 def incomplete_answer(gaps: list[str]) -> str:
-    """Framework-owned result; never repeat the unsupported candidate answer."""
+    """Framework-owned result for a turn that produced no answer to keep."""
     if gaps and all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
         # Nothing is left to finish: the user's side turned the write down.
         return "\n".join(gaps)
