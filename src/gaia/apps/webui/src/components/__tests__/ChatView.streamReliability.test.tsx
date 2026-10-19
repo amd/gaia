@@ -62,7 +62,7 @@ beforeEach(() => {
     });
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
-    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
@@ -276,7 +276,8 @@ describe('ChatView stream reliability', () => {
     });
 
     it('loads the saved answer when the run finished just before the chat reopened', async () => {
-        useChatStore.setState({ runningSessionIds: [SESSION.id] } as never);
+        mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [SESSION.id], queued: [], awaiting_user: {} });
+        useChatStore.setState({ runningSessionIds: [SESSION.id], activeRunsAt: Date.now() } as never);
         mockedApi.getMessages.mockResolvedValue({
             messages: [
                 { id: 1, session_id: SESSION.id, role: 'user', content: 'send the drafted email', created_at: '', rag_sources: null },

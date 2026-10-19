@@ -14,9 +14,47 @@
     z-index: 30;
 }
 
+.sb { position: relative; }
+
+/* Dragging follows the pointer directly, without the width transition. */
+.sb.is-resizing { transition: none; }
+
 .sb.is-collapsed {
     width: 56px;
     min-width: 56px;
+}
+
+/* Resize handle on the right edge: an 8px grab area with a line on hover. */
+.sb-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -4px;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 2;
+}
+
+.sb-resize::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: var(--accent-solid);
+    opacity: 0;
+    transition: opacity var(--duration) var(--ease);
+}
+
+.sb-resize:hover::after,
+.sb-resize:focus-visible::after,
+.sb-resize.is-dragging::after { opacity: 0.6; }
+
+.sb.is-collapsed .sb-top {
+    flex-direction: column;
+    gap: 10px;
 }
 
 .sb-top {
@@ -200,12 +238,94 @@
     color: var(--text-muted);
 }
 
-.sb-row-title {
+/* Long titles fade out instead of ending in an ellipsis. The fade covers 24px
+ * of padding only overflowing text reaches, so a short title is never dimmed. */
+.sb-row-title,
+.sb-location-text {
     overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-right: 24px;
+    margin-right: -24px;
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
+/* ── Status dots and unread (#5221) ── */
+.sb-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.sb-dot.is-running,
+.sb-dot.is-queued {
+    background: var(--accent-green);
+}
+
+.sb-dot.is-running {
+    animation: sb-dot-pulse var(--duration-pulse) var(--ease-in-out) infinite;
+}
+
+.sb-dot.is-queued {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--accent-green);
+}
+
+.sb-dot.is-waiting {
+    background: var(--accent-yellow);
+}
+
+.sb-dot.is-done {
+    background: var(--accent);
+}
+
+.sb-dot.is-failed {
+    background: var(--danger);
+}
+
+@keyframes sb-dot-pulse {
+    50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sb-dot.is-running { animation: none; }
+}
+
+.sb-row.is-unread .sb-row-title {
+    font-weight: 600;
+}
+
+.sb-row-queue {
+    flex-shrink: 0;
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11.5px;
     white-space: nowrap;
 }
 
+.sb-group.is-needs-you .sb-group-label {
+    color: var(--accent-yellow);
+}
+
+.sb-filter {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+    font-size: 12.5px;
+    text-align: left;
+}
+
+.sb-filter:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.sb-row-pin,
 .sb-row-delete {
     display: inline-flex;
     align-items: center;
@@ -219,10 +339,20 @@
     opacity: 0;
 }
 
+.sb-row-pin {
+    margin-right: 0;
+}
+
+.sb-row:hover .sb-row-pin,
+.sb-row:focus-within .sb-row-pin,
 .sb-row:hover .sb-row-delete,
 .sb-row:focus-within .sb-row-delete,
 .sb-row-delete.is-confirm {
     opacity: 1;
+}
+
+.sb-row-pin:hover {
+    color: var(--text-primary);
 }
 
 .sb-row-delete:hover {
@@ -281,12 +411,6 @@
     color: var(--text-primary);
 }
 
-.sb-location-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 .sb-bottom-actions {
     display: flex;
     align-items: center;
@@ -312,6 +436,7 @@
         transform: translateX(0);
     }
 
+    .sb-row-pin,
     .sb-row-delete {
         opacity: 1;
     }

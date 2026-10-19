@@ -750,20 +750,20 @@ def _wait_for_gaia_lemonade(
     """Wait, bounded, for GAIA's own server to answer again; return its URL.
 
     None when the server is not GAIA's own (the user's, or a remote
-    ``LEMONADE_BASE_URL``) or nothing needed waiting for: the caller's own
-    error then stands. Goes through the live Lemonade client when there is one,
-    so it follows the restarted server too.
+    ``LEMONADE_BASE_URL``): the caller's own error then stands. Goes through
+    the live Lemonade client when there is one, so it follows the restarted
+    server too. A server already back by now -- it came up while the failed
+    request was still retrying -- returns its URL at once.
     """
     chat = agent.chat
     client = getattr(chat, "llm_client", None)
     if not callable(getattr(client, "current_base_url", None)):
         client = LemonadeClient(base_url=chat.config.base_url, verbose=False)
     wait = getattr(client, "wait_for_gaia_lemonade", None)
-    if not callable(wait):
+    if not callable(wait) or not getattr(client, "follows_gaia_lemonade", False):
         return None
     try:
-        if not wait(target, on_status=on_status):
-            return None
+        wait(target, on_status=on_status)
         return client.current_base_url()
     except LemonadeClientError as exc:
         raise RuntimeError(str(exc)) from exc

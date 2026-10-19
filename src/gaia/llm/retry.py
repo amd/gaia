@@ -867,6 +867,7 @@ class ModelCallRetrier:
         server_loading: Optional[Callable[[], Optional[str]]] = None,
         log: Optional[logging.Logger] = None,
         classify: Callable[[BaseException], Optional[str]] = classify_exception,
+        hand_off: Callable[[BaseException, str], bool] = lambda error, reason: False,
     ):
         self.policy = policy or RetryPolicy.from_env()
         self._sleep = sleep
@@ -877,6 +878,9 @@ class ModelCallRetrier:
         self._server_loading = server_loading
         self._log = log or logger
         self._classify = classify
+        # True for a transient failure before any output that the caller
+        # recovers itself: given up on at once, without backoff.
+        self._hand_off = hand_off
 
     def _wait_or_give_up(
         self,
@@ -892,6 +896,8 @@ class ModelCallRetrier:
         if reason is None:
             return False
         state.last_reason = reason
+        if self._hand_off(error, reason):
+            return False
         if state.attempts >= self.policy.max_attempts:
             state.exhausted = True
             self._log.warning(

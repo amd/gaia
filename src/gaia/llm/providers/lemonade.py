@@ -653,6 +653,11 @@ class LemonadeProvider(LLMClient):
         """The Lemonade URL this client talks to now (see ``LemonadeClient``)."""
         return self._backend.current_base_url()
 
+    @property
+    def follows_gaia_lemonade(self) -> bool:
+        """Whether this client is aimed at GAIA's own server (see ``LemonadeClient``)."""
+        return self._backend.follows_gaia_lemonade
+
     def wait_for_gaia_lemonade(
         self,
         model: Optional[str] = None,
