@@ -177,9 +177,9 @@ on:
         type: boolean
         default: false
       eval_model:
-        description: 'Driver + judge model for the eval harness (must match the baseline)'
+        description: 'Driver + judge model for the eval harness. Blank = the model the flagship baseline was captured under (tests/fixtures/eval_baselines/gaia-flagship/meta.json)'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: ''
       deep_diagnostics:
         description: 'Run the full embedder-failure ladder (purges the model from disk, unloads all models). Off by default - it costs ~7 extra min and disturbs other jobs on the box.'
         required: false
@@ -206,7 +206,8 @@ permissions:
 
 env:
   # One scorecard per ci_lanes.json category, copied unedited from a real run
-  # on this pool (meta.json names the run). Captured under EVAL_MODEL below; a
+  # on this pool (meta.json names the run and its eval_model, which every job
+  # here runs under unless a dispatch overrides it); a
   # run under any other driver is not comparable to it. Replace the files from a
   # newer tag or dispatch run; never edit a number in them.
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
@@ -248,15 +249,13 @@ env:
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   # Only a dispatch can enforce; a tag run compares with the baseline and reports.
   ENFORCE: ${{ github.event.inputs.enforce || 'false' }}
-  # PINNED, and that is not a stale value to bump. `--model` is not a judge-only
-  # knob: runner.py passes it to `claude -p`, which DRIVES every scenario as well
-  # as scoring it. So the driver is part of the agent under test, and the
-  # committed baseline was recorded under this value. Changing it compares two
-  # different agents and folds the new driver's wall clock into the same >2x
-  # time verdict, so change it only together with a re-captured baseline.
-  # #2859 moved every other Claude workflow to Opus 5. Override per-run via the
-  # dispatch input above.
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  # EVAL_MODEL is not set here: each job reads it from $BASELINE_DIR/meta.json
+  # (eval_model), because `--model` is not a judge-only knob. runner.py passes it
+  # to `claude -p`, which DRIVES every scenario as well as scoring it, so the
+  # driver is part of the agent under test and must be the one the baseline was
+  # recorded under. It changes only with a re-captured baseline. #2859 moved
+  # every other Claude workflow to Opus 5. A dispatch input overrides it per run.
+  EVAL_MODEL_OVERRIDE: ${{ github.event.inputs.eval_model }}
   # Deep ladder is opt-in. Its rungs purge the embedder from disk and unload every
   # resident model, which is fine while investigating and wrong to repeat on every
   # PR: the cause is known (#3016) and the box is shared, so the next job landing
@@ -742,6 +741,23 @@ jobs:
         run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout
         uses: actions/checkout@v7
+
+      # The Claude model drives every scenario as well as judging it, so it must
+      # be the one the committed flagship baseline was captured under: its
+      # meta.json is the single source. A dispatch input overrides it.
+      - name: Resolve the eval driver model
+        run: |
+          $model = $env:EVAL_MODEL_OVERRIDE
+          if (-not $model) {
+            $meta = 'tests/fixtures/eval_baselines/gaia-flagship/meta.json'
+            $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
+            if (-not $model) {
+              Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: restore eval_model in $meta, or dispatch with the eval_model input."
+              exit 1
+            }
+          }
+          "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "Eval driver and judge model: $model"
 
       # A memory lane with memory switched off does not fail - it scores badly,
       # and the scorecard reads as a quality regression rather than a setup

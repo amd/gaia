@@ -123,7 +123,7 @@
 }
 
 .schedule-card.just-ran {
-    animation: schedule-flash 1.5s ease-out;
+    animation: schedule-flash var(--duration-pulse) var(--ease);
 }
 
 @keyframes schedule-flash {

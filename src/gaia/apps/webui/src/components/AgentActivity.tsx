@@ -89,6 +89,13 @@ const TOOL_META: Record<string, ToolMeta> = {
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };
 
+// Memory works in the background: its steps show only when they fail.
+const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+
+function isBackgroundStep(step: AgentStep): boolean {
+    return step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '');
+}
+
 const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
@@ -143,6 +150,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     const displaySteps = useMemo(() => {
         const result: AgentStep[] = [];
         for (const step of steps) {
+            if (isBackgroundStep(step)) continue;
             const prev = result[result.length - 1];
             // Merge consecutive thinking steps — concatenate details
             if (step.type === 'thinking' && prev && prev.type === 'thinking') {
@@ -236,7 +244,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
     // Messages saved before the agent's count was recorded only have their rows to go by.
-    const stepCount = agentStepCount && agentStepCount > 0
+    // The agent's own count includes the hidden memory steps, so it would disagree with the list.
+    const stepCount = agentStepCount && agentStepCount > 0 && !steps.some(isBackgroundStep)
         ? agentStepCount
         : displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
     const summaryText = hasPolicyAlerts

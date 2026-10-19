@@ -83,10 +83,16 @@ on:
         required: false
         type: boolean
         default: false
+    outputs:
+      quota_suspected:
+        description: "true when the Claude call was refused before reaching a model, or errored naming a spend/usage limit. claude.yml uses it to ask claude-account-switch.yml to probe the accounts."
+        value: ${{ jobs.run.outputs.quota_suspected }}
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    outputs:
+      quota_suspected: ${{ steps.harness.outputs.quota_suspected }}
     steps:
       - name: Show which Claude account this job uses
         run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
@@ -414,8 +420,18 @@ jobs:
                 | tr -d '\r\n' | cut -c1-300)
             fi
           fi
+          # A refusal before any model work is budget or credential; the account
+          # switch's own probe tells the two apart, so either one asks it to look.
+          quota_suspected=false
+          if [ "$status" = "not_started" ]; then
+            quota_suspected=true
+          # Exhaustion wording only: a transient 429 "rate limit" is not an empty account.
+          elif [ "$status" = "errored" ] && printf '%s' "$detail" | grep -qiE 'spend limit|usage limit|weekly limit|session limit|limit resets|quota|credit balance|billing|upgrade your plan'; then
+            quota_suspected=true
+          fi
           {
             echo "status=$status"
+            echo "quota_suspected=$quota_suspected"
             echo "turns=$turns"
             echo "cost=$cost"
             echo "models=$models"
