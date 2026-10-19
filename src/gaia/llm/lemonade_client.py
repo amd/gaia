@@ -1503,19 +1503,6 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
-def _pull_registration(model_name: str) -> Tuple[str, Dict[str, Any]]:
-    """The name and registration a pull of *model_name* must send.
-
-    A custom (``user.``) model in ``MODELS`` registers on its first pull, under
-    its ``user.`` name; everything else is pulled by name alone (#1655).
-    """
-    mr = find_model_requirement(model_name)
-    registration = (
-        {k: v for k, v in mr.pull_kwargs().items() if v is not None} if mr else {}
-    )
-    return (mr.model_id if registration else model_name), registration
-
-
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -5363,10 +5350,11 @@ class LemonadeClient:
 
         if not checkpoint:
             # A user. model Lemonade has not seen needs its registration on the
-            # first pull; every caller that pulls by name alone gets it here.
+            # first pull, under its user. name even when asked for without it.
             mr = find_model_requirement(model_name)
             registration = mr.pull_kwargs() if mr else {}
             if registration:
+                model_name = mr.model_id
                 checkpoint = registration["checkpoint"]
                 recipe = recipe or registration["recipe"]
                 mmproj = mmproj or registration["mmproj"]
@@ -6237,8 +6225,7 @@ class LemonadeClient:
         """
         download_complete = False
         last_logged_percent = -10  # Log at 0%, 10%, 20%, ...
-        pull_name, registration = _pull_registration(model_name)
-        for event in self.pull_model_stream(model_name=pull_name, **registration):
+        for event in self.pull_model_stream(model_name=model_name):
             event_type = event.get("event")
             if event_type == "progress":
                 percent = event.get("percent", 0)
@@ -6676,10 +6663,7 @@ class LemonadeClient:
                 download_complete = False
                 last_logged_percent = -10  # Log at 0%, 10%, 20%, etc.
 
-                pull_name, registration = _pull_registration(model_name)
-                for event in self.pull_model_stream(
-                    model_name=pull_name, **registration
-                ):
+                for event in self.pull_model_stream(model_name=model_name):
                     # Check for cancellation
                     if download_task and download_task.is_cancelled():
                         raise ModelDownloadCancelledError(

@@ -9,9 +9,11 @@ registration, or the user who picks it before running ``gaia init`` gets a
 dead chat ("Failed to preload ... was not found").
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
+import responses
 
 from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
@@ -51,14 +53,16 @@ def test_other_failures_are_not_mistaken_for_a_missing_model(client, error):
     assert not client._is_model_error(error)
 
 
+@responses.activate
 def _first_use(client, model):
-    """Load *model* on a server that has never seen it; return what was pulled."""
-    pulled = []
-
-    def _pull(**kwargs):
-        pulled.append(kwargs)
-        yield {"event": "complete"}
-
+    """Load *model* on a server that has never seen it; return the /pull bodies."""
+    responses.add(
+        responses.POST,
+        f"{client.base_url}/pull",
+        body='event: complete\ndata: {"percent":100}\n\n',
+        status=200,
+        content_type="text/event-stream",
+    )
     loads = [NOT_REGISTERED, {"status": "success"}]
 
     def _load(*_args, **_kwargs):
@@ -69,7 +73,6 @@ def _first_use(client, model):
 
     with (
         patch.object(client, "_post_load_with_transient_retry", side_effect=_load),
-        patch.object(client, "pull_model_stream", side_effect=_pull),
         patch.object(
             client,
             "get_model_info",
@@ -83,15 +86,19 @@ def _first_use(client, model):
     ):
         client.load_model(model, ctx_size=65536, prompt=False, auto_download=True)
     assert not loads, "the load was not retried after the download"
-    return pulled
+    return [json.loads(call.request.body) for call in responses.calls]
 
 
-def test_custom_model_is_pulled_with_its_registration(client):
+@pytest.mark.parametrize(
+    "model", [lc.FLASH_OPTION_MODEL_NAME, "Qwen3.8-Flash-Next-GGUF"]
+)
+def test_custom_model_is_pulled_with_its_registration(client, model):
+    """Registered under its user. name even when chosen without the prefix."""
     mr = lc.find_model_requirement(lc.FLASH_OPTION_MODEL_NAME)
-    pulled = _first_use(client, lc.FLASH_OPTION_MODEL_NAME)
-    assert pulled == [
+    assert _first_use(client, model) == [
         {
             "model_name": "user.Qwen3.8-Flash-Next-GGUF",
+            "stream": True,
             "checkpoint": mr.checkpoint,
             "recipe": "llamacpp",
             "mmproj": mr.mmproj,
@@ -104,5 +111,5 @@ def test_custom_model_is_pulled_with_its_registration(client):
 def test_builtin_model_is_pulled_by_name_only(client):
     """Sending a recipe for a built-in makes Lemonade 400 (#1655)."""
     assert _first_use(client, lc.DEFAULT_MODEL_NAME) == [
-        {"model_name": lc.DEFAULT_MODEL_NAME}
+        {"model_name": lc.DEFAULT_MODEL_NAME, "stream": True}
     ]
