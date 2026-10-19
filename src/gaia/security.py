@@ -1223,8 +1223,72 @@ class PathValidator:
             # Fail-closed: refuse if we can't determine safety.
             return (True, f"Read blocked: unable to validate path safety: {e}")
 
+    def _missing_instead_of_prompt(self, path: str) -> str:
+        """A "not found" refusal for an out-of-scope *path* that is not there.
+
+        Only for a path the user would otherwise be asked about: asking to
+        approve a file that does not exist is a wait with nothing behind it.
+        A path no answer may grant keeps its usual refusal, missing or not, so
+        protected and secret locations reveal nothing new. Where nobody can be
+        asked, the plain "access denied" is kept for the same reason.
+
+        Args:
+            path: A path outside the allowlist.
+
+        Returns:
+            The refusal, or "" when the path exists, cannot be checked, or
+            would not be offered for approval.
+        """
+        if self._access_prompt is None and not self._can_prompt():
+            return ""
+        real_path = Path(_real_path(path)).resolve()
+        if self._unaskable_reason(real_path):
+            return ""
+        try:
+            real_path.stat()
+            return ""
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except OSError:
+            # Unreadable is not missing; let the user decide as before.
+            return ""
+        message = (
+            f"Not found: '{path}' does not exist, so access was not requested. "
+            "Check the name and folder, or ask the user where the file is."
+        )
+        candidates = self._in_scope_files_named(real_path.name)
+        if candidates:
+            listed = ", ".join(f"'{c}'" for c in candidates)
+            message += f" A file with that name is available here: {listed}."
+        return message
+
+    def _in_scope_files_named(self, name: str) -> List[str]:
+        """Readable files already in scope called *name*: grants and their children.
+
+        Args:
+            name: The file name to look for (compared case-insensitively).
+
+        Returns:
+            Sorted paths; one stat per grant, never a directory walk.
+        """
+        wanted = name.lower()
+        found = set()
+        for root in [*self.allowed_paths, *self.read_only_paths]:
+            for candidate in (root, root / name):
+                if candidate.name.lower() != wanted:
+                    continue
+                if not candidate.is_file():
+                    continue
+                if self.is_read_blocked(str(candidate))[0]:
+                    continue
+                found.add(str(candidate))
+        return sorted(found)
+
     def validate_read(self, path: str, prompt_user: bool = True) -> Tuple[bool, str]:
         """Allowlist + sensitive-file check for a read.
+
+        An out-of-scope path that does not exist is refused as not found
+        rather than offered for approval (see :meth:`_missing_instead_of_prompt`).
 
         Args:
             path: File path to validate for reading.
@@ -1234,9 +1298,13 @@ class PathValidator:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
         if not self._in_read_only_scope(path) and not self.is_path_allowed(
-            path, prompt_user=prompt_user
+            path, prompt_user=False
         ):
-            return (False, self.access_denied_message(path))
+            missing = self._missing_instead_of_prompt(path) if prompt_user else ""
+            if missing:
+                return (False, missing)
+            if not prompt_user or not self.is_path_allowed(path, prompt_user=True):
+                return (False, self.access_denied_message(path))
 
         is_blocked, reason = self.is_read_blocked(path)
         if is_blocked:
