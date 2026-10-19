@@ -769,6 +769,11 @@ function initializeServices() {
     reopenWindow: () => reopenWindow(),
   });
   trayManager.create();
+  try {
+    trayManager.syncLoginItem();
+  } catch (err) {
+    console.error(`[main] Could not read the sign-in start setting: ${err.message}`);
+  }
 
   // T5: Notification Service (routes agent notifications to OS + renderer)
   notificationService = new NotificationService(

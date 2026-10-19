@@ -42,6 +42,10 @@ function describeBusy(work) {
 const GAIA_DIR = path.join(os.homedir(), ".gaia");
 const CONFIG_PATH = path.join(GAIA_DIR, "tray-config.json");
 const LINUX_AUTOSTART_FILE = "gaia-agent-ui.desktop";
+// The Run value the Windows installer writes (installer/nsis/installer.nsh,
+// ${PRODUCT_NAME}); the switch owns that same entry, command line included.
+const WIN_LOGIN_ITEM_NAME = "GAIA";
+const WIN_LOGIN_ITEM_ARGS = ["--minimized"];
 
 // ── Default config ───────────────────────────────────────────────────────
 
@@ -54,6 +58,10 @@ const DEFAULT_CONFIG = {
   agents: {},
   notices: {
     firstClose: false,
+  },
+  // Whether the user has set the sign-in switch; until then the OS decides it.
+  choices: {
+    startOnLogin: false,
   },
 };
 
@@ -641,6 +649,7 @@ class TrayManager {
         tray: { ...DEFAULT_CONFIG.tray },
         agents: {},
         notices: { ...DEFAULT_CONFIG.notices },
+        choices: { ...DEFAULT_CONFIG.choices },
       };
     }
 
@@ -676,12 +685,19 @@ class TrayManager {
       if (typeof storedNotices[key] === "boolean") notices[key] = storedNotices[key];
     }
 
+    const storedChoices = isPlainObject(loaded.choices) ? loaded.choices : {};
+    const choices = { ...DEFAULT_CONFIG.choices };
+    for (const key of Object.keys(DEFAULT_CONFIG.choices)) {
+      if (typeof storedChoices[key] === "boolean") choices[key] = storedChoices[key];
+    }
+
     return {
       ...DEFAULT_CONFIG,
       ...loaded,
       tray,
       agents,
       notices,
+      choices,
     };
   }
 
@@ -736,15 +752,18 @@ class TrayManager {
       if (tray === null && agents === null) {
         return this.config;
       }
+      const loginChanged =
+        tray !== null && tray.startOnLogin !== this.config.tray.startOnLogin;
       const next = {
         ...this.config,
         tray: tray ?? this.config.tray,
         agents: agents ? { ...this.config.agents, ...agents } : this.config.agents,
+        choices: loginChanged
+          ? { ...this.config.choices, startOnLogin: true }
+          : this.config.choices,
       };
       // The OS login item first: if it can't be set, nothing is saved, so the
       // toggle never claims a state the OS doesn't have.
-      const loginChanged =
-        tray !== null && tray.startOnLogin !== this.config.tray.startOnLogin;
       if (loginChanged) this._applyLoginItemSetting(tray.startOnLogin);
       try {
         this._saveConfig(next);
@@ -760,31 +779,79 @@ class TrayManager {
   }
 
   /**
-   * Register or remove GAIA as a login item. "Start minimized" decides
-   * whether that launch shows the window, the same as any other launch.
+   * Line the sign-in switch up with what the OS will actually do. Call once
+   * at startup. Until the user sets the switch, the OS decides it (the
+   * Windows installer turns sign-in start on). Once they turn it off, an
+   * entry that came back (a reinstall or update rewrites it) is removed again.
+   */
+  syncLoginItem() {
+    // A dev build's exe is electron itself; never touch the installed app's entry.
+    if (!app.isPackaged) return;
+    const osOn = this._loginItemOn();
+    const wanted = this.config.tray.startOnLogin;
+    if (osOn === wanted) return;
+    if (this.config.choices.startOnLogin && !wanted) {
+      try {
+        this._applyLoginItemSetting(false);
+        return;
+      } catch (err) {
+        console.error(`[tray] Sign-in start is back on and could not be turned off again: ${err.message}`);
+      }
+    }
+    this.config = { ...this.config, tray: { ...this.config.tray, startOnLogin: osOn } };
+    console.log(`[tray] Start at sign-in is ${osOn ? "on" : "off"} in the OS; the switch follows it`);
+  }
+
+  /** The executable and arguments the login item launches. */
+  _loginItemQuery() {
+    const args = process.platform === "win32" ? WIN_LOGIN_ITEM_ARGS : [];
+    return { path: app.getPath("exe"), args };
+  }
+
+  /** Whether GAIA will start at sign-in, read from the OS. */
+  _loginItemOn() {
+    if (process.platform === "linux") {
+      return fs.existsSync(this._linuxAutostartFile());
+    }
+    const now = app.getLoginItemSettings(this._loginItemQuery());
+    if (process.platform !== "win32") return Boolean(now.openAtLogin);
+    // openAtLogin reads the value named after the AppUserModelId, not ours.
+    // A Run value disabled in Task Manager is listed with enabled: false.
+    const item = (now.launchItems || []).find(
+      (i) => i.name === WIN_LOGIN_ITEM_NAME && i.scope === "user"
+    );
+    return Boolean(item && item.enabled);
+  }
+
+  /**
+   * Register or remove GAIA as a login item. On Windows that is the same Run
+   * value the installer writes, launched into the tray; elsewhere "Start in
+   * the tray" decides whether that launch shows the window.
    * @throws {Error} When the OS refused; the caller's save is skipped.
    */
   _applyLoginItemSetting(enabled) {
     if (process.platform === "linux") {
       this._applyLinuxAutostart(enabled);
     } else {
-      const item = { path: app.getPath("exe"), args: [] };
       const what = enabled ? "add GAIA to" : "remove GAIA from";
       try {
-        app.setLoginItemSettings({ ...item, openAtLogin: enabled });
+        const name = process.platform === "win32" ? { name: WIN_LOGIN_ITEM_NAME } : {};
+        app.setLoginItemSettings({ ...this._loginItemQuery(), ...name, openAtLogin: enabled });
       } catch (err) {
         throw new Error(`Could not ${what} the apps that start at sign-in: ${err.message}`);
       }
       // The OS can refuse without throwing; read back what it actually has.
-      const now = app.getLoginItemSettings(item);
-      if (enabled && now.status === "requires-approval") {
-        throw new Error(
-          "macOS needs your approval to start GAIA at sign-in. Allow it in System Settings → General → Login Items, then turn this on again."
-        );
+      if (process.platform === "darwin" && enabled) {
+        if (app.getLoginItemSettings(this._loginItemQuery()).status === "requires-approval") {
+          throw new Error(
+            "macOS needs your approval to start GAIA at sign-in. Allow it in System Settings → General → Login Items, then turn this on again."
+          );
+        }
       }
-      if (now.openAtLogin !== enabled) {
+      const now = this._loginItemOn();
+      if (now !== enabled) {
         throw new Error(
-          `Could not ${what} the apps that start at sign-in: the system still reports it ${now.openAtLogin ? "on" : "off"}. ` +
+          `Could not ${what} the apps that start at sign-in: the system still reports it ${now ? "on" : "off"}. ` +
             "Check your startup apps in the system settings."
         );
       }
@@ -792,10 +859,14 @@ class TrayManager {
     console.log(`[tray] Login item ${enabled ? "enabled" : "disabled"}`);
   }
 
+  _linuxAutostartFile() {
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+    return path.join(configHome, "autostart", LINUX_AUTOSTART_FILE);
+  }
+
   /** Electron has no login items on Linux; desktops read XDG autostart entries. */
   _applyLinuxAutostart(enabled) {
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-    const file = path.join(configHome, "autostart", LINUX_AUTOSTART_FILE);
+    const file = this._linuxAutostartFile();
     // An AppImage's exe is a temporary mount; APPIMAGE is the file the user runs.
     const exe = process.env.APPIMAGE || app.getPath("exe");
     try {

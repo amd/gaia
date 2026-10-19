@@ -46,13 +46,31 @@ function activity(overrides = {}) {
   };
 }
 
-/** OS login items that read back what was last set, as Windows and macOS do. */
-function mockLoginItems() {
+/**
+ * OS login items that read back what was last set, as Windows and macOS do.
+ * Like Electron on Windows, a `name` picks the Run value written; without one
+ * the value is named after the AppUserModelId, which `openAtLogin` reports,
+ * while `launchItems` lists the named values. Returns the named values.
+ */
+function mockLoginItems({ runValues = {} } = {}) {
   let openAtLogin = false;
+  const named = new Map(Object.entries(runValues));
   electronMock.app.setLoginItemSettings = jest.fn((s) => {
-    openAtLogin = s.openAtLogin;
+    if (s.name === undefined) openAtLogin = s.openAtLogin;
+    else if (s.openAtLogin) named.set(s.name, true);
+    else named.delete(s.name);
   });
-  electronMock.app.getLoginItemSettings = jest.fn(() => ({ openAtLogin }));
+  electronMock.app.getLoginItemSettings = jest.fn(() => ({
+    openAtLogin,
+    launchItems: [...named].map(([name, enabled]) => ({
+      name,
+      path: "/mock/exe",
+      args: ["--minimized"],
+      scope: "user",
+      enabled,
+    })),
+  }));
+  return named;
 }
 
 /** A TrayManager whose reopenWindow hands back a fresh mock window. */
@@ -1019,6 +1037,143 @@ describe("start at login", () => {
     expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
       expect.objectContaining({ openAtLogin: true, args: [] })
     );
+  });
+
+  test("Windows uses the installer's Run value, launched into the tray", async () => {
+    setPlatform("win32");
+    const runValues = mockLoginItems();
+    const mgr = newTray(createMockWindow());
+    await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } });
+    expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "GAIA", args: ["--minimized"], openAtLogin: true })
+    );
+    expect(runValues.get("GAIA")).toBe(true);
+    expect(mgr.startOnLogin).toBe(true);
+  });
+
+  test("turning it off removes the entry the installer wrote", async () => {
+    setPlatform("win32");
+    const runValues = mockLoginItems({ runValues: { GAIA: true } });
+    electronMock.app.isPackaged = true;
+    try {
+      const mgr = newTray(createMockWindow());
+      mgr.syncLoginItem();
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: false } });
+      expect(runValues.has("GAIA")).toBe(false);
+      const saved = JSON.parse(fs.writeFileSync.mock.calls.at(-1)[1]);
+      expect(saved.tray.startOnLogin).toBe(false);
+      expect(saved.choices.startOnLogin).toBe(true);
+    } finally {
+      delete electronMock.app.isPackaged;
+    }
+  });
+
+  test("a Run value named after the app id does not count as the installer's entry", async () => {
+    setPlatform("win32");
+    mockLoginItems();
+    electronMock.app.getLoginItemSettings.mockReturnValue({ openAtLogin: true, launchItems: [] });
+    await expect(
+      (newTray(createMockWindow()),
+      electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } }))
+    ).rejects.toThrow(/the system still reports it off/);
+  });
+
+  describe("at startup", () => {
+    let errorSpy;
+
+    beforeEach(() => {
+      setPlatform("win32");
+      electronMock.app.isPackaged = true;
+      errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      delete electronMock.app.isPackaged;
+      errorSpy.mockRestore();
+      fs.readFileSync.mockReturnValue("{}");
+    });
+
+    function managerWith(stored) {
+      fs.readFileSync.mockReturnValue(JSON.stringify(stored));
+      return newTray(createMockWindow());
+    }
+
+    test("a fresh install shows the switch on, matching the installer's entry", async () => {
+      mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({});
+      mgr.syncLoginItem();
+      expect(mgr.startOnLogin).toBe(true);
+      expect((await electronMock.ipcMain.simulateInvoke("tray:get-config")).tray.startOnLogin).toBe(true);
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+    });
+
+    test("an old saved 'off' the user never chose does not remove the installer's entry", () => {
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({ tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false } });
+      mgr.syncLoginItem();
+      expect(runValues.get("GAIA")).toBe(true);
+      expect(mgr.startOnLogin).toBe(true);
+    });
+
+    test("an update that writes the entry back is undone when the user turned it off", () => {
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: true },
+      });
+      mgr.syncLoginItem();
+      expect(runValues.has("GAIA")).toBe(false);
+      expect(mgr.startOnLogin).toBe(false);
+    });
+
+    test("turned off in Task Manager: the switch follows, nothing is rewritten", () => {
+      mockLoginItems({ runValues: { GAIA: false } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: true },
+        choices: { startOnLogin: true },
+      });
+      mgr.syncLoginItem();
+      expect(mgr.startOnLogin).toBe(false);
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+    });
+
+    test("when the entry can't be removed again, the switch shows on and the error is logged", () => {
+      mockLoginItems({ runValues: { GAIA: true } });
+      electronMock.app.setLoginItemSettings.mockImplementation(() => {
+        throw new Error("access denied");
+      });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: true },
+      });
+      expect(() => mgr.syncLoginItem()).not.toThrow();
+      expect(mgr.startOnLogin).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/could not be turned off again: .*access denied/));
+    });
+
+    test("a non-boolean choice on disk counts as never chosen", () => {
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: "yes" },
+      });
+      mgr.syncLoginItem();
+      expect(runValues.get("GAIA")).toBe(true);
+      expect(mgr.startOnLogin).toBe(true);
+    });
+
+    test("a dev build never reads or touches the installed app's entry", () => {
+      delete electronMock.app.isPackaged;
+      const runValues = mockLoginItems({ runValues: { GAIA: true } });
+      const mgr = managerWith({
+        tray: { minimizeToTray: true, startMinimized: false, startOnLogin: false },
+        choices: { startOnLogin: true },
+      });
+      mgr.syncLoginItem();
+      expect(electronMock.app.getLoginItemSettings).not.toHaveBeenCalled();
+      expect(runValues.get("GAIA")).toBe(true);
+      expect(mgr.startOnLogin).toBe(false);
+    });
   });
 
   test("Linux writes an XDG autostart entry, and removes it again", async () => {
