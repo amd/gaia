@@ -90,12 +90,13 @@
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
 # COST CEILING: 4 dimension jobs (--max-turns 150) + 1 synthesis job (--max-turns 100) =
-# a known per-run ceiling, paid up to 7x/week. Measured October 2026: ~$10 of
-# API-equivalent subscription usage on a normal night, ~$30 on a deep Sunday. The
+# a known per-run ceiling, paid every third night. Measured October 2026: ~$10 of
+# API-equivalent subscription usage on a normal turn, ~$30 on a deep sweep. The
 # since-last-success window and skip-if-empty are what keep that affordable. This shares one
-# Max subscription pool with claude-security-audit.yml (also nightly) and the interactive
-# PR-review / auto-fix jobs — if those start getting rate-limited, the first lever is
-# trimming the nightly matrix and leaving all four lenses to the Sunday deep run. The dimension matrix runs `max-parallel: 1` (serialized) so
+# Max subscription pool with the security audit and doc walkthrough (the other rotation
+# nights) and the interactive PR-review / auto-fix jobs. If those start getting
+# rate-limited, the first lever is trimming the normal-turn matrix and leaving all four
+# lenses to the deep sweep. The dimension matrix runs `max-parallel: 1` (serialized) so
 # the run is a steady drip rather than a 4-job burst — this keeps it under the Max
 # subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
 # skip-if-empty exits before any Claude call on a quiet night. The concurrency group
