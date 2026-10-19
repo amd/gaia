@@ -267,7 +267,8 @@ class TestOverflowRecoveryKeepsTheLesson:
         shrunk = session._shrink_messages_for_overflow(self._messages())
         shrunk = session._shrink_messages_for_overflow(shrunk)
 
-        assert "omitted" in shrunk[4]["content"][0]["text"]
+        # Shorter than a stub would be, so it stays as it was.
+        assert shrunk[4]["content"] == "clock not configured"
         assert shrunk[2]["content"] == (
             "fix the failing tests\n\n[GAIA Memory] Learned this turn:\n"
             f"  - {LESSON}"

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Session-scoped exact tool output with bounded, explicit continuation reads."""
 
+import hashlib
 import threading
 import time
 from typing import Optional, Tuple
@@ -9,6 +10,11 @@ from uuid import uuid4
 
 #: Most characters one ``read`` returns; a longer span continues at ``next_offset``.
 PAGE_CHARS = 8000
+
+
+def _encode(text: str) -> bytes:
+    # Leniently decoded binary output carries lone surrogates; keep them exactly.
+    return text.encode("utf-8", "surrogatepass")
 
 
 class ArtifactStore:
@@ -20,6 +26,8 @@ class ArtifactStore:
         self._items = {}
         #: handle -> [(offset, length), ...] for index entries 1..n.
         self._indexes = {}
+        #: Handles holding one whole tool result, which a bare ``read`` pages from 0.
+        self._whole = set()
         self._lock = threading.Lock()
 
     def put(self, text: str) -> str:
@@ -37,6 +45,41 @@ class ArtifactStore:
             handle = "output_" + uuid4().hex
             self._items[handle] = (now, text, size)
             return handle
+
+    def put_result(self, text: str) -> str:
+        """Archive a whole tool result moved out of the prompt; its handle hashes the text.
+
+        The same result always gets the same handle, so re-stubbing it yields
+        byte-identical text and keeps the prompt cache.
+        """
+        data = _encode(text)
+        handle = "output_" + hashlib.sha256(data).hexdigest()[:32]
+        with self._lock:
+            now = time.monotonic()
+            self._items = {
+                k: v for k, v in self._items.items() if now - v[0] < self.ttl
+            }
+            self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+            self._whole &= self._items.keys()
+            if (
+                handle not in self._items
+                and len(data) + sum(v[2] for v in self._items.values()) > self.max_bytes
+            ):
+                raise ValueError(
+                    "Tool output archive is full (64 MiB default); request smaller output or start a new session."
+                )
+            self._items[handle] = (now, text, len(data))
+            self._indexes[handle] = [(0, len(text))]
+            self._whole.add(handle)
+        return handle
+
+    def touch(self, handle: str) -> None:
+        """Restart a live handle's clock: a new stub now depends on it."""
+        with self._lock:
+            item = self._items.get(handle)
+            if item is None or time.monotonic() - item[0] >= self.ttl:
+                raise ValueError(f"Unknown or expired output handle {handle}.")
+            self._items[handle] = (time.monotonic(), item[1], item[2])
 
     def set_index(self, handle: str, entries) -> None:
         """Record a handle's index so ``read(entry=n)`` returns entry ``n``."""
@@ -72,6 +115,9 @@ class ArtifactStore:
         page holds at most ``PAGE_CHARS``; ``remaining`` and ``next_offset``
         say where the rest of the requested span continues.
         """
+        if entry is None and not offset and limit is None and handle in self._whole:
+            # Small models drop the stub's entry=1; a whole result still comes back.
+            entry = 1
         if entry is not None:
             if offset:
                 raise ValueError("Pass entry or offset, not both.")

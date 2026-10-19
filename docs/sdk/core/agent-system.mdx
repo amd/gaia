@@ -537,6 +537,19 @@ back to full size after its first turn. `read_tool_output` pages and
 are never changed. Each batch adds `evicted_results` and `evicted_tokens_est`
 to that step's `stats` entry in the conversation log and logs one info line.
 
+**When the backend refuses a request as too long**, the overflow retry runs once,
+eviction on or off. It moves every older tool result out of the request the same
+way, archived whole with a stub that names the `read_tool_output` call that reads
+it back. A large result from the latest step is cut to its first 2,000 characters
+plus a handle to the rest; a `read_tool_output` page the model just asked for, a
+refusal, and a `delegate_task` answer stay whole. Assistant text over 800
+characters is clipped, and any lesson memory learned this turn is restated on the
+last user message. The retry runs only when the shrink frees more than the
+request was over by (read from the backend's error), or, when the error gives no
+numbers, at least a tenth of the request. Otherwise nothing is archived and the
+turn ends with the message that the request needs more than fits, rather than
+repeating a refusal.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
