@@ -48,6 +48,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
+from gaia.utils.awake_clock import shared as _sleep_clock
 
 from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
@@ -1746,6 +1747,15 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
     return last.get("success") is False or bool(running)
 
 
+def _turn_clock() -> float:
+    """``_time.monotonic()`` without the time the PC spent asleep.
+
+    A turn on a PC that sleeps for longer than the no-progress limit must not
+    be stopped the moment it wakes: the model slept too.
+    """
+    return _time.monotonic() - _sleep_clock().slept
+
+
 class _TurnIdleClock:
     """Seconds a turn has gone without progress.
 
@@ -2395,7 +2405,7 @@ async def _get_chat_response(
                         ) from second_exc
                     raise
 
-        activity = _ActivityConsole(agent.console, _time.monotonic)
+        activity = _ActivityConsole(agent.console, _turn_clock)
         agent.console = activity
         activity_box["console"] = activity
         try:
@@ -2417,7 +2427,7 @@ async def _get_chat_response(
         return _clean_answer_json(result_str)
 
     try:
-        idle = _TurnIdleClock(_time.monotonic())
+        idle = _TurnIdleClock(_turn_clock())
         worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
         idle_message = None
         try:
@@ -2430,7 +2440,7 @@ async def _get_chat_response(
                     idle.progressed(activity.last_progress)
                 if (
                     not worker.done()
-                    and idle.idle_for(owned_wait, _time.monotonic())
+                    and idle.idle_for(owned_wait, _turn_clock())
                     > _STREAM_TIMEOUT_SECONDS
                 ):
                     idle_message = _turn_idle_message(_STREAM_TIMEOUT_SECONDS)
@@ -3039,7 +3049,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # The limit is on going without progress, not on total time: a long
         # task that keeps making progress runs to the end.
-        _idle = _TurnIdleClock(_time.monotonic())
+        _idle = _TurnIdleClock(_turn_clock())
         idle_message = None
         producer = threading.Thread(target=_run_agent, daemon=True)
         producer.start()
@@ -3094,7 +3104,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             _owned_wait = (
                 sse_handler.awaiting_user_input() or sse_handler.tool_running()
             )
-            if _idle.idle_for(_owned_wait, _time.monotonic()) > _STREAM_TIMEOUT_SECONDS:
+            if _idle.idle_for(_owned_wait, _turn_clock()) > _STREAM_TIMEOUT_SECONDS:
                 logger.error(
                     "Turn made no progress for %ds (%s); stopping it",
                     _STREAM_TIMEOUT_SECONDS,
@@ -3113,7 +3123,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                _idle.progressed(_time.monotonic())
+                _idle.progressed(_turn_clock())
                 if event is None:
                     # Sentinel - agent is done
                     break

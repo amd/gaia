@@ -77,9 +77,16 @@ class _ScriptedAgent:
 
 @pytest.fixture
 def clock():
+    from gaia.utils.awake_clock import AwakeClock
+
     fake = _Clock()
     fake_time = SimpleNamespace(monotonic=fake.monotonic, time=fake.monotonic)
-    with patch.object(helpers, "_time", fake_time):
+    # A jump of the fake clock stands for awake time here, never for sleep.
+    never_sleeps = AwakeClock(fake.monotonic, gap=float("inf"))
+    with (
+        patch.object(helpers, "_time", fake_time),
+        patch.object(helpers, "_sleep_clock", lambda: never_sleeps, create=True),
+    ):
         yield fake
 
 
@@ -493,3 +500,89 @@ def test_non_streaming_tool_ends_on_its_result_like_the_sse_handler():
     console.pretty_print_json({"status": "success"}, title="Tool Result")
     assert console.tool_running is False
     assert console.last_progress == clock.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# A PC that sleeps mid-turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sleeping_pc(clock):
+    """The turn's sleep clock watches the fake clock, so a jump reads as sleep.
+
+    In the tests above a jump stands for silent awake time; here it is the PC
+    sleeping, which is what a jump between two one-second reads looks like.
+    """
+    from gaia.utils.awake_clock import AwakeClock
+
+    watcher = AwakeClock(clock.monotonic)
+    with patch.object(helpers, "_sleep_clock", lambda: watcher, create=True):
+        yield clock
+
+
+EIGHT_HOURS = 8 * 60 * 60
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_pc_slept_through_carries_on_after_waking(
+    runtime, sleeping_pc
+):
+    def script(agent):
+        agent.console.print_info("started")
+        _wait_until_read(agent.console)
+        sleeping_pc.advance(EIGHT_HOURS)
+        time.sleep(0.5)  # the loop looks at the clock after waking
+        agent.console.print_info("still going after the sleep")
+        _wait_until_read(agent.console)
+        return "Finished after the PC woke up."
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 300):
+        events = await _stream(runtime, session, agent)
+
+    assert _done(events)["content"] == "Finished after the PC woke up."
+    assert "without progress" not in _all_text(events)
+    assert agent._cancel_event.message is None
+
+
+@pytest.mark.asyncio
+async def test_a_non_streaming_turn_the_pc_slept_through_carries_on(
+    runtime, sleeping_pc
+):
+    def script(agent):
+        agent.console.print_info("started")
+        sleeping_pc.advance(EIGHT_HOURS)
+        time.sleep(0.5)
+        agent.console.print_info("still going after the sleep")
+        return "Finished after the PC woke up."
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 300):
+        assert await _ask(runtime, session) == "Finished after the PC woke up."
+    assert agent._cancel_event.message is None
+
+
+@pytest.mark.asyncio
+async def test_silence_after_waking_still_stops_the_turn(runtime, sleeping_pc):
+    def script(agent):
+        agent.console.print_info("started")
+        _wait_until_read(agent.console)
+        sleeping_pc.advance(EIGHT_HOURS)
+        time.sleep(0.5)
+        # Awake again, and silent past the window, in steps the clock counts.
+        for _ in range(40):
+            sleeping_pc.advance(4)
+            time.sleep(0.25)
+            if agent._cancel_event.is_set():
+                break
+        return agent.wait_for_cancel()
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 20):
+        events = await _stream(runtime, session, agent)
+
+    assert "without progress" in _done(events)["content"]

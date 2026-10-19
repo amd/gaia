@@ -40,6 +40,7 @@ from gaia.llm.retry import (
     current_cancel_check,
     stream_idle_timeout,
 )
+from gaia.utils.awake_clock import AwakeClock
 
 T = TypeVar("T")
 
@@ -77,11 +78,18 @@ class ByteActivity:
 
     def __init__(self, clock: Callable[[], float] = time.monotonic):
         self._clock = clock
+        self._lock = threading.Lock()
         self.last = clock()
         self._aborted = threading.Event()
 
     def touch(self) -> None:
-        self.last = self._clock()
+        with self._lock:
+            self.last = self._clock()
+
+    def excuse(self, seconds: float) -> None:
+        """Do not count *seconds* the process spent asleep as silence."""
+        with self._lock:
+            self.last = min(self.last + seconds, self._clock())
 
     @property
     def aborted(self) -> bool:
@@ -111,13 +119,15 @@ class _AbortableStream(httpcore.NetworkStream):
         self._activity = activity
 
     def read(self, max_bytes: int, timeout: Optional[float] = None) -> bytes:
-        deadline = None if timeout is None else time.monotonic() + timeout
+        # Time the PC spends asleep during the read does not use up its timeout.
+        awake = AwakeClock(time.monotonic)
+        deadline = None if timeout is None else awake() + timeout
         while True:
             if self._activity.aborted:
                 raise _AbandonedStream()
             wait = _POLL_INTERVAL
             if deadline is not None:
-                left = deadline - time.monotonic()
+                left = deadline - awake()
                 if left <= 0:
                     raise httpcore.ReadTimeout("timed out")
                 wait = min(wait, left)
@@ -257,7 +267,10 @@ def watch_stream(
     :class:`StreamCancelledError` when Stop is pressed while it is silent.
 
     *activity* must be the one fed by the connection ``produce`` reads from;
-    every item ``produce`` yields counts as activity too.
+    every item ``produce`` yields counts as activity too. *clock* must be the
+    one *activity* reads. Time the PC spends asleep is not counted as silence:
+    this loop reads the clock every fraction of a second and treats a jump as
+    sleep (see :class:`~gaia.utils.awake_clock.AwakeClock`).
     """
     handoff: "queue.Queue[tuple]" = queue.Queue()
     stop = threading.Event()
@@ -283,8 +296,14 @@ def watch_stream(
     is_cancelled = current_cancel_check()
     seen_output = False
     finished = False
+    awake = AwakeClock(clock)
+    excused = 0.0
     try:
         while True:
+            slept = awake.slept
+            if slept > excused:
+                activity.excuse(slept - excused)
+                excused = slept
             try:
                 kind, value = handoff.get_nowait()
             except queue.Empty:
