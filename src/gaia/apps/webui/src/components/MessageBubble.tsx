@@ -11,7 +11,9 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { AnswerStats } from './AnswerStats';
 import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
@@ -49,8 +51,9 @@ interface MessageBubbleProps {
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
+    const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
+    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
     const wasActiveRef = useRef(active);
     const textLengthRef = useRef(text.length);
     textLengthRef.current = text.length;
@@ -58,19 +61,19 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     // Type out characters
     useEffect(() => {
         if (phase !== 'typing') return;
-        if (chars >= text.length) { setPhase('idle'); return; }
+        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
         const timer = setTimeout(() => setChars(c => c + 1), 30);
         return () => clearTimeout(timer);
-    }, [phase, chars, text.length]);
+    }, [phase, chars, text.length, reduceMotion]);
 
     // Detect active → false: start erasing
     useEffect(() => {
         if (wasActiveRef.current && !active) {
             setChars(textLengthRef.current);
-            setPhase('erasing');
+            setPhase(reduceMotion ? 'done' : 'erasing');
         }
         wasActiveRef.current = active;
-    }, [active]);
+    }, [active, reduceMotion]);
 
     // Erase characters
     useEffect(() => {
@@ -98,7 +101,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
-        <span className="thinking-indicator">
+        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
@@ -403,12 +406,6 @@ function formatFullTimestamp(iso: string): string {
     });
 }
 
-/** Format latency in ms to a human-readable string. */
-function formatLatency(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-}
-
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
@@ -574,26 +571,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
-                        <div className="msg-stats" aria-label="Message performance stats">
+                        <div className="msg-stats" aria-label="About this answer">
                             {message.created_at && (
                                 <span className="msg-stats-ts" title="Message timestamp">
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
                             )}
-                            {latencyMs != null && latencyMs > 0 && (
-                                <span title="Total response time">{formatLatency(latencyMs)}</span>
-                            )}
-                            {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
-                                <span title="Tokens per second, final model call of this answer">{message.stats.tokens_per_second} tok/s</span>
-                            )}
-                            {message.stats?.time_to_first_token != null && message.stats.time_to_first_token > 0 && (
-                                <span title="Time to first token, final model call of this answer">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
-                            )}
-                            {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
-                                <span title="Input → output tokens, all model calls of this answer">
-                                    {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
-                                </span>
-                            )}
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
                     )}
                 </div>

@@ -892,6 +892,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -1765,6 +1766,17 @@
         "title": "Output Tokens",
         "type": "integer"
       },
+      "place": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Place"
+      },
       "steps": {
         "anyOf": [
           {
@@ -2007,6 +2019,11 @@
           }
         ],
         "title": "Ctx Size"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
       },
       "model_name": {
         "title": "Model Name",
@@ -3368,6 +3385,23 @@
         ],
         "title": "Lemonade Error"
       },
+      "lemonade_probe": {
+        "anyOf": [
+          {
+            "enum": [
+              "ok",
+              "down",
+              "timed_out",
+              "error"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Probe"
+      },
       "lemonade_running": {
         "default": false,
         "title": "Lemonade Running",
@@ -3817,6 +3851,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
