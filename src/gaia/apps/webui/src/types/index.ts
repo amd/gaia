@@ -316,7 +316,12 @@ export interface RetryResult {
 export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
 
 /** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
-export type RetryChoice = { kept: 'original' } | { kept: 'retry'; content: string; stats: RetryResult['stats'] };
+export type RetryChoice = { kept: 'original' } | {
+    kept: 'retry';
+    content: string;
+    /** The retry's numbers over the turn's saved ones, so `steps` and `place` carry over. */
+    stats: RetryResult['stats'] & Pick<InferenceStats, 'steps' | 'place'>;
+};
 
 export interface Message {
     id: number;

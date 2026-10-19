@@ -236,7 +236,12 @@ def transcript_turns(messages: list[dict]) -> list[list[dict]]:
     for message in messages:
         role = message.get("role")
         if role == "user":
-            pending = {"role": "user", "content": message["content"]}
+            # A message added mid-turn is saved as its own row; without a
+            # recorded turn (stopped, failed) it must not replace the question.
+            content = message["content"]
+            if pending is not None:
+                content = pending["content"] + "\n\n" + content
+            pending = {"role": "user", "content": content}
         elif role in ("assistant", "autonomous"):
             recorded = message.get("model_messages")
             if recorded is not None:

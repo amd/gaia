@@ -129,7 +129,7 @@ describe('Retry with…', () => {
     });
 
     it('continues the chat from the answer the user keeps', async () => {
-        mockedApi.chooseRetry.mockResolvedValue({ kept: 'retry', content: RESULT.content, stats: RESULT.stats });
+        mockedApi.chooseRetry.mockResolvedValue({ kept: 'retry', content: RESULT.content, stats: { ...RESULT.stats, steps: 4, place: 'on your GPU' } });
         await retryWithQwen();
         await act(async () => { resolveRetry(RESULT); });
 
@@ -142,6 +142,8 @@ describe('Retry with…', () => {
         expect(kept?.content).toBe('Eleven is prime.');
         expect(kept?.stats?.model).toBe('Qwen3.6-35B-A3B-GGUF');
         expect(kept?.stats?.retried).toBe(true);
+        expect(kept?.stats?.steps).toBe(4);
+        expect(kept?.stats?.place).toBe('on your GPU');
         expect(screen.queryByLabelText('Compare answers')).toBeNull();
     });
 

@@ -65,13 +65,13 @@ export function useAnswerComparison({ sessionId, isStreaming, isStale, setMessag
                         ...m,
                         content: kept.content,
                         stats: {
+                            ...m.stats,
+                            ...s,
                             tokens_per_second: s.tokens_per_second ?? 0,
                             time_to_first_token: s.time_to_first_token ?? 0,
                             input_tokens: s.input_tokens ?? 0,
                             output_tokens: s.output_tokens ?? 0,
-                            model: s.model,
                             retried: true,
-                            seconds: s.seconds,
                         },
                     }
                     : m)));
