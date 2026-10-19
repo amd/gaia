@@ -609,6 +609,20 @@
     "title": "CancelStreamRequest",
     "type": "object"
   },
+  "ChatModelRequest": {
+    "description": "One of setup's default chat models.",
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "ChatModelRequest",
+    "type": "object"
+  },
   "ChatRequest": {
     "description": "Request to send a chat message.",
     "properties": {
@@ -892,6 +906,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -1764,6 +1779,17 @@
         "default": 0,
         "title": "Output Tokens",
         "type": "integer"
+      },
+      "place": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Place"
       },
       "steps": {
         "anyOf": [
@@ -3879,6 +3905,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -3980,6 +4007,17 @@
         ],
         "title": "Cached Tokens"
       },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
       "elapsed_seconds": {
         "anyOf": [
           {
@@ -4001,6 +4039,17 @@
           }
         ],
         "title": "Error"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
       },
       "prompt_tokens": {
         "anyOf": [

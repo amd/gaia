@@ -23,7 +23,7 @@ import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
-import { STARTING_REASON } from '../utils/constants';
+import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 
 /**
@@ -727,6 +727,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
+                    const toolLabel = event.tool_label || toolName;
                     const { addNotification: addNotif, notifications } = useNotificationStore.getState();
                     // A re-attach replays the run: keep an answered prompt as it is, and
                     // bring back one still waiting that earlier replayed steps hid.
@@ -747,10 +748,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentId: sessionId,
                         sessionId,
                         agentName: 'GAIA',
-                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolName}?`,
+                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolLabel}?`,
                         message: isPathAccess
                             ? pathAccessQuestion(event.args, followUp)
-                            : `The agent wants to execute: ${toolName}`,
+                            : `GAIA needs your OK before ${toolLabel}.`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,
@@ -759,6 +760,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolArgs: event.args as Record<string, unknown> | undefined,
                         confirmId: event.confirm_id,
                         alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
+                        alwaysLabel: typeof event.always_label === 'string' && event.always_label ? event.always_label : undefined,
+                        toolLabel: event.tool_label || undefined,
                         risk: typeof event.risk === 'string' ? event.risk : undefined,
                         // A relayed agent sends a summary of the call instead of its args.
                         summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
@@ -1337,10 +1340,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
     };
 
     const saveTitle = async () => {
-        if (titleDraft.trim() && titleDraft !== session?.title) {
+        const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
+        // Untouched draft: never cut an old over-long title the user didn't edit.
+        if (title && titleDraft !== session?.title && title !== session?.title) {
             // Explicit rename — pin against the auto-retitler (#2165).
-            await api.updateSession(sessionId, { title: titleDraft.trim(), title_is_custom: true });
-            updateSessionInList(sessionId, { title: titleDraft.trim() });
+            await api.updateSession(sessionId, { title, title_is_custom: true });
+            updateSessionInList(sessionId, { title });
         }
         setEditingTitle(false);
     };
@@ -1484,6 +1489,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <input
                             className="title-edit"
                             value={titleDraft}
+                            maxLength={MAX_SESSION_TITLE_CHARS}
                             onChange={(e) => setTitleDraft(e.target.value)}
                             onBlur={saveTitle}
                             onKeyDown={(e) => {
