@@ -26,8 +26,9 @@ from typing import Dict, Optional, Set
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.mcp.ports import TELEGRAM_HEALTH_PORT
-from gaia.messaging.bridge import turn_idle_limit_from_env, turn_idle_message
+from gaia.messaging.bridge import turn_idle_message
 from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
+from gaia.stream_timeout import stream_timeout_from_env
 
 log = get_logger(__name__)
 
@@ -149,7 +150,7 @@ class TelegramAdapter:
         idle_limit: Optional[float] = None,
     ):
         if idle_limit is None:
-            idle_limit = turn_idle_limit_from_env()
+            idle_limit = float(stream_timeout_from_env())
         if idle_limit <= 0:
             raise ValueError(f"idle_limit must be > 0 seconds, got {idle_limit}")
         #: Seconds a reply may go without a new chunk before it is stopped.

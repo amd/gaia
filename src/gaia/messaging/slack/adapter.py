@@ -171,11 +171,21 @@ def inbox_dir() -> Path:
 
 #: How to bring the bridge back once its agent has been given up on. A second
 #: `gaia slack start` while this one runs would open a second connection.
-SLACK_RESTART_HINT = (
-    "Stop the Slack bridge (Ctrl+C, or `gaia slack stop` if it runs in the "
-    "background), then start it again with `gaia slack start --allowed-users "
-    "<your member id>`."
-)
+def slack_restart_hint(background: bool = False) -> str:
+    """How to restart this bridge, matching how it was started."""
+    if background:
+        return (
+            "Stop the Slack bridge with `gaia slack stop`, then start it again "
+            "with `gaia slack start --allowed-users <your member id> "
+            "--background`."
+        )
+    return (
+        "Stop the Slack bridge with Ctrl+C, then start it again with "
+        "`gaia slack start --allowed-users <your member id>`."
+    )
+
+
+SLACK_RESTART_HINT = slack_restart_hint()
 
 
 class SlackAllowlistError(ValueError):
@@ -276,6 +286,7 @@ class SlackAdapter:
         channel_factory: Optional[Callable[..., AgentChannel]] = None,
         web_client: Any = None,
         confirm_timeout: float = CONFIRM_TIMEOUT_SECONDS,
+        restart_hint: str = SLACK_RESTART_HINT,
     ) -> None:
         # Refused here rather than in start(): an adapter that should serve
         # nobody must never exist, so no later caller can reach a permissive one.
@@ -297,6 +308,7 @@ class SlackAdapter:
         self.team_id = team_id
         self.deny_gated_tools = deny_gated_tools
         self.confirm_timeout = confirm_timeout
+        self.restart_hint = restart_hint
         # Default to the same scope the agent itself reads from, so a file the
         # user asked the agent to write can be handed back without extra setup.
         self.upload_roots = [
@@ -385,7 +397,7 @@ class SlackAdapter:
             on_event=self._on_agent_event,
             argv=self._agent_argv,
             on_busy=self._on_busy,
-            restart_hint=SLACK_RESTART_HINT,
+            restart_hint=self.restart_hint,
         )
         self._channel.start()
         if connect:

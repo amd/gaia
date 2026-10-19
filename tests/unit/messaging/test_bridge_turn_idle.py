@@ -137,14 +137,19 @@ def test_silent_turn_is_stopped_and_the_next_message_runs():
         assert _wait_for(lambda: len(proc.stdin.lines) == 1)
 
         clock.advance(LIMIT + 1)
-        assert _wait_for(lambda: _errors(seen, "first"))
-        assert "without progress" in _errors(seen, "first")[0]["detail"]
         assert _wait_for(lambda: _cancels(proc))
+        # Late output while the stop is pending is not shown.
+        proc.stdout.emit({"type": "token", "delta": "late"})
+        time.sleep(0.1)
+        assert not [e for e, t in seen if t == "first"]
 
-        # The child honours the stop; its late terminal event is not rendered.
+        # The child honours the stop: the user is told, and can continue.
         proc.stdout.emit({"type": "error", "detail": "Cancelled."})
+        assert _wait_for(lambda: _errors(seen, "first"))
+        [stopped] = [e for e, t in seen if t == "first"]
+        assert "without progress" in stopped["detail"]
+        assert '"continue"' in stopped["detail"]
         assert _wait_for(lambda: any("second" in line for line in proc.stdin.lines))
-        assert len([e for e, t in seen if t == "first"]) == 1
         assert proc.terminated is False
     finally:
         ch.close()
@@ -191,7 +196,7 @@ def test_running_tool_and_pending_approval_are_not_idle():
         proc.stdout.emit({"type": "status", "message": "working"})
         assert _wait_for(lambda: len(seen) == 4)
         clock.advance(LIMIT + 1)
-        assert _wait_for(lambda: _errors(seen, "q"))
+        assert _wait_for(lambda: _cancels(proc))
     finally:
         ch.close()
 
@@ -262,7 +267,7 @@ def test_gaia_stream_timeout_sets_the_window(monkeypatch):
     from gaia.messaging import bridge
 
     monkeypatch.setenv("GAIA_STREAM_TIMEOUT", "120")
-    assert bridge.turn_idle_limit_from_env() == 120.0
+    assert bridge.stream_timeout_from_env() == 120
     ch = AgentChannel(on_event=lambda e, t: None, spawn=FakeProc)
     assert ch._idle_limit == 120.0
     monkeypatch.setenv("GAIA_STREAM_TIMEOUT", "soon")
