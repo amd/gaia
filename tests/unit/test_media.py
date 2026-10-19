@@ -409,3 +409,20 @@ class TestDecodeStall:
         media._run_ffmpeg(["ffmpeg"], Path("in.mp4"), 15.0, seen.append)
         assert seen[-1] == pytest.approx(1.0)
         assert seen == sorted(seen)
+
+    def test_a_damaged_file_flooding_stderr_is_not_mistaken_for_a_stall(
+        self, monkeypatch
+    ):
+        """A corrupt file logs an error per frame; a full stderr pipe blocked ffmpeg."""
+        self._fake_ffmpeg(
+            monkeypatch,
+            "import sys\n"
+            "for _ in range(5000):\n"
+            "    sys.stderr.write('Error while decoding stream #0:0\\n')\n"
+            "sys.stderr.flush()\n"
+            "print('out_time=00:00:01.000000', flush=True)\n"
+            "sys.exit(1)\n",
+        )
+        with pytest.raises(media.MediaError, match="failed to decode") as excinfo:
+            media._run_ffmpeg(["ffmpeg"], Path("bad.mp3"))
+        assert "Error while decoding stream" in str(excinfo.value)

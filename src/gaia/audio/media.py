@@ -37,8 +37,11 @@ TARGET_CODEC = "pcm_s16le"
 
 _INSTALL_TIMEOUT_SECONDS = 900
 _PROBE_TIMEOUT_SECONDS = 60
-# ffmpeg reports progress about twice a second; this much silence means stuck.
-_DECODE_STALL_SECONDS = 120.0
+# ffmpeg reports progress about twice a second once decoding; this much
+# silence means stuck. Generous so a slow share can finish probing the input.
+_DECODE_STALL_SECONDS = 300.0
+# How much of ffmpeg's stderr is kept for the error message.
+_STDERR_KEEP_CHARS = 16384
 
 # (package manager executable, install argv). First manager present on PATH wins.
 _INSTALL_COMMANDS: dict[str, Sequence[tuple[str, Sequence[str]]]] = {
@@ -364,8 +367,6 @@ def _run_ffmpeg(
     that goes silent for ``_DECODE_STALL_SECONDS`` is stuck (a drive or share
     that stopped answering, a stream that stopped sending) and is killed.
     """
-    # -loglevel error keeps stderr small enough that reading it after stdout
-    # cannot deadlock on a full pipe.
     progress_cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
     try:
         proc = subprocess.Popen(
@@ -391,7 +392,26 @@ def _run_ffmpeg(
                 proc.kill()
                 return
 
+    # Drained on its own thread: a damaged file logs an error per frame, and a
+    # full stderr pipe would block ffmpeg and read as a stall.
+    stderr_kept: List[str] = []
+
+    def drain_stderr() -> None:
+        kept = 0
+        try:
+            for line in iter(proc.stderr.readline, ""):
+                if kept < _STDERR_KEEP_CHARS:
+                    stderr_kept.append(line)
+                    kept += len(line)
+        except (OSError, ValueError) as e:
+            # The pipe was closed under us after a kill; nothing left to read.
+            log.debug("ffmpeg stderr closed: %s", e)
+
     threading.Thread(target=watchdog, name="ffmpeg-stall-watchdog", daemon=True).start()
+    stderr_reader = threading.Thread(
+        target=drain_stderr, name="ffmpeg-stderr", daemon=True
+    )
+    stderr_reader.start()
 
     assert proc.stdout is not None
     try:
@@ -403,8 +423,9 @@ def _run_ffmpeg(
             elapsed = _parse_progress_seconds(line)
             if elapsed is not None:
                 progress_callback(min(elapsed / total_seconds, 1.0))
-        stderr = proc.stderr.read() if proc.stderr else ""
         returncode = proc.wait()
+        stderr_reader.join()
+        stderr = "".join(stderr_kept)
     except BaseException:
         # A callback that raises (cancellation) must not leave ffmpeg decoding
         # a file nobody will read, holding two pipes open.
