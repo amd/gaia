@@ -6338,6 +6338,10 @@ class LemonadeClient:
                 "Send chat requests through Lemonade; select its provider in "
                 "the TUI provider settings if it is not connected."
             )
+        mr = find_model_requirement(model_name)
+        if mr and mr.pull_kwargs():
+            # Load under the user. name an auto-download registers it as.
+            model_name = mr.model_id
         with self._model_slot_lease(model_name):
             response = self._load_model_leased(
                 model_name,

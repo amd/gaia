@@ -69,7 +69,10 @@ def test_other_failures_are_not_mistaken_for_a_missing_model(client, error):
 
 @responses.activate
 def _first_use(client, model):
-    """Load *model* on a server that has never seen it; return the /pull bodies."""
+    """Load *model* on a server that has never seen it.
+
+    Returns the /pull bodies and the model name each /load asked for.
+    """
     responses.add(
         responses.POST,
         f"{client.base_url}/pull",
@@ -78,8 +81,10 @@ def _first_use(client, model):
         content_type="text/event-stream",
     )
     loads = [NOT_REGISTERED, {"status": "success"}]
+    loaded = []
 
-    def _load(*_args, **_kwargs):
+    def _load(_url, request_data, *_args, **_kwargs):
+        loaded.append(request_data["model_name"])
         step = loads.pop(0)
         if isinstance(step, Exception):
             raise step
@@ -100,7 +105,7 @@ def _first_use(client, model):
     ):
         client.load_model(model, ctx_size=65536, prompt=False, auto_download=True)
     assert not loads, "the load was not retried after the download"
-    return [json.loads(call.request.body) for call in responses.calls]
+    return [json.loads(call.request.body) for call in responses.calls], loaded
 
 
 @pytest.mark.parametrize(
@@ -109,7 +114,9 @@ def _first_use(client, model):
 def test_custom_model_is_pulled_with_its_registration(client, model):
     """Registered under its user. name even when chosen without the prefix."""
     mr = lc.find_model_requirement(lc.FLASH_OPTION_MODEL_NAME)
-    assert _first_use(client, model) == [
+    pulls, loads = _first_use(client, model)
+    assert loads == ["user.Qwen3.8-Flash-Next-GGUF"] * 2
+    assert pulls == [
         {
             "model_name": "user.Qwen3.8-Flash-Next-GGUF",
             "stream": True,
@@ -124,6 +131,6 @@ def test_custom_model_is_pulled_with_its_registration(client, model):
 
 def test_builtin_model_is_pulled_by_name_only(client):
     """Sending a recipe for a built-in makes Lemonade 400 (#1655)."""
-    assert _first_use(client, lc.DEFAULT_MODEL_NAME) == [
-        {"model_name": lc.DEFAULT_MODEL_NAME, "stream": True}
-    ]
+    pulls, loads = _first_use(client, lc.DEFAULT_MODEL_NAME)
+    assert pulls == [{"model_name": lc.DEFAULT_MODEL_NAME, "stream": True}]
+    assert loads == [lc.DEFAULT_MODEL_NAME] * 2
