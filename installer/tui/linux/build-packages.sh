@@ -2,7 +2,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Build the Linux .deb and .rpm packages for the GAIA terminal hub.
+# Build the Linux .deb and .rpm packages for the GAIA Terminal UI.
 #
 #   ./build-packages.sh --version <x.y.z> --payload <dir> --out <dir>
 #
@@ -24,7 +24,7 @@ readonly HOMEPAGE="https://amd-gaia.ai"
 readonly LICENSE_NAME="MIT"
 readonly DOC_DIR="usr/share/doc/gaia-tui"
 readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
-readonly SUMMARY="AMD GAIA terminal hub - local AI assistant"
+readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
 

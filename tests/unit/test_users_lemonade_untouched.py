@@ -394,16 +394,15 @@ class TestChatStart:
         assert [b["model_name"] for b in users_server.posts("load")] == [CHAT]
         assert users_server.setup_writes() == []
 
-    def test_control_preflight_unloads_on_an_env_chosen_server(
+    def test_preflight_leaves_another_apps_model_on_gaias_own_server(
         self, env_server, monkeypatch
     ):
         env_server.loaded = [
-            {"model_name": "Users-Own-Model", "type": "llm", "recipe": "llamacpp"}
+            {"model_name": "Other-Apps-Model", "type": "llm", "recipe": "llamacpp"}
         ]
         self._preflight(monkeypatch)(CHAT)
-        assert ("POST", "unload", {"model_name": "Users-Own-Model"}) in (
-            env_server.setup_writes()
-        )
+        assert [b["model_name"] for b in env_server.posts("load")] == [CHAT]
+        assert not [w for w in env_server.setup_writes() if w[1] == "unload"]
 
 
 # ---------------------------------------------------------------------------
