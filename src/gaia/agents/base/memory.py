@@ -330,7 +330,9 @@ EXTRACTION_TOOL_RECORD_DETAIL_CHARS = 2000
 _EXTRACTION_GROUNDS = frozenset({"user"})
 
 
-def _copied_from_material(content: str, user_input: str, material: str) -> bool:
+def _copied_from_material(
+    content: str, user_input: str, material: str, prior: str = ""
+) -> bool:
     """Whether a proposed memory restates what the turn read, not what the user said.
 
     The extractor labels ops "user" even when it lifted them from a PDF
@@ -340,8 +342,13 @@ def _copied_from_material(content: str, user_input: str, material: str) -> bool:
     lends a few such words to a real fact, so a memory resting on several of
     the user's own words is kept unless the borrowed ones outnumber them two
     to one.
+
+    *prior* is the memory an update replaces. Its words count on neither
+    side: an answer that echoes it back ("I moved your dentist appointment to
+    Friday") does not make a short correction look borrowed, and a borrowed
+    addition to it still has to rest on the user's own words.
     """
-    words = content_stems(content)
+    words = content_stems(content) - content_stems(prior)
     from_user = words & content_stems(user_input)
     from_material = (words - from_user) & content_stems(material)
     return len(from_material) >= 2 and (
@@ -1999,8 +2006,18 @@ class MemoryMixin(ProceduralMemoryMixin):
                         str(op.get("content", ""))[:80],
                     )
                     continue
+                prior = ""
+                if op_type == "update":
+                    prior = next(
+                        (
+                            str(item.get("content", ""))
+                            for item in existing_items
+                            if item.get("id") == op.get("knowledge_id")
+                        ),
+                        "",
+                    )
                 if op_type in ("add", "update") and _copied_from_material(
-                    str(op.get("content", "")), user_input, material
+                    str(op.get("content", "")), user_input, material, prior
                 ):
                     logger.info(
                         "[MemoryMixin] not stored: proposed memory restates what "
