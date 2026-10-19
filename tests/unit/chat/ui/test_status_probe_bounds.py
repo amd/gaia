@@ -3,10 +3,10 @@
 
 """/api/system/status answers in bounded time and says why Lemonade is unknown.
 
-A connect timeout means nothing is answering, the same as a refused
-connection, so the UI shows "not running" rather than "busy". A server that
-accepts the connection but never finishes answering no longer holds the
-endpoint for the sum of every probe's timeout.
+A refused connection, or a connect timeout to a remote server, reads as "not
+running". A connect timeout to a local server reads as busy: it is up, just
+not accepting. A server that accepts the connection but never finishes
+answering no longer holds the endpoint for the sum of every probe's timeout.
 """
 
 import asyncio
@@ -78,7 +78,7 @@ def test_a_connect_timeout_to_a_local_server_reads_as_busy_not_stopped(
 def test_a_server_that_never_answers_is_reported_in_bounded_time(
     status_with, monkeypatch
 ):
-    monkeypatch.setattr(system_mod, "_STATUS_PROBE_BUDGET_S", 0.5, raising=False)
+    monkeypatch.setattr(system_mod, "_STATUS_PROBE_BUDGET_S", 0.5)
 
     async def get(url):
         await asyncio.sleep(30)
