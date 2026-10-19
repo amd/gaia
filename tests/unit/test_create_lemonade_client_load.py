@@ -6,6 +6,8 @@ download reports progress and stops on silence or Stop, and the load is bounded
 by ``GAIA_LLM_LOAD_WAIT``.
 """
 
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -209,3 +211,80 @@ def test_a_programming_error_mid_download_is_not_disguised():
     with patch.object(lc.requests, "post", return_value=reply):
         with pytest.raises(ValueError, match="bad state"):
             list(client.pull_model_stream(MODEL))
+
+
+class _StuckResponse:
+    """A /pull reply that sends one event, then blocks in a read that hanging
+    up does not wake (as a socket read may not, depending on the OS)."""
+
+    status_code = 200
+
+    def __init__(self, then=None):
+        self.release = threading.Event()
+        self.then = then or []
+        self.closed = threading.Event()
+
+    def iter_lines(self):
+        yield b"event: progress"
+        yield b'data: {"percent": 5}'
+        self.release.wait(30)
+        yield from self.then
+
+    def close(self):
+        self.closed.set()
+
+
+def test_stop_ends_a_pull_whose_read_never_wakes():
+    reply = _StuckResponse()
+    client = lc.LemonadeClient(verbose=False)
+    seen = []
+    stop_at = time.monotonic() + 1.0
+    started = time.monotonic()
+    try:
+        with (
+            patch.object(lc.requests, "post", return_value=reply),
+            retry.model_retry_notices(
+                lambda _n: None, is_cancelled=lambda: time.monotonic() >= stop_at
+            ),
+        ):
+            with pytest.raises(lc.ModelDownloadCancelledError):
+                for event in client.pull_model_stream(MODEL):
+                    seen.append(event)
+        assert time.monotonic() - started < 3
+        assert [e["percent"] for e in seen] == [5]
+        assert not reply.closed.is_set()  # the blocked reader still owns it
+    finally:
+        reply.release.set()
+    assert reply.closed.wait(5)  # closed once its read ends
+
+
+def test_a_pull_read_on_a_worker_still_completes():
+    reply = _StuckResponse(then=[b"event: complete", b'data: {"percent": 100}'])
+    reply.release.set()
+    client = lc.LemonadeClient(verbose=False)
+    with (
+        patch.object(lc.requests, "post", return_value=reply),
+        retry.model_retry_notices(lambda _n: None, is_cancelled=lambda: False),
+    ):
+        events = list(client.pull_model_stream(MODEL))
+    assert [e["event"] for e in events] == ["progress", "complete"]
+    assert reply.closed.wait(5)
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (ConnectionResetError("reset"), "connection lost"),
+        (lc.requests.exceptions.ConnectionError("read timed out"), "read timed out"),
+    ],
+)
+def test_a_read_error_on_the_worker_reaches_the_caller(error, expected):
+    reply = _DroppingResponse(error)
+    client = lc.LemonadeClient(verbose=False)
+    with (
+        patch.object(lc.requests, "post", return_value=reply),
+        retry.model_retry_notices(lambda _n: None, is_cancelled=lambda: False),
+    ):
+        with pytest.raises(lc.LemonadeClientError, match=expected) as e:
+            list(client.pull_model_stream(MODEL))
+    assert not isinstance(e.value, lc.ModelDownloadCancelledError)

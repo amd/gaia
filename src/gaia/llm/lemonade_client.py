@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import platform
+import queue
 import signal
 import socket
 import subprocess
@@ -711,6 +712,43 @@ def _abort_stream(response: Optional["requests.Response"]) -> None:
     except OSError:
         pass  # already shut down or reset: the close below still applies
     socket_io.close()
+
+
+def _lines_unless_stopped(
+    response: "requests.Response", is_stopped: Callable[[], bool]
+) -> Iterator[bytes]:
+    """``response.iter_lines()``, read on a worker so Stop is seen within
+    ``_STOP_CHECK_SECONDS`` even where hanging up does not wake a blocked read.
+
+    The worker closes *response* when its read ends; the caller must not,
+    since closing waits on the lock that read holds. Read errors are
+    re-raised here, on the caller's thread.
+    """
+    lines: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
+
+    def read() -> None:
+        try:
+            for line in response.iter_lines():
+                lines.put(("line", line))
+            lines.put(("end", None))
+        except BaseException as e:  # pylint: disable=broad-except
+            lines.put(("error", e))  # re-raised on the caller's thread below
+        finally:
+            response.close()
+
+    threading.Thread(target=read, name="gaia-pull-read", daemon=True).start()
+    while True:
+        try:
+            kind, value = lines.get(timeout=_STOP_CHECK_SECONDS)
+        except queue.Empty:
+            if is_stopped():
+                return
+            continue
+        if kind == "end":
+            return
+        if kind == "error":
+            raise value
+        yield value
 
 
 def fit_ctx_to_free_memory(
@@ -5729,6 +5767,7 @@ class LemonadeClient:
         read_timeout = PULL_IDLE_TIMEOUT_S
 
         response = None
+        reading = False
         is_cancelled = current_cancel_check()
         stopped = threading.Event()
         finished = threading.Event()
@@ -5820,8 +5859,19 @@ class LemonadeClient:
             event_type = None
             received_complete = False
 
+            if is_cancelled is None:
+                lines = response.iter_lines()
+            else:
+                reading = True
+
+                def stop_seen() -> bool:
+                    if is_cancelled():
+                        stopped.set()
+                    return stopped.is_set()
+
+                lines = _lines_unless_stopped(response, stop_seen)
             try:
-                for line_bytes in response.iter_lines():
+                for line_bytes in lines:
                     if not line_bytes:
                         continue
 
@@ -5878,7 +5928,9 @@ class LemonadeClient:
         finally:
             finished.set()
             # Also on an early close (Stop): hanging up is what cancels the pull.
-            if response is not None:
+            if reading:
+                _abort_stream(response)  # the reader closes it once its read ends
+            elif response is not None:
                 response.close()
 
     def delete_model(
