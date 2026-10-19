@@ -2864,10 +2864,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.stop()
             observer.join()
         self.observers.clear()
-        # Each handler reindexes on its own thread; stop those too.
-        for handler in self.file_handlers:
-            handler.close()
-        self.file_handlers.clear()
+        # Each handler reindexes on its own thread; stop those too. A core
+        # without close() reindexes inline, so there is nothing to stop.
+        handlers = self.__dict__.get("file_handlers", [])
+        for handler in handlers:
+            close = getattr(handler, "close", None)
+            if close is not None:
+                close()
+        handlers.clear()
 
     def load_session(self, session_id: str) -> bool:
         """
