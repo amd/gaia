@@ -6,6 +6,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Requires `amd-gaia>=0.25.1` and the `gaia` Python CLI 0.25.1+ on `PATH`.**
+  The chat agent this one builds on imports the reasoning-effort tool, which
+  first ships in core 0.25.1; an older core cannot import it.
 - **gpt-oss 20B and 120B are supported models.** On a model that grades its
   reasoning, the agent gets `set_reasoning_effort` (low, medium or high) to
   choose how hard it thinks for the rest of the request; every new message

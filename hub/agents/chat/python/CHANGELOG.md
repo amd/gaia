@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
+  agent chooses how hard the model reasons for the rest of a request; each new
+  message starts again at the default. It registers per agent and only on a
+  model that grades its reasoning, so other models' agents never see it, even
+  in a server that ran gpt-oss earlier.
+- Requires `amd-gaia>=0.25.1`, the first core release that ships
+  `gaia.agents.tools.reasoning_tools`, which the agent imports at start. With
+  an older core the agent fails at import.
+
 ## 0.2.0
 
 - When `generate_image` fails, the prompt asks for its error in a sentence or two

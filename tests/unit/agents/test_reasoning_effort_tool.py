@@ -117,10 +117,48 @@ def test_chosen_level_reaches_the_next_calls_and_resets_next_turn(
 
 
 def test_tool_is_only_offered_on_models_that_grade_reasoning(clean_registry):
-    _build(DEFAULT_MODEL_NAME)
+    gemma = _build(DEFAULT_MODEL_NAME)
+    assert "set_reasoning_effort" not in gemma._tools_registry
+    gpt_oss = _build(GPT_OSS_20B_MODEL_NAME)
+    assert "set_reasoning_effort" in gpt_oss._tools_registry
+
+
+@pytest.mark.parametrize("snapshot", [False, True], ids=["live", "snapshotted"])
+def test_a_later_agent_on_another_model_does_not_inherit_the_tool(
+    clean_registry, snapshot
+):
+    """A long-running server builds gpt-oss first, then switches back to Gemma."""
+    gpt_oss = _build(GPT_OSS_20B_MODEL_NAME)
+    gemma = _build(DEFAULT_MODEL_NAME)
+    if snapshot:
+        gpt_oss._snapshot_tools()
+        gemma._snapshot_tools()
+
     assert "set_reasoning_effort" not in _TOOL_REGISTRY
-    _build(GPT_OSS_20B_MODEL_NAME)
-    assert "set_reasoning_effort" in _TOOL_REGISTRY
+    assert "set_reasoning_effort" not in gemma._tools_registry
+    assert "set_reasoning_effort" in gpt_oss._tools_registry
+
+
+def test_each_agent_s_tool_changes_only_its_own_effort(clean_registry):
+    first = _build(GPT_OSS_20B_MODEL_NAME)
+    second = _build(GPT_OSS_20B_MODEL_NAME)
+
+    out = second._tools_registry["set_reasoning_effort"]["function"](level="high")
+
+    assert out["status"] == "success"
+    assert second.reasoning_effort_kwargs() == {
+        "chat_template_kwargs": {"reasoning_effort": "high"}
+    }
+    assert first.reasoning_effort_kwargs() == {}
+
+
+def test_registering_after_the_snapshot_still_offers_the_tool(clean_registry):
+    agent = _build(DEFAULT_MODEL_NAME)
+    agent._snapshot_tools()
+    agent.model_id = GPT_OSS_20B_MODEL_NAME
+    agent.register_reasoning_effort_tools()
+    assert "set_reasoning_effort" in agent._tools_registry
+    assert "set_reasoning_effort" not in _TOOL_REGISTRY
 
 
 def test_an_invalid_level_is_refused_and_changes_nothing(clean_registry):
@@ -171,13 +209,13 @@ def test_after_a_switch_to_another_model_the_tool_refuses_and_sends_nothing(
 
 def test_not_offered_when_the_agent_runs_on_claude(clean_registry):
     with patch("gaia.agents.base.agent.AgentSDK"):
-        _EffortAgent(
+        agent = _EffortAgent(
             silent_mode=True,
             skip_lemonade=True,
             model_id=GPT_OSS_20B_MODEL_NAME,
             use_claude=True,
         )
-    assert "set_reasoning_effort" not in _TOOL_REGISTRY
+    assert "set_reasoning_effort" not in agent._tools_registry
 
 
 def test_final_answer_call_keeps_the_chosen_level(clean_registry):

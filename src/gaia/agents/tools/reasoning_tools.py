@@ -49,7 +49,11 @@ class ReasoningEffortToolsMixin:
             return
         from gaia.agents.base.tools import tool
 
-        @tool(display_label="Setting reasoning effort")
+        # Per agent, not global: the closure binds this agent's effort.
+        if not hasattr(self, "_tool_overrides"):
+            self._tool_overrides = {}
+
+        @tool(display_label="Setting reasoning effort", registry=self._tool_overrides)
         def set_reasoning_effort(level: str, reason: str = "") -> Dict[str, Any]:
             """Set how much you reason for the rest of this request: low, medium or high.
 
@@ -65,6 +69,12 @@ class ReasoningEffortToolsMixin:
                 reason: Why this step needs that level, in a few words.
             """
             return self._set_reasoning_effort(level, reason)
+
+        instance_tools = getattr(self, "_instance_tools", None)
+        if instance_tools is not None:
+            instance_tools["set_reasoning_effort"] = self._tool_overrides[
+                "set_reasoning_effort"
+            ]
 
     def _set_reasoning_effort(self, level: str, reason: str) -> Dict[str, Any]:
         if not self.model_grades_reasoning():

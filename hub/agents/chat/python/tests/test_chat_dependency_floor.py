@@ -27,6 +27,9 @@ REQUIRED_FLOOR = (0, 22, 0)
 # First core release shipping gaia.agents.tools.path_access (#4656).
 PATH_ACCESS_FLOOR = (0, 25, 0)
 
+# First core release shipping gaia.agents.tools.reasoning_tools.
+REASONING_TOOLS_FLOOR = (0, 25, 1)
+
 # Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
 # (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
 _AMD_GAIA_FLOOR_RE = r'"amd-gaia(?:\[[^\]]*\])?>=([0-9.]+)"'
@@ -80,6 +83,21 @@ def test_pyproject_floor_covers_path_access():
     )
 
 
+def test_pyproject_floor_covers_reasoning_tools():
+    """An older core has no reasoning-effort module, so the agent can't import."""
+    from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin
+
+    assert ReasoningEffortToolsMixin
+    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
+    assert match
+    assert _floor_tuple(match.group(1)) >= REASONING_TOOLS_FLOOR, (
+        f"amd-gaia floor {match.group(1)} predates "
+        "gaia.agents.tools.reasoning_tools (first shipped in 0.25.1); the agent "
+        "ImportErrors on an older core"
+    )
+
+
 def test_manifest_floors_match_pyproject():
     """gaia-agent.yaml repeats the floor twice; both must stay in lock-step."""
     manifest = (CHAT_ROOT / "gaia-agent.yaml").read_text(encoding="utf-8")
@@ -92,9 +110,7 @@ def test_manifest_floors_match_pyproject():
     pyproject_floor = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
     assert pyproject_floor
 
-    assert (
-        min_gaia.group(1) == dep.group(1) == pyproject_floor.group(1)
-    ), (
+    assert min_gaia.group(1) == dep.group(1) == pyproject_floor.group(1), (
         "amd-gaia floor drift: pyproject.toml "
         f"({pyproject_floor.group(1)}) vs gaia-agent.yaml min_gaia_version "
         f"({min_gaia.group(1)}) / python dependency ({dep.group(1)})"

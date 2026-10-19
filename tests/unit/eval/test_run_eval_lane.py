@@ -88,8 +88,10 @@ def test_each_category_gets_an_empty_home_with_the_staged_skills(tmp_path):
 def test_agent_model_is_the_default_model_the_backend_resolves(tmp_path):
     import subprocess
 
+    from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+
     env = run_eval_lane.category_home(tmp_path / "gaia_core", tmp_path / "_staged")
-    run_eval_lane.write_agent_model(tmp_path / "gaia_core", "gpt-oss-20b-mxfp4-GGUF")
+    run_eval_lane.write_agent_model(tmp_path / "gaia_core", GPT_OSS_20B_MODEL_NAME)
 
     resolved = subprocess.run(
         [
@@ -107,7 +109,7 @@ def test_agent_model_is_the_default_model_the_backend_resolves(tmp_path):
         text=True,
         check=True,
     ).stdout.strip()
-    assert resolved == "gpt-oss-20b-mxfp4-GGUF"
+    assert resolved == GPT_OSS_20B_MODEL_NAME
 
 
 def test_a_category_home_that_already_exists_is_refused(tmp_path):

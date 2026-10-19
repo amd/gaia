@@ -146,6 +146,21 @@ class TestReasoningEffort:
             == "low"
         )
 
+    def test_caller_value_is_case_insensitive_like_the_env(self, monkeypatch):
+        monkeypatch.delenv("GAIA_REASONING_EFFORT", raising=False)
+        assert (
+            lc.requested_reasoning_effort(
+                "gpt-oss-20b-GGUF", {"reasoning_effort": " High "}
+            )
+            == "high"
+        )
+
+    @pytest.mark.parametrize("bad", ["extreme", "", 2, None.__class__])
+    def test_invalid_caller_effort_fails_loudly(self, monkeypatch, bad):
+        monkeypatch.delenv("GAIA_REASONING_EFFORT", raising=False)
+        with pytest.raises(lc.LemonadeClientError, match="reasoning_effort"):
+            lc.requested_reasoning_effort("gpt-oss-20b-GGUF", {"reasoning_effort": bad})
+
     @pytest.mark.parametrize("bad", ["extreme", "0"])
     def test_invalid_effort_fails_loudly(self, monkeypatch, bad):
         monkeypatch.setenv("GAIA_REASONING_EFFORT", bad)

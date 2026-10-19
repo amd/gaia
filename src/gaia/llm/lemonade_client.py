@@ -1599,7 +1599,7 @@ def requested_reasoning_effort(
         return None
     explicit = (chat_template_kwargs or {}).get("reasoning_effort")
     if explicit is not None:
-        effort = explicit
+        effort = explicit.strip().lower() if isinstance(explicit, str) else explicit
     else:
         effort = os.environ.get("GAIA_REASONING_EFFORT", "").strip().lower() or (
             mr.reasoning_effort
