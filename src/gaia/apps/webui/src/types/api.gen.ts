@@ -80,6 +80,7 @@ export interface ApiSchemas {
   ScriptedUserRequest: ScriptedUserRequest;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
+  SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
@@ -908,14 +909,24 @@ export interface SessionResponse {
   inference_provider?: string | null;
   inference_provider_name?: string | null;
   inference_remote?: boolean | null;
+  kind?: string;
+  last_run_status?: string | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;
+  pinned?: boolean;
   private?: boolean;
   system_prompt?: string | null;
   title: string;
   title_is_custom?: boolean;
+  unread?: boolean;
   updated_at: string;
+}
+/**
+ * Pin or unpin a chat.
+ */
+export interface SessionPinRequest {
+  pinned: boolean;
 }
 /**
  * Current user settings.

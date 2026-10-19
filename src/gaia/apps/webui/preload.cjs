@@ -14,6 +14,7 @@
  *   install:*        — First-run backend install progress (Phase A)
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
  *   system:*         — System metrics for the observability dashboard (#2007)
+ *   power:*          — Keep the PC awake while a chat turn runs (#5226)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -63,6 +64,16 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     respondPermission: (id, action, remember) =>
       ipcRenderer.invoke("notification:respond", id, action, remember),
     onNotification: (cb) => onEvent("notification:new", cb),
+    // Chat alerts (#5226)
+    show: (payload) => ipcRenderer.invoke("notification:show", payload),
+    flash: () => ipcRenderer.invoke("notification:flash"),
+    setAttentionCount: (count) =>
+      ipcRenderer.invoke("notification:attention", count),
+  },
+
+  // ── Keep the PC awake while GAIA works (#5226) ────────────────────────
+  power: {
+    setKeepAwake: (on) => ipcRenderer.invoke("power:keep-awake", on),
   },
 
   // ── System metrics for the observability dashboard (#2007) ────────────
