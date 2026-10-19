@@ -159,11 +159,89 @@ def test_the_walkthrough_refuses_to_synthesize_a_partial_sweep(walkthrough: dict
     steps = walkthrough["jobs"]["synthesize"]["steps"]
     gate = [s for s in steps if "reported in" in str(s.get("name", ""))]
     assert gate, (
-        "the walkthrough's synthesize job needs a step requiring every discovered "
-        "doc to have produced findings, matching the nightly audit's dimension gate"
+        "the walkthrough's synthesize job needs a step checking the discovered "
+        "docs produced findings"
     )
     run = gate[0]["run"]
-    assert "exit 1" in run, "a short sweep must fail, not warn"
+    assert re.search(
+        r'if \[ "\$got" -eq 0 \]; then\n[^\n]*\n\s*exit 1', run
+    ), "a night where no guide reported must fail, not synthesize an empty sweep"
+
+
+def test_the_walkthrough_files_a_partial_night_and_names_the_missing_guides(
+    walkthrough: dict,
+):
+    """Refusing the whole night because one guide failed let one always-failing guide
+    stop every other guide from being recorded, so the rotation never moved on."""
+    steps = walkthrough["jobs"]["synthesize"]["steps"]
+    run = next(s for s in steps if "reported in" in str(s.get("name", "")))["run"]
+    assert '-lt "$expected"' not in run, "a partial night must not be refused outright"
+    assert "::error title=Doc walkthrough guide unverified::" in run
+    assert "GITHUB_STEP_SUMMARY" in run
+
+
+def test_the_rotation_reads_per_guide_history(walkthrough: dict):
+    """Changed-first is judged per guide inside audit_history.py rotate; the run-wide
+    changed-paths list kept the same guides 'changed' while the base never moved."""
+    discover = walkthrough["jobs"]["discover"]
+    body = "\n".join(str(s.get("run", "")) for s in discover["steps"])
+    assert "audit_history.py rotate" in body
+    assert "--changed-paths" not in body
+    assert "--success-job synthesize" in body
+    assert (
+        discover["steps"][0]["with"]["fetch-depth"] == 0
+    ), "the per-guide git diff needs full history"
+
+
+@pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
+def test_synthesis_runs_only_after_the_quota_gate_passed(path: Path):
+    """A refused probe fails the gate job; without this check synthesis still ran on
+    `!cancelled()` and reported "the audit did not run" instead of the probe's reason.
+    """
+    workflow = _load(path)
+    gate = next(
+        name
+        for name, job in workflow["jobs"].items()
+        if any(
+            "require_claude.py" in str(s.get("run", "")) for s in job.get("steps") or []
+        )
+    )
+    condition = str(workflow["jobs"]["synthesize"]["if"])
+    assert (
+        f"needs.{gate}.result == 'success'" in condition
+    ), f"{path.name}: synthesize must require {gate} to have succeeded"
+
+
+@pytest.mark.parametrize("path", PROACTIVE_WORKFLOWS, ids=lambda p: p.name)
+def test_a_quota_refusal_dispatches_the_account_switch(path: Path):
+    """The rotation starts every audit with GITHUB_TOKEN. GitHub promises that only
+    workflow_dispatch/repository_dispatch from that token create runs, so the
+    switch's workflow_run hook is not a reliable trigger here; dispatch it."""
+    workflow = _load(path)
+    gate, gate_job = next(
+        (name, job)
+        for name, job in workflow["jobs"].items()
+        if any(
+            "require_claude.py" in str(s.get("run", "")) for s in job.get("steps") or []
+        )
+    )
+    gate_step = next(
+        s for s in gate_job["steps"] if "require_claude.py" in str(s.get("run", ""))
+    )
+    assert '--github-output "$GITHUB_OUTPUT"' in gate_step["run"]
+    assert gate_job["outputs"]["claude_verdict"] == (
+        "${{ steps." + gate_step["id"] + ".outputs.verdict }}"
+    )
+    job = workflow["jobs"]["request-account-switch"]
+    needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+    assert gate in needs
+    assert f"needs.{gate}.outputs.claude_verdict == 'quota'" in job["if"]
+    assert "!cancelled()" in job["if"], "the gate job FAILED; the switch must still run"
+    assert job["permissions"] == {"actions": "write"}
+    assert any(
+        "gh workflow run claude-account-switch.yml" in str(s.get("run", ""))
+        for s in job["steps"]
+    )
 
 
 def test_the_nightly_audit_refuses_to_synthesize_a_partial_sweep(nightly: dict):

@@ -6,8 +6,13 @@
 # Each Claude step reads CLAUDE_CODE_OAUTH_TOKEN_SECONDARY instead of
 # CLAUDE_CODE_OAUTH_TOKEN while the repo variable CLAUDE_ACCOUNT is "secondary".
 # It runs when a Claude job hits a wall, not on a clock: claude.yml dispatches it
-# when a call is refused before reaching a model, and the scheduled Claude
-# workflows below trigger it when they fail. It probes the primary account: out of
+# when a call is refused before reaching a model, and each proactive audit
+# dispatches it when its quota probe is refused (request-account-switch). Those
+# dispatches are what make it reliable: the rotation starts the audits with
+# GITHUB_TOKEN, and GitHub does not document that workflow_run fires for the
+# completion of a GITHUB_TOKEN-started run. The workflow_run hook below stays for
+# hand-dispatched runs and for a lens refused after the probe passed. It probes
+# the primary account: out of
 # quota -> switch to the secondary (after proving it answers); answering again ->
 # switch back. A bad credential never switches anything; it fails here so a person
 # fixes it. See docs/reference/claude-ci-workflows.md.

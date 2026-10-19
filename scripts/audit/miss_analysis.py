@@ -35,6 +35,9 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import closed_duplicates  # noqa: E402  (sibling module; scripts/audit is no package)
+
 DOC = Path(__file__).resolve().parent / "missed_bug_classes.md"
 START = "<!-- miss-analysis:start -->"
 END = "<!-- miss-analysis:end -->"
@@ -93,7 +96,6 @@ def fetch_fix_prs(repo: str, start: date, end: date, chunk_days: int = 10) -> li
 
 
 CLOSES_RE = re.compile(r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
-DUP_RE = re.compile(r"duplicate of #(\d+)", re.I)
 
 
 def closed_issues(pr: dict) -> set[int]:
@@ -124,8 +126,7 @@ def analyse(prs: list[dict], audit_issues: list[dict]) -> dict:
         reason = issue.get("stateReason") or ""
         if reason not in ("DUPLICATE", "NOT_PLANNED"):
             continue
-        texts = [c.get("body") or "" for c in issue.get("comments") or []]
-        dup = next((m for t in reversed(texts) for m in DUP_RE.findall(t)), None)
+        dup = closed_duplicates.canonical_of(issue) if reason == "DUPLICATE" else None
         noise[f"duplicate of #{dup}" if dup else reason.lower().replace("_", " ")] += 1
     return {
         "total": len(prs),
@@ -165,6 +166,24 @@ def render(result: dict, start: date, end: date) -> str:
     return "\n".join(lines)
 
 
+def fetch_audit_issues(repo: str, cap: int) -> list[dict]:
+    """Every audit-filed issue's number and close reason; duplicates with their canonical.
+
+    Paged and capped (closed_duplicates.py): the old single 5000-issue query pulled
+    every comment of every issue and could not tell a short list from a cut one.
+    """
+    issues = closed_duplicates.list_labelled(
+        repo, "weekly-audit", ("OPEN", "CLOSED"), cap
+    )
+    details = {
+        d["number"]: d
+        for d in closed_duplicates.duplicate_details(
+            [i["id"] for i in issues if i.get("stateReason") == "DUPLICATE"]
+        )
+    }
+    return [dict(details.get(i["number"], {}), **i) for i in issues]
+
+
 def splice(doc: str, block: str) -> str:
     if doc.count(START) != 1 or doc.count(END) != 1:
         raise SystemExit(f"{DOC} must contain exactly one {START} ... {END} block.")
@@ -179,18 +198,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=120)
     parser.add_argument("--end", default="", help="YYYY-MM-DD (default: today)")
     parser.add_argument("--chunk-days", type=int, default=10)
+    parser.add_argument(
+        "--issue-cap",
+        type=int,
+        default=closed_duplicates.DEFAULT_CAP,
+        help="Fail rather than read past this many audit-labelled issues.",
+    )
     args = parser.parse_args(argv)
 
     end = date.fromisoformat(args.end) if args.end else date.today()
     start = end - timedelta(days=args.days)
     prs = fetch_fix_prs(args.repo, start, end, args.chunk_days)
-    audit_issues = _gh(
-        [
-            "issue", "list", "--repo", args.repo, "--label", "weekly-audit",
-            "--state", "all", "--limit", "5000",
-            "--json", "number,stateReason,comments",
-        ]
-    )
+    audit_issues = fetch_audit_issues(args.repo, args.issue_cap)
     block = render(analyse(prs, audit_issues), start, end)
     DOC.write_text(splice(DOC.read_text(encoding="utf-8"), block), encoding="utf-8")
     print(block)

@@ -30,7 +30,6 @@ import re
 import subprocess
 import sys
 from collections import Counter
-from datetime import datetime, timedelta
 from pathlib import Path
 
 PR_RE = re.compile(r"\(#(\d+)\)\s*$")
@@ -38,6 +37,13 @@ COMMIT_SEP = "\x1e"
 FIELD_SEP = "\x1f"
 MAX_PATHS_PER_COMMIT = 12
 BODY_CHARS = 300
+
+#: PR descriptions read per window, newest first. The 30 KB render cap shows ~60
+#: commits, so this is only reached after a long outage; the file then says so.
+MAX_PRS = 150
+
+#: PRs per GraphQL query (aliased `pullRequest(number:)` lookups).
+PR_BATCH = 50
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -120,32 +126,52 @@ def read_commits(selector: list[str]) -> list[dict]:
     return commits
 
 
-def fetch_prs(repo: str, commits: list[dict]) -> dict[int, dict]:
-    """One `gh` call for every merged PR the window could contain."""
-    if not any(c["pr"] for c in commits):
-        return {}
-    oldest = min(datetime.fromisoformat(c["date"]) for c in commits)
-    since = (oldest - timedelta(days=1)).date().isoformat()
-    prs = json.loads(
-        _must(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--repo",
-                repo,
-                "--state",
-                "merged",
-                "--search",
-                f"merged:>={since}",
-                "--limit",
-                "1000",
-                "--json",
-                "number,title,body",
-            ]
+def fetch_prs(
+    repo: str, commits: list[dict], limit: int = MAX_PRS
+) -> tuple[dict[int, dict], int]:
+    """Title and body of exactly the PRs the window's commits name, newest first.
+
+    Returns ``(prs, not_read)``: at most *limit* PRs are read, and ``not_read`` is
+    how many more the window named, so the render can say so instead of dropping
+    them silently. A merged-PR search capped at 1000 used to stand in for this.
+    """
+    numbers = list(dict.fromkeys(c["pr"] for c in commits if c["pr"]))
+    wanted = numbers[:limit]
+    owner, name = repo.split("/", 1)
+    prs: dict[int, dict] = {}
+    for start in range(0, len(wanted), PR_BATCH):
+        batch = wanted[start : start + PR_BATCH]
+        fields = " ".join(
+            f"p{n}: pullRequest(number: {n}) {{ number title body }}" for n in batch
         )
-    )
-    return {p["number"]: p for p in prs}
+        query = (
+            "query($owner: String!, $name: String!) { repository(owner: $owner, "
+            f"name: $name) {{ {fields} }} }}"
+        )
+        args = ["gh", "api", "graphql", "-f", f"query={query}"]
+        args += ["-f", f"owner={owner}", "-f", f"name={name}"]
+        completed = _run(args)
+        try:
+            data = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        errors = data.get("errors") or []
+        # A "(#N)" that names an issue, not a PR, is NOT_FOUND; that commit keeps its
+        # subject. Anything else means the lookup itself broke.
+        if completed.returncode != 0 and (
+            not errors or any(e.get("type") != "NOT_FOUND" for e in errors)
+        ):
+            raise SystemExit(
+                f"`gh api graphql` (PR lookup) failed with exit {completed.returncode}:\n"
+                f"{completed.stderr.strip() or json.dumps(errors)[:800]}\nThe audit's "
+                "recent-changes context could not be built; fix this rather than "
+                "auditing without it."
+            )
+        repository = (data.get("data") or {}).get("repository") or {}
+        for pr in repository.values():
+            if pr:
+                prs[pr["number"]] = pr
+    return prs, len(numbers) - len(wanted)
 
 
 def excerpt(body: str) -> str:
@@ -163,7 +189,13 @@ def area(path: str) -> str:
     return "/".join(parts[:3]) if parts[0] in ("src", "hub") else "/".join(parts[:2])
 
 
-def render(commits: list[dict], prs: dict[int, dict], description: str, max_bytes: int) -> str:
+def render(
+    commits: list[dict],
+    prs: dict[int, dict],
+    description: str,
+    max_bytes: int,
+    prs_not_read: int = 0,
+) -> str:
     areas = Counter(area(p) for c in commits for p in c["paths"])
     lines = [
         "# Recent changes on main",
@@ -177,6 +209,12 @@ def render(commits: list[dict], prs: dict[int, dict], description: str, max_byte
         + (", ".join(f"`{a}` ({n})" for a, n in areas.most_common(10)) or "none"),
         "",
     ]
+    if prs_not_read:
+        lines += [
+            f"PR descriptions were read for the newest {len(prs)} PRs only; the "
+            f"{prs_not_read} older PRs show their commit subject.",
+            "",
+        ]
     size = sum(len(line) + 1 for line in lines)
     shown = 0
     for commit in commits:
@@ -222,8 +260,15 @@ def main(argv: list[str] | None = None) -> int:
 
     selector, description, exact = resolve_range(args.base_sha, args.fallback_days)
     commits = read_commits(selector)
-    prs = fetch_prs(args.repo, commits)
-    args.out.write_text(render(commits, prs, description, args.max_bytes), encoding="utf-8")
+    prs, not_read = fetch_prs(args.repo, commits)
+    args.out.write_text(
+        render(commits, prs, description, args.max_bytes, not_read), encoding="utf-8"
+    )
+    if not_read:
+        print(
+            f"::warning title=Recent changes truncated::{not_read} older PRs in the "
+            f"window were not read (cap {MAX_PRS}); they show their commit subject."
+        )
     paths = sorted({p for c in commits for p in c["paths"]})
     args.paths_out.write_text("".join(f"{p}\n" for p in paths), encoding="utf-8")
     with args.summary.open("a", encoding="utf-8") as fh:

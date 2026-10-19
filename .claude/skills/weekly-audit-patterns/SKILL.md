@@ -45,8 +45,16 @@ nothing.
 
 **Quota gate.** Each audit's first job probes Claude once (`scripts/audit/require_claude.py`,
 same classifier as the canary and account switch). Refused → the run fails there with the
-account and reset time in the summary, before any lens or self-hosted job starts. The
-failure triggers `claude-account-switch.yml`.
+account and reset time in the summary, before any lens or self-hosted job starts. On a
+quota verdict the `request-account-switch` job **dispatches** `claude-account-switch.yml`.
+Don't drop that for the switch's `workflow_run` hook: the rotation starts every audit with
+`GITHUB_TOKEN`, GitHub only promises that `workflow_dispatch`/`repository_dispatch` from that
+token create runs, and it does not document `workflow_run` firing for such a run's completion.
+A contract test checks every audit has the dispatch job.
+
+**Explicit modes are honoured.** Only `auto` (what the rotation sends) may escalate to a deep
+sweep. A hand-dispatched `mode=normal` with no recent successful run reviews the last 7 days
+and says in the summary what that leaves out.
 
 **Recent changes, read first.** The same first job writes `recent-changes.md`
 (`scripts/audit/recent_changes.py`): first-parent commits since the commit the last
@@ -194,10 +202,13 @@ is trivially undone and a duplicate issue is what created this backlog.
 
 Two more dedup rules, both from the October 2026 cleanup (34 open duplicates closed):
 
-- **A closed duplicate keeps pointing at its canonical.** Issues closed with
-  `gh issue close N --duplicate-of M` (or a "Duplicate of #M" comment) hand their markers
-  to open issue M (`redirect_duplicates`). Otherwise consolidating into an umbrella like
-  #1077 makes the next run re-file every duplicate it just closed.
+- **A closed duplicate keeps pointing at its canonical.** Issues closed as duplicate hand
+  their markers to open issue M (`redirect_duplicates`). The canonical comes from GitHub's
+  own record first (the `MarkedAsDuplicateEvent` the UI's "Close as duplicate" writes, which
+  leaves no comment), then a "Duplicate of #M" comment or body line. Otherwise consolidating
+  into an umbrella like #1077 makes the next run re-file every duplicate it just closed. The
+  closed-issue scan (`scripts/audit/closed_duplicates.py`) pages through small GraphQL
+  queries and fails loudly at its hard cap rather than silently reading part of the list.
 - **Candidate matching reads an audit issue's own keys, not just its title.** Titles alone
   let same-location duplicates through (#3832 scored 0.15 against #3471, same guide and
   section); with the markers both rank first.
@@ -284,11 +295,24 @@ route promotions through `bug` unless you deliberately widen the auto-fix `if`.
   deep sweeps.
 - **Read-only**: dimension + synthesis jobs run `--allowedTools Read,Grep,Glob,Bash` —
   no Edit/Write, never install or run repo code (same rule as `claude.yml` review jobs).
-- **A partial sweep never synthesizes.** Every lens writes `{"findings": []}` even when
-  clean, so a missing file means the lens never ran: the upload fails on it, and synthesis
-  hard-fails if fewer files arrive than `preflight` declared dimensions. The doc
-  walkthrough gained the same gate per discovered guide (#3058) — without it a night where
-  every judge crashed reached synthesis, found nothing to file, and reported a clean run.
+- **A partial code/security sweep never synthesizes.** Every lens writes
+  `{"findings": []}` even when clean, so a missing file means the lens never ran: the upload
+  fails on it, and synthesis hard-fails if fewer files arrive than `preflight` declared
+  dimensions.
+- **The walkthrough is per guide, not all-or-nothing.** Zero guides reporting is a hard
+  failure (#3058: a night where every judge crashed once reported a clean run). A partial
+  night files what the guides that finished found, and names each missing guide as an
+  `::error`; their failed matrix jobs keep the run red. Refusing the whole night instead let
+  one always-failing guide (`code-index.mdx` failed four turns running in Sep–Oct 2026) stop
+  every other guide from being recorded, so the rotation was stuck on the same ten.
+  `audit_history.py rotate` reads each guide's **own** job: walked = its job passed and that
+  run's `synthesize` job passed. After 3 failed turns in a row a guide is **backed off**
+  (one retry every 9 days, an `::error` and a table in the summary) so it can't hold a slot
+  every turn. Only turns where another guide finished count: a night where every guide
+  failed (usage limit, a runner with no Git) is the night's fault, and counting it backed
+  off 11 of 29 guides on the real Sep–Oct history. A guide is "changed" when its file differs from the commit of **its own** last
+  walk (never a run-wide base that only moves on a green run), and changed guides take at
+  most half the slots.
 - **Concurrency group** `claude-nightly-audit` (not cancel-in-progress) so two runs never
   overlap and double-file.
 - **`dry_run` dispatch input** (both this workflow and the doc walkthrough): files and

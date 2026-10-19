@@ -92,6 +92,7 @@ jobs:
       skip: ${{ steps.scope.outputs.skip }}
       lenses: ${{ steps.lenses.outputs.lenses }}
       lens_count: ${{ steps.lenses.outputs.lens_count }}
+      claude_verdict: ${{ steps.gate.outputs.verdict }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -182,6 +183,7 @@ jobs:
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read
       - name: Stop here if Claude cannot answer
+        id: gate
         if: steps.scope.outputs.skip != 'true'
         env:
           CLAUDE_CONCLUSION: ${{ steps.probe.outputs.conclusion }}
@@ -190,7 +192,33 @@ jobs:
         run: |
           python3 scripts/audit/require_claude.py --conclusion "${CLAUDE_CONCLUSION:-}" \
             --log "${CLAUDE_LOG:-}" --account "$ACCOUNT" \
-            --what "Tonight's security audit" --summary "$GITHUB_STEP_SUMMARY"
+            --what "Tonight's security audit" --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # A refused quota probe asks the account switch to run. Explicit, because this run
+  # is usually started by claude-audit-rotation.yml with GITHUB_TOKEN: GitHub documents
+  # that GITHUB_TOKEN events create no runs except workflow_dispatch and
+  # repository_dispatch, and does not document that claude-account-switch.yml's
+  # workflow_run hook fires when such a run completes. A dispatch is the documented
+  # exception. If the hook does fire as well, the switch's concurrency group runs the
+  # two one after the other and the second finds nothing left to change.
+  request-account-switch:
+    name: Ask the account switch to probe (Claude is out of quota)
+    needs: preflight
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.preflight.outputs.claude_verdict == 'quota'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch claude-account-switch.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run claude-account-switch.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "::notice title=Claude account switch requested::The quota probe was refused, so claude-account-switch.yml was asked to move Claude CI to the other account. See its latest run."
 
   semgrep:
     if: github.repository == 'amd/gaia'
@@ -489,9 +517,11 @@ jobs:
   synthesize:
     needs: [preflight, audit]
     # !cancelled() lets synthesis still run when a lens crashed (continue-on-error), but
-    # it must NOT run when preflight skipped the whole Claude layer — otherwise it would
-    # synthesise zero findings every quiet night.
-    if: github.repository == 'amd/gaia' && !cancelled() && needs.preflight.outputs.skip != 'true'
+    # it must NOT run when preflight skipped the Claude layer or failed (a refused quota
+    # probe) — otherwise it reports "the audit did not run" instead of the probe's reason.
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.preflight.result == 'success' && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

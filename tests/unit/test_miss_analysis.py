@@ -84,6 +84,55 @@ def test_noise_is_grouped_by_the_umbrella_it_was_closed_into(ma):
     assert noise == {"duplicate of #1077": 2, "not planned": 1}
 
 
+def test_a_ui_close_as_duplicate_is_grouped_under_its_canonical(ma):
+    """GitHub's "Close as duplicate" records an event and writes no comment."""
+    issues = [
+        {
+            "number": 1,
+            "stateReason": "DUPLICATE",
+            "comments": [],
+            "duplicate_events": [
+                {
+                    "type": "MarkedAsDuplicateEvent",
+                    "duplicate": 1,
+                    "canonical": 1077,
+                }
+            ],
+        }
+    ]
+    assert ma.analyse([], issues)["noise"] == {"duplicate of #1077": 1}
+
+
+def test_audit_issues_are_paged_and_only_duplicates_get_details(ma, monkeypatch):
+    listing = [
+        {"id": "A", "number": 1, "state": "CLOSED", "stateReason": "DUPLICATE"},
+        {"id": "B", "number": 2, "state": "OPEN", "stateReason": None},
+    ]
+    asked = {}
+
+    def list_labelled(repo, label, states, cap):
+        asked.update(label=label, states=states, cap=cap)
+        return listing
+
+    def duplicate_details(ids):
+        asked["ids"] = ids
+        return [{"number": 1, "body": "", "comments": [{"body": "Duplicate of #9"}]}]
+
+    monkeypatch.setattr(ma.closed_duplicates, "list_labelled", list_labelled)
+    monkeypatch.setattr(ma.closed_duplicates, "duplicate_details", duplicate_details)
+
+    issues = ma.fetch_audit_issues("amd/gaia", 500)
+
+    assert asked == {
+        "label": "weekly-audit",
+        "states": ("OPEN", "CLOSED"),
+        "cap": 500,
+        "ids": ["A"],
+    }
+    assert [i["number"] for i in issues] == [1, 2]
+    assert ma.analyse([], issues)["noise"] == {"duplicate of #9": 1}
+
+
 def test_render_and_splice_replace_only_the_generated_block(ma):
     doc = f"# Title\nkeep me\n{ma.START}\nold\n{ma.END}\ntail\n"
     block = ma.render(

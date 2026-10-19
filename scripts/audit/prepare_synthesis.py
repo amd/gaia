@@ -33,6 +33,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import closed_duplicates  # noqa: E402  (sibling module; scripts/audit is no package)
+
 #: Severity ranking, most severe first. Used to pick a cluster's severity and
 #: to order the dossier.
 SEVERITY_ORDER = ["🔴", "🟠", "🟡"]
@@ -252,7 +255,22 @@ def _gh_json(args: list[str]) -> Any:
     return json.loads(completed.stdout)
 
 
-def fetch_backlog(repo: str, label: str, limit: int) -> dict[str, Any]:
+def _capped(issues: list[Any], what: str, limit: int) -> list[Any]:
+    """`gh issue list` stops at --limit without saying so: treat a full page as cut."""
+    if len(issues) >= limit:
+        raise SystemExit(
+            f"The {what} query returned {len(issues)} issues, hitting the --limit of "
+            f"{limit}, so it may be cut short and dedup would miss keys. Raise --limit."
+        )
+    return issues
+
+
+def fetch_backlog(
+    repo: str,
+    label: str,
+    limit: int,
+    closed_cap: int = closed_duplicates.DEFAULT_CAP,
+) -> dict[str, Any]:
     """Read the whole open backlog plus the audit's own filed/suppressed keys."""
     open_issues = _gh_json(
         [
@@ -305,30 +323,15 @@ def fetch_backlog(repo: str, label: str, limit: int) -> dict[str, Any]:
             "number,body",
         ]
     )
-    # Closed as a duplicate: its keys must keep pointing at the open canonical, or
-    # the next run re-files the defect the moment a human consolidates it.
-    closed = _gh_json(
-        [
-            "gh",
-            "issue",
-            "list",
-            "--repo",
-            repo,
-            "--label",
-            label,
-            "--state",
-            "closed",
-            "--limit",
-            str(limit),
-            "--json",
-            "number,body,stateReason,comments",
-        ]
-    )
     return {
         "open_issues": open_issues,
-        "filed": labelled,
-        "suppressed": suppressed,
-        "closed_duplicates": [i for i in closed if i.get("stateReason") == "DUPLICATE"],
+        "filed": _capped(labelled, f"open {label!r}", limit),
+        "suppressed": _capped(suppressed, "audit-wontfix", limit),
+        # Closed as a duplicate: its keys must keep pointing at the open canonical, or
+        # the next run re-files the defect the moment a human consolidates it.
+        "closed_duplicates": closed_duplicates.fetch_closed_duplicates(
+            repo, label, closed_cap
+        ),
     }
 
 
@@ -356,13 +359,8 @@ def extract_keys(issues: list[dict[str, Any]]) -> dict[str, list[int]]:
     return dict(keys)
 
 
-#: How a duplicate's canonical is named: GitHub's own "Duplicate of #N" wording,
-#: which `gh issue close --duplicate-of` and the triage comments both use.
-DUPLICATE_OF_RE = re.compile(r"duplicate of #(\d+)", re.IGNORECASE)
-
-
 def redirect_duplicates(
-    closed_duplicates: list[dict[str, Any]], open_numbers: set[int]
+    duplicates: list[dict[str, Any]], open_numbers: set[int]
 ) -> list[dict[str, Any]]:
     """Re-home each closed duplicate's audit markers onto its open canonical.
 
@@ -371,24 +369,16 @@ def redirect_duplicates(
     a duplicate's keys vanish from dedup the moment it is closed, so the next run
     re-files exactly what the triager just consolidated.
 
-    The latest "Duplicate of #N" wins (a re-pointed duplicate). A duplicate whose
-    canonical cannot be named, or is no longer open, is not redirected: the defect
-    then goes through the normal backlog search instead of being silenced against
-    an issue nobody will see.
+    The canonical comes from :func:`closed_duplicates.canonical_of`: GitHub's own
+    duplicate event first (the UI's "Close as duplicate" leaves no comment), then
+    the latest "Duplicate of #N". A duplicate whose canonical cannot be named, or
+    is no longer open, is not redirected: the defect then goes through the normal
+    backlog search instead of being silenced against an issue nobody will see.
     """
     redirected = []
-    for issue in closed_duplicates:
-        texts = [c.get("body") or "" for c in reversed(issue.get("comments") or [])]
-        texts.append(issue.get("body") or "")
-        canonical = None
-        for text in texts:
-            matches = DUPLICATE_OF_RE.findall(text)
-            if matches:
-                canonical = int(matches[-1])
-                break
+    for issue in duplicates:
+        canonical = closed_duplicates.canonical_of(issue)
         if canonical is None or canonical not in open_numbers:
-            continue
-        if canonical == issue["number"]:
             continue
         redirected.append({"number": canonical, "body": issue.get("body") or ""})
     return redirected
@@ -884,6 +874,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", default="weekly-audit")
     # Keep well above the open-issue count; the guard below fails loudly if it isn't.
     parser.add_argument("--limit", type=int, default=5000)
+    parser.add_argument(
+        "--closed-cap",
+        type=int,
+        default=closed_duplicates.DEFAULT_CAP,
+        help="Fail rather than read past this many closed labelled issues.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dossier", type=Path, required=True)
     parser.add_argument(
@@ -906,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.backlog_file:
         backlog = json.loads(args.backlog_file.read_text(encoding="utf-8"))
     else:
-        backlog = fetch_backlog(args.repo, args.label, args.limit)
+        backlog = fetch_backlog(args.repo, args.label, args.limit, args.closed_cap)
 
     if len(backlog["open_issues"]) >= args.limit:
         raise SystemExit(

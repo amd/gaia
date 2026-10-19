@@ -49,61 +49,64 @@ WEEKLY = "You've hit your weekly limit · resets Oct 21, 3pm (UTC)"
 
 
 def test_an_answering_account_lets_the_run_go(gate, tmp_path):
-    code, error, summary = gate.gate(
+    result = gate.gate(
         "success", log(tmp_path, "ok", False, reply="ok"), "primary", "Tonight's audit"
     )
-    assert (code, error, summary) == (0, "", "")
+    assert result == (0, "ok", "", "")
 
 
 def test_the_weekly_limit_stops_the_run_and_names_account_and_reset(gate, tmp_path):
-    code, error, summary = gate.gate(
+    code, verdict, error, summary = gate.gate(
         "failure", log(tmp_path, WEEKLY, True), "secondary", "Tonight's nightly audit"
     )
-    assert code == 1
+    assert (code, verdict) == (1, "quota")
     assert "secondary Claude account is out of quota" in summary
     assert "resets Oct 21, 3pm (UTC)." in summary
     assert "next scheduled run covers everything since" in summary
     assert "claude-account-switch.yml" in error
+    # Truthful about HOW the switch runs: this run dispatches it.
+    assert "request-account-switch" in error
+    assert "triggers" not in error
 
 
 def test_a_refusal_reported_as_success_is_still_caught(gate, tmp_path):
     """The action can report success while the body is the refusal."""
-    code, _, summary = gate.gate(
+    code, verdict, _, summary = gate.gate(
         "success", log(tmp_path, WEEKLY, False, reply=WEEKLY), "primary", "Audit"
     )
-    assert code == 1
+    assert (code, verdict) == (1, "quota")
     assert "out of quota" in summary
 
 
 def test_a_dead_token_is_named_as_a_token_problem_not_quota(gate, tmp_path):
-    code, error, summary = gate.gate(
+    code, verdict, error, summary = gate.gate(
         "failure",
         log(tmp_path, "Invalid API key · Please run /login", True),
         "primary",
         "Audit",
     )
-    assert code == 1
+    assert (code, verdict) == (1, "credential")
     assert "token was rejected" in summary
     assert "out of quota" not in summary
     assert "claude setup-token" in error
 
 
 def test_no_execution_log_means_the_run_does_not_start(gate, tmp_path):
-    code, error, _ = gate.gate(
+    code, verdict, error, _ = gate.gate(
         "failure", str(tmp_path / "missing.json"), "primary", "Audit"
     )
-    assert code == 1
+    assert (code, verdict) == (1, "no-log")
     assert "wrote no execution log" in error
 
 
 def test_a_success_without_the_expected_reply_is_not_a_go(gate, tmp_path):
-    code, _, summary = gate.gate(
+    code, verdict, _, summary = gate.gate(
         "success",
         log(tmp_path, "", False, reply="I cannot help with that"),
         "primary",
         "Audit",
     )
-    assert code == 1
+    assert (code, verdict) == (1, "unknown")
     assert "did not answer the probe" in summary
 
 
@@ -131,3 +134,35 @@ def test_cli_appends_the_summary_and_prints_one_error(gate, tmp_path, capsys):
         "::error title=Claude unavailable::Tonight's security audit skipped"
     )
     assert summary.read_text(encoding="utf-8").startswith("earlier\n## ⛔")
+
+
+@pytest.mark.parametrize(
+    "result, is_error, reply, verdict",
+    [
+        ("ok", False, "ok", "ok"),
+        (WEEKLY, True, "", "quota"),
+        ("Invalid API key · Please run /login", True, "", "credential"),
+    ],
+)
+def test_cli_writes_the_verdict_the_switch_job_reads(
+    gate, tmp_path, result, is_error, reply, verdict
+):
+    """Only `quota` makes the workflow dispatch claude-account-switch.yml."""
+    output = tmp_path / "github_output"
+    gate.main(
+        [
+            "--conclusion",
+            "failure" if is_error else "success",
+            "--log",
+            log(tmp_path, result, is_error, reply=reply),
+            "--account",
+            "primary",
+            "--what",
+            "Audit",
+            "--summary",
+            str(tmp_path / "s.md"),
+            "--github-output",
+            str(output),
+        ]
+    )
+    assert output.read_text(encoding="utf-8") == f"verdict={verdict}\n"

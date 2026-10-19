@@ -99,9 +99,12 @@ tracking issue with fix steps — turning a silent multi-week outage into a noti
 Every Claude step reads `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` instead of
 `CLAUDE_CODE_OAUTH_TOKEN` while the repo variable `CLAUDE_ACCOUNT` is `secondary`. It runs
 when Claude hits a wall, not on a clock: `claude.yml` dispatches it when a review, reply or
-triage call is refused before reaching a model, and the code audit, security audit, doc
-walkthrough and auth canary trigger it when they fail. It probes the primary account with the
-canary's probe:
+triage call is refused before reaching a model, and the code audit, security audit and doc
+walkthrough dispatch it when their quota probe is refused. They dispatch it rather than rely on
+its `workflow_run` hook because the rotation starts them with `GITHUB_TOKEN`, and GitHub does not
+document that `workflow_run` fires for a run started that way. The hook still covers the auth
+canary, hand-dispatched audits, and a lens refused after the probe passed. It probes the primary
+account with the canary's probe:
 
 - **Out of quota:** it checks the secondary account answers, then sets `CLAUDE_ACCOUNT=secondary`.
 - **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary`.

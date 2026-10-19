@@ -1917,26 +1917,100 @@ def test_a_redirect_never_overrides_wontfix(prep, tmp_path):
     assert clusters[0]["status"] == "suppressed"
 
 
-def test_fetch_backlog_keeps_only_closed_duplicates(prep, monkeypatch):
-    """Completed and not-planned closures must not redirect anything."""
+def _fake_graphql(closed, details):
+    """A GraphQL stand-in: one page of closed issues, then details by node id."""
     calls = []
 
-    def fake_gh(args):
-        calls.append(args)
-        if "closed" in args:
-            return [
-                {"number": 1, "stateReason": "DUPLICATE", "body": "", "comments": []},
-                {"number": 2, "stateReason": "COMPLETED", "body": "", "comments": []},
-                {"number": 3, "stateReason": "NOT_PLANNED", "body": "", "comments": []},
-            ]
-        return []
+    def graphql(query, variables):
+        calls.append((query, variables))
+        if "nodes(ids:" in query:
+            return {"nodes": [details[i] for i in variables["ids"]]}
+        return {
+            "repository": {
+                "issues": {
+                    "totalCount": len(closed),
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": closed,
+                }
+            }
+        }
 
-    monkeypatch.setattr(prep, "_gh_json", fake_gh)
+    return graphql, calls
+
+
+def test_fetch_backlog_keeps_only_closed_duplicates(prep, monkeypatch):
+    """Completed and not-planned closures must not redirect anything, and only the
+    duplicates' bodies and comments are read."""
+    monkeypatch.setattr(prep, "_gh_json", lambda args: [])
+    graphql, calls = _fake_graphql(
+        [
+            {"id": "I1", "number": 1, "state": "CLOSED", "stateReason": "DUPLICATE"},
+            {"id": "I2", "number": 2, "state": "CLOSED", "stateReason": "COMPLETED"},
+            {"id": "I3", "number": 3, "state": "CLOSED", "stateReason": "NOT_PLANNED"},
+        ],
+        {"I1": {"number": 1, "body": "", "comments": {"nodes": []}}},
+    )
+    monkeypatch.setattr(prep.closed_duplicates, "graphql", graphql)
+
     backlog = prep.fetch_backlog("amd/gaia", "weekly-audit", 5000)
 
     assert [i["number"] for i in backlog["closed_duplicates"]] == [1]
-    closed_call = next(a for a in calls if "closed" in a)
-    assert "comments" in closed_call[closed_call.index("--json") + 1]
+    detail_calls = [v for q, v in calls if "nodes(ids:" in q]
+    assert detail_calls == [{"ids": ["I1"], "comments": 10}]
+    list_call = next(v for q, v in calls if "nodes(ids:" not in q)
+    assert list_call["states"] == ["CLOSED"] and list_call["label"] == "weekly-audit"
+    assert list_call["first"] <= 100
+
+
+def test_a_ui_close_as_duplicate_redirects_without_any_comment(
+    prep, monkeypatch, tmp_path
+):
+    """GitHub's "Close as duplicate" records an event and writes no comment."""
+    monkeypatch.setattr(prep, "_gh_json", lambda args: [])
+    graphql, _ = _fake_graphql(
+        [{"id": "I9", "number": 9, "state": "CLOSED", "stateReason": "DUPLICATE"}],
+        {
+            "I9": {
+                "number": 9,
+                "body": "<!-- audit-cluster: docs:x -->",
+                "comments": {"nodes": []},
+                "timelineItems": {
+                    "nodes": [
+                        {
+                            "__typename": "MarkedAsDuplicateEvent",
+                            "duplicate": {"number": 9},
+                            "canonical": {"number": 4331},
+                        }
+                    ]
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(prep.closed_duplicates, "graphql", graphql)
+    backlog = prep.fetch_backlog("amd/gaia", "weekly-audit", 5000)
+
+    redirected = prep.redirect_duplicates(backlog["closed_duplicates"], {4331})
+    clusters = _cluster(prep, [make_finding(cluster_key="docs:x")], tmp_path)
+    prep.classify(clusters, prep.extract_keys(redirected), {})
+
+    assert clusters[0]["status"] == "already-filed"
+    assert clusters[0]["existing_issues"] == [4331]
+
+
+@pytest.mark.parametrize("which", ["filed", "suppressed"])
+def test_a_labelled_query_that_fills_its_limit_is_refused(prep, monkeypatch, which):
+    """`gh issue list` stops at --limit silently; a full page may be a cut one."""
+
+    def fake_gh(args):
+        wontfix = "audit-wontfix" in args
+        if "--label" in args and wontfix == (which == "suppressed"):
+            return [{"number": i, "body": ""} for i in range(50)]
+        return []
+
+    monkeypatch.setattr(prep, "_gh_json", fake_gh)
+    with pytest.raises(SystemExit) as excinfo:
+        prep.fetch_backlog("amd/gaia", "weekly-audit", 50)
+    assert "Raise --limit" in str(excinfo.value)
 
 
 # ----------------------------------------------------------------------

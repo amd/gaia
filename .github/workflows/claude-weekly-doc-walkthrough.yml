@@ -107,9 +107,13 @@
 # guides x 16 min mean, 7-9 hours serial: it ran into the US workday on the shared
 # Strix Point pool (the 2026-10-12 run spent 57 hours queued) and spent ~$190 of the
 # weekly Claude budget in a single day. Ten a turn is ~2.5-3 hours, done by ~6am
-# Pacific, and reaches every guide about every 9 days. Only a run whose synthesis
-# succeeded counts a guide as walked, so a turn that stops on the usage limit leaves
-# its guides first in line for the next.
+# Pacific, and reaches every guide about every 9 days. A guide counts as walked when
+# its own matrix job passed and that run's synthesis filed its findings, so a turn that
+# stops on the usage limit leaves its guides first in line for the next, and one guide
+# that keeps failing never stops the others being recorded. After 3 failed turns in a
+# row a guide is backed off (retried every 9 days, flagged in the summary) so it cannot
+# hold a slot every turn. Guides edited since their own last walk jump the queue, capped
+# at half the slots.
 
 name: Claude Doc Walkthrough
 run-name: ${{ inputs.rotation_night && format('Claude Doc Walkthrough — rotation night {0}', inputs.rotation_night) || 'Claude Doc Walkthrough' }}
@@ -172,13 +176,15 @@ jobs:
       pull-requests: read
     outputs:
       docs: ${{ steps.discover.outputs.docs }}
+      claude_verdict: ${{ steps.gate.outputs.verdict }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      # What merged since this workflow last succeeded. Guides those merges touched
-      # jump the rotation queue, and synthesis uses it not to re-file a fixed defect.
+      # What merged since this workflow last filed findings, so synthesis does not
+      # re-file a defect a recent PR fixed. "Last filed" is the synthesize job, not the
+      # run: the run goes red whenever any one guide fails.
       - name: Collect recent changes on main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -186,7 +192,8 @@ jobs:
           set -euo pipefail
           python3 scripts/audit/audit_history.py window \
             --repo "${{ github.repository }}" \
-            --workflow claude-weekly-doc-walkthrough.yml > "$RUNNER_TEMP/scope.txt"
+            --workflow claude-weekly-doc-walkthrough.yml \
+            --success-job synthesize > "$RUNNER_TEMP/scope.txt"
           base_sha=$(sed -n 's/^base_sha=//p' "$RUNNER_TEMP/scope.txt")
           python3 scripts/audit/recent_changes.py --repo "${{ github.repository }}" \
             --base-sha "$base_sha" --fallback-days 3 --max-bytes 30000 \
@@ -223,7 +230,6 @@ jobs:
               --repo "${{ github.repository }}" \
               --workflow claude-weekly-doc-walkthrough.yml \
               --docs-json "$all_docs" --count "$MAX_DOCS" \
-              --changed-paths changed-paths.txt \
               --summary "$RUNNER_TEMP/rotation.md")
           fi
           echo "docs=$docs" >> "$GITHUB_OUTPUT"
@@ -257,6 +263,7 @@ jobs:
             --model ${{ env.WALKTHROUGH_EXECUTOR_MODEL }}
             --allowedTools Read
       - name: Stop here if Claude cannot answer
+        id: gate
         if: steps.discover.outputs.docs != '[]'
         env:
           CLAUDE_CONCLUSION: ${{ steps.probe.outputs.conclusion }}
@@ -265,7 +272,33 @@ jobs:
         run: |
           python3 scripts/audit/require_claude.py --conclusion "${CLAUDE_CONCLUSION:-}" \
             --log "${CLAUDE_LOG:-}" --account "$ACCOUNT" \
-            --what "Tonight's doc walkthrough" --summary "$GITHUB_STEP_SUMMARY"
+            --what "Tonight's doc walkthrough" --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # A refused quota probe asks the account switch to run. Explicit, because this run
+  # is usually started by claude-audit-rotation.yml with GITHUB_TOKEN: GitHub documents
+  # that GITHUB_TOKEN events create no runs except workflow_dispatch and
+  # repository_dispatch, and does not document that claude-account-switch.yml's
+  # workflow_run hook fires when such a run completes. A dispatch is the documented
+  # exception. If the hook does fire as well, the switch's concurrency group runs the
+  # two one after the other and the second finds nothing left to change.
+  request-account-switch:
+    name: Ask the account switch to probe (Claude is out of quota)
+    needs: discover
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.discover.outputs.claude_verdict == 'quota'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch claude-account-switch.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run claude-account-switch.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "::notice title=Claude account switch requested::The quota probe was refused, so claude-account-switch.yml was asked to move Claude CI to the other account. See its latest run."
 
   # One matrix entry per doc, each acting as a real user/developer walking
   # that guide on real hardware. Serialized (max-parallel: 1) -- same
@@ -897,23 +930,47 @@ jobs:
           echo "**$total_files findings file(s) reported in, $total_findings raw finding(s) before dedup/verification.**" >> "$GITHUB_STEP_SUMMARY"
           echo "Reported in: $total_files files, $total_findings raw findings before dedup"
 
-      # The static audit has always refused to synthesize off a partial sweep; the
-      # walkthrough only tallied and carried on, so a night where every guide's judge died
-      # reached synthesis with zero findings and reported "nothing to file" — a crash
-      # reading as a pass (#3058). Every discovered doc writes a findings file even when
-      # clean, so a short count means guides went unwalked. Fail instead of filing.
-      - name: Require every discovered doc to have reported in
+      # A night where every guide's judge died used to reach synthesis with zero findings
+      # and report "nothing to file", a crash reading as a pass (#3058). So zero reports is
+      # a hard failure. A partial night is filed, not thrown away: each guide is its own
+      # walk, and refusing all ten because one failed kept one always-failing guide from
+      # ever letting the rest be recorded. The guides that did not report are named here
+      # as errors, their failed matrix jobs keep the run red, and the rotation puts them
+      # back at the front of the queue (scripts/audit/audit_history.py).
+      - name: Require the discovered docs to have reported in
         env:
           EXPECTED_DOCS: ${{ needs.discover.outputs.docs }}
         run: |
           set -euo pipefail
           expected=$(printf '%s' "$EXPECTED_DOCS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
           got=$(find walkthrough-findings -name 'findings-walkthrough-*.json' | wc -l)
-          if [ "$got" -lt "$expected" ]; then
-            echo "::error title=Doc walkthrough::Only $got/$expected guides produced findings — $((expected - got)) went unverified. Not synthesizing off a partial sweep."
+          if [ "$got" -eq 0 ]; then
+            echo "::error title=Doc walkthrough::None of the $expected guides produced findings, so nothing was verified. Not synthesizing an empty sweep."
             exit 1
           fi
-          echo "All $got/$expected guides reported in."
+          missing=$(EXPECTED_DOCS="$EXPECTED_DOCS" python3 -c '
+          import json, os, pathlib
+          have = {p.name for p in pathlib.Path("walkthrough-findings").rglob("findings-walkthrough-*.json")}
+          for doc in json.loads(os.environ["EXPECTED_DOCS"]):
+              if "findings-walkthrough-%s.json" % doc["slug"] not in have:
+                  print(doc["path"])
+          ')
+          if [ -n "$missing" ]; then
+            {
+              echo "### ⛔ Guides that went unverified"
+              echo ""
+              echo "These guides produced no findings, so they were not checked tonight. Everything the other guides found is filed below; these stay first in line for the next turn."
+              echo ""
+              while IFS= read -r path; do
+                echo "- \`$path\`"
+              done <<< "$missing"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r path; do
+              echo "::error title=Doc walkthrough guide unverified::$path produced no findings tonight, so it was not verified. The other guides' findings are still filed."
+            done <<< "$missing"
+          fi
+          echo "$got/$expected guides reported in."
 
       - name: Ensure labels exist
         env:

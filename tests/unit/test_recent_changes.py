@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -72,14 +73,31 @@ PRS = [
 ]
 
 
+def asked_numbers(args: list[str]) -> list[int]:
+    query = next(a for a in args if a.startswith("query="))
+    return [int(n) for n in re.findall(r"pullRequest\(number: (\d+)\)", query)]
+
+
 def stub_gh(rc, monkeypatch, prs=PRS):
+    """GitHub's GraphQL reply for the aliased PR lookups the script sends."""
     real = rc._run
     calls = []
+    by_number = {p["number"]: p for p in prs}
 
     def fake(args):
         if args[0] == "gh":
             calls.append(args)
-            return subprocess.CompletedProcess(args, 0, json.dumps(prs), "")
+            repository = {f"p{n}": by_number.get(n) for n in asked_numbers(args)}
+            missing = [n for n in asked_numbers(args) if n not in by_number]
+            reply = {"data": {"repository": repository}}
+            if missing:
+                reply["errors"] = [
+                    {"type": "NOT_FOUND", "path": ["repository", f"p{n}"]}
+                    for n in missing
+                ]
+            return subprocess.CompletedProcess(
+                args, 1 if missing else 0, json.dumps(reply), ""
+            )
         return real(args)
 
     monkeypatch.setattr(rc, "_run", fake)
@@ -162,6 +180,55 @@ def test_one_gh_call_covers_every_pr(rc, repo, tmp_path, monkeypatch):
     calls = stub_gh(rc, monkeypatch)
     run_main(rc, tmp_path)
     assert len(calls) == 1
+
+
+def test_only_the_prs_the_window_names_are_looked_up(rc, repo, tmp_path, monkeypatch):
+    """Not every PR merged since some date: just the commits' own, by number."""
+    _, shas = repo
+    calls = stub_gh(rc, monkeypatch)
+    run_main(rc, tmp_path, "--base-sha", shas[0])
+    assert asked_numbers(calls[0]) == [3, 2]
+    assert ["-f", "owner=amd"] == calls[0][5:7] and ["-f", "name=gaia"] == calls[0][7:]
+
+
+def test_a_number_that_is_not_a_pr_keeps_its_commit_subject(
+    rc, repo, tmp_path, monkeypatch
+):
+    """`(#1)` resolves to no PR (NOT_FOUND): the commit's own subject is shown."""
+    stub_gh(rc, monkeypatch)
+    text, _, _ = run_main(rc, tmp_path)
+    assert "## #1 feat: start (#1)" in text
+    assert "The chat guide now says X." in text
+
+
+def test_lookups_are_batched_and_capped_and_the_cap_is_stated(rc, monkeypatch):
+    commits = [
+        {"sha": f"{n:040d}", "date": "", "subject": f"s (#{n})", "pr": n, "paths": []}
+        for n in range(400, 0, -1)
+    ]
+    calls = stub_gh(
+        rc,
+        monkeypatch,
+        prs=[{"number": n, "title": f"t{n}", "body": ""} for n in range(1, 401)],
+    )
+    prs, not_read = rc.fetch_prs("amd/gaia", commits, limit=120)
+    assert [len(asked_numbers(c)) for c in calls] == [50, 50, 20]
+    assert asked_numbers(calls[0])[0] == 400
+    assert len(prs) == 120 and not_read == 280
+    text = rc.render(commits, prs, "a window", 100_000, not_read)
+    assert "read for the newest 120 PRs only; the 280 older PRs" in text
+
+
+def test_a_lookup_error_other_than_not_found_stops_the_run(rc, monkeypatch):
+    def fake(args):
+        reply = {"errors": [{"type": "RATE_LIMITED", "message": "slow down"}]}
+        return subprocess.CompletedProcess(args, 1, json.dumps(reply), "")
+
+    monkeypatch.setattr(rc, "_run", fake)
+    commits = [{"sha": "a", "date": "", "subject": "x (#5)", "pr": 5, "paths": []}]
+    with pytest.raises(SystemExit) as excinfo:
+        rc.fetch_prs("amd/gaia", commits)
+    assert "RATE_LIMITED" in str(excinfo.value)
 
 
 def test_a_gh_failure_stops_the_run(rc, repo, tmp_path, monkeypatch):

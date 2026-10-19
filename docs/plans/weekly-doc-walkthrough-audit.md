@@ -52,9 +52,11 @@ scheme, `bug` → auto-fix promotion, `audit-wontfix` permanent suppression — 
 ## Cadence & runtime
 
 > **Cadence update (October 2026):** every third night, dispatched by
-> `claude-audit-rotation.yml` at 10:13 UTC, walking **ten** guides a turn: ones a recent
-> merge changed first, then the least recently walked (`scripts/audit/audit_history.py
-> rotate`). A full weekly pass ran 7–9 hours serially into the US workday on the shared
+> `claude-audit-rotation.yml` at 10:13 UTC, walking **ten** guides a turn: ones edited since
+> their own last walk first (at most half the slots), then the least recently walked
+> (`scripts/audit/audit_history.py rotate`). A guide that fails 3 turns running while
+> others finish is backed off to one retry every 9 days and flagged in the summary. A full
+> weekly pass ran 7–9 hours serially into the US workday on the shared
 > Strix Point pool and spent ~$190 of the weekly Claude budget in one day. Per-guide
 > timeout is 50 minutes. The paragraph below is the original design.
 
@@ -218,10 +220,13 @@ are never filed, 🔴/🟠 defects become **one issue listing every guide they b
 defect the backlog already tracks gets a comment instead. The run report goes to
 `$GITHUB_STEP_SUMMARY`, not an issue.
 
-**A partial sweep never synthesizes.** Every discovered doc writes a findings file even
-when clean, so a short count means guides went unwalked — the job fails instead of filing.
-Without that gate a night where every judge crashed reached synthesis with zero findings
-and reported "nothing to file": a crash reading as a pass (#3058).
+**An empty sweep never synthesizes; a partial one files what it has.** Every discovered doc
+writes a findings file even when clean. Zero files fails the job: without that gate a night
+where every judge crashed reached synthesis with zero findings and reported "nothing to
+file", a crash reading as a pass (#3058). A short count files the guides that reported and
+names each missing guide as an error; their failed matrix jobs keep the run red. Refusing a
+partial night outright let one always-failing guide stop every other guide from being
+recorded, so the rotation never moved on (October 2026).
 
 ## Non-goals (v1)
 
