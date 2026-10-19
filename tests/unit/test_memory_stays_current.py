@@ -480,3 +480,108 @@ class TestLastConfirmedMeansConfirmed:
             )
         finally:
             db.close()
+
+
+class TestAdversarialEdges:
+    """Inputs that try to slip past the fixes above."""
+
+    def _age(self, store, kid, field, days):
+        with store._lock:
+            store._conn.execute(
+                f"UPDATE knowledge SET {field} = ? WHERE id = ?", (_iso(days), kid)
+            )
+            store._conn.commit()
+
+    def test_a_memory_confirmed_since_its_last_decay_is_not_decayed(self, store):
+        kid = store.store(
+            category="fact", content="User keeps bees on the roof", confidence=0.5
+        )
+        self._age(store, kid, "last_used", 90)
+        self._age(store, kid, "decayed_at", 45)
+        self._age(store, kid, "updated_at", 5)
+
+        assert store.apply_confidence_decay() == 0
+        assert store.get_item(kid)["confidence"] == pytest.approx(0.5)
+
+    def test_decay_runs_again_once_a_full_month_has_passed(self, store):
+        kid = store.store(
+            category="fact", content="User keeps bees on the roof", confidence=0.5
+        )
+        for field in ("last_used", "updated_at"):
+            self._age(store, kid, field, 90)
+        self._age(store, kid, "decayed_at", 31)
+
+        assert store.apply_confidence_decay() == 1
+
+    def test_a_negative_nudge_neither_confirms_nor_leaves_the_range(self, store):
+        kid = store.store(
+            category="fact", content="User keeps bees on the roof", confidence=0.05
+        )
+        self._age(store, kid, "updated_at", 60)
+        confirmed = store.get_item(kid)["updated_at"]
+
+        store.update_confidence(kid, -0.5)
+
+        item = store.get_item(kid)
+        assert item["confidence"] == 0.0
+        assert item["updated_at"] == confirmed
+
+    def test_a_superseded_copy_is_not_current(self, store):
+        old = store.store(category="fact", content="User lives in Calgary")
+        new = store.store(category="fact", content="User lives in Toronto")
+        store.update(old, superseded_by=new)
+
+        assert not store.is_current("User lives in Calgary", "fact")
+        assert store.is_current("User lives in Toronto", "fact")
+
+    def test_the_same_words_in_another_category_are_not_current(self, store):
+        store.store(category="preference", content="User likes dark roast coffee")
+        assert not store.is_current("User likes dark roast coffee", "fact")
+
+    @pytest.mark.parametrize(
+        "current, new",
+        [
+            ("User's standup is at 9am", "User's standup is at 10am"),
+            ("User's flat is unit 12", "User's flat is unit 120"),
+            ("User runs 5k on Saturdays", "User runs 10k on Saturdays"),
+        ],
+    )
+    def test_a_changed_number_is_a_different_memory(self, store, current, new):
+        store.store(category="fact", content=current)
+        assert not store.is_current(new, "fact")
+        assert store.is_current(current, "fact")
+
+    def test_a_change_made_before_the_chat_does_not_block_it(self, store):
+        old = store.store(category="fact", content="User lives in Calgary")
+        new = store.store(category="fact", content="User lives in Toronto")
+        store.update(old, superseded_by=new)
+        self._age(store, old, "updated_at", 60)
+
+        assert not store.changed_since("User lives in Calgary", _iso(30))
+        assert store.changed_since("User lives in Calgary", _iso(90))
+
+    @pytest.mark.parametrize("due_at", [" ", "2026-13-01", "soon", {"day": 3}, [1]])
+    def test_a_malformed_due_date_is_dropped_not_fatal(self, tmp_path, due_at):
+        host = _host(tmp_path, [])
+        host.chat.send_messages.side_effect = lambda *a, **k: MagicMock(
+            text=json.dumps(
+                [
+                    {
+                        "op": "add",
+                        "category": "reminder",
+                        "grounded": "user",
+                        "content": "User's car service is booked",
+                        "due_at": due_at,
+                    }
+                ]
+            ),
+            finish_reason="stop",
+        )
+        host._after_process_query("My car service is booked", "Noted.")
+        assert host.wait_for_memory_extraction(timeout=10)
+
+        rows = host._memory_store._conn.execute(
+            "SELECT content, due_at FROM knowledge"
+        ).fetchall()
+        assert rows == [("User's car service is booked", None)]
+        host.close()

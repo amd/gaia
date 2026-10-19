@@ -287,7 +287,7 @@ Start a fresh memory session. Generates a new session ID and applies confidence 
 def reset_memory_session(self) -> None
 ```
 
-Confidence decay multiplies the confidence of items not accessed in 30+ days by 0.9. This is called once per session start to keep knowledge fresh.
+Confidence decay multiplies the confidence of items not accessed in 30+ days by 0.9, at most once a month per item and not within a month of its last confirmation. It is checked once per session start to keep knowledge fresh.
 
 ### Properties
 
@@ -708,7 +708,7 @@ def apply_confidence_decay(
 ) -> int:                   # Returns number of entries decayed
 ```
 
-Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days, at most once per `days_threshold` (tracked in `decayed_at`). It never moves `updated_at`, which the agent is shown as "last confirmed" and which orders memories newest first. Called once per session start via `reset_memory_session()`.
+Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days, at most once per `days_threshold` (tracked in `decayed_at`) and not within `days_threshold` of its last confirmation. It never moves `updated_at`, which the agent is shown as "last confirmed" and which orders memories newest first. Called once per session start via `reset_memory_session()`.
 
 #### update_confidence()
 

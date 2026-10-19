@@ -4183,10 +4183,11 @@ class MemoryStore:
                         confidence = confidence * ?,
                         decayed_at = ?
                     WHERE last_used IS NOT NULL AND last_used < ?
-                          AND COALESCE(decayed_at, updated_at) < ?
+                          AND updated_at < ?
+                          AND (decayed_at IS NULL OR decayed_at < ?)
                           AND superseded_by IS NULL
                     """,
-                    (decay_factor, now, cutoff, cutoff),
+                    (decay_factor, now, cutoff, cutoff, cutoff),
                 )
                 rowcount = cursor.rowcount
                 self._conn.commit()
