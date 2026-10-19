@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     _is_local_url,
+    _model_ids_match,
     cloud_model_provider,
     find_model_requirement,
     lemonade_auth_headers,
@@ -146,9 +147,20 @@ def _set_download_progress(model_name: str, payload: Dict[str, Any]) -> None:
 
 
 def _get_download_progress(model_name: str) -> Optional[Dict[str, Any]]:
-    """Return a copy of the latest progress dict, or None."""
+    """Return a copy of the latest progress dict, or None.
+
+    A pull registers a custom model as ``user.X`` and Lemonade then lists it as
+    ``X``, so either name finds the download.
+    """
     with _download_progress_lock:
-        entry = _download_progress.get(model_name)
+        entry = _download_progress.get(model_name) or next(
+            (
+                v
+                for k, v in _download_progress.items()
+                if _model_ids_match(k, model_name)
+            ),
+            None,
+        )
         return dict(entry) if entry else None
 
 

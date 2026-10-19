@@ -79,3 +79,14 @@ def test_listed_name_without_the_namespace_still_registers_under_it(sent):
 def test_builtin_and_unknown_models_pull_by_name_only(sent, model):
     asyncio.run(system._stream_lemonade_pull(model, True))
     assert sent == [{"model_name": model, "stream": True, "force": True}]
+
+
+def test_progress_follows_the_model_once_lemonade_drops_the_user_prefix(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        lc.GPT_OSS_20B_MODEL_NAME, {"state": "downloading", "percent": 40}
+    )
+    listed = lc.GPT_OSS_20B_MODEL_NAME[len("user.") :]
+    assert system._get_download_progress(listed)["percent"] == 40
+    assert system._get_download_progress(lc.GPT_OSS_20B_MODEL_NAME)["percent"] == 40
+    assert system._get_download_progress("gpt-oss-20b-mxfp4-GGUF") is None
