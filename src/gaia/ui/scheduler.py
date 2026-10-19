@@ -680,24 +680,36 @@ def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime
     if config.start_hour is not None:
         # Windowed schedule: "every hour from 8am to 6pm"
         candidate = now + interval
+        start_h = config.start_hour
         end_h = config.end_hour if config.end_hour is not None else 24
-        local_hour = candidate.astimezone(zone).hour
+        # "10pm to 2am" (or same start and end) wraps past midnight.
+        wraps = end_h <= start_h
+        local = candidate.astimezone(zone)
 
-        # If past end of window or before start, jump to start of next window
-        if local_hour >= end_h or local_hour < config.start_hour:
-            today_start = _at_local(local_now.date(), config.start_hour, 0, zone)
-            if now < today_start:
-                candidate = today_start
+        if wraps:
+            inside = local.hour >= start_h or local.hour < end_h
+        else:
+            inside = start_h <= local.hour < end_h
+
+        if not inside:
+            start_on_day = _at_local(local.date(), start_h, 0, zone)
+            if candidate < start_on_day:
+                candidate = start_on_day
             else:
                 candidate = _at_local(
-                    local_now.date() + timedelta(days=1), config.start_hour, 0, zone
+                    local.date() + timedelta(days=1), start_h, 0, zone
                 )
 
         if days:
-            day = candidate.astimezone(zone).date()
-            while day.weekday() not in days:
-                day += timedelta(days=1)
-                candidate = _at_local(day, config.start_hour, 0, zone)
+            local = candidate.astimezone(zone)
+            # The early-morning part of a wrapping window belongs to the day it opened.
+            window_day = local.date()
+            if wraps and local.hour < start_h:
+                window_day -= timedelta(days=1)
+            if window_day.weekday() not in days:
+                while window_day.weekday() not in days:
+                    window_day += timedelta(days=1)
+                candidate = _at_local(window_day, start_h, 0, zone)
 
         return candidate
 

@@ -73,6 +73,38 @@ def test_next_run_is_in_the_schedule_time_zone(text, tz, now, expected):
     assert compute_next_run(_config(text, tz), after=_utc(now)) == _utc(expected)
 
 
+@pytest.mark.parametrize(
+    "text,now,expected",
+    [
+        # Inside a window that crosses midnight: keep the hourly cadence.
+        ("every hour from 10pm to 2am", "2026-10-15T22:00", "2026-10-15T23:00"),
+        ("every hour from 10pm to 2am", "2026-10-15T23:00", "2026-10-16T00:00"),
+        ("every hour from 10pm to 2am", "2026-10-16T00:30", "2026-10-16T01:30"),
+        # Past the end: wait for tonight's 10pm, not tomorrow's.
+        ("every hour from 10pm to 2am", "2026-10-16T01:30", "2026-10-16T22:00"),
+        ("every hour from 10pm to 2am", "2026-10-16T12:00", "2026-10-16T22:00"),
+        # Ending at midnight leaves only the 11pm hour.
+        ("every 30m from 11pm to midnight", "2026-10-15T23:00", "2026-10-15T23:30"),
+        ("every 30m from 11pm to midnight", "2026-10-15T23:30", "2026-10-16T23:00"),
+        # Same start and end is a full day.
+        ("every hour from 9am to 9am", "2026-10-15T03:00", "2026-10-15T04:00"),
+        # Friday night's window runs into Saturday morning.
+        (
+            "every hour from 10pm to 2am on fri",
+            "2026-10-16T23:00",
+            "2026-10-17T00:00",
+        ),
+        (
+            "every hour from 10pm to 2am on fri",
+            "2026-10-17T01:30",
+            "2026-10-23T22:00",
+        ),
+    ],
+)
+def test_window_that_crosses_midnight_runs_inside_it(text, now, expected):
+    assert compute_next_run(_config(text, "UTC"), after=_utc(now)) == _utc(expected)
+
+
 @pytest.mark.parametrize("tz", [LA, "Europe/London", "Australia/Sydney"])
 def test_daily_time_holds_across_a_dst_change(tz):
     """Walk 60 consecutive runs through a DST change: always 9:00 local, once a day."""
