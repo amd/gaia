@@ -26,6 +26,22 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
+#: A run that came due while the PC was off or asleep (or GAIA was closed)
+#: still runs if GAIA is back within this long of its time. Older ones are
+#: recorded in the history as missed, not run late.
+MISSED_RUN_GRACE_SECONDS = 3600
+#: Longest a waiting timer goes without re-reading the wall clock, so a sleep
+#: or a clock change is noticed this soon after waking.
+WAKE_CHECK_SECONDS = 30.0
+#: Most due times counted for one missed stretch; past it the history entry
+#: says "100000+".
+_MAX_MISSED_COUNTED = 100_000
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 # ── Day name mappings ────────────────────────────────────────────────────────
 
 _DAY_FULL = {
@@ -688,6 +704,23 @@ def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime
     return candidate
 
 
+def _parse_due(task: "ScheduledTask") -> datetime:
+    """``task.next_run_at`` as an aware UTC datetime.
+
+    Raises:
+        RuntimeError: the stored value is not an ISO timestamp.
+    """
+    try:
+        due = datetime.fromisoformat(task.next_run_at)
+    except ValueError as e:
+        raise RuntimeError(
+            f"Scheduled task '{task.name}' has an unreadable next_run_at "
+            f"{task.next_run_at!r}. Fix or clear the row in the chat database "
+            "(scheduled_tasks.next_run_at); a cleared value is recomputed."
+        ) from e
+    return due if due.tzinfo else due.replace(tzinfo=timezone.utc)
+
+
 # ── ScheduledTask ────────────────────────────────────────────────────────────
 
 
@@ -1098,35 +1131,99 @@ class Scheduler:
     # ── Internal: timer loop ──────────────────────────────────────────────
 
     async def _run_loop(self, task: ScheduledTask):
-        """Run the timer loop for a single task."""
+        """Run the timer loop for a single task.
+
+        The task runs at its stored ``next_run_at``, so a restart keeps its
+        time. Runs whose time passed while nothing could run them are
+        recorded as missed (see :meth:`_skip_missed`).
+        """
         try:
             while self._running and task.status == "active":
-                config = (
-                    ScheduleConfig.from_json(task.schedule_config)
-                    if task.schedule_config
-                    else None
-                )
-                if config and (
-                    config.time_of_day
-                    or config.start_hour is not None
-                    or config.days_of_week
-                ):
-                    next_dt = compute_next_run(config)
-                    sleep_secs = max(
-                        0, (next_dt - datetime.now(timezone.utc)).total_seconds()
-                    )
-                else:
-                    sleep_secs = task.interval_seconds
-
-                await asyncio.sleep(sleep_secs)
+                due = self._due_at(task)
+                await self._sleep_until(due)
 
                 if not self._running or task.status != "active":
                     break
 
+                if self._skip_missed(task, due):
+                    continue
                 await self._execute_task(task)
         except asyncio.CancelledError:
             logger.debug("Timer cancelled for task '%s'", task.name)
             raise
+
+    @staticmethod
+    def _config(task: ScheduledTask) -> Optional[ScheduleConfig]:
+        return (
+            ScheduleConfig.from_json(task.schedule_config)
+            if task.schedule_config
+            else None
+        )
+
+    def _following(self, task: ScheduledTask, after: datetime) -> datetime:
+        """The task's first due time after *after*."""
+        config = self._config(task)
+        if config:
+            return compute_next_run(config, after=after)
+        return after + timedelta(seconds=task.interval_seconds)
+
+    def _due_at(self, task: ScheduledTask) -> datetime:
+        if task.next_run_at:
+            return _parse_due(task)
+        return self._following(task, _utcnow())
+
+    @staticmethod
+    async def _sleep_until(due: datetime) -> None:
+        # Short naps, so waking from a sleep is noticed within one of them.
+        while True:
+            left = (due - _utcnow()).total_seconds()
+            if left <= 0:
+                return
+            await asyncio.sleep(min(left, WAKE_CHECK_SECONDS))
+
+    def _skip_missed(self, task: ScheduledTask, due: datetime) -> bool:
+        """Record the runs nothing ran at their time; True to skip this one.
+
+        Of the due times that have passed, the latest still runs if it is
+        within :data:`MISSED_RUN_GRACE_SECONDS`; every other one goes into
+        the history as missed. Nothing is run twice to catch up.
+        """
+        now = _utcnow()
+        passed = [due]
+        following = self._following(task, due)
+        while following <= now and len(passed) < _MAX_MISSED_COUNTED:
+            passed.append(following)
+            following = self._following(task, following)
+        runs_now = now - passed[-1] <= timedelta(seconds=MISSED_RUN_GRACE_SECONDS)
+        missed = passed[:-1] if runs_now else passed
+        if missed:
+            self._record_missed(task, missed, more=following <= now)
+        if runs_now:
+            return False
+        task.next_run_at = self._following(task, now).isoformat()
+        self._db_update_task(task)
+        return True
+
+    def _record_missed(
+        self, task: ScheduledTask, missed: List[datetime], more: bool
+    ) -> None:
+        config = self._config(task)
+        zone = resolve_zone(config.timezone if config else None)
+
+        def when(moment: datetime) -> str:
+            return moment.astimezone(zone).strftime("%Y-%m-%d %H:%M %Z")
+
+        reason = "while the PC was off or asleep, or GAIA was closed"
+        if len(missed) == 1:
+            message = f"Missed the run due {when(missed[0])} {reason}."
+        else:
+            count = f"{len(missed)}{'+' if more else ''}"
+            message = (
+                f"Missed {count} runs due {when(missed[0])} to "
+                f"{when(missed[-1])} {reason}."
+            )
+        logger.warning("Scheduled task '%s': %s", task.name, message)
+        self._db_store_result(task.id, missed[-1].isoformat(), error=message)
 
     async def _execute_task(self, task: ScheduledTask):
         """Execute a single task run.
@@ -1279,6 +1376,9 @@ class Scheduler:
                     "the schedule schema is out of date — check "
                     "src/gaia/ui/database.py."
                 ) from e
+            if task.next_run_at:
+                # Same reason: the timer reads it on its first pass.
+                _parse_due(task)
             if task.schedule_config:
                 # Validate eagerly so a corrupt row fails the boot loudly
                 # instead of killing the timer coroutine unobserved later.

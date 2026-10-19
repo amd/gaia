@@ -11,7 +11,16 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 # tomllib is stdlib on 3.11+; fall back to tomli on 3.10 (python_requires>=3.10).
 try:
@@ -41,6 +50,14 @@ class Schedule:
     next_run: Optional[str] = None
     session_ref: Optional[str] = None
     created_at: str = ""
+    #: Runs that came due while nothing could run them, and the latest one.
+    missed_count: int = 0
+    last_missed: Optional[str] = None
+    #: When it was last resumed: runs due while it was paused are not missed.
+    resumed_at: Optional[str] = None
+    #: Since when missed runs are counted. Unset on a schedule saved before
+    #: they were, whose old ``next_run`` cannot be trusted to count from.
+    missed_since: Optional[str] = None
 
     def __post_init__(self) -> None:
         if bool(self.skill) == bool(self.prompt):
@@ -70,6 +87,14 @@ class Schedule:
             d["next_run"] = self.next_run
         if self.session_ref:
             d["session_ref"] = self.session_ref
+        if self.missed_count:
+            d["missed_count"] = self.missed_count
+        if self.last_missed:
+            d["last_missed"] = self.last_missed
+        if self.resumed_at:
+            d["resumed_at"] = self.resumed_at
+        if self.missed_since:
+            d["missed_since"] = self.missed_since
         return d
 
     @classmethod
@@ -86,7 +111,20 @@ class Schedule:
             next_run=data.get("next_run"),
             session_ref=data.get("session_ref"),
             created_at=data.get("created_at", ""),
+            missed_count=int(data.get("missed_count", 0)),
+            last_missed=data.get("last_missed"),
+            resumed_at=data.get("resumed_at"),
+            missed_since=data.get("missed_since"),
         )
+
+
+class MissedRuns(NamedTuple):
+    """What one check found: due times nothing ran (ISO, oldest first), the
+    next run the daemon expects, and since when misses are counted."""
+
+    missed: List[str]
+    next_run: Optional[str]
+    since: Optional[str] = None
 
 
 @runtime_checkable
@@ -113,6 +151,10 @@ class ScheduleStore(Protocol):
     def mark_run(
         self, name: str, last_run: str, next_run: Optional[str] = None
     ) -> Schedule: ...
+
+    def account_missed(
+        self, name: str, decide: Callable[[Schedule], Optional[MissedRuns]]
+    ) -> Optional[Schedule]: ...
 
 
 class TomlScheduleStore:
@@ -154,6 +196,8 @@ class TomlScheduleStore:
                 pending.unlink(missing_ok=True)
 
     def add(self, schedule: Schedule) -> None:
+        # A new schedule counts the runs it misses from the moment it exists.
+        schedule.missed_since = schedule.missed_since or schedule.created_at
         with store_lock(self.path):
             schedules = self.load()
             if schedule.name in schedules:
@@ -192,6 +236,9 @@ class TomlScheduleStore:
                     f"no schedule named {name!r} in {self.path}; "
                     f"run `gaia schedule list` to see registered schedules"
                 )
+            if enabled and not schedules[name].enabled:
+                schedules[name].resumed_at = datetime.now(timezone.utc).isoformat()
+                schedules[name].next_run = None
             schedules[name].enabled = enabled
             self.save(schedules)
             return schedules[name]
@@ -211,3 +258,28 @@ class TomlScheduleStore:
                 schedules[name].next_run = next_run
             self.save(schedules)
             return schedules[name]
+
+    def account_missed(
+        self, name: str, decide: Callable[[Schedule], Optional[MissedRuns]]
+    ) -> Optional[Schedule]:
+        """Apply what *decide* says the schedule missed, under the store lock.
+
+        *decide* sees the schedule as it is on disk now and returns the runs
+        it missed, or None to leave it alone. Returns the updated schedule, or
+        None when there is no such schedule any more.
+        """
+        with store_lock(self.path):
+            schedules = self.load()
+            schedule = schedules.get(name)
+            if schedule is None:
+                return None
+            outcome = decide(schedule)
+            if outcome is None:
+                return schedule
+            if outcome.missed:
+                schedule.missed_count += len(outcome.missed)
+                schedule.last_missed = outcome.missed[-1]
+            schedule.next_run = outcome.next_run
+            schedule.missed_since = schedule.missed_since or outcome.since
+            self.save(schedules)
+            return schedule

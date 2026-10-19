@@ -4336,6 +4336,7 @@ def _handle_schedule(args):
             print(
                 f"{s.name}  [{state}]  cron={s.cron!r}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
+                + (f"  missed={s.missed_count}" if s.missed_count else "")
             )
         return
 
@@ -4348,6 +4349,13 @@ def _handle_schedule(args):
         print(f"enabled:    {s.enabled}")
         print(f"created_at: {s.created_at}")
         print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
+        if s.missed_count:
+            runs = "run" if s.missed_count == 1 else "runs"
+            print(
+                f"missed:     {s.missed_count} {runs} in all while the PC was off or "
+                "asleep, or the schedule daemon wasn't running "
+                f"(latest due {s.last_missed})"
+            )
         return
 
     if action == "remove":
