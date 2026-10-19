@@ -4,12 +4,20 @@
 """Console helpers: whether ``input()`` can reach a person, and how to start a
 child process without a console window popping up on Windows."""
 
+import subprocess
 import sys
+
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 # Windows process-creation flags. Literal so they resolve off Windows too, where
 # ``subprocess`` does not define them.
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+_ERROR_ACCESS_DENIED = 5
 
 
 def windows_hidden_popen_kwargs() -> dict:
@@ -39,6 +47,39 @@ def background_popen_kwargs() -> dict:
     if sys.platform != "win32":
         return {"start_new_session": True}
     return {"creationflags": CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP}
+
+
+def popen_outliving_job(argv, **kwargs) -> subprocess.Popen:
+    """``subprocess.Popen`` for a server every GAIA process shares.
+
+    Pass :func:`background_popen_kwargs` in *kwargs* as for any background
+    server. On Windows the child also asks to leave the caller's job object
+    (the flag does nothing outside one): otherwise the TUI session whose agent
+    happened to start GAIA's daemon kills it, and the Lemonade Server it runs,
+    for every other session when it closes.
+
+    Windows lets it leave only when every enclosing job allows that. Where one
+    does not, some Windows builds refuse the spawn, which is logged and the
+    server started in the job as before; others start it in the job without
+    saying so, which nothing here can detect.
+    """
+    if sys.platform != "win32":
+        return subprocess.Popen(argv, **kwargs)
+    flags = kwargs.get("creationflags", 0)
+    try:
+        return subprocess.Popen(
+            argv, **{**kwargs, "creationflags": flags | CREATE_BREAKAWAY_FROM_JOB}
+        )
+    except OSError as e:
+        if getattr(e, "winerror", None) != _ERROR_ACCESS_DENIED:
+            raise
+    log.warning(
+        "%s runs inside a Windows job object that does not let it leave, so it "
+        "stops when the program that started GAIA closes. Start GAIA from a "
+        "terminal or the GAIA app to keep it running for every session.",
+        argv[0],
+    )
+    return subprocess.Popen(argv, **kwargs)
 
 
 def stdin_is_interactive() -> bool:

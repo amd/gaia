@@ -301,8 +301,10 @@ def test_a_stopped_extraction_is_dropped_when_the_queue_is_full(store, monkeypat
         "Please remember that my favourite colour is teal", "Noted."
     )
     assert first_running.wait(5)
-    host._note_user_turn_started()
+    # Queue the next turn before stopping the running job, so the queue is full
+    # when the stop lands; the other order races the queue's SQLite writes.
     host._after_process_query("And I live in Calgary these days, by the way", "Okay.")
+    host._note_user_turn_started()
     host._note_user_turn_finished()
     assert host.wait_for_memory_extraction(timeout=5)
 

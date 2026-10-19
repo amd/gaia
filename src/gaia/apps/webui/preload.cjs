@@ -82,6 +82,15 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   },
 });
 
+// ── Window frame ─────────────────────────────────────────────────────────
+// The app draws its own top row; this says how the native controls sit in it.
+contextBridge.exposeInMainWorld("gaiaWindow", {
+  /** "mac": traffic lights at the top left; "overlay": controls at the top right. */
+  titleBar: process.platform === "darwin" ? "mac" : "overlay",
+  /** Match the native window controls to the app: { color, symbolColor } as #rrggbb. */
+  setColors: (colors) => ipcRenderer.invoke("window:set-titlebar-colors", colors),
+});
+
 // ── Install progress (Phase A) ──────────────────────────────────────────
 // Exposed as a separate global so the progress window can use it without
 // pulling in the full gaiaAPI surface (and so it keeps working if an
