@@ -3383,7 +3383,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
-        _stream_start = _time.time()
+        last_event_at = _time.monotonic()
 
         def _blocked_policy_steps():
             return [
@@ -3443,7 +3443,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                _idle.progressed(_time.monotonic())
+                last_event_at = _time.monotonic()
+                _idle.progressed(last_event_at)
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -3494,6 +3495,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": f"Using {event.get('tool', 'tool')}",
                             "tool": event.get("tool"),
                             "detail": event.get("detail"),
+                            "narration": event.get("narration"),
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
@@ -3505,6 +3507,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     tool_step = _find_last_tool_step(captured_steps)
                     if tool_step is not None:
                         tool_step["detail"] = event.get("detail", "")
+                        if event.get("narration"):
+                            tool_step["narration"] = event["narration"]
                 elif event_type == "tool_end" and captured_steps:
                     tool_step = _find_last_tool_step(captured_steps)
                     if tool_step is not None:
@@ -3541,20 +3545,45 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             tool_step["render"] = event["render"]
                             tool_step["data"] = event.get("data")
                 elif event_type == "plan":
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "plan",
-                            "label": "Created plan",
-                            "planSteps": event.get("steps"),
-                            "active": False,
-                            "success": True,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
+                    # The agent re-sends its plan before every step; keep one row
+                    # and move its current step. A replan still gets its own row.
+                    last_plan = next(
+                        (
+                            s
+                            for s in reversed(captured_steps)
+                            if s.get("type") == "plan"
+                        ),
+                        None,
                     )
+                    same_plan = (
+                        last_plan
+                        if last_plan is not None
+                        and last_plan.get("planSteps") == event.get("steps")
+                        else None
+                    )
+                    if same_plan is not None:
+                        same_plan["currentStep"] = event.get("current_step")
+                        if event.get("step_narrations"):
+                            same_plan["planNarrations"] = event["step_narrations"]
+                    else:
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "plan",
+                                "label": "Created plan",
+                                "planSteps": event.get("steps"),
+                                "planNarrations": event.get("step_narrations"),
+                                "currentStep": event.get("current_step"),
+                                "active": False,
+                                "success": True,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                            }
+                        )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
                 ):
@@ -3626,9 +3655,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # Every 15s (75 cycles) emit a visible status so the user knows
                 # the model is still processing (prompt prefill is silent).
                 # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend.
-                if idle_cycles % 75 == 0:
-                    elapsed = int(_time.time() - _stream_start)
+                # into a single updating step on the frontend. A running tool
+                # shows its own timer, so the model is not the one being waited on.
+                if idle_cycles % 75 == 0 and not sse_handler.tool_running():
+                    elapsed = int(_time.monotonic() - last_event_at)
                     status_evt = json.dumps(
                         {
                             "type": "status",
