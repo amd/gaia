@@ -418,3 +418,65 @@ class TestReviewedEdges:
         assert rows == [("User's sister's wedding is next Saturday", None)]
         assert any("not an ISO date" in r.getMessage() for r in caplog.records)
         host.close()
+
+
+class TestLastConfirmedMeansConfirmed:
+    """``updated_at`` is shown to the agent as "last confirmed" and drives
+    newest-first ordering; upkeep must not move it on every idle memory."""
+
+    def _age(self, store, kid, field, days):
+        with store._lock:
+            store._conn.execute(
+                f"UPDATE knowledge SET {field} = ? WHERE id = ?", (_iso(days), kid)
+            )
+            store._conn.commit()
+
+    def test_decay_does_not_touch_last_confirmed_and_runs_once_a_month(self, store):
+        kid = store.store(
+            category="fact", content="User keeps bees on the roof", confidence=0.5
+        )
+        for field in ("last_used", "updated_at"):
+            self._age(store, kid, field, 60)
+        confirmed = store.get_item(kid)["updated_at"]
+
+        assert store.apply_confidence_decay() == 1
+        assert store.apply_confidence_decay() == 0, "decayed again the same day"
+
+        item = store.get_item(kid)
+        assert item["updated_at"] == confirmed
+        assert item["confidence"] == pytest.approx(0.45)
+
+    def test_a_reconciliation_nudge_is_not_a_confirmation(self, store):
+        kid = store.store(
+            category="fact", content="User keeps bees on the roof", confidence=0.5
+        )
+        self._age(store, kid, "updated_at", 60)
+        confirmed = store.get_item(kid)["updated_at"]
+
+        store.update_confidence(kid, 0.05)
+        assert store.get_item(kid)["updated_at"] == confirmed
+
+        store.update_confidence(kid, 0.1, confirmed=True)
+        assert store.get_item(kid)["updated_at"] != confirmed
+
+    def test_a_v6_database_gains_decayed_at(self, tmp_path):
+        import sqlite3
+
+        path = tmp_path / "v6.db"
+        MemoryStore(db_path=path).close()
+        conn = sqlite3.connect(path)
+        conn.execute("ALTER TABLE knowledge DROP COLUMN decayed_at")
+        conn.execute("UPDATE schema_version SET version = 6")
+        conn.commit()
+        conn.close()
+
+        db = MemoryStore(db_path=path)
+        try:
+            cols = [r[1] for r in db._conn.execute("PRAGMA table_info(knowledge)")]
+            assert "decayed_at" in cols
+            assert (
+                db._conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                == 7
+            )
+        finally:
+            db.close()

@@ -708,15 +708,15 @@ def apply_confidence_decay(
 ) -> int:                   # Returns number of entries decayed
 ```
 
-Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days. Called once per session start via `reset_memory_session()`.
+Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days, at most once per `days_threshold` (tracked in `decayed_at`). It never moves `updated_at`, which the agent is shown as "last confirmed" and which orders memories newest first. Called once per session start via `reset_memory_session()`.
 
 #### update_confidence()
 
 ```python
-def update_confidence(self, knowledge_id: str, delta: float) -> None
+def update_confidence(self, knowledge_id: str, delta: float, *, confirmed: bool = False) -> None
 ```
 
-Adjust confidence by `delta`, clamped to [0.0, 1.0]. Used internally by reconciliation (+0.05 reinforce, +0.1 contradict newer, -0.1 weaken) and hybrid search (+0.02 per returned result of a recall).
+Adjust confidence by `delta`, clamped to [0.0, 1.0]. Used internally by reconciliation (+0.05 reinforce, +0.1 contradict newer, -0.1 weaken). `updated_at` moves only with `confirmed=True` — a lesson whose fix just worked again; a reconciliation nudge is not a confirmation.
 
 #### delete_by_source()
 

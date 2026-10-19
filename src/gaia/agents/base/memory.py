@@ -3764,7 +3764,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         if lesson["id"] in confirmed:
             return
         confirmed.add(lesson["id"])
-        self._memory_store.update_confidence(lesson["id"], LESSON_CONFIRM_DELTA)
+        self._memory_store.update_confidence(
+            lesson["id"], LESSON_CONFIRM_DELTA, confirmed=True
+        )
 
     def overflow_recovery_note(self) -> str:
         """Lessons learned this turn, for a history that overflow recovery shrank.

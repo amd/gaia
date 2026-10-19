@@ -389,8 +389,11 @@ CREATE TABLE IF NOT EXISTS knowledge (
     due_at      TEXT,
     reminded_at TEXT,
     embedding   BLOB,
-    superseded_by TEXT
+    superseded_by TEXT,
+    decayed_at  TEXT
 );
+-- knowledge.decayed_at (v7): when confidence decay last ran on the row, kept
+-- apart from updated_at, which the agent shows as "last confirmed".
 CREATE INDEX IF NOT EXISTS idx_knowledge_due ON knowledge(due_at)
     WHERE due_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_knowledge_context ON knowledge(context);
@@ -678,9 +681,9 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v6 schema.  Existing databases at v1–v5 are
-        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 through
-        v5→v6 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v7 schema.  Existing databases at v1–v6 are
+        migrated automatically (v1→v2 and v6→v7 via ALTER TABLE ADD COLUMN;
+        v2→v3 through v5→v6 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
         with self._locked():
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -697,12 +700,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v6)
+            # Initialize schema_version if empty (fresh install → v7)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (6, _now_iso()),
+                    (7, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -815,6 +818,21 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v6 complete")
             current_version = 6
+
+        if current_version < 7:
+            # v6 -> v7: knowledge.decayed_at, so confidence decay stops
+            # stamping updated_at ("last confirmed") on every idle memory.
+            try:
+                self._conn.execute("ALTER TABLE knowledge ADD COLUMN decayed_at TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+            self._conn.execute(
+                "UPDATE schema_version SET version = 7, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v7 complete")
+            current_version = 7
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -1856,18 +1874,25 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def update_confidence(self, knowledge_id: str, delta: float) -> None:
-        """Adjust confidence by delta, clamped to [0.0, 1.0]."""
+    def update_confidence(
+        self, knowledge_id: str, delta: float, *, confirmed: bool = False
+    ) -> None:
+        """Adjust confidence by delta, clamped to [0.0, 1.0].
+
+        ``updated_at`` is what the agent shows as "last confirmed", so it only
+        moves when *confirmed*: a lesson whose fix just worked again. A
+        reconciliation nudge or a recall is not a confirmation.
+        """
         with self._locked():
             try:
                 self._conn.execute(
                     """
                     UPDATE knowledge SET
                         confidence = MIN(MAX(confidence + ?, 0.0), 1.0),
-                        updated_at = ?
+                        updated_at = CASE WHEN ? THEN ? ELSE updated_at END
                     WHERE id = ?
                     """,
-                    (delta, _now_iso(), knowledge_id),
+                    (delta, int(confirmed), _now_iso(), knowledge_id),
                 )
                 self._conn.commit()
             except Exception:
@@ -2938,14 +2963,15 @@ class MemoryStore:
             count_sql = f"SELECT COUNT(*) FROM knowledge k {fts_join} {where}"
             total = self._conn.execute(count_sql, tuple(params)).fetchone()[0]
 
-            # Paginated results
+            # Paginated results. Rows written in the same clock tick tie on
+            # their timestamp; insertion order breaks it, so newest-first holds.
             select_cols = ", ".join(
                 f"k.{c.strip()}" for c in self._KNOWLEDGE_COLS.split(",")
             )
             data_sql = f"""
                 SELECT {select_cols} FROM knowledge k {fts_join}
                 {where}
-                ORDER BY k.{sort_col} {order_dir}
+                ORDER BY k.{sort_col} {order_dir}, k.rowid {order_dir}
                 LIMIT ? OFFSET ?
             """
             data_params = tuple(params) + (limit, offset)
@@ -4155,9 +4181,9 @@ class MemoryStore:
                     """
                     UPDATE knowledge SET
                         confidence = confidence * ?,
-                        updated_at = ?
+                        decayed_at = ?
                     WHERE last_used IS NOT NULL AND last_used < ?
-                          AND updated_at < ?
+                          AND COALESCE(decayed_at, updated_at) < ?
                           AND superseded_by IS NULL
                     """,
                     (decay_factor, now, cutoff, cutoff),
