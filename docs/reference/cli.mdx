@@ -444,6 +444,8 @@ gaia install --lemonade --silent
 If a different version of Lemonade is already installed, you'll be prompted to uninstall first.
 </Note>
 
+The installer is downloaded to a file of its own in the temp folder and checked against its expected size and SHA-256 before it runs. It is deleted after a successful install. After a failed one it is kept, and its path is printed so you can retry by hand. If Windows Installer still holds the file, GAIA can't delete it; it logs a warning with the path instead.
+
 ### Uninstall Command
 
 Tiered cleanup of GAIA components. By default, the OS-native uninstall (Add or Remove Programs, drag to Trash, `apt remove`) only removes the app — user data in `~/.gaia/` is preserved. This command lets you escalate cleanup as far as you want.
@@ -527,6 +529,7 @@ gaia kill [OPTIONS]
 |--------|------|-------------|
 | `--lemonade` | flag | Kill Lemonade Server and child processes |
 | `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
+| `--daemons` | flag | List every running GAIA daemon with its pid, age and home folder, and stop the orphaned ones |
 
 **Examples:**
 
@@ -538,7 +541,15 @@ gaia kill --lemonade
 ```bash Kill Process on Port
 gaia kill --port 8080
 ```
+
+```bash Stop Orphaned Daemons
+gaia kill --daemons
+```
 </CodeGroup>
+
+<Note>
+`--daemons` stops only *orphaned* daemons: ones whose home folder or `instance.json` is gone, so no GAIA command can reach them (test runs used to leave these behind). The daemon of your own home is listed but never stopped; use `gaia daemon stop` for that. Daemons of other homes, such as a `GAIA_HOME` you set elsewhere, are listed and left running. Exits 1 if an orphaned daemon would not stop.
+</Note>
 
 <Note>
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
@@ -761,17 +772,6 @@ and the same SHA-256 verification.
 Running a sidecar agent starts its sidecar automatically on first use;
 `gaia daemon start-agent <id>` is an optional pre-flight to launch and
 health-check it early.
-
-##### Automated PyPI publishing (CI)
-
-`.github/workflows/publish_agents.yml` builds every production agent wheel and
-publishes it to PyPI on a version tag (`v*`). Its matrix is derived from the
-`agents` extra in `setup.py` (via `util/list_agent_packages.py`), so adding an
-agent there is all it takes to start publishing it. The workflow uploads with
-[`pypa/gh-action-pypi-publish`](https://github.com/pypa/gh-action-pypi-publish)
-using the `PYPI_API_TOKEN` secret and `skip-existing: true`, so an unchanged
-agent version is a no-op rather than an error — PyPI enforces version
-immutability natively.
 
 #### Sharing: `export`, `import`
 
@@ -3289,6 +3289,15 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
+A daemon also shuts down on its own, logging why, within a few seconds of its
+home folder or `instance.json` being deleted, since no GAIA command can reach it
+after that. A daemon for any home other than `~/.gaia` (a scratch `GAIA_HOME`,
+say) also shuts down after 120 minutes with no client connected, no sidecar busy
+and no scheduled job pending, and the next GAIA command starts a fresh one. Set
+`GAIA_DAEMON_IDLE_EXIT_MINUTES` to change that limit, or `0` to keep it running.
+The daemon for `~/.gaia` never idles out. `gaia kill --daemons` finds and stops
+any that are still left.
+
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from
 `~/.gaia/host/instance.json`):
@@ -3776,6 +3785,7 @@ gaia kill [OPTIONS]
 |--------|------|-------------|
 | `--port` | integer | Port number to kill process on |
 | `--lemonade` | flag | Kill Lemonade server (port 13305) |
+| `--daemons` | flag | List running GAIA daemons; stop those whose home folder or `instance.json` is gone |
 
 **Examples:**
 
@@ -3786,6 +3796,10 @@ gaia kill --lemonade
 
 ```bash Kill by Port
 gaia kill --port 13305
+```
+
+```bash Stop Orphaned Daemons
+gaia kill --daemons
 ```
 </CodeGroup>
 

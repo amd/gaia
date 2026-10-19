@@ -22,11 +22,14 @@
 //              `npm run build` required).
 //   - AC9    : asserts no stray .env, sourcemaps, or dotfiles shipped in
 //              the app.asar (defence-in-depth for future browser-mode wheel).
+//   - #5268  : asserts the Linux tray icon inside app.asar is the GAIA logo,
+//              not a flat placeholder square.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
@@ -35,6 +38,10 @@ import {
   backendInstallerPath,
   bundledUvPath,
 } from "./_helpers/installer-smoke.mjs";
+
+const { assertTrayLogoPng } = createRequire(import.meta.url)(
+  "./_helpers/tray-icon-png.cjs"
+);
 
 const APPIMAGE = process.env.GAIA_APPIMAGE;
 const PLATFORM_KEY = "linux-x64";
@@ -157,6 +164,30 @@ if (!APPIMAGE) {
           fs.existsSync(indexHtml),
           `expected pre-built dist at ${indexHtml} so users do not need to run npm run build`
         );
+      });
+
+      // ── #5268: the Linux tray icon is packed and is the real logo ───
+      // tray-manager.cjs loads assets/tray-icon.png (+@2x) from inside
+      // app.asar; a missing or placeholder file shows as a blank/red square.
+      test("#5268: app.asar ships the GAIA logo as the Linux tray icon", () => {
+        const asarPath = path.join(squashRoot, "resources", "app.asar");
+        for (const [file, size] of [
+          ["tray-icon.png", 32],
+          ["tray-icon@2x.png", 64],
+        ]) {
+          const outDir = fs.mkdtempSync(path.join(workdir, "tray-"));
+          execFileSync(
+            "npx",
+            ["--yes", "asar", "extract-file", asarPath, `assets/${file}`],
+            { cwd: outDir, encoding: "utf8", timeout: 60000 }
+          );
+          const extracted = path.join(outDir, file);
+          assert.ok(
+            fs.existsSync(extracted),
+            `expected assets/${file} inside ${asarPath}`
+          );
+          assertTrayLogoPng(fs.readFileSync(extracted), size, `app.asar:assets/${file}`);
+        }
       });
 
       // ── AC9: no stray .env/sourcemaps/dotfiles in app.asar ──────────

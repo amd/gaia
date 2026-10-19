@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from gaia.llm.inference_location import InferenceLocation
-from gaia.ui._chat_helpers import _done_event, _turn_location, _turn_summary
+from gaia.ui._chat_helpers import _done_event, _agent_location, _turn_summary
 from gaia.ui.database import ChatDatabase
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.turn_summary import TurnLedger, upload_display_names
@@ -243,11 +243,11 @@ def test_the_sse_handler_feeds_the_ledger_from_its_tool_events():
 
 def test_turn_location_prefers_the_agents_live_client():
     agent = SimpleNamespace(_inference_location=lambda: FIREWORKS, model_id="x")
-    assert _turn_location(agent) is FIREWORKS
+    assert _agent_location(agent) is FIREWORKS
 
 
 def test_an_agent_that_cannot_locate_itself_is_not_called_local():
-    assert _turn_location(SimpleNamespace(model_id="Gemma-4-E4B-it-GGUF")) is None
+    assert _agent_location(SimpleNamespace(model_id="Gemma-4-E4B-it-GGUF")) is None
 
 
 def test_turn_summary_without_an_agent_has_no_location():

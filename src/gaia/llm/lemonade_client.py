@@ -49,6 +49,7 @@ from gaia.llm.lemonade_launcher import (
     get_installed_version,
     resolve_lemonade,
 )
+from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
     HOSTED_REPLY_TIMEOUT_ENV,
     ModelCallRetrier,
@@ -377,7 +378,7 @@ DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
 
 #: Embedders whose llama.cpp backend GAIA chooses: the GPU, falling back to the
-#: CPU only when the GPU load fails (#5049).
+#: CPU only when the GPU load fails (#5049) — or the CPU with ROCm (#5267).
 EMBEDDER_MODELS = frozenset(
     {DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL.removeprefix("user.")}
 )
@@ -533,6 +534,20 @@ def _slots_in_flags(flags: List[str]) -> Optional[int]:
         except ValueError:
             return None
     return None
+
+
+# Called with the model's name after this process loads a model.
+_MODEL_LOAD_LISTENERS: List[Callable[[str], None]] = []
+
+
+def add_model_load_listener(listener: Callable[[str], None]) -> None:
+    """Call *listener(model_name)* after every model this process loads.
+
+    How the Agent UI keeps count of the models it loaded itself, including
+    the ones its agents reload mid-turn.
+    """
+    if listener not in _MODEL_LOAD_LISTENERS:
+        _MODEL_LOAD_LISTENERS.append(listener)
 
 
 def profile_ctx_size(device: Optional[str]) -> int:
@@ -1930,6 +1945,17 @@ def backend_crash_remedy(model: str) -> str:
         "llamacpp_backend=cpu, or start Lemonade with GGML_VK_DISABLE_COOPMAT=1 "
         "(every model then runs slower). Otherwise, Lemonade's server log has "
         "llama-server's own output."
+    )
+
+
+def _embedder_on_cpu_remedy(model: str) -> str:
+    """What to do when the embedder GAIA moved off ROCm fails on the CPU."""
+    return (
+        f"GAIA loads '{model}' on llama.cpp's CPU backend because llama.cpp "
+        "uses ROCm here, where the chat and embedding models together can hold "
+        "the GPU at 100% (a known amdgpu driver issue). Lemonade's server log "
+        "has llama-server's own output; see "
+        "https://amd-gaia.ai/docs/reference/troubleshooting."
     )
 
 
@@ -6327,6 +6353,12 @@ class LemonadeClient:
         if manages_embedder_backend(model_name):
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
+        for listener in list(_MODEL_LOAD_LISTENERS):
+            try:
+                listener(model_name)
+            except Exception as e:  # pylint: disable=broad-except
+                # The model is loaded; a bookkeeping failure must not undo that.
+                self.log.warning(f"Model-load listener failed for {model_name}: {e}")
         return response
 
     def _load_model_leased(
@@ -6419,10 +6451,20 @@ class LemonadeClient:
         )
         if chosen_backend:
             request_data["llamacpp_backend"] = chosen_backend
+        avoiding_rocm = False
         if managed_embedder:
             with _PINNED_BACKENDS_LOCK:
                 fell_back = (self.base_url, model_name) in _CPU_FALLBACK_EMBEDDERS
             backend = "cpu" if fell_back else self._default_llamacpp_backend()
+            if not fell_back and embedder_avoids_rocm(
+                backend, preferred_llamacpp_backend()
+            ):
+                avoiding_rocm = True
+                self.log.info(
+                    f"Loading '{model_name}' on llama.cpp's CPU backend: "
+                    f"{EMBEDDER_ON_CPU_WITH_ROCM}"
+                )
+                backend = "cpu"
             if backend:
                 request_data["llamacpp_backend"] = backend
             # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
@@ -6558,6 +6600,11 @@ class LemonadeClient:
             if not (auto_download and self._is_model_error(e)):
                 # Not a model error or auto_download disabled - re-raise
                 self.log.error(f"Failed to load {model_name}: {original_error}")
+                if avoiding_rocm and not isinstance(e, LemonadeAuthError):
+                    raise LemonadeClientError(
+                        f"Failed to load {model_name}: {original_error}. "
+                        f"{_embedder_on_cpu_remedy(model_name)}"
+                    ) from e
                 if self._is_transient_load_error(e):
                     # Outlived any retries, so name the likely cause.
                     raise LemonadeClientError(
