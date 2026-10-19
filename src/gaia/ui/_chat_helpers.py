@@ -53,14 +53,7 @@ from gaia.ui.memory_settings import memory_enabled
 from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .sse_handler import (
-    _ANSWER_JSON_SUB_RE,
-    _RAG_RESULT_JSON_SUB_RE,
-    _THOUGHT_JSON_SUB_RE,
-    _TOOL_CALL_JSON_SUB_RE,
-    _clean_answer_json,
-    _fix_double_escaped,
-)
+from .sse_handler import _clean_answer_json, clean_reply_text
 from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
@@ -3359,29 +3352,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = idle_message
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Clean LLM output artifacts before DB storage.
-        # Apply all canonical patterns so stored content is always clean
-        # regardless of which streaming path was taken.
-        # Order matters: _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE.
-        # The base agent asks for {"thought":..., "answer":...} JSON; if that JSON
-        # leaks into full_response (e.g. streaming buffer released early), the
-        # thought-stripper would consume the entire blob including the answer,
-        # leaving an empty string.  Extracting the answer first prevents that.
+        # Clean LLM output artifacts before DB storage, whichever streaming
+        # path was taken.
         if full_response:
-            full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
-            # Extract answer from {"thought":..., "answer":...} before thought stripping.
-            full_response = _clean_answer_json(full_response)
-            full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
-            full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
-            # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
-            # embedded after plain text — strips the duplicate JSON wrapper.
-            full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
-            full_response = _fix_double_escaped(full_response)
-            # Strip trailing JSON artifact sequences (3+ closing braces = nested tool result leak)
-            full_response = _re.sub(r"\}{3,}\s*$", "", full_response).strip()
-            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON extraction)
-            full_response = _re.sub(r"[\n\s]*`{3,}\s*$", "", full_response).strip()
-            full_response = full_response.strip()
+            full_response = clean_reply_text(full_response)
 
         # Guard: if cleaning reduced the response to JSON/code artifacts only
         # (e.g. "}", "}}", "}\n", "}\n```", backtick-only), fall back to the agent's
@@ -3571,7 +3545,11 @@ async def _run_chat_lifecycle(
         raise
     finally:
         if not shutting_down:
-            journal.close()
+            try:
+                journal.close()
+            except (RuntimeError, sqlite3.Error) as exc:
+                # Don't mask the turn's own error; the next start closes the turn.
+                logger.warning("Could not close the finished turn: %s", exc)
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
     # than on subscriber detach.

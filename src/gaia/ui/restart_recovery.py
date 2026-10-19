@@ -29,6 +29,7 @@ from typing import Callable, Dict, Optional
 
 from .database import ChatDatabase
 from .process_owner import owner_is_gone
+from .sse_handler import clean_reply_text
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,8 @@ class TurnJournal:
     def flush(self) -> None:
         self._saved_at = self._clock()
         if self._text != self._saved:
-            self._db.save_turn_partial(self._session_id, self._text)
+            # Saved cleaned, as a finished reply is, so leaked JSON never shows.
+            self._db.save_turn_partial(self._session_id, clean_reply_text(self._text))
             self._saved = self._text
 
     def close(self) -> None:

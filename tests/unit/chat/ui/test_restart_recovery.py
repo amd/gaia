@@ -423,3 +423,45 @@ async def test_a_partial_save_that_fails_does_not_end_the_turn(runtime, caplog):
     with patch.object(db, "save_turn_partial", side_effect=sqlite3.OperationalError):
         journal.observe('data: {"type": "chunk", "content": "Hel"}\n\n')
     assert "Could not save the streamed text" in caplog.text
+
+
+async def test_recovered_text_is_cleaned_like_a_finished_reply(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, db.add_message(sid, "user", "hi"))
+        journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+        journal.observe(
+            'data: {"type": "chunk", "content": '
+            '"{\\"thought\\": \\"plan it\\", \\"answer\\": \\"Paris\\"}"}\n\n'
+        )
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert "thought" not in reply
+    assert reply == f"Paris\n\n{INTERRUPTED_TURN_NOTICE}"
+
+
+async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog):
+    db, _db_path, _manager, _http_request = runtime
+    sid = db.create_session()["id"]
+    db.begin_turn(sid, db.add_message(sid, "user", "hi"))
+
+    async def raises(*_args):
+        yield 'data: {"type": "chunk", "content": "Let me"}\n\n'
+        raise ValueError("the turn's own failure")
+
+    caplog.set_level("WARNING", logger=helpers.logger.name)
+    with (
+        patch.object(helpers, "_stream_chat_impl", raises),
+        patch.object(db, "close_turn", side_effect=sqlite3.OperationalError("gone")),
+        pytest.raises(ValueError, match="the turn's own failure"),
+    ):
+        run = SimpleNamespace(emit=lambda _data: None)
+        await helpers._run_chat_lifecycle(
+            run, db, {}, ChatRequest(session_id=sid, message="hi")
+        )
+    assert "Could not close the finished turn" in caplog.text
+    assert [t["session_id"] for t in db.turns_in_progress()] == [sid]
