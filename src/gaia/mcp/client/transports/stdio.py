@@ -98,6 +98,10 @@ _QUALIFIER_WORDS = frozenset(
         "scope",
         "prefix",
         "through",
+        "attempts",
+        "age",
+        "days",
+        "retries",
     }
 )
 # ... or it is a database's key: SORT_KEY, PARTITION_KEY, PRIMARY_KEY.
@@ -178,6 +182,8 @@ def _is_secret_name(name: str) -> bool:
 # character or "?" (a code page's replacement, an undecodable byte, mojibake),
 # or a \xNN / \uNNNN / \UNNNNNNNN escape behind any run of backslashes.
 _RUN_UNIT = r"(?:[?\x80-\U0010ffff]|\\+(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8}))"
+# The same, after a run of backslashes that already matched the escape's own.
+_BARE_RUN_UNIT = r"(?:[?\x80-\U0010ffff]|(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8}))"
 _RUN_CHAR = re.compile(r"[?\x80-\U0010ffff]")
 _ESCAPE_BEFORE = re.compile(r"\\+(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})\Z")
 # A run of k non-ASCII characters can arrive as anything from one character
@@ -194,19 +200,31 @@ def _run_after(units: int) -> "re.Pattern[str]":
 def _core_pattern(core: str) -> "re.Pattern[str]":
     """*core* (starting and ending in ASCII) as one linear-time pattern.
 
-    ASCII matches itself; a run of ``m`` backslashes matches ``m`` or more
-    (escaped once or many times), as does one before ``"``; a run of ``k``
-    non-ASCII characters is one bounded repetition of ``_RUN_UNIT``.
+    Each ASCII character matches itself behind any run of backslashes, or
+    as a ``\\uNNNN`` / ``\\xNN`` escape (and ``\\t``-style for control
+    characters); a run of ``m`` backslashes matches ``m`` or more; a run of
+    ``k`` non-ASCII characters is one bounded repetition of ``_RUN_UNIT``.
+    Every piece ends in a character other than a backslash, so no run of
+    backslashes is shared between pieces, and the whole pattern starts only
+    at the first backslash of a run.
     """
     parts = []
     i = 0
+    # Right after a run of backslashes, the next piece takes no backslashes of
+    # its own: two pieces splitting one run would make a long run quadratic.
+    after_run = False
     while i < len(core):
         char = core[i]
         if ord(char) >= 128:
             j = i
             while j < len(core) and ord(core[j]) >= 128:
                 j += 1
-            parts.append(f"{_RUN_UNIT}{{1,{_UNITS_PER_CHAR * (j - i)}}}")
+            units = _UNITS_PER_CHAR * (j - i)
+            if after_run:
+                parts.append(f"{_BARE_RUN_UNIT}{_RUN_UNIT}{{0,{units - 1}}}")
+            else:
+                parts.append(f"{_RUN_UNIT}{{1,{units}}}")
+            after_run = False
             i = j
         elif char == "\\":
             j = i
@@ -214,18 +232,34 @@ def _core_pattern(core: str) -> "re.Pattern[str]":
                 j += 1
             quote = j < len(core) and core[j] == '"'
             parts.append(f"\\\\{{{j - i},}}" + ('"' if quote else ""))
+            after_run = not quote
             i = j + (1 if quote else 0)
-        elif char == '"':
-            parts.append(r'\\*"')
-            i += 1
         else:
-            parts.append(re.escape(char))
+            parts.append(_ascii_piece(char, bare=after_run))
+            after_run = False
             i += 1
-    pattern = "".join(parts)
-    if core[0] in '\\"':
-        # Start at the first backslash of a run, or a long run is quadratic.
-        pattern = r"(?<!\\)" + pattern
-    return re.compile(pattern)
+    # Start at the first backslash of a run, or a long run is quadratic.
+    return re.compile(r"(?<!\\)" + "".join(parts))
+
+
+_SHORT_ESCAPES = {"\t": "t", "\n": "n", "\r": "r", "\b": "b", "\f": "f"}
+
+
+def _ascii_piece(char: str, bare: bool = False) -> str:
+    """One ASCII character, raw or escaped as any encoder writes it.
+
+    *bare* leaves out the backslashes before it, for a piece that follows a
+    run of backslashes the previous piece already matched.
+    """
+    code = ord(char)
+    slashes, escape = ("", "") if bare else (r"\\*", r"\\+")
+    alternatives = [
+        slashes + re.escape(char),
+        escape + f"(?i:u00{code:02x}|x{code:02x})",
+    ]
+    if char in _SHORT_ESCAPES:
+        alternatives.append(escape + _SHORT_ESCAPES[char])
+    return "(?:" + "|".join(alternatives) + ")"
 
 
 def _extend_back(text: str, start: int, units: int) -> int:
@@ -294,8 +328,11 @@ _STARTUP_CHECK_SLICES = 5
 _CHILD_SCAN_S = 0.5
 _CHILD_SCAN_MAX_S = 8.0
 
-# The longest stderr line kept: redaction runs over every kept line.
+# The longest stderr line kept, and how much of it is read and cleaned so a
+# secret at the cut is still matched whole. The rest of a longer line is read
+# and dropped.
 _STDERR_LINE_CHARS = 8192
+_STDERR_WINDOW_CHARS = _STDERR_LINE_CHARS + 4096
 
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
@@ -611,6 +648,14 @@ class StdioTransport(MCPTransport):
             time.sleep(interval)
 
     @staticmethod
+    def _discard_rest_of_line(stream) -> None:
+        """Read through the next newline without keeping any of it."""
+        while True:
+            part = stream.readline(65536)
+            if not isinstance(part, str) or not part or part.endswith("\n"):
+                return
+
+    @staticmethod
     def _pump_stdout(stream, lines: queue.Queue) -> None:
         try:
             while True:
@@ -626,12 +671,18 @@ class StdioTransport(MCPTransport):
     def _pump_stderr(self, stream, tail: collections.deque) -> None:
         try:
             while True:
-                line = stream.readline()
+                # Bounded: a server writing endlessly without a newline must
+                # not grow GAIA's memory with it.
+                line = stream.readline(_STDERR_WINDOW_CHARS)
                 if not isinstance(line, str) or not line:
                     return
-                # Cleaned whole, so the cap can't cut a secret in two.
+                cut = len(line) >= _STDERR_WINDOW_CHARS and not line.endswith("\n")
+                if cut:
+                    self._discard_rest_of_line(stream)
+                # Cleaned over a window wider than what is kept, so the cap
+                # can't cut a secret in two.
                 line = self.redact(line)
-                if len(line) > _STDERR_LINE_CHARS:
+                if cut or len(line) > _STDERR_LINE_CHARS:
                     line = line[:_STDERR_LINE_CHARS] + " [line cut]\n"
                 tail.append(line)
         except (OSError, ValueError) as e:

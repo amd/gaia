@@ -1447,6 +1447,10 @@ _QUALIFIER_ROWS = [
     "scope",
     "prefix",
     "through",
+    "attempts",
+    "age",
+    "days",
+    "retries",
 ]
 _COUNT_ROWS = ["max", "min", "num", "first"]
 _KEY_KIND_ROWS = ["sort", "partition", "primary", "cache", "foreign", "composite"]
@@ -1508,6 +1512,10 @@ def test_a_database_key_is_not_a_credential(word):
         ("FIRST_PASS", False),
         ("FIRST_PASSWORD", True),
         ("MAX_SECRET", True),
+        ("MAX_PASSWORD_ATTEMPTS", False),
+        ("MAX_SECRET_AGE", False),
+        ("TOKEN_RETRIES", False),
+        ("API_KEY_DAYS", False),
     ],
 )
 def test_name_splitting_and_switches(name, secret):
@@ -1528,6 +1536,11 @@ def test_redaction_stays_linear_on_long_non_ascii_secrets():
         ("\\\\Zq9vKe7w", "\\" * 1_000_000),
         ('"Zq9vKe7w', "\\" * 1_000_000),
         ('\u00e9"Zq9vKe7w', "\\" * 1_000_000),
+        # A backslash run in the secret, then another character: the run
+        # must not be split between two pieces of the pattern.
+        ("\\Zq9vKe7w", "\\" * 1_000_000),
+        ("Zq9v\\\u00e9Ke7w", ("Zq9v" + "\\" * 50_000) * 20),
+        ("Zq9v\\Ke7wP2", ("Zq9v" + "\\" * 50_000) * 20),
     ]
     for secret, text in cases:
         t = StdioTransport(sys.executable, args=["--api-key", secret])
@@ -1607,3 +1620,76 @@ def test_stderr_lines_are_cleaned_whole_then_capped(tmp_path):
     assert "Zq9v" not in stderr and "capped" not in stderr
     assert "[line cut]" in stderr
     assert len(stderr) < 9000
+
+
+@pytest.mark.parametrize(
+    "secret,arrived",
+    [
+        ("Zq9v&<>Ke7w", "Zq9v\\u0026\\u003c\\u003eKe7w"),  # Go's JSON
+        ("Zq9v/Ke7wP2", "Zq9v\\/Ke7wP2"),  # JSON's optional \/
+        ("Zq9v\tKe7w\nP2", "Zq9v\\tKe7w\\nP2"),  # short escapes
+        ("Zq9v'Ke7wP2", "Zq9v\\'Ke7wP2"),  # Python repr
+        ("Zq9v'Ke7wP2", "Zq9v\\x27Ke7wP2"),
+        ("Zq9v<Ke7wP2", "Zq9v\\u003CKe7wP2"),  # uppercase hex
+        ("Zq9v\\\u00e9Ke7w", "Zq9v\\\\\\u00e9Ke7w"),  # backslash, then an escape
+        ("Zq9v\\Ke7wP2", "Zq9v\\\\\\\\Ke7wP2"),  # backslash, escaped twice
+    ],
+    ids=[
+        "go-json",
+        "json-slash",
+        "short-escapes",
+        "repr-quote",
+        "x-escape",
+        "upper-hex",
+        "backslash-escape",
+        "double-backslash",
+    ],
+)
+def test_escaped_forms_of_a_secret_are_redacted_too(secret, arrived):
+    t = StdioTransport(sys.executable, args=["--api-key", secret])
+    assert t.redact(f"x {arrived} y") == "x <redacted> y", (secret, arrived)
+
+
+def test_ordinary_escapes_beside_a_secret_shape_stay(tmp_path):
+    t = StdioTransport(sys.executable, args=["--api-key", "Zq9v&Ke7wP2"])
+    text = "a \\u0026 b \\/ c \\t d Zq9v and Ke7wP2 apart"
+    assert t.redact(text) == text
+
+
+def test_a_stderr_line_with_no_end_does_not_grow_memory(tmp_path):
+    """A server streaming one endless line must not be buffered whole."""
+    psutil = pytest.importorskip("psutil")
+    script = tmp_path / "endless_line.py"
+    script.write_text(
+        "import sys, time\n"
+        "chunk = 'x' * 1_000_000\n"
+        "for _ in range(50):\n"
+        "    sys.stderr.write(chunk)\n"
+        "sys.stderr.write('\\n')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(60)\n"
+    )
+    me = psutil.Process()
+    before = me.memory_info().rss
+    transport = StdioTransport(sys.executable, args=["-u", str(script)])
+    assert transport.connect()
+    peak = before
+    try:
+        # Until the reader has taken in all 50 MB: the newline is read last.
+        deadline = time.monotonic() + 60
+        settled_at = None
+        while time.monotonic() < deadline:
+            peak = max(peak, me.memory_info().rss)
+            size = len(transport._stderr_tail)
+            if size and settled_at is None:
+                settled_at = time.monotonic()
+            if settled_at and time.monotonic() - settled_at > 3:
+                break
+            time.sleep(0.05)
+        kept = "".join(transport._stderr_tail)
+    finally:
+        transport.disconnect()
+
+    assert "[line cut]" in kept
+    assert len(kept) < 9000
+    assert peak - before < 20 * 1024 * 1024, f"grew {(peak - before) >> 20} MB"
