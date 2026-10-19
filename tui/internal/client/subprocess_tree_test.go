@@ -199,7 +199,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 	t.Run("abandoning a turn kills the whole tree before the tool finishes", func(t *testing.T) {
 		pidfile, sideEffect := env(t, 1500)
-		c := NewSubprocessClient(bin, nil, false)
+		c := NewSubprocessClient(bin, nil)
 		defer c.Close()
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -234,7 +234,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 	t.Run("a cooperative cancel stops the turn and keeps the process", func(t *testing.T) {
 		pidfile, sideEffect := env(t, 10000)
-		c := NewSubprocessClient(bin, nil, false)
+		c := NewSubprocessClient(bin, nil)
 		defer c.Close()
 
 		if err := c.Cancel(context.Background()); err != nil {
@@ -277,7 +277,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 	t.Run("a respawn keeps /full-access off and says what was lost", func(t *testing.T) {
 		pidfile, _ := env(t, 10000)
-		c := NewSubprocessClient(bin, []string{FullAccessFlag}, false)
+		c := NewSubprocessClient(bin, []string{FullAccessFlag})
 		defer c.Close()
 
 		if a := answerOf(runTurn(t, c, "report full access")); !strings.HasPrefix(a, "full_access=true ") {
@@ -330,7 +330,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 	t.Run("a message sent straight after a hard stop starts the replacement", func(t *testing.T) {
 		env(t, 10000)
-		c := NewSubprocessClient(bin, nil, false)
+		c := NewSubprocessClient(bin, nil)
 		defer c.Close()
 
 		runTurn(t, c, "report full access")
@@ -352,7 +352,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 	t.Run("a second message while a turn runs is refused", func(t *testing.T) {
 		env(t, 10000)
-		c := NewSubprocessClient(bin, nil, false)
+		c := NewSubprocessClient(bin, nil)
 		defer c.Close()
 
 		ch := startSlowTool(t, c, context.Background())
@@ -369,7 +369,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 	t.Run("/full-access with no agent running applies to the next one", func(t *testing.T) {
 		env(t, 10000)
-		c := NewSubprocessClient(bin, []string{FullAccessFlag}, false)
+		c := NewSubprocessClient(bin, []string{FullAccessFlag})
 		defer c.Close()
 
 		if err := c.SetFullAccess(false); err != nil {
@@ -383,7 +383,7 @@ func TestSubprocessProcessTree(t *testing.T) {
 
 func TestSpawnArgsFollowTheSessionMode(t *testing.T) {
 	launch := []string{"--dev", FullAccessFlag, UseClaudeFlag}
-	c := NewSubprocessClient("agent", launch, false)
+	c := NewSubprocessClient("agent", launch)
 
 	if got, want := c.spawnArgs(false), []string{"--dev", UseClaudeFlag}; !reflect.DeepEqual(got, want) {
 		t.Errorf("spawnArgs(false) = %v, want %v", got, want)
@@ -398,7 +398,7 @@ func TestSpawnArgsFollowTheSessionMode(t *testing.T) {
 
 // A mode picked with Shift+Tab survives a respawn, and is dropped once turned off.
 func TestSpawnArgsCarryAcceptEdits(t *testing.T) {
-	c := NewSubprocessClient("agent", []string{"--dev"}, false)
+	c := NewSubprocessClient("agent", []string{"--dev"})
 	if err := c.SetAcceptEdits(true); err != nil {
 		t.Fatalf("SetAcceptEdits before any turn: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestFailedFullAccessWriteKeepsRespawnInSafeMode(t *testing.T) {
 			if !enable {
 				args = append(args, FullAccessFlag)
 			}
-			c := NewSubprocessClient("agent", args, false)
+			c := NewSubprocessClient("agent", args)
 			reader, writer, err := os.Pipe()
 			if err != nil {
 				t.Fatal(err)

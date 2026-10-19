@@ -60,6 +60,9 @@ func startLiveTUI(t *testing.T) *liveTUI {
 func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.FlagshipModel) *liveTUI {
 	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())
+	// The session log is held open for the process; release it before the
+	// temp dir holding it is removed (Windows will not delete an open file).
+	t.Cleanup(control.CloseLog)
 	isolateGaiaHome(t)
 	stubSetupCheck(t, 0)
 	t.Setenv("LEMONADE_BASE_URL", stubLemonade(t))
@@ -75,7 +78,7 @@ func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.Flagshi
 	}
 
 	state := control.NewState(nil)
-	model := adjust(root.NewFlagshipModel(*agent, false).
+	model := adjust(root.NewFlagshipModel(*agent).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond}))
 	return runLiveTUI(t, tea.NewProgram(
@@ -416,7 +419,7 @@ func startLiveTUIMissingAgent(t *testing.T) *liveTUI {
 	agent.BinaryPath = "gaia-agent-that-was-never-installed"
 
 	state := control.NewState(nil)
-	model := root.NewFlagshipModel(*agent, false).
+	model := root.NewFlagshipModel(*agent).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
 	return runLiveTUI(t, tea.NewProgram(

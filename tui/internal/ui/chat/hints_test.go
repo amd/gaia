@@ -16,9 +16,9 @@ import (
 // right-hand truncation does the exact opposite.
 func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 	hints := []hint{
-		{text: "step 12", rank: rankDiagnostic},
+		{text: "Ctrl+T scroll-select", rank: rankSecondary},
 		{text: "↑↓ scroll", rank: rankAffordance},
-		{text: "Esc cancel", rank: rankInterrupt},
+		{text: "Esc to interrupt", rank: rankInterrupt},
 		{text: "Ctrl+C quit", rank: rankEscape},
 	}
 
@@ -35,7 +35,7 @@ func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 		}
 	}
 
-	// Tight: only the escape hatch survives, and the diagnostic goes first.
+	// Tight: only the escape hatch survives, and the secondary hint goes first.
 	tight := fitHints(hints, 12)
 	if tight != "Ctrl+C quit" {
 		t.Errorf("at 12 columns the bar reads %q; want just the way out", tight)
@@ -43,7 +43,7 @@ func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 
 	// Roomy: everything shows, in the order it was appended.
 	full := fitHints(hints, 80)
-	if full != "step 12 · ↑↓ scroll · Esc cancel · Ctrl+C quit" {
+	if full != "Ctrl+T scroll-select · ↑↓ scroll · Esc to interrupt · Ctrl+C quit" {
 		t.Errorf("a wide bar changed the order or lost an item: %q", full)
 	}
 }
@@ -51,13 +51,13 @@ func TestANarrowBarKeepsTheWayOutAndDropsTheNiceties(t *testing.T) {
 // Ranks decide the order of loss, not the order of display.
 func TestItemsAreDroppedByRankNotByPosition(t *testing.T) {
 	hints := []hint{
-		{text: "step 3", rank: rankDiagnostic},
+		{text: "Ctrl+T scroll-select", rank: rankSecondary},
 		{text: "End to jump to latest", rank: rankOrient},
 		{text: "Ctrl+C quit", rank: rankEscape},
 	}
 	got := fitHints(hints, 36)
-	if strings.Contains(got, "step 3") {
-		t.Errorf("the diagnostic outlived the orientation hint: %q", got)
+	if strings.Contains(got, "Ctrl+T") {
+		t.Errorf("the secondary hint outlived the orientation hint: %q", got)
 	}
 	if !strings.Contains(got, "End to jump to latest") {
 		t.Errorf("the way back to the newest content was dropped too early: %q", got)
@@ -92,27 +92,15 @@ func TestHintsAreMeasuredInColumnsNotBytes(t *testing.T) {
 	}
 }
 
-// The step counter is machinery, not progress — it stays out of a normal
-// session entirely.
-func TestTheStepCounterIsDevOnly(t *testing.T) {
+// The step counter is machinery, not progress — it is never in the bar, in any
+// mode, and there is no denominator to show when no limit is set.
+func TestTheStepCounterIsNeverShown(t *testing.T) {
 	m := newTestChat(t)
-	m.totalSteps = 7
-
+	m.streaming = true
 	for _, h := range m.statusHints() {
-		if strings.HasPrefix(h.text, "step ") {
-			t.Errorf("the agent loop's step count leaked into a normal session: %q", h.text)
+		if strings.HasPrefix(h.text, "step ") || strings.Contains(h.text, "/150") {
+			t.Errorf("the agent loop's step count leaked into the bar: %q", h.text)
 		}
-	}
-
-	m.dev = true
-	var found bool
-	for _, h := range m.statusHints() {
-		if h.text == "step 7" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("--dev lost the step counter")
 	}
 }
 
@@ -120,13 +108,13 @@ func TestTheStepCounterIsDevOnly(t *testing.T) {
 func TestHintsMatchTheState(t *testing.T) {
 	busy := newTestChat(t)
 	if got := joinHints(busy.statusHints()); !strings.Contains(got, "keep typing") ||
-		!strings.Contains(got, "Esc cancel") {
+		!strings.Contains(got, "Esc to interrupt") {
 		t.Errorf("a running turn does not advertise type-ahead or cancel: %q", got)
 	}
 
 	idle := newTestChat(t)
 	idle.streaming = false
-	if got := joinHints(idle.statusHints()); strings.Contains(got, "Esc cancel") {
+	if got := joinHints(idle.statusHints()); strings.Contains(got, "Esc to interrupt") {
 		t.Errorf("an idle session offers to cancel nothing: %q", got)
 	}
 

@@ -18,7 +18,7 @@ import (
 func providerBlockedRoot(t *testing.T) FlagshipModel {
 	t.Helper()
 	agent := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA", BinaryPath: filepath.Join(t.TempDir(), "missing-agent")}
-	m := NewFlagshipModel(agent, true)
+	m := NewFlagshipModel(agent)
 	next, cmd := m.beginPreflight(agent)
 	m = next.(FlagshipModel)
 	batch := cmd().(tea.BatchMsg)
@@ -105,7 +105,7 @@ func TestClosingProviderSetupRechecksWithoutChangingStartupModel(t *testing.T) {
 // already says: a choice made on the gate, or a saved one, skips the question.
 func TestTheGateAsksWhereChatRunsOnlyWhenNothingSaysSo(t *testing.T) {
 	agent := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA"}
-	m := NewFlagshipModel(agent, false)
+	m := NewFlagshipModel(agent)
 	if opts := m.localOptions(agent); !opts.AskWhereChatRuns || opts.ChatProvider != "" {
 		t.Errorf("new flagship launch: %+v, want the question asked", opts)
 	}

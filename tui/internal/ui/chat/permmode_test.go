@@ -129,7 +129,7 @@ func TestShiftTabNeverTurnsOnFullAccessUnconfirmed(t *testing.T) {
 // A launch with full access is already unlocked.
 func TestAFullAccessLaunchUnlocksShiftTab(t *testing.T) {
 	c := &permissionClient{launchFullAccess: true}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	if !m.fullAccessUnlocked {
 		t.Error("a --full-access launch must unlock Shift+Tab into full access")
 	}
@@ -153,7 +153,7 @@ func TestShiftTabOverAPromptUpdatesItsModeLine(t *testing.T) {
 
 // A transport that cannot carry the mode says so and leaves the mode alone.
 func TestShiftTabWithoutAControlChannelChangesNothing(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "email", "", false)
+	m := NewChatModel(&nullClient{}, "email", "")
 	m.width, m.height = 100, 30
 	m.resize()
 	m = shiftTab(t, m)
@@ -229,7 +229,7 @@ func (c *fullAccessOnlyClient) SetFullAccess(enabled bool) error {
 // A transport without accept edits skips that step instead of dead-ending.
 func TestShiftTabSkipsAcceptEditsWhereTheTransportHasNone(t *testing.T) {
 	c := &fullAccessOnlyClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 	m.resize()
 	m.fullAccessUnlocked = true

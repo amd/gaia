@@ -115,8 +115,8 @@ lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
 
     The TUI prints the port it bound and writes `~/.gaia/tui/control.json`
     (mode `0600`) holding the pid, port, and bearer token. The token is never
-    printed. Add `--dev` to log input counts, state transitions, and
-    wait resolution to stderr.
+    printed. `--dev` does the same as `--control` and also logs input counts,
+    state transitions, and wait resolution to the TUI log.
 
     For a fixed port: `gaia tui --control-port 8770`.
   </Step>

@@ -1,6 +1,7 @@
 package components
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -156,6 +157,7 @@ var actionTitles = map[string]string{
 	"install_skill":       "Install this skill?",
 	"remove_skill":        "Remove this skill?",
 	"allow_path_access":   "Allow access to this location?",
+	"continue_long_turn":  "Keep going?",
 }
 
 // ActionTitle is the prompt's question for a gated action.
@@ -351,6 +353,10 @@ type ConfirmationDecidedMsg struct {
 // delivery path here is exactly the mistake ui/oneshot.go's writeWithheld
 // already documents avoiding for the one-shot surface.
 type ConfirmationModel struct {
+	// titleColour overrides the question's colour for one frame; nil keeps
+	// the default. See WithTitleColour.
+	titleColour lipgloss.TerminalColor
+
 	runID     string
 	seq       uint64
 	action    string
@@ -414,6 +420,14 @@ func (m ConfirmationModel) WithRisk(risk string) ConfirmationModel {
 
 // SetModeHint sets the line that names the permission mode on this prompt.
 func (m *ConfirmationModel) SetModeHint(hint string) { m.modeHint = hint }
+
+// WithTitleColour draws the question in c for this frame — the chat view's
+// gentle pulse on a prompt that is waiting. Bold and the words are unchanged,
+// so a terminal with no colour still reads the same prompt.
+func (m ConfirmationModel) WithTitleColour(c lipgloss.TerminalColor) ConfirmationModel {
+	m.titleColour = c
+	return m
+}
 
 // Summary is the call as the agent described it — the command, the file.
 func (m ConfirmationModel) Summary() string { return m.summary }
@@ -545,10 +559,18 @@ func (m ConfirmationModel) View() string {
 	}
 
 	var lines []string
-	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render(ActionTitle(m.action)))
+	title := confirmationTitleStyle
+	if m.titleColour != nil {
+		title = title.Foreground(m.titleColour)
+	}
+	lines = append(lines, m.tier.Badge()+" "+title.Render(ActionTitle(m.action)))
 
 	// The call itself, once. The title already says what kind of action it is.
-	if summary := strings.TrimSpace(m.summary); summary != "" {
+	summary := strings.TrimSpace(m.summary)
+	if m.action == "continue_long_turn" {
+		summary = longTurnSummary(summary)
+	}
+	if summary != "" {
 		lines = append(lines, "", confirmationBodyStyle.Render(WrapText(summary, inner)))
 	}
 
@@ -567,6 +589,26 @@ func (m ConfirmationModel) View() string {
 	lines = append(lines, m.resultOrHint(inner))
 
 	return confirmationPanelStyle.Width(m.width - confirmationBorderCols).Render(strings.Join(lines, "\n"))
+}
+
+// longTurnSummary words the agent's every-N-steps check-in, whose arguments
+// are {steps, model}: "200 steps so far on DeepSeek-V4.1-Flash". A summary in
+// any other shape is shown as sent.
+func longTurnSummary(summary string) string {
+	var args struct {
+		Steps json.Number `json:"steps"`
+		Model string      `json:"model"`
+	}
+	dec := json.NewDecoder(strings.NewReader(summary))
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil || args.Steps == "" {
+		return summary
+	}
+	out := args.Steps.String() + " steps so far"
+	if model := strings.TrimSpace(args.Model); model != "" {
+		out += " on " + model
+	}
+	return out
 }
 
 func (m ConfirmationModel) resultOrHint(inner int) string {

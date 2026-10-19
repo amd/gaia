@@ -2,10 +2,12 @@ package client
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 func TestFlagshipModelOverrideReachesSubprocessWithoutMutatingCatalog(t *testing.T) {
@@ -18,7 +20,7 @@ func TestFlagshipModelOverrideReachesSubprocessWithoutMutatingCatalog(t *testing
 			args := make([]string, 1, 8)
 			args[0] = "--json-events"
 			agent := catalog.Agent{ID: catalog.FlagshipID, BinaryPath: self, BinaryArgs: args, DevArgs: []string{"--dev"}, CanonicalEvents: true}
-			c, err := ForAgent(agent, ForAgentOptions{Model: model, Dev: true})
+			c, err := ForAgent(agent, ForAgentOptions{Model: model, Trace: testTrace(t)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -147,14 +149,14 @@ func TestForAgentPlumbsModelAndMaxSteps(t *testing.T) {
 	}
 }
 
-// One --dev has to reach the child too: the TUI going verbose while the agent
-// it spawned keeps logging errors only is the half-state that sends people
-// looking in an empty log file.
+// A traced launch is the debugging one, so the child logs at DEBUG too: a trace
+// beside an agent log holding errors only is the half-state that sends people
+// looking in an empty log file. The screen is the same either way.
 //
 // Opt-in per agent, because an agent that does not know the flag dies at exec
 // on an unknown argument — a verbosity switch must never become a launch
 // failure.
-func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
+func TestATracedLaunchForwardsDevArgsToTheChild(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
@@ -163,19 +165,23 @@ func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		devArgs []string
-		dev     bool
+		traced  bool
 		want    []string
 	}{
-		{"off, so the child argv is untouched", []string{"--dev"}, false, []string{"--json-events"}},
-		{"on, so the child goes verbose too", []string{"--dev"}, true, []string{"--json-events", "--dev"}},
-		{"on but the agent has no dev mode", nil, true, []string{"--json-events"}},
+		{"untraced, so the child argv is untouched", []string{"--dev"}, false, []string{"--json-events"}},
+		{"traced, so the child logs at DEBUG too", []string{"--dev"}, true, []string{"--json-events", "--dev"}},
+		{"traced but the agent has no debug flag", nil, true, []string{"--json-events"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := catalog.Agent{
 				ID: "gaia", BinaryPath: self,
 				BinaryArgs: []string{"--json-events"}, DevArgs: tc.devArgs,
 			}
-			c, err := ForAgent(agent, ForAgentOptions{Dev: tc.dev})
+			opts := ForAgentOptions{}
+			if tc.traced {
+				opts.Trace = testTrace(t)
+			}
+			c, err := ForAgent(agent, opts)
 			if err != nil {
 				t.Fatalf("ForAgent: %v", err)
 			}
@@ -296,7 +302,7 @@ func TestClaudeModelWithoutUseClaudeIsRefused(t *testing.T) {
 
 // The catalog entry outlives the launch. Appending straight onto BinaryArgs
 // would let a slice with spare capacity alias the catalog's backing array, so
-// one --dev launch would leave --dev on the entry for every later one.
+// one traced launch would leave --dev on the entry for every later one.
 func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
@@ -307,7 +313,7 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 		ID: "gaia", BinaryPath: self,
 		BinaryArgs: []string{"--json-events"}, DevArgs: []string{"--dev"},
 	}
-	c, err := ForAgent(agent, ForAgentOptions{Dev: true})
+	c, err := ForAgent(agent, ForAgentOptions{Trace: testTrace(t)})
 	if err != nil {
 		t.Fatalf("ForAgent: %v", err)
 	}
@@ -316,6 +322,17 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 	if got := strings.Join(agent.BinaryArgs, " "); got != "--json-events" {
 		t.Errorf("the catalog entry now carries %q; --dev leaked into it", got)
 	}
+}
+
+// testTrace is a trace file in the test's temp dir, closed when it ends.
+func testTrace(t *testing.T) *event.TraceWriter {
+	t.Helper()
+	w, err := event.NewTraceWriter(filepath.Join(t.TempDir(), "trace.jsonl"))
+	if err != nil {
+		t.Fatalf("NewTraceWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	return w
 }
 
 func TestDaemonFullAccessFailsBeforeConnection(t *testing.T) {

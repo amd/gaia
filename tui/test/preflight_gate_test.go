@@ -320,7 +320,7 @@ func newRootDriverOpts(t *testing.T, g preflight.Transport, w, h int, opts prefl
 func newRootDriverFor(t *testing.T, agent catalog.Agent, g preflight.Transport, w, h int, opts preflight.Options) *rootDriver {
 	t.Helper()
 	cat := catalog.NewCatalog()
-	m := root.NewFlagshipModel(agent, false).WithPreflight(g, opts)
+	m := root.NewFlagshipModel(agent).WithPreflight(g, opts)
 	d := &rootDriver{t: t, m: m, cat: cat, tr: g}
 	d.send(windowSize(w, h))
 	return d

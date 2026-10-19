@@ -51,8 +51,15 @@ For a dev run against your checkout:
 scripts/dev/run-tui.sh --dev --control
 ```
 
-`--dev` shows per-turn timings, steps, and tool arguments **on screen**;
-`--trace=<path>` writes the same events to JSONL instead. They are independent.
+There is one screen. `--dev` changes nothing on it: it turns on the control API
+(like `--control`) and logs that API's input counts, state changes and waits to
+`$GAIA_TUI_HOME/gaia-tui.log`. Debug detail lives elsewhere:
+
+| Where | What |
+|---|---|
+| `Ctrl+O` | Each call's command or code, timings, full outcomes, and the turn's metrics (when the agent ran with `GAIA_TURN_LOG`) |
+| `--trace=<path>` | Every event as JSONL, tool arguments and results included. A traced launch also puts agents the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log` |
+| `gaia-tui.log` | Transport diagnostics, always on. Metadata only, never input contents |
 
 ### Point it at your checkout, not the published sidecar
 
@@ -107,9 +114,40 @@ upstream has the fix.
 
 A status or error line is one sentence on what is wrong plus the one next step.
 Daemon errors implement `daemon.Briefer`; render `daemon.Brief(err)` on the line
-and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. In
-`--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
-no `[harness]` tag.
+and keep `err.Error()` (route, alternatives, log path) for a `d details` pane.
+Harness lines (`Step 4/50`, a plan's "Following the plan to …" headline,
+`Plan: a → b`) never reach the screen in any mode; they are in the trace.
+
+### The chat view
+
+A turn renders as one bullet per event (`internal/ui/chat/workview.go`), led by
+what the action does in plain words. `headline()` picks the words, best first:
+
+1. the call's `description` (or `purpose`) argument, sanitised by
+   `cleanDescription` and refused if it is placeholder text;
+2. the goal the agent announced before the call, if it reads as a goal
+   (`goalLike`): not a stage line ending in `-ing`, not the model musing, not a
+   template;
+3. a summary derived from the tool and its parsed arguments (`describeCall` in
+   `actions.go`), e.g. `Run a 42-line Python script that reads 3 spreadsheets`.
+
+What is running now is not a bullet but the status line, drawn by `View()`
+outside the viewport (`statusLine`). Motion (`motion.go`) rides the spinner's
+20 fps tick and redraws only that line, a pending prompt's title, and the
+finished turn's recap for one sweep. A tick never rebuilds the transcript.
+Turn it off with `reduced_motion` in `~/.gaia/config.json` or
+`GAIA_TUI_REDUCED_MOTION=1`; `NO_COLOR` and a non-TTY stdout turn it off too.
+
+Files a turn changed are found by `findDeliverables` (`deliverables.go`) and
+peeked without running anything: sheet names and row counts for xlsx, slide
+count for pptx, word count for docx and text, rows for csv.
+
+Golden frames of whole screens live in `internal/ui/chat/testdata/frames/`.
+After an intended change, regenerate them and review the diff:
+
+```bash
+cd tui && go test ./internal/ui/chat -run TestFrame -update
+```
 
 ## The control API
 

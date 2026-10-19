@@ -10,10 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// A turn is read a step at a time, so the work log shows one short row per
-// step: what ran, and a failure's reason when one failed. Everything else the
-// agent says on the way — its narration, stage lines, the text it streamed
-// before calling a tool — is detail, folded away until Ctrl+O asks for it.
+// A turn is read a step at a time: one bullet per meaningful event, drawn by
+// workview.go. The agent's stage lines are detail, folded away until Ctrl+O
+// asks for them; its narration is shown as plain prose.
 //
 // The log outlives the turn as a RoleWork message (commitWork), which is also
 // the durable record of every failure and every confirmation answer; the
@@ -43,7 +42,7 @@ func isStep(item ActivityItem) bool {
 // each step's preamble ran straight into the next — "first.Reproduced: …Now
 // the fix." — and the real answer arrived glued to the end of them.
 func (m *ChatModel) stashNarration() {
-	text := clean(m.buffer)
+	text := clean(withoutThinking(m.buffer))
 	if text == "" {
 		m.buffer = ""
 		return
@@ -172,32 +171,6 @@ func stepText(item ActivityItem) string {
 	return line
 }
 
-// visibleWork is what the log shows of items: everything when expanded (or in
-// --dev, whose job is the mechanics), only the steps when folded. Narration is
-// the model thinking aloud ("Hmm, should I fix it too?") — noise even as the
-// live line, which then names the state instead (idlePhrase).
-func (m ChatModel) visibleWork(items []ActivityItem) []ActivityItem {
-	if m.expandWork || m.dev {
-		return items
-	}
-	out := make([]ActivityItem, 0, len(items))
-	for _, item := range items {
-		if !isNarration(item) {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-// renderWork draws a finished turn's work record.
-func (m ChatModel) renderWork(msg *Message) string {
-	var lines []string
-	for _, item := range collapseActivity(m.visibleWork(msg.Work)) {
-		lines = append(lines, m.renderActivityItem(item, false, 0, 0)...)
-	}
-	return strings.Join(lines, "\n")
-}
-
 // hasWork reports whether there is any folded detail for Ctrl+O to open.
 func (m ChatModel) hasWork() bool {
 	if len(m.activity) > 0 {
@@ -243,4 +216,26 @@ func isLatency(s string) bool {
 		return false
 	}
 	return strings.Trim(num, "0123456789.") == ""
+}
+
+// withoutThinking drops a model's raw reasoning from streamed text: every
+// <think>…</think> span, and an unclosed one still streaming. The status line
+// already says the model is reasoning; the reasoning itself is not the answer.
+func withoutThinking(s string) string {
+	const openTag, closeTag = "<think>", "</think>"
+	for {
+		open := strings.Index(s, openTag)
+		closeAt := strings.Index(s, closeTag)
+		switch {
+		case closeAt >= 0 && (open < 0 || closeAt < open):
+			// Reasoning that began before this text did: drop up to the close.
+			s = s[closeAt+len(closeTag):]
+		case open >= 0 && closeAt > open:
+			s = s[:open] + s[closeAt+len(closeTag):]
+		case open >= 0:
+			return strings.TrimSpace(s[:open])
+		default:
+			return strings.TrimSpace(s)
+		}
+	}
 }

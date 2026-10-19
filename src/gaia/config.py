@@ -160,6 +160,9 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        reduced_motion: Turn off the terminal UI's animations — the shimmer on
+            the live status line, a pending prompt's pulse, and the spinner.
+            ``GAIA_TUI_REDUCED_MOTION=1`` does the same for one launch.
     """
 
     profile: str = "chat"
@@ -173,6 +176,7 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    reduced_motion: bool = False
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this

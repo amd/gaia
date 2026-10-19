@@ -64,7 +64,7 @@ func (*recordingStdin) Close() error { return nil }
 // startedWithRecorder is a client that believes its child is running and a
 // turn is in flight, writing control lines into a buffer instead of a pipe.
 func startedWithRecorder() (*SubprocessClient, *recordingStdin) {
-	c := NewSubprocessClient("agent", nil, false)
+	c := NewSubprocessClient("agent", nil)
 	stdin := &recordingStdin{}
 	c.started = true
 	c.stdin = stdin

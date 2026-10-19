@@ -42,12 +42,12 @@ func TestNoLaunchFrameOverflowsItsTerminal(t *testing.T) {
 	agent := catalog.NewCatalog().Get(catalog.FlagshipID)
 
 	// The first frame, drawn before any size is known.
-	m := root.NewFlagshipModel(*agent, false)
+	m := root.NewFlagshipModel(*agent)
 	assertFits(t, "pre-resize splash", m.View(), assumedCols, assumedRows)
 
 	for _, size := range terminalSizes {
 		w, h := size[0], size[1]
-		m := root.NewFlagshipModel(*agent, false).
+		m := root.NewFlagshipModel(*agent).
 			WithLocalPreflight(preflight.LocalOptions{Binary: "gaia-agent-absent-fixture"})
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		assertFits(t, "splash", updated.(root.FlagshipModel).View(), w, h)
@@ -57,7 +57,7 @@ func TestNoLaunchFrameOverflowsItsTerminal(t *testing.T) {
 func TestNoChatFrameOverflowsItsTerminal(t *testing.T) {
 	for _, size := range terminalSizes {
 		w, h := size[0], size[1]
-		m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", false, true)
+		m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", true)
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		assertFits(t, "chat", updated.(chat.ChatModel).View(), w, h)
 	}

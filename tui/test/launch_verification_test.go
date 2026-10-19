@@ -100,7 +100,7 @@ func newLocalDriver(t *testing.T, binary string, w, h int) *rootDriver {
 	}
 	agent.BinaryPath = binary
 
-	m := root.NewFlagshipModel(*agent, false).
+	m := root.NewFlagshipModel(*agent).
 		WithLocalPreflight(preflight.LocalOptions{Binary: binary}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
 	d := &rootDriver{t: t, m: m, cat: catalog.NewCatalog()}
@@ -278,7 +278,7 @@ func TestTheModelOverrideReachesTheInteractiveClient(t *testing.T) {
 	agent := catalog.Agent{
 		ID: "email", Name: "Email", Transport: catalog.TransportDaemon,
 	}
-	m := root.NewFlagshipModel(agent, false).WithModel("some-other-model")
+	m := root.NewFlagshipModel(agent).WithModel("some-other-model")
 
 	if got := root.ModelForTest(m); got != "some-other-model" {
 		t.Errorf("the router carries model %q; --model would be silently dropped", got)

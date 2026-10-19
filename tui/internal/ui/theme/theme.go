@@ -32,7 +32,9 @@
 package theme
 
 import (
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -211,4 +213,37 @@ func All() map[string]lipgloss.AdaptiveColor {
 		"ArtBright": ArtBright, "ArtBody": ArtBody, "ArtMid": ArtMid,
 		"ArtDetail": ArtDetail, "ArtShadow": ArtShadow, "ArtEye": ArtEye,
 	}
+}
+
+// Blend mixes two roles for motion — a shimmer's highlight, a prompt's pulse:
+// f=0 is a, f=1 is b, clamped. Each mode is mixed on its own side, so the result
+// is still an adaptive role, and only ever a point between two measured ones.
+func Blend(a, b lipgloss.AdaptiveColor, f float64) lipgloss.AdaptiveColor {
+	f = max(0, min(1, f))
+	return lipgloss.AdaptiveColor{Light: mixHex(a.Light, b.Light, f), Dark: mixHex(a.Dark, b.Dark, f)}
+}
+
+func mixHex(a, b string, f float64) string {
+	ar, ag, ab, okA := hexRGB(a)
+	br, bg, bb, okB := hexRGB(b)
+	if !okA || !okB {
+		return a
+	}
+	mix := func(x, y uint8) uint8 { return uint8(float64(x) + (float64(y)-float64(x))*f + 0.5) }
+	return fmt.Sprintf("#%02X%02X%02X", mix(ar, br), mix(ag, bg), mix(ab, bb))
+}
+
+func hexRGB(s string) (r, g, b uint8, ok bool) {
+	var v [3]uint8
+	if len(s) != 7 || s[0] != '#' {
+		return 0, 0, 0, false
+	}
+	for i := range v {
+		n, err := strconv.ParseUint(s[1+2*i:3+2*i], 16, 8)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		v[i] = uint8(n)
+	}
+	return v[0], v[1], v[2], true
 }

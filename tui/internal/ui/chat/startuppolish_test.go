@@ -64,26 +64,32 @@ func TestRestoreIsStatedOnceWithoutAStrayTime(t *testing.T) {
 	}
 }
 
-func TestRestoreKeepsItsTimingUnderDev(t *testing.T) {
+// #5122: the opening model switch's time is really the agent starting up, so
+// it is never printed as "model switched in N s" — there is no mode that
+// labels it, and no recap line under the restore notice.
+func TestTheRestoreNeverPrintsASwitchTime(t *testing.T) {
 	m, c, _ := startupChat(t, StartupRestore, "local", restoredID)
-	m.dev = true
 	m = openChat(t, m, c)
-	m.queryStart = m.queryStart.Add(-time.Second)
+	m.queryStart = m.queryStart.Add(-25 * time.Second)
 	m = confirmRestore(t, m)
 	last := m.messages[len(m.messages)-1]
-	if last.Duration <= 0 {
-		t.Fatal("--dev must keep the restore turn's timing")
+	m.expandWork = true
+	if s := m.answerStats(&last); s != "" {
+		t.Fatalf("the restore printed a time: %q", s)
 	}
-	if s := m.answerStats(&last); !strings.HasPrefix(s, "model switched in ") {
-		t.Fatalf("the restore time must say what it measures, not print bare: %q", s)
+	if out := ansi.Strip(m.View()); strings.Contains(out, "switched in") {
+		t.Fatalf("the restore was labelled as a slow model switch:\n%s", out)
 	}
 }
 
-func TestAnOrdinaryAnswerKeepsItsBareTime(t *testing.T) {
-	m := ChatModel{}
+func TestAnOrdinaryAnswerKeepsItsTimeUnderCtrlO(t *testing.T) {
+	m := ChatModel{expandWork: true}
 	msg := Message{Duration: 2 * time.Second}
 	if s := m.answerStats(&msg); s != "2.0s" {
-		t.Fatalf("only the model notice is labelled: %q", s)
+		t.Fatalf("the expanded stats lost the bare time: %q", s)
+	}
+	if s := m.recapLine(&msg); s != "2.0s" {
+		t.Fatalf("a turn with no work recaps as its time alone: %q", s)
 	}
 }
 

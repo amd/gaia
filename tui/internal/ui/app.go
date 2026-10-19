@@ -49,7 +49,7 @@ func prepareTerminal() {
 // useClaude/claudeModel run it against Anthropic's Claude API instead of the
 // local Lemonade backend. A non-nil trace records every agent event to a JSONL
 // file; the caller owns it and closes it after this returns.
-func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
+func RunFlagship(mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
@@ -75,7 +75,7 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 			}
 		}()
 	}
-	m := withLastModel(root.NewFlagshipModel(*agent, dev).
+	m := withLastModel(root.NewFlagshipModel(*agent).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
@@ -86,14 +86,14 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 			// spawn — with --mock that is the mock, not the name the seed carries.
 			Binary: agent.BinaryPath, ClaudeMode: useClaude,
 		})
-	return run(m, dev, ctrl)
+	return run(m, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
 //
 // subprocess is a command line, so it is split with quoting honoured — a binary
 // path containing a space must be quoted, not silently torn in two.
-func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, trace *event.TraceWriter) error {
+func RunChat(subprocess string, query string, ctrl *control.Options, trace *event.TraceWriter) error {
 	argv, err := client.SplitCommandLine(subprocess)
 	if err != nil {
 		return fmt.Errorf("invalid --subprocess command: %w", err)
@@ -105,14 +105,14 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
+	c := client.NewSubprocessClient(bin, argv[1:]).WithTrace(trace)
 	defer func() {
 		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 		}
 	}()
 
-	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
+	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query), ctrl)
 }
 
 // slowCloseNotice is how long quit runs before it says what it is waiting on.
@@ -161,7 +161,7 @@ func teaOptions() []tea.ProgramOption {
 
 // run boots the Bubble Tea program, optionally wrapping it with the control
 // recorder so the live session can be driven over HTTP.
-func run(model tea.Model, dev bool, ctrl *control.Options) error {
+func run(model tea.Model, ctrl *control.Options) error {
 	prepareTerminal()
 
 	// Alternate scroll mode: with the mouse left to the terminal (so drag-select
@@ -188,8 +188,8 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// WITHOUT --control used to leave a dead predecessor's file in place.
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
-	} else if removed && dev {
-		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
+	} else if removed {
+		control.Logf("removed a stale control discovery file")
 	}
 
 	if ctrl == nil {
@@ -200,10 +200,8 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 		return nil
 	}
 
-	// One dev switch for both halves: --dev on the TUI implies control
-	// logging, and the server must not end up quieter than the recorder.
+	// The server and the recorder log through the same switch.
 	opts := *ctrl
-	opts.Debug = opts.Debug || dev
 	state := control.NewState(control.Debugf(opts.Debug))
 	p := tea.NewProgram(control.NewRecorder(model, state), teaOptions()...)
 
@@ -266,7 +264,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // that overrode the binary for one entry point and not the other let a test
 // spawn the real agent while believing it had substituted a stand-in.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
+func RunAgent(agentID, query, model string, timeout time.Duration, ctrl *control.Options, fullAccess bool, useClaude bool, claudeModel, mockAgent string, trace *event.TraceWriter) (int, error) {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
@@ -292,12 +290,9 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 				"longer bound instead, e.g. --timeout 2h", timeout)
 	}
 
-	logf := func(string, ...any) {}
-	if dev {
-		logf = func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
-		}
-	}
+	// Diagnostics go to the session log, never the terminal: a one-shot's
+	// stdout is the answer, and the interactive screen is the TUI's.
+	logf := control.Logf
 
 	if query != "" {
 		var notice string
@@ -336,7 +331,6 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		}
 
 		c, err := client.ForAgent(*agent, client.ForAgentOptions{
-			Dev:   dev,
 			Model: model,
 			Logf:  logf,
 			// A one-shot has nobody at the keyboard; only the interactive chat
@@ -354,7 +348,9 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, dev, logf)
+		// Event payloads are content, and the session log holds metadata only;
+		// --trace is where a one-shot's events are recorded.
+		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, nil)
 		return res.ExitCode, nil
 	}
 
@@ -363,13 +359,14 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// passes. That is what gains an interactive --agent launch a gate: it had
 	// none, and email in particular went straight to chat and reported a
 	// missing daemon as a failed first message.
-	m := withLastModel(root.NewFlagshipModel(*agent, dev).
+	m := withLastModel(root.NewFlagshipModel(*agent).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
 		WithModel(model)).
 		WithTrace(trace)
-	if err := run(m, dev, ctrl); err != nil {
+	if err := run(m, ctrl); err != nil {
+
 		return 1, err
 	}
 	return 0, nil

@@ -85,7 +85,7 @@ func sampleMemoryDump() client.MemoryDump {
 
 func TestSlashMemoryIsDispatchedNotSentAsAQuestion(t *testing.T) {
 	fc := &fakeMemoryClient{dump: sampleMemoryDump()}
-	m := NewChatModel(fc, "gaia", "", false)
+	m := NewChatModel(fc, "gaia", "")
 	m.width, m.height = 80, 24
 	m.resize()
 
