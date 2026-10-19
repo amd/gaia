@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Iterator, TypeVar
 
+from gaia.config import default_gaia_home
 from gaia.connectors.errors import ConnectorsError
 from gaia.daemon.lock import try_lock, unlock
 
@@ -31,7 +32,7 @@ _POLL_SECONDS = 0.05
 def lock_path(provider_id: str) -> Path:
     # Scoped like the keyring it guards: per user (not per GAIA_HOME), per
     # provider (the slot is keyed by provider alone, store.py A10).
-    return Path.home() / ".gaia" / "connectors" / f"{provider_id}.refresh.lock"
+    return default_gaia_home() / "connectors" / f"{provider_id}.refresh.lock"
 
 
 def _open(provider_id: str) -> int:
