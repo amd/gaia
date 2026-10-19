@@ -9,6 +9,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A scheduled send or snooze interrupted mid-fire now shows up as failed.**
+  A crash, or a locked database when the result was written, left the job in
+  `firing` forever: never retried, and never reported as a failure. The
+  scheduler now records when it claims a job (`claimed_at`, added to
+  `email_scheduled_jobs` on startup) and marks a claim that has gone an hour
+  without an outcome `failed`, with the reason. The job is still never run a
+  second time, because the send may already have gone out.
+
 - **A batch organize that failed for every message is reported as a failure.**
   `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,
   `add_star_batch`, `remove_star_batch`, `label_message_batch` and

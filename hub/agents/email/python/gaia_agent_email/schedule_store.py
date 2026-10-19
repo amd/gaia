@@ -25,7 +25,8 @@ Status lifecycle::
 
 ``claim_job`` is an atomic ``pending -> firing`` transition (single UPDATE
 guarded on status), so a job fires exactly once even if two drivers poll the
-same store.
+same store. It records ``claimed_at``; ``fail_stale_firing`` marks a claim that
+never finished ``failed`` instead of leaving it ``firing`` forever.
 
 All public helpers are pure functions taking a ``DatabaseMixin``-typed first
 argument, mirroring ``action_store``. They never reach into the agent class.
@@ -52,7 +53,8 @@ CREATE TABLE IF NOT EXISTS email_scheduled_jobs (
     status       TEXT NOT NULL DEFAULT 'pending',
     error        TEXT,
     created_at   REAL NOT NULL,
-    fired_at     REAL
+    fired_at     REAL,
+    claimed_at   REAL
 );
 CREATE INDEX IF NOT EXISTS idx_email_scheduled_jobs_due
     ON email_scheduled_jobs(status, due_at);
@@ -70,8 +72,11 @@ STATUS_CANCELLED = "cancelled"
 
 
 def init_schema(db) -> None:
-    """Create the scheduled-jobs table if it doesn't exist. Idempotent."""
+    """Create the scheduled-jobs table if absent, and add newer columns."""
     db.execute(EMAIL_SCHEDULED_JOBS_DDL)
+    columns = {r["name"] for r in db.query("PRAGMA table_info(email_scheduled_jobs)")}
+    if "claimed_at" not in columns:
+        db.execute("ALTER TABLE email_scheduled_jobs ADD COLUMN claimed_at REAL")
 
 
 def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,6 +91,7 @@ def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
         "error": row["error"],
         "created_at": row["created_at"],
         "fired_at": row["fired_at"],
+        "claimed_at": row["claimed_at"],
     }
 
 
@@ -149,7 +155,7 @@ def list_jobs(db, *, status: str = STATUS_PENDING) -> List[Dict[str, Any]]:
     return [_row_to_job(r) for r in rows or ()]
 
 
-def claim_job(db, *, job_id: str) -> bool:
+def claim_job(db, *, job_id: str, now: Optional[float] = None) -> bool:
     """Atomically transition a job ``pending -> firing``.
 
     Returns True when this caller won the claim; False when the job was
@@ -158,7 +164,10 @@ def claim_job(db, *, job_id: str) -> bool:
     """
     affected = db.update(
         "email_scheduled_jobs",
-        {"status": STATUS_FIRING},
+        {
+            "status": STATUS_FIRING,
+            "claimed_at": now if now is not None else time.time(),
+        },
         "job_id = :id AND status = :pending",
         {"id": job_id, "pending": STATUS_PENDING},
     )
@@ -181,6 +190,47 @@ def mark_failed(db, *, job_id: str, error: str) -> None:
         "job_id = :id",
         {"id": job_id},
     )
+
+
+def fail_stale_firing(db, *, now: float, stale_after: float) -> List[str]:
+    """Mark ``failed`` every ``firing`` job claimed more than ``stale_after`` ago.
+
+    A claim stays ``firing`` forever when its process dies mid-fire, or when the
+    outcome write hits a locked DB. The job is never run again, because a
+    scheduled send may already have gone out, but it surfaces as a failure the
+    user can see and reschedule. A row with no ``claimed_at`` was claimed before
+    claim times were recorded, so it is stale on sight. Returns the failed ids.
+    """
+    rows = db.query(
+        "SELECT * FROM email_scheduled_jobs WHERE status = :firing "
+        "AND (claimed_at IS NULL OR claimed_at <= :cutoff)",
+        {"firing": STATUS_FIRING, "cutoff": now - stale_after},
+    )
+    failed: List[str] = []
+    for row in rows or ():
+        claimed = row["claimed_at"]
+        when = "at an unknown time" if claimed is None else f"at {claimed:.0f}"
+        # Guarded on the claim we read, so a claim renewed meanwhile is kept.
+        guard = "job_id = :id AND status = :firing AND " + (
+            "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed"
+        )
+        affected = db.update(
+            "email_scheduled_jobs",
+            {
+                "status": STATUS_FAILED,
+                "fired_at": now,
+                "error": (
+                    f"interrupted while firing (claimed {when}, never finished). "
+                    "Not run again because it may already have taken effect; "
+                    "check the mailbox and schedule it again if it did not."
+                ),
+            },
+            guard,
+            {"id": row["job_id"], "firing": STATUS_FIRING, "claimed": claimed},
+        )
+        if affected == 1:
+            failed.append(row["job_id"])
+    return failed
 
 
 def cancel_job(db, *, job_id: str) -> bool:
@@ -209,6 +259,7 @@ __all__ = [
     "cancel_job",
     "claim_job",
     "create_job",
+    "fail_stale_firing",
     "fetch_due",
     "get_job",
     "init_schema",

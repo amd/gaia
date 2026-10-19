@@ -36,15 +36,17 @@ error message persisted on the row and logs at ERROR — a firing send must
 never silently swallow a send failure. A job whose kind has no registered
 executor is likewise marked failed, never quietly skipped.
 
-At-most-once trade-off (deliberate): a process crash between ``claim_job``
-and ``mark_fired``/``mark_failed`` leaves the row stuck in ``firing`` — it
-will never re-fire. That is the safe side for email (no double-send); the
-row stays inspectable in ``email_scheduled_jobs``.
+At-most-once trade-off (deliberate): a process crash, or a locked DB, between
+``claim_job`` and ``mark_fired``/``mark_failed`` leaves the row in ``firing``.
+It never re-fires, which is the safe side for email (no double-send). Once the
+claim is older than ``stale_firing_seconds`` a pass marks it ``failed`` with the
+reason, so it shows up as a failure to check instead of sitting in ``firing``.
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia_agent_email import schedule_store
@@ -57,6 +59,10 @@ log = get_logger(__name__)
 # Executor signature: (job_row, db) -> None. ``db`` is the scheduler-owned
 # per-pass connection; executors must use it for any store/audit writes.
 JobExecutor = Callable[[Dict[str, Any], Any], None]
+
+# How long a ``firing`` claim may go without an outcome before a pass fails it.
+# Longer than any send or snooze restore takes, so a live fire is never failed.
+DEFAULT_STALE_FIRING_SECONDS = 3600.0
 
 
 class _SchedulerDB(DatabaseMixin):
@@ -78,9 +84,14 @@ class EmailJobScheduler:
         executors: Dict[str, JobExecutor],
         *,
         poll_seconds: float = 30.0,
+        stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
+        if stale_firing_seconds <= 0:
+            raise ValueError(
+                f"stale_firing_seconds must be > 0, got {stale_firing_seconds}"
+            )
         if db_path == ":memory:":
             raise ValueError(
                 "EmailJobScheduler needs a file-backed SQLite path — an "
@@ -90,6 +101,7 @@ class EmailJobScheduler:
         self._db_path = db_path
         self._executors = dict(executors)
         self._poll_seconds = poll_seconds
+        self._stale_firing_seconds = stale_firing_seconds
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -100,6 +112,8 @@ class EmailJobScheduler:
 
         The atomic ``claim_job`` guard makes each job fire exactly once even
         when two drivers (thread + external dispatcher) poll the same store.
+        Claims left ``firing`` past ``stale_firing_seconds`` are failed first
+        and reported in ``failed``.
         """
         db = _SchedulerDB()
         db.init_db(self._db_path)
@@ -110,10 +124,21 @@ class EmailJobScheduler:
 
     def _fire_due_jobs_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
-        failed: List[str] = []
+        failed = schedule_store.fail_stale_firing(
+            db,
+            now=now if now is not None else time.time(),
+            stale_after=self._stale_firing_seconds,
+        )
+        for job_id in failed:
+            log.error(
+                "email scheduler: job %s was left firing with no outcome for "
+                "over %.0fs; marked it failed instead of running it twice",
+                job_id,
+                self._stale_firing_seconds,
+            )
         for job in schedule_store.fetch_due(db, now=now):
             job_id = job["job_id"]
-            if not schedule_store.claim_job(db, job_id=job_id):
+            if not schedule_store.claim_job(db, job_id=job_id, now=now):
                 continue  # another driver won the claim
             executor = self._executors.get(job["kind"])
             if executor is None:
@@ -182,4 +207,4 @@ class EmailJobScheduler:
                 return
 
 
-__all__ = ["EmailJobScheduler", "JobExecutor"]
+__all__ = ["DEFAULT_STALE_FIRING_SECONDS", "EmailJobScheduler", "JobExecutor"]

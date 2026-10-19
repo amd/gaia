@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS daemon_jobs (
     error           TEXT,
     created_at      REAL NOT NULL,
     fired_at        REAL,
-    run_count       INTEGER NOT NULL DEFAULT 0
+    run_count       INTEGER NOT NULL DEFAULT 0,
+    claimed_at      REAL
 );
 CREATE INDEX IF NOT EXISTS idx_daemon_jobs_due
     ON daemon_jobs(status, fire_at);
@@ -69,8 +70,11 @@ CREATE TABLE IF NOT EXISTS daemon_migration_ledger (
 
 
 def init_schema(db) -> None:
-    """Create both tables if absent. Idempotent."""
+    """Create both tables if absent, and add columns newer code relies on."""
     db.execute(DAEMON_JOBS_DDL)
+    columns = {r["name"] for r in db.query("PRAGMA table_info(daemon_jobs)")}
+    if "claimed_at" not in columns:
+        db.execute("ALTER TABLE daemon_jobs ADD COLUMN claimed_at REAL")
 
 
 def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,6 +91,7 @@ def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": row["created_at"],
         "fired_at": row["fired_at"],
         "run_count": row["run_count"],
+        "claimed_at": row["claimed_at"],
     }
 
 
@@ -178,16 +183,21 @@ def fetch_due(db, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
     return [_row_to_job(r) for r in rows or ()]
 
 
-def claim_job(db, *, job_id: str) -> bool:
+def claim_job(db, *, job_id: str, now: Optional[float] = None) -> bool:
     """Atomically transition ``pending -> firing``. True iff this caller won.
 
     The status guard in the WHERE clause is what makes a job fire exactly once
     across concurrent drivers — the transition guard the whole reconciliation
     rests on (no double-run when both old and new paths briefly coexist).
+    ``claimed_at`` is what lets :func:`recover_stale_firing` tell a claim that
+    is still running from one a dead process left behind.
     """
     affected = db.update(
         "daemon_jobs",
-        {"status": STATUS_FIRING},
+        {
+            "status": STATUS_FIRING,
+            "claimed_at": now if now is not None else time.time(),
+        },
         "job_id = :id AND status = :pending",
         {"id": job_id, "pending": STATUS_PENDING},
     )
@@ -214,6 +224,7 @@ def mark_fired(db, *, job_id: str) -> None:
                 "fired_at": now,
                 "fire_at": now + job["interval_seconds"],
                 "run_count": run_count,
+                "error": None,
             },
             "job_id = :id",
             {"id": job_id},
@@ -234,6 +245,61 @@ def mark_failed(db, *, job_id: str, error: str) -> None:
         "job_id = :id",
         {"id": job_id},
     )
+
+
+def recover_stale_firing(db, *, now: float, stale_after: float) -> Dict[str, List[str]]:
+    """Move on every ``firing`` row whose claim is older than ``stale_after``.
+
+    A claim stays ``firing`` forever when its process dies mid-fire, or when the
+    outcome write hits a locked DB. A recurring row goes back to ``pending`` and
+    fires on the next pass. A one-shot row is marked ``failed``: its executor may
+    already have taken effect (an email sent), so running it again is not safe.
+    A row with no ``claimed_at`` was claimed before claim times were recorded,
+    by a process that is long gone, so it is stale on sight.
+
+    Returns ``{"requeued": [...], "failed": [...]}`` daemon job ids.
+    """
+    cutoff = now - stale_after
+    rows = db.query(
+        "SELECT * FROM daemon_jobs WHERE status = :firing "
+        "AND (claimed_at IS NULL OR claimed_at <= :cutoff)",
+        {"firing": STATUS_FIRING, "cutoff": cutoff},
+    )
+    requeued: List[str] = []
+    failed: List[str] = []
+    for row in rows or ():
+        job = _row_to_job(row)
+        claimed = job["claimed_at"]
+        when = "at an unknown time" if claimed is None else f"at {claimed:.0f}"
+        # Guarded on the claim we read, so a claim renewed meanwhile is kept.
+        guard = "job_id = :id AND status = :firing AND " + (
+            "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed"
+        )
+        params = {"id": job["job_id"], "firing": STATUS_FIRING, "claimed": claimed}
+        if job["kind"] == KIND_RECURRING and job["interval_seconds"]:
+            values = {
+                "status": STATUS_PENDING,
+                "claimed_at": None,
+                "error": (
+                    f"re-queued: claimed {when} but never finished (the daemon "
+                    "stopped or the store was locked mid-fire)"
+                ),
+            }
+            target = requeued
+        else:
+            values = {
+                "status": STATUS_FAILED,
+                "fired_at": now,
+                "error": (
+                    f"interrupted while firing (claimed {when}, never finished). "
+                    "Not run again because it may already have taken effect; "
+                    "check its result and schedule it again if it did not."
+                ),
+            }
+            target = failed
+        if db.update("daemon_jobs", values, guard, params) == 1:
+            target.append(job["job_id"])
+    return {"requeued": requeued, "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -299,5 +365,6 @@ __all__ = [
     "mark_failed",
     "mark_fired",
     "record_migration",
+    "recover_stale_firing",
     "register_job",
 ]

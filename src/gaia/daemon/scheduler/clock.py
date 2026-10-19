@@ -46,6 +46,11 @@ JobExecutor = Callable[[Dict[str, Any], Any], None]
 # or a status-route job_counts() read) waits instead of raising SQLITE_BUSY.
 _BUSY_TIMEOUT_MS = 5000
 
+# How long a ``firing`` claim may go without an outcome before a pass treats it
+# as abandoned. Longer than any executor should run, so a live fire is not
+# taken over by a second driver.
+DEFAULT_STALE_FIRING_SECONDS = 3600.0
+
 
 class _ClockDB(DatabaseMixin):
     """Bare DatabaseMixin host for the clock's per-pass connection."""
@@ -66,9 +71,14 @@ class DaemonClock:
         executors: Dict[str, JobExecutor],
         *,
         poll_seconds: float = 30.0,
+        stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
+        if stale_firing_seconds <= 0:
+            raise ValueError(
+                f"stale_firing_seconds must be > 0, got {stale_firing_seconds}"
+            )
         if db_path == ":memory:":
             raise ValueError(
                 "DaemonClock needs a file-backed SQLite path — an in-memory DB "
@@ -78,6 +88,7 @@ class DaemonClock:
         self._db_path = db_path
         self._executors = dict(executors)
         self._poll_seconds = poll_seconds
+        self._stale_firing_seconds = stale_firing_seconds
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._schema_ready = False
@@ -112,6 +123,9 @@ class DaemonClock:
 
         The atomic ``claim_job`` guard makes each job fire exactly once even
         when a legacy driver polls the same store during the transition window.
+        Each pass first recovers claims left ``firing`` past
+        ``stale_firing_seconds``; a one-shot job failed that way is reported in
+        ``failed``, and a re-queued recurring job fires in this same pass.
         """
         db = self._open_db()
         try:
@@ -122,10 +136,29 @@ class DaemonClock:
 
     def _fire_due_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
-        failed: List[str] = []
+        recovered = store.recover_stale_firing(
+            db,
+            now=now if now is not None else time.time(),
+            stale_after=self._stale_firing_seconds,
+        )
+        for job_id in recovered["requeued"]:
+            log.warning(
+                "daemon clock: recurring job %s was left firing with no outcome "
+                "for over %.0fs; re-queued it",
+                job_id,
+                self._stale_firing_seconds,
+            )
+        for job_id in recovered["failed"]:
+            log.error(
+                "daemon clock: one-shot job %s was left firing with no outcome "
+                "for over %.0fs; marked it failed instead of running it twice",
+                job_id,
+                self._stale_firing_seconds,
+            )
+        failed: List[str] = list(recovered["failed"])
         for job in store.fetch_due(db, now=now):
             job_id = job["job_id"]
-            if not store.claim_job(db, job_id=job_id):
+            if not store.claim_job(db, job_id=job_id, now=now):
                 continue  # another driver won the claim
             executor = self._executors.get(job["kind"])
             if executor is None:
@@ -242,4 +275,4 @@ class DaemonClock:
                 return
 
 
-__all__ = ["DaemonClock", "JobExecutor"]
+__all__ = ["DEFAULT_STALE_FIRING_SECONDS", "DaemonClock", "JobExecutor"]

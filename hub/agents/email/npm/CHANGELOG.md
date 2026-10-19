@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **A scheduled send or snooze cut off mid-fire now shows up as failed.** If
+  the agent crashed while firing one, the job stayed "firing" forever and was
+  never reported. An hour later it is now marked failed with the reason. It is
+  still never sent twice.
+
 - **A bulk archive, label, star or mark-read that changed nothing now says it
   failed.** When every message in the batch failed, the agent used to report
   the action as done. It now reports the failure with each message's reason,
