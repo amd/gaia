@@ -592,6 +592,10 @@ class LemonadeInstaller:
         except Exception as e:
             dest_path.unlink(missing_ok=True)
             raise RuntimeError(f"Download failed: {e}")
+        except BaseException:
+            # Ctrl-C mid-download: the unique name means no later run reclaims it.
+            dest_path.unlink(missing_ok=True)
+            raise
 
     def install(
         self, installer_path: Optional[Path] = None, silent: bool = True
@@ -1258,6 +1262,7 @@ class LemonadeInstaller:
             installed_version = info.version.lstrip("v")
 
             # Try both minimal and full MSI variants
+            variant_errors = []
             for use_minimal in [True, False]:
                 variant = "minimal" if use_minimal else "full"
                 try:
@@ -1312,13 +1317,20 @@ class LemonadeInstaller:
                         )
                 except Exception as e:
                     log.debug(f"Failed to uninstall with {variant} MSI: {e}")
+                    variant_errors.append(f"{variant} MSI: {e}")
                     continue
 
             # Both strategies failed
+            detail = (
+                " The matching installer could not be used - "
+                + "; ".join(variant_errors)
+                if variant_errors
+                else ""
+            )
             return InstallResult(
                 success=False,
-                error="Could not uninstall: product not found in Windows Installer registry. "
-                "Try uninstalling manually via Windows Settings > Apps.",
+                error="Could not uninstall: product not found in Windows Installer registry."
+                f"{detail} Try uninstalling manually via Windows Settings > Apps.",
             )
 
         except subprocess.TimeoutExpired:

@@ -295,3 +295,46 @@ class TestDownloadIntegrity:
         assert paths[0] != paths[1]
         assert all(p.read_bytes() == payload for p in paths)
         assert all(p.suffix == ".msi" for p in paths)
+
+    def test_interrupted_download_leaves_no_file(self, tmp_path, monkeypatch):
+        installer = _installer("Windows", "AMD64")
+        _pin(monkeypatch, installer, b"x" * 10_000)
+
+        class _Interrupted(_Stream):
+            def read(self, size):
+                raise KeyboardInterrupt
+
+        def _urlopen(request, timeout=None):
+            if request.get_method() == "HEAD":
+                return _Stream(b"")
+            return _Interrupted(b"x" * 10_000)
+
+        with patch("urllib.request.urlopen", side_effect=_urlopen):
+            with pytest.raises(KeyboardInterrupt):
+                installer.download_installer(dest_dir=str(tmp_path))
+        assert list(tmp_path.iterdir()) == []
+
+    def test_uninstall_fallback_names_the_unverifiable_installer(self):
+        from gaia.installer.lemonade_installer import LemonadeInfo
+
+        installer = _installer("Windows", "AMD64")
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("platform.machine", return_value="AMD64"),
+            patch.object(installer, "wait_for_msi_mutex", return_value=True),
+            patch.object(installer, "find_product_code", return_value=None),
+            patch.object(
+                installer,
+                "check_installation",
+                return_value=LemonadeInfo(installed=True, version="v1.2.3"),
+            ),
+            patch("urllib.request.urlopen") as urlopen,
+            patch("subprocess.run") as run,
+        ):
+            result = installer.uninstall()
+
+        assert not result.success
+        assert "No pinned SHA-256" in result.error
+        assert "minimal MSI" in result.error and "full MSI" in result.error
+        urlopen.assert_not_called()
+        run.assert_not_called()
