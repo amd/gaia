@@ -170,3 +170,40 @@ async def test_browser_connect_saves_under_the_lock(monkeypatch, microsoft):
 
     assert seen == [False]
     assert _lock_is_free("microsoft")
+
+
+async def test_forward_route_waits_for_a_holder_on_its_own_loop(monkeypatch):
+    """The UI route ran the import on the loop: a refresh holding the lock on
+    that loop could never release it, so every such import timed out."""
+    import asyncio
+
+    from gaia.ui.routers import connectors as router
+
+    monkeypatch.setattr(_refresh_lock, "LOCK_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(router, "_resolve_grant_scopes", lambda *_a, **_k: {})
+
+    async def emit(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(router._emitter, "emit", emit)
+    monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "env.apps.googleusercontent.com")
+
+    async def refresh_holding_the_lock():
+        async with _refresh_lock.held("google"):
+            await asyncio.sleep(0.5)
+
+    holder = asyncio.create_task(refresh_holding_the_lock())
+    while _lock_is_free("google"):
+        await asyncio.sleep(0.01)
+
+    body = router.ForwardConnectionRequest(
+        client_id="fwd.apps.googleusercontent.com",
+        client_secret="fwd-secret",
+        refresh_token="fwd-refresh",
+        scopes=FORWARDED_SCOPES,
+        account_email="alice@example.com",
+    )
+    summary = await router.forward_connection(None, "google", body)
+
+    await holder
+    assert summary["provider"] == "google"

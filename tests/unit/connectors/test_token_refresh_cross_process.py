@@ -143,7 +143,7 @@ async def test_lock_held_too_long_fails_loudly(monkeypatch, google, other_proces
     monkeypatch.setattr(_refresh_lock, "LOCK_TIMEOUT_SECONDS", 0.3)
     route = respx.post(TOKEN_URL).mock(side_effect=_rotating_endpoint(SEED, "x"))
 
-    with pytest.raises(ConnectorsError, match="Another GAIA process"):
+    with pytest.raises(ConnectorsError, match="has been busy"):
         await get_or_refresh("google")
 
     assert route.call_count == 0
@@ -317,3 +317,17 @@ async def test_a_slow_token_endpoint_fails_inside_the_lock_cap(monkeypatch, goog
 
     with pytest.raises(httpx.TimeoutException, match="did not answer"):
         await get_or_refresh("google")
+
+
+async def test_a_hung_peer_task_in_this_process_is_bounded(monkeypatch, google):
+    from gaia.connectors.tokens import _AccessTokenCache, _cache, _cache_key
+
+    monkeypatch.setattr(_refresh_lock, "LOCK_TIMEOUT_SECONDS", 0.3)
+    entry = _AccessTokenCache()
+    _cache[_cache_key("google", "default")] = entry
+    await entry.lock.acquire()  # a peer task stuck in a keyring write
+    try:
+        with pytest.raises(ConnectorsError, match="has been busy"):
+            await asyncio.wait_for(get_or_refresh("google"), 5)
+    finally:
+        entry.lock.release()

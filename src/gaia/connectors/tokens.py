@@ -6,9 +6,9 @@ Per-provider access-token cache with double-checked locking and refresh.
 Critical invariants (T-5b, plan amendments A6, A7):
 
 - One ``asyncio.Lock`` per ``(provider, account_email)`` cache slot. The
-  refresh path uses **explicit ``async with lock:`` (context-manager form)**
-  so the lock is released on exception. Manual ``acquire``/``release``
-  pairs are forbidden — they deadlock if a refresh raises.
+  refresh path acquires it with the same bounded wait as the connection
+  lock and releases it in a ``finally``, so a refresh that raises never
+  leaves it held.
 
 - The daemon, the Agent UI and the CLI each refresh in their own process,
   so a refresh also holds the per-provider connection lock
@@ -118,7 +118,12 @@ async def get_or_refresh(
     if not _is_expired(entry):
         return entry.access_token  # type: ignore[return-value]
 
-    async with entry.lock:
+    # Bounded like the file lock: a peer task's keyring write can hang.
+    try:
+        await asyncio.wait_for(entry.lock.acquire(), _refresh_lock.LOCK_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise _refresh_lock.timeout_error(provider_id) from exc
+    try:
         # Re-check inside the lock — a peer task may have refreshed
         # while we were waiting.
         if not _is_expired(entry):
@@ -126,6 +131,8 @@ async def get_or_refresh(
 
         async with _refresh_lock.held(provider_id):
             return await _refresh_locked(provider, provider_id, account_email, entry)
+    finally:
+        entry.lock.release()
 
 
 async def _refresh_locked(

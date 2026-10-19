@@ -34,29 +34,32 @@ def lock_path(provider_id: str) -> Path:
     return Path.home() / ".gaia" / "connectors" / f"{provider_id}.refresh.lock"
 
 
-def _open(provider_id: str) -> tuple[int, Path]:
+def _open(provider_id: str) -> int:
     path = lock_path(provider_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600), path
+    return os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
 
 
-def _timeout_error(provider_id: str, path: Path) -> ConnectorsError:
+def timeout_error(provider_id: str) -> ConnectorsError:
+    """The error for a connection lock not freed within the wait cap."""
     return ConnectorsError(
-        f"Another GAIA process has held the {provider_id} connection lock for "
-        f"over {LOCK_TIMEOUT_SECONDS:.0f}s (lock held on {path}). Retry; if it "
-        "keeps happening, look for a stuck `gaia daemon` or Agent UI process."
+        f"The {provider_id} connection has been busy for over "
+        f"{LOCK_TIMEOUT_SECONDS:.0f}s: another GAIA process, or another request "
+        "in this one, is still refreshing or saving it (lock file "
+        f"{lock_path(provider_id)}). Retry; if it keeps happening, look for a "
+        "stuck `gaia daemon` or Agent UI process."
     )
 
 
 @asynccontextmanager
 async def held(provider_id: str) -> AsyncIterator[None]:
     """Hold ``provider_id``'s connection lock from async code."""
-    fd, path = _open(provider_id)
+    fd = _open(provider_id)
     try:
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
         while not try_lock(fd):
             if time.monotonic() >= deadline:
-                raise _timeout_error(provider_id, path)
+                raise timeout_error(provider_id)
             await asyncio.sleep(_POLL_SECONDS)
         try:
             yield
@@ -68,13 +71,17 @@ async def held(provider_id: str) -> AsyncIterator[None]:
 
 @contextmanager
 def held_sync(provider_id: str) -> Iterator[None]:
-    """Hold ``provider_id``'s connection lock from sync code."""
-    fd, path = _open(provider_id)
+    """Hold ``provider_id``'s connection lock from sync code.
+
+    Never call it on an event loop thread: a holder on that loop could not
+    run to release it.
+    """
+    fd = _open(provider_id)
     try:
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
         while not try_lock(fd):
             if time.monotonic() >= deadline:
-                raise _timeout_error(provider_id, path)
+                raise timeout_error(provider_id)
             time.sleep(_POLL_SECONDS)
         try:
             yield
