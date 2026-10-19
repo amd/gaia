@@ -1140,7 +1140,7 @@ export async function getSessionGit(sessionId: string): Promise<SessionGit> {
     return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
 }
 
-export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[] }> {
+export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[]; ignored: string[] }> {
     return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
 }
 

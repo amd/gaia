@@ -259,3 +259,100 @@ def test_odd_file_names_are_names_not_patterns(client, session_id, repo):
     assert committed == ["note[s].md"]
     status = _git(repo, "status", "--porcelain")
     assert "notes.md" in status and "secret.env" in status
+
+
+def _chat_writes(client, session_id, *paths):
+    db = client.app.state.db
+    db.add_message(session_id, "user", "Write the report")
+    with fs.recording_turn(session_id) as rec:
+        for path in paths:
+            fs.before_change(path, "write_file")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("chat\n", encoding="utf-8")
+    rec.link_message(db.add_message(session_id, "assistant", "ok"))
+
+
+def _ignore(repo, *patterns):
+    (repo / ".gitignore").write_text("\n".join(patterns) + "\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+
+
+def test_ignored_files_are_left_out_of_the_commit(client, session_id, repo):
+    _ignore(repo, "*.csv", "build/")
+    _chat_writes(
+        client,
+        session_id,
+        repo / "report.md",
+        repo / "summary.csv",
+        repo / "build" / "out.bin",
+        repo / "deep" / "data.csv",
+    )
+    (r,) = client.get(f"/api/sessions/{session_id}/changes/git").json()["repos"]
+    assert r["files"] == ["report.md"]
+    assert sorted(r["ignored"]) == ["build/out.bin", "deep/data.csv", "summary.csv"]
+    assert r["uncommitted"] == ["report.md"]
+    assert "csv" not in r["draft"]["body"] and "out.bin" not in r["draft"]["body"]
+
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert sorted(resp.json()["ignored"]) == [
+        "build/out.bin",
+        "deep/data.csv",
+        "summary.csv",
+    ]
+    committed = _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert committed == ["report.md"]
+    # Never force-added, and still on disk.
+    assert _git(repo, "ls-files", "summary.csv", "build", "deep") == ""
+    assert (repo / "summary.csv").exists()
+
+
+def test_a_tracked_file_matching_an_ignore_pattern_is_still_committed(
+    client, session_id, repo
+):
+    (repo / "config.csv").write_text("a\n", encoding="utf-8")
+    _git(repo, "add", "config.csv")
+    _git(repo, "commit", "-q", "-m", "tracked csv")
+    _ignore(repo, "*.csv")
+    _chat_writes(client, session_id, repo / "config.csv")
+    (r,) = client.get(f"/api/sessions/{session_id}/changes/git").json()["repos"]
+    assert r["files"] == ["config.csv"] and r["ignored"] == []
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert _git(repo, "show", "--name-only", "--format=", "HEAD") == "config.csv"
+
+
+def test_only_ignored_changes_commit_nothing_and_say_why(client, session_id, repo):
+    _ignore(repo, "*.log")
+    _chat_writes(client, session_id, repo / "run.log")
+    before = _git(repo, "rev-parse", "HEAD")
+    (r,) = client.get(f"/api/sessions/{session_id}/changes/git").json()["repos"]
+    assert r["files"] == [] and r["uncommitted"] == [] and r["ignored"] == ["run.log"]
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 400
+    assert "ignored by git" in resp.json()["detail"]
+    assert _git(repo, "rev-parse", "HEAD") == before
+
+
+def test_ignore_check_takes_names_literally(client, session_id, repo):
+    """Names with spaces and brackets are checked and committed as written."""
+    _ignore(repo, "secret*")
+    _chat_writes(client, session_id, repo / "a b.txt", repo / "[x].md")
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ignored"] == []
+    committed = _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert sorted(committed) == ["[x].md", "a b.txt"]

@@ -887,8 +887,9 @@ Deleting a chat deletes its copies.
   <Accordion title="GET /api/sessions/{session_id}/changes/git">
     The git repositories holding the chat's changed files:
     `{"available": true, "repos": [{"root", "branch", "remote", "default_branch",
-    "gh", "files", "uncommitted", "draft": {"title", "body"}, "pr_blocked"}]}`.
-    `draft` is drafted from the chat's requests for the turns that changed those
+    "gh", "files", "uncommitted", "ignored", "draft": {"title", "body"},
+    "pr_blocked"}]}`. `ignored` lists the chat's files git ignores; they are
+    left out of `files` and never committed. `draft` is drafted from the chat's requests for the turns that changed those
     files; `pr_blocked` says why a pull request can't be opened (no `gh`, no
     remote, or on the default branch), or is null.
   </Accordion>
@@ -899,9 +900,11 @@ Deleting a chat deletes its copies.
     Stages only the files the chat changed in `root` (deletions included, names
     taken literally, never as patterns) and
     commits them with `message`; other staged or changed files are left alone
-    and hooks run as usual. Returns `{"root", "commit", "files"}`. **400**
+    and hooks run as usual. Files git ignores are left out and returned in
+    `ignored`. Returns `{"root", "commit", "files", "ignored"}`. **400**
     without `"confirmed": true`, for an empty message, for a repository in a
-    folder removed from the chat, or when git refuses; **409** while a turn is
+    folder removed from the chat, when every changed file is ignored, or when
+    git refuses; **409** while a turn is
     running.
   </Accordion>
 
@@ -1426,8 +1429,10 @@ agent at once, so they take effect on its next step.
     web tools, the in-app browser, connector (MCP) tools, and any call whose
     arguments or shell command reach a host other than this PC (for example
     `curl https://…`, `git push`, `pip install`, `npx`), before asking for
-    confirmation. A web or browser call whose URL is on this PC
-    (`localhost`, `127.*`) still runs. The refusal tells the model the
+    confirmation. A web or browser call whose URL is on this PC still runs,
+    as does a plain `curl`/`wget`/`Invoke-WebRequest` whose every destination
+    is: `localhost` exactly or a loopback IP (`127.0.0.0/8`, `::1`). Each
+    command in a chained shell line is checked on its own. The refusal tells the model the
     internet is off for this chat.
   </Accordion>
 

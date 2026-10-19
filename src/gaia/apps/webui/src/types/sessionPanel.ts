@@ -91,6 +91,8 @@ export interface GitRepo {
     files: string[];
     /** The chat's files git still sees as changed. */
     uncommitted: string[];
+    /** The chat's files git ignores; never staged. */
+    ignored: string[];
     draft: { title: string; body: string };
     pr_blocked: string | null;
 }

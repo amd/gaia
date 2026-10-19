@@ -52,6 +52,7 @@ const REPO: GitRepo = {
     gh: true,
     files: ['app.py', 'util.py', 'old.txt'],
     uncommitted: ['app.py', 'util.py', 'old.txt'],
+    ignored: [],
     draft: { title: 'Add a helper for the totals', body: 'Files:\n- app.py\n- util.py\n- old.txt' },
     pr_blocked: null,
 };
@@ -187,7 +188,7 @@ describe('ChangesSection git', () => {
     });
 
     it('commits only after the drafted message is shown and confirmed, with the user’s edits', async () => {
-        mocked.commitChanges.mockResolvedValue({ root: REPO.root, commit: 'abc1234', files: ['app.py', 'util.py', 'old.txt'] });
+        mocked.commitChanges.mockResolvedValue({ root: REPO.root, commit: 'abc1234', files: ['app.py', 'util.py', 'old.txt'], ignored: [] });
         renderSection();
         fireEvent.click(await screen.findByRole('button', { name: /Commit…/ }));
         expect(mocked.commitChanges).not.toHaveBeenCalled();
@@ -200,6 +201,28 @@ describe('ChangesSection git', () => {
             SID, 'C:\\repo', 'Add totals helper\n\nFiles:\n- app.py\n- util.py\n- old.txt',
         ));
         expect(await screen.findByText('Committed 3 files as abc1234.')).toBeInTheDocument();
+    });
+
+    it('names the files git ignores as left out of the commit', async () => {
+        mocked.getSessionGit.mockResolvedValue({
+            available: true,
+            repos: [{ ...REPO, files: ['app.py'], uncommitted: ['app.py'], ignored: ['out/summary.csv'] }],
+        });
+        renderSection();
+        fireEvent.click(await screen.findByRole('button', { name: /Commit…/ }));
+        const dialog = screen.getByRole('dialog', { name: 'Commit this chat’s changes' });
+        expect(within(dialog).getByText(/Left out, because git ignores it: out\/summary\.csv/)).toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: 'Commit 1 file' })).toBeInTheDocument();
+    });
+
+    it('a repo whose only changes are ignored is not shown as committed', async () => {
+        mocked.getSessionGit.mockResolvedValue({
+            available: true,
+            repos: [{ ...REPO, files: [], uncommitted: [], ignored: ['build/a.bin'] }],
+        });
+        renderSection();
+        expect(await screen.findByRole('button', { name: /Commit…/ })).toBeDisabled();
+        expect(screen.queryByText(/· committed/)).not.toBeInTheDocument();
     });
 
     it('closing the commit dialog runs nothing', async () => {

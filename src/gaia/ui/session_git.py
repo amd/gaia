@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base import file_snapshots
 from gaia.logger import get_logger
@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 
 _TIMEOUT_S = 120
 _TITLE_MAX = 72
+_NUL = "\x00"
 
 
 class GitActionError(RuntimeError):
@@ -43,13 +44,24 @@ def _git_exe() -> str:
     return exe
 
 
-def _run(argv: List[str], cwd: str, stdin: Optional[str] = None) -> str:
+def _run(
+    argv: List[str],
+    cwd: str,
+    stdin: Optional[str] = None,
+    ok_codes: Tuple[int, ...] = (0,),
+    literal: bool = True,
+) -> str:
+    env = dict(os.environ)
+    if literal:
+        # File names are names, never patterns: `*` must not stage the repo.
+        env["GIT_LITERAL_PATHSPECS"] = "1"
+    else:
+        env.pop("GIT_LITERAL_PATHSPECS", None)
     try:
         proc = subprocess.run(
             argv,
             cwd=cwd,
-            # File names are names, never patterns: `*` must not stage the repo.
-            env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
+            env=env,
             input=stdin,
             capture_output=True,
             text=True,
@@ -62,7 +74,7 @@ def _run(argv: List[str], cwd: str, stdin: Optional[str] = None) -> str:
         ) from e
     except OSError as e:
         raise GitActionError(f"Could not run {argv[0]}: {e}") from e
-    if proc.returncode != 0:
+    if proc.returncode not in ok_codes:
         detail = (proc.stderr or proc.stdout).strip()
         raise GitActionError(f"`{' '.join(argv[:3])}` failed: {detail[:800]}")
     # Leading space is meaningful: `git status --porcelain` starts lines with it.
@@ -83,6 +95,24 @@ def _existing_parent(path: str) -> Optional[str]:
             return None
         p = p.parent
     return str(p)
+
+
+def _ignored(root: str, rel: List[str]) -> List[str]:
+    """The paths in *rel* git ignores; a tracked file never counts as ignored."""
+    if not rel:
+        return []
+    posix = [r.replace(os.sep, "/") for r in rel]
+    # check-ignore reads plain names, not pathspecs, and rejects the literal
+    # flag. Exit 1 means none of them are ignored.
+    out = _run(
+        [_git_exe(), "check-ignore", "-z", "--stdin"],
+        root,
+        stdin=_NUL.join(posix) + _NUL,
+        ok_codes=(0, 1),
+        literal=False,
+    )
+    hits = {p for p in out.split(_NUL) if p}
+    return [r for r, p in zip(rel, posix) if p in hits]
 
 
 def _changed_by_chat(session_id: str) -> List[str]:
@@ -170,9 +200,23 @@ def describe(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     for root, files in sorted(by_root.items()):
         state = _repo_state(root)
         rel = [os.path.relpath(f, root) for f in files]
-        dirty = _run(
-            [_git_exe(), "status", "--porcelain", "--untracked-files=all", "--", *rel],
-            root,
+        ignored = _ignored(root, rel)
+        files = [f for f, r in zip(files, rel) if r not in ignored]
+        rel = [r for r in rel if r not in ignored]
+        dirty = (
+            _run(
+                [
+                    _git_exe(),
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                    "--",
+                    *rel,
+                ],
+                root,
+            )
+            if rel
+            else ""
         )
         pending = [line[3:].strip().strip('"') for line in dirty.splitlines() if line]
         pr_blocked = None
@@ -191,6 +235,7 @@ def describe(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
                 **state,
                 "files": [f.replace(os.sep, "/") for f in rel],
                 "uncommitted": pending,
+                "ignored": [f.replace(os.sep, "/") for f in ignored],
                 "draft": draft_message(db, session_id, files, root),
                 "pr_blocked": pr_blocked,
             }
@@ -227,6 +272,14 @@ def commit(
     files = _check_repo(db, session_id, root)
     git = _git_exe()
     rel = [os.path.relpath(f, root) for f in files]
+    # Git refuses to stage an ignored file, so those stay out of the commit.
+    ignored = _ignored(root, rel)
+    rel = [r for r in rel if r not in ignored]
+    if not rel:
+        raise GitActionError(
+            "Nothing was committed: every file this chat changed in "
+            f"{root} is ignored by git (.gitignore)."
+        )
     # --all stages the deletions of files the chat removed too.
     _run([git, "add", "--all", "--", *rel], root)
     staged = _run([git, "diff", "--cached", "--name-only", "--", *rel], root)
@@ -246,7 +299,12 @@ def commit(
         os.unlink(msg_file)
     sha = _run([git, "rev-parse", "--short", "HEAD"], root)
     logger.info("Committed %d file(s) in %s as %s", len(rel), root, sha)
-    return {"root": root, "commit": sha, "files": staged.splitlines()}
+    return {
+        "root": root,
+        "commit": sha,
+        "files": staged.splitlines(),
+        "ignored": [f.replace(os.sep, "/") for f in ignored],
+    }
 
 
 def create_pr(

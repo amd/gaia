@@ -562,7 +562,8 @@ reads nothing.
   - When the files are in a git repository, **Commit** and **Create PR** open
     a message drafted from your requests in this chat, which you can edit.
     Nothing runs until you press the button in that dialog, whatever the
-    permission mode. Commit includes only the files this chat changed.
+    permission mode. Commit includes only the files this chat changed, and
+    leaves out any that git ignores; the dialog names them.
     Create PR pushes the current branch (never forced) and opens the pull
     request with GitHub's `gh` tool; it isn't offered from the default branch
     or while the chat's internet is off.

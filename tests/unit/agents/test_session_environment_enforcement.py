@@ -186,6 +186,9 @@ class TestInternetOff:
             "uvx ruff check",
             "docker pull nginx",
             "cargo install ripgrep",
+            "curl http://localhost:8000/ && curl example.com",
+            "curl http://127.0.0.1/ ; git push origin main",
+            "curl http://127.0.0.1.attacker.example/",
         ],
     )
     def test_online_shell_commands_are_refused(self, layout, command):
@@ -215,6 +218,12 @@ class TestInternetOff:
         result = _call(agent, "browser_open", url="http://localhost:5316/")
         assert result["status"] == "success"
         assert agent.ran == ["http://localhost:5316/"]
+
+    def test_a_look_alike_of_this_pc_is_refused(self, layout):
+        agent = self._agent(layout)
+        result = _call(agent, "browser_open", url="http://127.0.0.1.attacker.example/")
+        assert result["error_type"] == "internet_off"
+        assert agent.ran == []
 
     def test_connector_tools_are_refused(self, layout):
         agent = self._agent(layout)

@@ -294,7 +294,7 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
                 <div key={repo.root} className="sp-git-repo">
                     <span className="sp-meta" title={repo.root}>
                         <GitBranch size={12} aria-hidden="true" /> {baseName(repo.root)} · {repo.branch}
-                        {repo.uncommitted.length === 0 && ' · committed'}
+                        {repo.uncommitted.length === 0 && repo.files.length > 0 && ' · committed'}
                     </span>
                     <span className="sp-actions-row">
                         <button
@@ -394,6 +394,11 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
                         <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={7} disabled={running} />
                     </label>
                     <div className="sp-meta">{plural(files.length, 'file')}: {files.join(', ')}</div>
+                    {kind === 'commit' && repo.ignored.length > 0 && (
+                        <div className="sp-meta">
+                            Left out, because git ignores {repo.ignored.length === 1 ? 'it' : 'them'}: {repo.ignored.join(', ')}
+                        </div>
+                    )}
                     {error && <p className="sp-error" role="alert">{error}</p>}
                 </div>
                 <div className="sp-picker-actions">
