@@ -140,14 +140,43 @@ async def test_logged_tunnel_to_another_port_is_ignored(monkeypatch):
     assert await manager._poll_ngrok_api(timeout=0.1, interval=0.05) is None
 
 
-async def test_a_foreign_api_owner_is_named_in_the_error(monkeypatch):
-    _api(monkeypatch, {"127.0.0.1:4040": [_USERS]})
+async def test_never_polls_4040_before_its_own_agent_reports(monkeypatch):
+    # The user's own `ngrok http 4200` forwards to GAIA's port too.
+    users_same_port = _tunnel("https://users-4200.ngrok.app", "http://localhost:4200")
+    requested = _api(monkeypatch, {"127.0.0.1:4040": [users_same_port]})
     manager = _manager_with_log()
 
     assert await manager._poll_ngrok_api(timeout=0.2, interval=0.05) is None
 
-    assert "not GAIA's" in manager._error
-    assert "authtoken" not in manager._error
+    assert requested == []
+
+
+def test_the_web_addr_is_the_last_one_ngrok_bound():
+    manager = _manager_with_log(
+        't=1 lvl=info msg="starting web service" obj=web addr=127.0.0.1:4040',
+        't=2 lvl=eror msg="failed to start web service" obj=web '
+        'err="listen tcp 127.0.0.1:4040: bind: address already in use"',
+        't=3 lvl=info msg="starting web service" obj=web addr=127.0.0.1:4041',
+    )
+
+    assert manager._logged_web_addr() == "127.0.0.1:4041"
+
+
+def test_a_port_conflict_ngrok_recovered_from_is_not_blamed():
+    output = (
+        'lvl=eror msg="failed to start web service" '
+        'err="listen tcp 127.0.0.1:4040: bind: address already in use"\n'
+        'lvl=info msg="starting web service" addr=127.0.0.1:4041\n'
+        'lvl=eror msg="session closed" err="something else went wrong"'
+    )
+
+    assert _parse_ngrok_error(output) != tunnel_mod._NGROK_PORT_CONFLICT_HINT
+
+
+def test_an_unrecovered_port_conflict_is_still_reported():
+    output = 'lvl=eror err="listen tcp 127.0.0.1:4040: bind: address already in use"'
+
+    assert _parse_ngrok_error(output) == tunnel_mod._NGROK_PORT_CONFLICT_HINT
 
 
 def test_output_readers_collect_lines_while_ngrok_runs():
@@ -204,11 +233,15 @@ def _table(monkeypatch, procs, alive=()):
     )
 
 
-async def test_an_ngrok_it_cannot_inspect_is_reported(monkeypatch):
-    _table(monkeypatch, [_Proc(41, "ngrok.exe", None)])
+async def test_an_ngrok_it_cannot_inspect_is_left_alone(monkeypatch):
+    uninspectable = _Proc(41, "ngrok.exe", None)
+    _table(monkeypatch, [uninspectable])
+    manager = TunnelManager(port=4200)
 
-    with pytest.raises(_StaleNgrokError, match="pid 41"):
-        await TunnelManager(port=4200)._kill_stale_ngrok()
+    await manager._kill_stale_ngrok()
+
+    assert not uninspectable.killed
+    assert manager._uninspectable == [41]
 
 
 async def test_an_uninspectable_non_ngrok_process_is_ignored(monkeypatch):
@@ -235,8 +268,30 @@ async def test_an_agent_that_already_exited_is_skipped(monkeypatch):
     assert other.killed
 
 
-async def test_sweep_errors_reach_the_tunnel_status(monkeypatch):
-    _table(monkeypatch, [_Proc(41, "ngrok.exe", None)])
+def _startable(monkeypatch, output: bytes):
+    """A manager whose ``ngrok`` is a fake that prints ``output`` and exits."""
+
+    class _ExitedAgent:
+        pid = None
+
+        def __init__(self, *_a, **_k):
+            self.stdout = io.BytesIO(output)
+            self.stderr = io.BytesIO(b"")
+            self.stdin = None
+
+        def poll(self):
+            return 1
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 1
+
+    monkeypatch.setattr(tunnel_mod.subprocess, "Popen", _ExitedAgent)
     monkeypatch.setattr(tunnel_mod, "_check_ngrok_authtoken_configured", lambda: True)
     manager = TunnelManager(port=4200)
     manager._find_ngrok = lambda: "ngrok"
@@ -245,8 +300,35 @@ async def test_sweep_errors_reach_the_tunnel_status(monkeypatch):
         manager._public_ip = None
 
     manager._fetch_public_ip = _no_ip
+    return manager
+
+
+async def test_a_held_session_names_the_ngrok_it_could_not_inspect(monkeypatch):
+    _table(monkeypatch, [_Proc(41, "ngrok.exe", None)])
+    manager = _startable(monkeypatch, _SESSION_LIMIT_CONSOLE.encode())
 
     status = await manager.start()
 
     assert status["active"] is False
+    assert status["error"].startswith(_NGROK_SESSION_LIMIT_HINT)
     assert "pid 41" in status["error"]
+
+
+async def test_an_unrelated_failure_does_not_blame_that_ngrok(monkeypatch):
+    _table(monkeypatch, [_Proc(41, "ngrok.exe", None)])
+    manager = _startable(monkeypatch, b"x509: certificate signed by unknown authority")
+
+    status = await manager.start()
+
+    assert "pid 41" not in status["error"]
+
+
+async def test_sweep_errors_reach_the_tunnel_status(monkeypatch):
+    stale = _Proc(21, "ngrok.exe", ["ngrok.exe", *_GAIA_ARGS])
+    _table(monkeypatch, [stale], alive=[stale])
+    manager = _startable(monkeypatch, b"")
+
+    status = await manager.start()
+
+    assert status["active"] is False
+    assert "pid 21" in status["error"]
