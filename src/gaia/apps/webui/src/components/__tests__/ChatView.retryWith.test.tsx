@@ -9,6 +9,7 @@ import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import type { Message, RetryResult, Session } from '../../types';
 import * as api from '../../services/api';
+import { resetQueueDispatch } from '../../services/queueDispatch';
 
 vi.mock('../../services/api');
 
@@ -89,7 +90,10 @@ beforeEach(() => {
         isLoadingMessages: false,
         pendingPrompt: null,
         systemStatus: null,
+        messageQueues: {},
+        queueHolds: {},
     });
+    resetQueueDispatch();
 });
 
 async function retryWithQwen() {

@@ -240,3 +240,79 @@ def test_a_followup_link_to_no_upload_is_left_as_is(uploads, link):
 
     assert inbox.get_nowait() == link
     assert taken == [link]
+
+
+@pytest.mark.asyncio
+async def test_a_chat_that_missed_the_turn_end_can_ask_what_was_taken(runtime):
+    db = runtime
+    agent = _Agent(drain=True)
+
+    session, _, _ = await _turn_with_followup(db, agent, "also the totals")
+
+    assert await chat.followup_outcome(session["id"]) == {
+        "taken": ["also the totals"],
+        "returned": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_chat_that_missed_the_turn_end_can_ask_what_came_back(runtime):
+    db = runtime
+    agent = _Agent(drain=False)
+
+    session, _, _ = await _turn_with_followup(db, agent, _ATTACHED)
+
+    # As the user sent it, so the chat can match it against its queue.
+    assert await chat.followup_outcome(session["id"]) == {
+        "taken": [],
+        "returned": [_ATTACHED],
+    }
+
+
+@pytest.mark.asyncio
+async def test_followup_outcome_is_refused_while_a_turn_runs(runtime):
+    with patch.object(chat.run_manager, "is_running", return_value=True):
+        with pytest.raises(HTTPException) as exc:
+            await chat.followup_outcome("busy")
+    assert exc.value.status_code == 409
+
+
+def test_each_turn_replaces_the_last_outcome():
+    agent = _Agent(drain=True)
+    first = followups.open_inbox("s-out", agent, lambda _t: None)
+    followups.deliver("s-out", "old")
+    followups.close_inbox("s-out", agent, first)
+    assert followups.last_outcome("s-out") == {"taken": [], "returned": ["old"]}
+
+    second = followups.open_inbox("s-out", agent, lambda _t: None)
+    followups.deliver("s-out", "new")
+    assert agent._followup_queue.get_nowait() == "new"
+    followups.close_inbox("s-out", agent, second)
+    assert followups.last_outcome("s-out") == {"taken": ["new"], "returned": []}
+
+    followups.forget("s-out")
+    assert followups.last_outcome("s-out") == {"taken": [], "returned": []}
+
+
+def test_outcome_of_a_session_that_never_had_a_turn_is_empty():
+    assert followups.last_outcome("never-ran") == {"taken": [], "returned": []}
+
+
+def test_deleting_a_chat_drops_its_followup_outcome():
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.server import create_app
+
+    client = TestClient(create_app(db_path=":memory:"))
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    agent = _Agent(drain=False)
+    inbox = followups.open_inbox(sid, agent, lambda _t: None)
+    followups.deliver(sid, "left behind")
+    followups.close_inbox(sid, agent, inbox)
+    assert client.get(f"/api/chat/followup/{sid}").json() == {
+        "taken": [],
+        "returned": ["left behind"],
+    }
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert followups.last_outcome(sid) == {"taken": [], "returned": []}

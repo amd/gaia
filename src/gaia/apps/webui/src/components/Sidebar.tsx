@@ -47,12 +47,15 @@ function readShowAutomated(): boolean {
     }
 }
 
-function SessionRow({ session, active, status, queuePlace, onSelect, onDelete, onPin }: {
+function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin }: {
     session: Session;
     active: boolean;
     status: RowStatus | null;
     /** 1-based place in line for the GPU while queued; 0 otherwise. */
     queuePlace: number;
+    /** Messages typed into this chat that have not gone out yet, and how many of them failed. */
+    unsent: number;
+    failed: number;
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
     onPin: (id: string, pinned: boolean) => void;
@@ -69,6 +72,9 @@ function SessionRow({ session, active, status, queuePlace, onSelect, onDelete, o
     const dot = status === 'done' && !unread ? null : status;
     const place = queuePlace > 0 ? `${ordinal(queuePlace)} in line` : null;
     const label = dot ? [STATUS_LABEL[dot], place].filter(Boolean).join(', ') : undefined;
+    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
+    const note = [place, waiting].filter(Boolean).join(' · ');
+    const unsentWords = `${unsent} unsent message${unsent === 1 ? '' : 's'}`;
 
     return (
         <li className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}`} data-status={dot ?? undefined}>
@@ -77,13 +83,13 @@ function SessionRow({ session, active, status, queuePlace, onSelect, onDelete, o
                 className="sb-row-main"
                 onClick={() => onSelect(session.id)}
                 aria-current={active ? 'page' : undefined}
-                aria-label={[session.title, label, unread ? 'unread' : null].filter(Boolean).join(', ')}
+                aria-label={[session.title, label, waiting, unread ? 'unread' : null].filter(Boolean).join(', ')}
                 title={session.title}
             >
                 {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
                 {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
                 <span className="sb-row-title">{session.title}</span>
-                {place && <span className="sb-row-queue">{place}</span>}
+                {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
             </button>
             <button
                 type="button"
@@ -99,10 +105,16 @@ function SessionRow({ session, active, status, queuePlace, onSelect, onDelete, o
                 type="button"
                 className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
                 onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
-                aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}
-                title={confirm ? 'Click again to delete' : 'Delete'}
+                aria-label={confirm
+                    ? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`
+                    : `Delete ${session.title}`}
+                title={confirm
+                    ? (unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : 'Click again to delete')
+                    : 'Delete'}
             >
-                {confirm ? <span className="sb-row-delete-label">Delete?</span> : <Trash2 size={13} />}
+                {confirm
+                    ? <span className="sb-row-delete-label">{unsent > 0 ? `Delete ${unsent} unsent?` : 'Delete?'}</span>
+                    : <Trash2 size={13} />}
             </button>
         </li>
     );
@@ -114,6 +126,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const runningSessionIds = useChatStore((s) => s.runningSessionIds);
     const queuedSessionIds = useChatStore((s) => s.queuedSessionIds);
     const awaitingBySession = useChatStore((s) => s.awaitingBySession);
+    const messageQueues = useChatStore((s) => s.messageQueues);
     const updateSessionInList = useChatStore((s) => s.updateSessionInList);
     const prompting = useNotificationStore(useShallow(selectPromptingSessionIds));
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
@@ -335,6 +348,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         active={s.id === currentSessionId}
                                         status={sessionRowStatus(s, live)}
                                         queuePlace={queuedSessionIds.indexOf(s.id) + 1}
+                                        unsent={messageQueues[s.id]?.length ?? 0}
+                                        failed={messageQueues[s.id]?.filter((m) => m.state === 'failed').length ?? 0}
                                         onSelect={select}
                                         onDelete={remove}
                                         onPin={(id, pinned) => void pin(id, pinned)}

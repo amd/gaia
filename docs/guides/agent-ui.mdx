@@ -89,6 +89,13 @@ without starting over, though it may not answer it separately. If the reply
 ends before reading it, it goes back in the queue. Press Stop and anything still
 queued goes back into the message box.
 
+Each chat keeps its own queue. Switch to another chat and the queued messages
+still go out when their chat's reply ends, and the chat list shows how many are
+waiting. They survive a reload of the app too. A message that can't be sent
+stays in the queue marked **Not sent**, with the reason and **Send again**, and
+the messages after it wait so the order holds. Deleting a chat deletes its
+queued messages; the delete button says how many first.
+
 ### Compare Models on Your Question
 
 To see how another model answers, use **Retry with…** on the latest answer and

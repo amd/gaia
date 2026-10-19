@@ -17,6 +17,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
+import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
@@ -219,6 +220,8 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    // Queued messages go out when their chat's turn ends, even with another chat open.
+    useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
 

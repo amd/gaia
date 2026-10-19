@@ -1036,6 +1036,14 @@ Deleting a chat deletes its copies.
     typed mid-turn waits and is sent as its own turn.
   </Accordion>
 
+  <Accordion title="GET /api/chat/followup/{session_id}">
+    What the session's last finished turn did with the follow-ups handed to it:
+    `{"taken": [...], "returned": [...]}`, as the user sent them. A chat that
+    was not watching when the turn ended reads this to send the returned ones
+    as their own turns without resending the taken ones. Each turn replaces the
+    record, and deleting the session drops it. 409 while a turn still runs.
+  </Accordion>
+
   <Accordion title="GET /api/chat/context/{session_id}">
     Estimated tokens the chat's next message would carry, against the model's
     window: `system`, `tools`, `documents` (results of document-reading tools),

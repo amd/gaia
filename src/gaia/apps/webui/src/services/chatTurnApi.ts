@@ -4,6 +4,7 @@
 /** Controls for a chat's turns and its tool permissions; re-exported from `api`. */
 
 import type { ActiveRuns, ContextUsageResult, PermissionMode, RetryChoice, RetryResult, SessionPermissions } from '../types';
+import type { FollowUpOutcome } from '../utils/messageQueue';
 import { apiFetch } from './api';
 
 /** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
@@ -14,6 +15,11 @@ export async function cancelStream(sessionId: string): Promise<{ cancelled: bool
 /** Rejects when the running turn could not take the message. */
 export async function sendFollowUp(sessionId: string, text: string): Promise<{ delivered: boolean }> {
     return apiFetch('POST', '/chat/followup', { session_id: sessionId, text });
+}
+
+/** What the chat's last finished turn did with the messages added to it; rejects (409) while one runs. */
+export async function getFollowUpOutcome(sessionId: string): Promise<FollowUpOutcome> {
+    return apiFetch('GET', `/chat/followup/${encodeURIComponent(sessionId)}`);
 }
 
 export async function getContextUsage(sessionId: string): Promise<ContextUsageResult> {

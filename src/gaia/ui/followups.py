@@ -7,6 +7,8 @@ The running in-process agent drains its follow-up queue at each step boundary
 (``Agent._drain_followups``). An inbox reports each message the moment the
 agent takes it, so the chat records it only once the agent has it, and hands
 back whatever the turn never took so the chat can send it as the next turn.
+Each session keeps the outcome of its last such turn, so a chat that was not
+listening when the turn ended can still learn what became of its messages.
 """
 
 import queue
@@ -30,12 +32,14 @@ class FollowUpInbox(queue.Queue):
     def __init__(self, on_take: Callable[[str], None]):
         super().__init__()
         self._on_take = on_take
+        self.taken: list[str] = []
 
     def put(self, item: str, block: bool = True, timeout: float | None = None):
         super().put((item, resolve_upload_links(item)), block, timeout)
 
     def get(self, block: bool = True, timeout: float | None = None) -> str:
         sent, for_agent = super().get(block, timeout)
+        self.taken.append(sent)
         self._on_take(sent)
         return for_agent
 
@@ -53,6 +57,7 @@ class FollowUpInbox(queue.Queue):
 # inbox or refused — never put into one that nothing will drain or return.
 _lock = threading.Lock()
 _inboxes: dict[str, tuple[Any, FollowUpInbox]] = {}
+_last_outcome: dict[str, dict[str, list[str]]] = {}
 
 
 def open_inbox(
@@ -75,6 +80,8 @@ def close_inbox(session_id: str, agent: Any, inbox: FollowUpInbox) -> list[str]:
         if getattr(agent, "_followup_queue", None) is inbox:
             agent._followup_queue = None
     left = inbox.take_untaken()
+    with _lock:
+        _last_outcome[session_id] = {"taken": list(inbox.taken), "returned": left}
     if left:
         logger.info(
             "Turn for session %s ended before taking %d follow-up(s); "
@@ -83,6 +90,19 @@ def close_inbox(session_id: str, agent: Any, inbox: FollowUpInbox) -> list[str]:
             len(left),
         )
     return left
+
+
+def last_outcome(session_id: str) -> dict[str, list[str]]:
+    """What the session's last finished turn did with the follow-ups it was handed."""
+    with _lock:
+        outcome = _last_outcome.get(session_id, {"taken": [], "returned": []})
+        return {"taken": list(outcome["taken"]), "returned": list(outcome["returned"])}
+
+
+def forget(session_id: str) -> None:
+    """Drop a deleted session's follow-up record."""
+    with _lock:
+        _last_outcome.pop(session_id, None)
 
 
 def deliver(session_id: str, text: str) -> bool:

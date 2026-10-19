@@ -700,6 +700,22 @@ async def send_followup(request: FollowUpRequest):
     return {"delivered": True}
 
 
+@router.get("/api/chat/followup/{session_id}")
+async def followup_outcome(session_id: str):
+    """What the chat's last finished turn did with the messages added to it.
+
+    ``taken`` were read by the turn and recorded in the chat; ``returned`` were
+    not and should go out as their own messages. 409 while a turn still runs,
+    since its follow-ups have no outcome yet.
+    """
+    if run_manager.is_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A reply is still running in this chat; ask again once it ends.",
+        )
+    return followups.last_outcome(session_id)
+
+
 @router.get("/api/chat/context/{session_id}")
 async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db)):
     """How full the model's context is for this chat's next message, by kind."""
