@@ -189,3 +189,28 @@ class TestStatusOutput:
         assert "Installed: no" in out
         assert "Running:   no" in out
         assert "Backends:  none" in out
+
+    def test_a_busy_server_reads_as_running_not_stalled(self, capsys, tmp_path):
+        from gaia.cli import _print_embedded_status
+
+        class _Manager:
+            dist_dir = tmp_path
+            log_path = tmp_path / "lemond.log"
+            cache_dir = tmp_path
+
+            def status(self):
+                return lemonade_embedded.EmbeddedStatus(
+                    installed=True,
+                    running=True,
+                    version="x",
+                    port=13399,
+                    pid=4321,
+                    base_url="http://localhost:13399/api/v1",
+                    busy=True,
+                )
+
+        _print_embedded_status(_Manager())
+        out = capsys.readouterr().out
+        assert "Running:   yes" in out
+        assert "busy" in out
+        assert "embedded stop" not in out

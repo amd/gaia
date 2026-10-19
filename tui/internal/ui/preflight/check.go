@@ -493,9 +493,9 @@ func restartSidecarRemedy(agentID string) Remedy {
 	}
 }
 
-// timedOut reports whether a call was given up on rather than refused. The
-// daemon client reports a deadline as text on its own error type rather than
-// wrapping context.DeadlineExceeded, so both forms are checked.
+// timedOut reports whether a call was given up on rather than refused. A
+// transport timeout (net/http's header wait, a dial timeout) is not
+// context.DeadlineExceeded, so its text is checked as well.
 func timedOut(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
