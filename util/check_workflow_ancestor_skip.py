@@ -30,7 +30,7 @@ Only flags a job whose `if:` references `needs.` at all — a condition with no
 cross-job reference cannot be affected by an ancestor's skip, so it is not
 flagged even without a status function.
 
-Runs as part of `python util/lint.py --all`. Run directly with
+Runs as part of `python util/lint.py --all` and fails it. Run directly with
 `python util/check_workflow_ancestor_skip.py`.
 """
 
@@ -48,8 +48,15 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
-_STATUS_FUNCTIONS = ("success(", "failure(", "cancelled(", "always(")
+_STATUS_CALL_RE = re.compile(r"\b(?:success|failure|cancelled|always)\s*\(")
 _NEEDS_RE = re.compile(r"\bneeds\.")
+# Actions expression string literals are single-quoted; '' escapes a quote.
+_STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _code_only(condition: str) -> str:
+    """The expression with string literals blanked, so `'always()'` counts for nothing."""
+    return _STRING_LITERAL_RE.sub("''", condition)
 
 
 def _job_if_conditions(workflow: Any) -> List[tuple]:
@@ -92,9 +99,10 @@ def run_check() -> int:
 
         for job_id, condition in _job_if_conditions(workflow):
             checked += 1
-            if not _NEEDS_RE.search(condition):
+            code = _code_only(condition)
+            if not _NEEDS_RE.search(code):
                 continue
-            if any(fn in condition for fn in _STATUS_FUNCTIONS):
+            if _STATUS_CALL_RE.search(code):
                 continue
             errors.append(
                 f"{path.name}: job `{job_id}` has `if: {condition.strip()}` — "

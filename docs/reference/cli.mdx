@@ -3367,6 +3367,15 @@ Install and uninstall stop a running sidecar first, and two installs of the same
 never race (the second gets a clean "already in progress" error). Requires the daemon
 extras (`pip install "amd-gaia[api]"`).
 
+A Python agent's install waits up to 5 minutes when another install holds uv's
+package cache (GAIA sets `UV_LOCK_TIMEOUT` for uv, keeping a shorter value of your
+own). While it waits, the install status reads "waiting for another install to
+finish"; if the cache is still taken, it stops with an error saying so. An install
+that does no work (no CPU or disk activity) for 900 seconds is stopped as stuck
+(`GAIA_HUB_PIP_TIMEOUT` changes that window), and one still running after 2 hours is
+stopped however busy it looks (`GAIA_HUB_PIP_MAX_SECONDS` changes that ceiling).
+Either way, everything the install started is stopped and the install is rolled back.
+
 Any agent outside the `verified` security tier runs third-party code on your machine,
 so the daemon refuses it with **HTTP 403** until you pass `--trust`. The error shows
 the agent's publisher and security tier and names the `--trust` re-run.

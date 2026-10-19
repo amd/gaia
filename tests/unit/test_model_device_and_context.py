@@ -344,6 +344,49 @@ def test_chosen_size_persists_and_automatic_clears_it():
     )
 
 
+def test_saving_a_size_keeps_other_models_and_unknown_keys():
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"tui_only_key": [1, 2], "context_sizes": {"Other-GGUF": 32768}}),
+        encoding="utf-8",
+    )
+    save_context_size(LARGE_DEFAULT_MODEL_NAME, 131072, _cap(128))
+    on_disk = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert on_disk["tui_only_key"] == [1, 2]
+    assert on_disk["context_sizes"] == {
+        "Other-GGUF": 32768,
+        LARGE_DEFAULT_MODEL_NAME: 131072,
+    }
+    # Only the touched key is written; defaults for undeclared fields are not.
+    assert set(on_disk) == {"tui_only_key", "context_sizes"}
+
+
+def test_saving_a_size_rereads_the_file_under_the_lock():
+    """A key another process wrote after this one last loaded still survives."""
+    config_mod.GAIA_CONFIG_FILE.write_text("{}", encoding="utf-8")
+    config_mod.GaiaConfig.load()
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": "Elsewhere-GGUF"}), encoding="utf-8"
+    )
+    save_context_size(LARGE_DEFAULT_MODEL_NAME, 131072, _cap(128))
+    on_disk = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert on_disk["default_model"] == "Elsewhere-GGUF"
+
+
+def test_saving_a_size_refuses_to_overwrite_a_corrupt_config():
+    config_mod.GAIA_CONFIG_FILE.write_text("{not json", encoding="utf-8")
+    with pytest.raises(config_mod.GaiaConfigError, match="not valid JSON"):
+        save_context_size(LARGE_DEFAULT_MODEL_NAME, 131072, _cap(128))
+    assert config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8") == "{not json"
+
+
+def test_saving_a_size_refuses_when_the_existing_sizes_are_malformed():
+    bad = json.dumps({"context_sizes": {"Other-GGUF": "big"}})
+    config_mod.GAIA_CONFIG_FILE.write_text(bad, encoding="utf-8")
+    with pytest.raises(config_mod.GaiaConfigError, match="context_sizes"):
+        save_context_size(LARGE_DEFAULT_MODEL_NAME, 131072, _cap(128))
+    assert config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8") == bad
+
+
 def test_a_size_not_offered_is_refused():
     with pytest.raises(ContextChoiceError, match="not offered"):
         save_context_size(LARGE_DEFAULT_MODEL_NAME, 262144, _cap(32, "AMD GPU"))

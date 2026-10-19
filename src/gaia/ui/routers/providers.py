@@ -19,7 +19,6 @@ a key). The calls mirror ``tui/internal/lemonade/cloud.go`` and
 
 from __future__ import annotations
 
-import json
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -407,23 +406,16 @@ def _new_chat_location(model: str, custom_model: Optional[str]) -> Dict[str, Any
 
 
 def _write_config_keys(values: Dict[str, Any]) -> None:
-    """Read-modify-write ``config.json``, keeping keys other clients wrote."""
-    from gaia.config import GaiaConfig
+    """Save *values* to ``config.json`` under its lock, keeping every other key."""
+    from gaia.config import GaiaConfig, GaiaConfigError
 
-    path = GaiaConfig.config_path()
-    data: Dict[str, Any] = {}
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except ValueError as e:
-            raise ProviderError(
-                f"{path} is not valid JSON, so the model choice was not saved: {e}. "
-                "Fix or delete the file, then pick the model again.",
-                500,
-            ) from e
-    data.update(values)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    try:
+        GaiaConfig.save_keys(values)
+    except GaiaConfigError as e:
+        raise ProviderError(
+            f"The model choice was not saved: {e} Then pick the model again.",
+            500,
+        ) from e
 
 
 _restore_lock = threading.Lock()

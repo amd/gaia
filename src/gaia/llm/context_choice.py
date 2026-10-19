@@ -116,29 +116,18 @@ def save_context_size(model_id: str, tokens: Optional[int], capacity) -> None:
                 f"{_k(tokens)} is not offered for {model_id} on this PC. "
                 f"Choose one of: {choices}."
             )
-    sizes = {
-        k: v
-        for k, v in GaiaConfig.load().context_sizes.items()
-        if not _model_ids_match(k, model_id)
-    }
-    if tokens is not None:
-        sizes[model_id] = tokens
-    _write_context_sizes(sizes)
 
+    def _apply(doc: Dict[str, Any]) -> None:
+        sizes = {
+            k: v
+            for k, v in (doc.get("context_sizes") or {}).items()
+            if not _model_ids_match(k, model_id)
+        }
+        if tokens is not None:
+            sizes[model_id] = tokens
+        if sizes:
+            doc["context_sizes"] = sizes
+        else:
+            doc.pop("context_sizes", None)
 
-def _write_context_sizes(sizes: Dict[str, int]) -> None:
-    """Write ``context_sizes`` into config.json, keeping every other key."""
-    import json
-
-    from gaia.config import GaiaConfig
-
-    path = GaiaConfig.config_path()
-    doc: Dict[str, Any] = {}
-    if path.exists():
-        doc = json.loads(path.read_text(encoding="utf-8") or "{}")
-    if sizes:
-        doc["context_sizes"] = sizes
-    else:
-        doc.pop("context_sizes", None)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    GaiaConfig.edit_doc(_apply)
