@@ -21,6 +21,7 @@ export interface ApiSchemas {
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
   CancelStreamRequest: CancelStreamRequest;
+  ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
@@ -274,6 +275,12 @@ export interface QuickLink {
 }
 export interface CancelStreamRequest {
   session_id: string;
+}
+/**
+ * One of setup's default chat models.
+ */
+export interface ChatModelRequest {
+  model_id: string;
 }
 /**
  * Request to send a chat message.
@@ -543,6 +550,7 @@ export interface InferenceCommitItem {
 export interface InferenceStatsResponse {
   input_tokens?: number;
   output_tokens?: number;
+  place?: string | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -583,6 +591,7 @@ export interface KnowledgeUpdate {
 }
 export interface LoadModelRequest {
   ctx_size?: number | null;
+  force?: boolean;
   model_name: string;
 }
 /**
@@ -862,6 +871,7 @@ export interface SystemStatus {
   init_tasks?: InitTaskInfo[];
   initialized?: boolean;
   lemonade_error?: string | null;
+  lemonade_probe?: ("ok" | "down" | "timed_out" | "error") | null;
   lemonade_running?: boolean;
   lemonade_url?: string | null;
   lemonade_version?: string | null;
@@ -886,8 +896,10 @@ export interface SystemStatus {
  */
 export interface WarmUpStatus {
   cached_tokens?: number | null;
+  device?: string | null;
   elapsed_seconds?: number | null;
   error?: string | null;
+  model?: string | null;
   prompt_tokens?: number | null;
   state: string;
 }

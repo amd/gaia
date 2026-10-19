@@ -93,10 +93,13 @@ jobs:
           fi
 
           # Guard 2: don't bump to a release missing an asset GAIA downloads (a release can
-          # exist before all assets finish uploading). Covers the Windows installers AND the
+          # exist before all assets finish uploading). Covers the five installers AND the
           # four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
           # partial upload here is free, whereas discovering it inside the Claude step is not.
           for required in lemonade.msi lemonade-server-minimal.msi \
+                          "lemonade-server_${target}-debian13_amd64.deb" \
+                          "lemonade-server_${target}-debian13_arm64.deb" \
+                          "Lemonade-${target}-Darwin.pkg" \
                           "lemonade-embeddable-${target}-windows-x64.zip" \
                           "lemonade-embeddable-${target}-ubuntu-x64.tar.gz" \
                           "lemonade-embeddable-${target}-ubuntu-arm64.tar.gz" \
@@ -109,8 +112,9 @@ jobs:
             fi
           done
 
-          # Guard 2b: every embeddable asset must carry a sha256 digest, since the bump
-          # rewrites EMBEDDABLE_SHA256 from it. No digest -> nothing trustworthy to pin.
+          # Guard 2b: every pinned asset must carry a sha256 digest, since the bump
+          # rewrites EMBEDDABLE_SHA256 and INSTALLER_SHA256 from it. No digest -> nothing
+          # trustworthy to pin.
           #
           # Both this and Guard 2 skip rather than fail, because the usual cause is a
           # release whose assets are still uploading. That is right for a race and wrong
@@ -118,7 +122,7 @@ jobs:
           # Every skip therefore writes to the job summary, so a run that keeps skipping
           # is visible without reading logs.
           missing_digest=$(echo "$release_json" | jq -r \
-            '.assets[] | select(.name|test("embeddable")) | select((.digest // "") | startswith("sha256:") | not) | .name')
+            '.assets[] | select(.name|test("embeddable|[.]msi$|[.]deb$|[.]pkg$")) | select((.digest // "") | startswith("sha256:") | not) | .name')
           if [ -n "$missing_digest" ]; then
             echo "::warning::Lemonade $target publishes no sha256 digest for: $missing_digest — skipping bump."
             echo "⚠️ Skipped the bump to **$target**: no sha256 digest published for $missing_digest. If this repeats, upstream stopped publishing digests and the pins need another source." >> "$GITHUB_STEP_SUMMARY"
@@ -229,6 +233,25 @@ jobs:
                returns — never carry over an old value, and never invent one. If any of
                the four embeddable assets has no digest, do NOT open a PR: delete the
                branch and stop.
+
+               Then refresh `INSTALLER_SHA256` (src/gaia/installer/lemonade_installer.py)
+               the same way. `gaia install --lemonade` verifies the installer against it.
+               Its keys are `v<version>/<asset name>`, because the MSI names carry no
+               version, and its values are bare hex. First MOVE its two outgoing
+               `v${{ steps.detect.outputs.current_version }}/lemonade.msi` and
+               `v${{ steps.detect.outputs.current_version }}/lemonade-server-minimal.msi`
+               entries, unchanged, to the end of `LEGACY_MSI_SHA256` in the same file
+               (uninstalling that version downloads its MSI; never delete or edit a
+               legacy entry). Then rewrite `INSTALLER_SHA256` to exactly these five
+               keys, with the digests this prints:
+                 ```
+                 gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} \
+                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi" or (.name|test("^lemonade-server_.*-debian13_(amd64|arm64)[.]deb$")) or (.name|test("^Lemonade-.*-Darwin[.]pkg$"))) | "v${{ steps.detect.outputs.target_version }}/\(.name) \(.digest | sub("^sha256:";""))"'
+                 ```
+               The same stop rule applies if any of the five has no digest. You do not
+               need to check the values yourself: the bump PR's CI runs
+               tests/integration/test_lemonade_embeddable_assets.py, which compares every
+               pin against the release API and fails on any mismatch.
             4. Sync the hardcoded Lemonade version strings in the docs. CI runs
                `python util/check_doc_versions.py`, which FAILS the build when any doc or
                README under docs/, cpp/, tui/ or .claude/ still references the OLD Lemonade version (release
@@ -258,9 +281,10 @@ jobs:
                no formatting changes.)
 
             ## Commit
-            Stage version.py, lemonade_embedded.py, plus every doc file you updated (`git add -u` picks up
-            all modified tracked files — you have only edited version.py,
-            lemonade_embedded.py and flagged docs, so this stays in scope):
+            Stage version.py, lemonade_embedded.py, lemonade_installer.py, plus every doc file you
+            updated (`git add -u` picks up all modified tracked files — you have only edited
+            version.py, lemonade_embedded.py, lemonade_installer.py and flagged docs, so this
+            stays in scope):
             ```
             git add -u
             git commit -m "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}"
@@ -366,7 +390,9 @@ jobs:
 
             ## Hard constraints
             - The only repo FILES you may change are src/gaia/version.py,
-              src/gaia/llm/lemonade_embedded.py (the EMBEDDABLE_SHA256 dict only), and the docs/README
+              src/gaia/llm/lemonade_embedded.py (the EMBEDDABLE_SHA256 dict only),
+              src/gaia/installer/lemonade_installer.py (the INSTALLER_SHA256 and LEGACY_MSI_SHA256
+              dicts only), and the docs/README
               files under docs/, cpp/, tui/ or .claude/ that `util/check_doc_versions.py` flags for a Lemonade
               version update — and in those docs, only the version numbers. No other files, no
               drive-by edits. (Feature scouting creates GitHub issues only — it never edits files.)
