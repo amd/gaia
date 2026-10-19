@@ -16,6 +16,10 @@ import type { Env } from "./types";
 
 const DEFAULT_MAX_BYTES = 262_144_000; // 250 MiB
 
+// R2's single-part PUT ceiling. A by-reference object must be single-part (R2
+// records no whole-object SHA-256 otherwise), so nothing larger can be verified.
+const DEFAULT_MAX_REFERENCED_BYTES = 5 * 1024 ** 3; // 5 GiB
+
 /** Artifact filename: a single safe path segment (no traversal, no separators). */
 export const ARTIFACT_FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 
@@ -26,18 +30,31 @@ export async function sha256Hex(bytes: ArrayBuffer | Uint8Array): Promise<string
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Configured artifact size ceiling; a non-numeric override is a config error. */
-export function maxBytes(env: Env): number {
-  if (!env.MAX_ARTIFACT_BYTES) return DEFAULT_MAX_BYTES;
-  const n = Number(env.MAX_ARTIFACT_BYTES);
+function parseByteLimit(raw: string | undefined, name: string, fallback: number): number {
+  if (!raw) return fallback;
+  const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) {
-    throw new HttpError(
-      500,
-      "server_misconfigured",
-      `MAX_ARTIFACT_BYTES is not a positive number: ${env.MAX_ARTIFACT_BYTES}.`
-    );
+    throw new HttpError(500, "server_misconfigured", `${name} is not a positive number: ${raw}.`);
   }
   return n;
+}
+
+/** Size ceiling for an artifact sent through the Worker; a bad override is a config error. */
+export function maxBytes(env: Env): number {
+  return parseByteLimit(env.MAX_ARTIFACT_BYTES, "MAX_ARTIFACT_BYTES", DEFAULT_MAX_BYTES);
+}
+
+/**
+ * Size ceiling for an artifact CI put straight into R2 and publishes by
+ * reference. Separate from maxBytes: these bytes never pass through the Worker,
+ * so the inline cap protects nothing here and only blocks large installers.
+ */
+export function maxReferencedBytes(env: Env): number {
+  return parseByteLimit(
+    env.MAX_REFERENCED_ARTIFACT_BYTES,
+    "MAX_REFERENCED_ARTIFACT_BYTES",
+    DEFAULT_MAX_REFERENCED_BYTES
+  );
 }
 
 /**
