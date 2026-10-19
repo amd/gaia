@@ -564,7 +564,7 @@ Author, version, validate, and share GAIA agents.
 
 #### Developer workflow: `init`, `version`, `test`
 
-Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`).
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`). `init` and `version` are hidden from `gaia agent -h` but still work.
 
 ```bash
 gaia agent init <name> [--language python|cpp] [--output DIR] [--layout flat|hub] [--force]
@@ -698,19 +698,18 @@ uv pip install "gaia-agent-hello-world @ git+https://github.com/amd/gaia.git#sub
 ```
 </Note>
 
-The **Hub (R2)** path downloads the published, SHA-verified artifact into
-`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Use the Agent UI's
-discover/install panel when browsing the Hub, or install headlessly with:
+The download-server path fetches the published, SHA-verified artifact into
+`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Install headlessly with:
 
 ```bash
-gaia agent list                            # installed + available hub agents
+gaia agent list                            # installed + available to install
 gaia agent install <id>                    # latest published version
 gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what the hub offers (with an `[installed]` marker) so
-you know which id to pass. This is the supported way to provision a sidecar
+`gaia agent list` shows what is available to install (with an `[installed]`
+marker) so you know which id to pass. This is the supported way to provision a sidecar
 agent on a machine with no UI.
 
 <Note>
