@@ -150,7 +150,20 @@ CREATE TABLE IF NOT EXISTS schedule_results (
     error       TEXT
 );
 
+-- One row per cloud chat turn; usd is NULL when the model has no known price.
+CREATE TABLE IF NOT EXISTS cloud_spend (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    month         TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    usd           REAL
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_cloud_spend_month ON cloud_spend(month);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
@@ -1136,6 +1149,35 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    # ── Cloud spending ────────────────────────────────────────────────
+
+    def add_cloud_spend(
+        self,
+        month: str,
+        model: str,
+        provider: str,
+        input_tokens: Optional[int],
+        output_tokens: Optional[int],
+        usd: Optional[float],
+    ) -> None:
+        """Record one cloud chat turn; *usd* None when its price is unknown."""
+        with self._transaction():
+            self._conn.execute(
+                "INSERT INTO cloud_spend (month, model, provider, input_tokens, "
+                "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
+                (month, model, provider, input_tokens, output_tokens, usd),
+            )
+
+    def cloud_spend_for_month(self, month: str) -> List[Dict]:
+        """Every cloud turn recorded in *month* (``YYYY-MM``)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE month = ? ORDER BY id",
+                (month,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Settings ──────────────────────────────────────────────────────
 
