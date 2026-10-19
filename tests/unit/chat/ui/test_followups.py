@@ -185,3 +185,58 @@ def test_inbox_reports_each_message_as_the_agent_takes_it():
     assert taken == ["a"]
     assert inbox.take_untaken() == ["b"]
     assert taken == ["a"]
+
+
+@pytest.fixture
+def uploads(tmp_path, monkeypatch):
+    from gaia.ui.utils import uploads_dir
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    up = uploads_dir()
+    up.mkdir(parents=True)
+    (up / "abc.pdf").write_bytes(b"%PDF-1.4")
+    return up.resolve()
+
+
+_ATTACHED = "and this one\n\n[plan.pdf](/api/files/uploads/abc.pdf)"
+
+
+@pytest.mark.asyncio
+async def test_a_followup_attachment_reaches_the_agent_as_a_file_path(runtime, uploads):
+    db = runtime
+    agent = _Agent(drain=True)
+
+    session, _, events = await _turn_with_followup(db, agent, _ATTACHED)
+
+    assert agent.took == [f"and this one\n\n[plan.pdf]({uploads / 'abc.pdf'})"]
+    # The chat records and matches what the user sent, link and all.
+    assert {"type": "followup_taken", "text": _ATTACHED} in events
+    assert ("user", _ATTACHED) in [
+        (m["role"], m["content"]) for m in db.get_messages(session["id"])
+    ]
+
+
+def test_an_untaken_attachment_comes_back_as_the_user_sent_it(uploads):
+    taken = []
+    inbox = followups.FollowUpInbox(taken.append)
+    inbox.put(_ATTACHED)
+
+    assert inbox.take_untaken() == [_ATTACHED]
+    assert taken == []
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "[x](/api/files/uploads/missing.pdf)",
+        "[x](/api/files/uploads/..)",
+        "[x](/api/files/uploads/..%2Fsecret)",
+    ],
+)
+def test_a_followup_link_to_no_upload_is_left_as_is(uploads, link):
+    taken = []
+    inbox = followups.FollowUpInbox(taken.append)
+    inbox.put(link)
+
+    assert inbox.get_nowait() == link
+    assert taken == [link]

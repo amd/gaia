@@ -14,28 +14,37 @@ import threading
 from typing import Any, Callable
 
 from gaia.logger import get_logger
+from gaia.ui.utils import resolve_upload_links
 
 logger = get_logger(__name__)
 
 
 class FollowUpInbox(queue.Queue):
-    """An agent's follow-up queue that reports each message the agent takes."""
+    """An agent's follow-up queue that reports each message the agent takes.
+
+    The agent gets the text with its attachment links pointed at the files on
+    disk; ``on_take`` and :meth:`take_untaken` get the text as the user sent it,
+    which is what the chat records and matches against its queue.
+    """
 
     def __init__(self, on_take: Callable[[str], None]):
         super().__init__()
         self._on_take = on_take
 
+    def put(self, item: str, block: bool = True, timeout: float | None = None):
+        super().put((item, resolve_upload_links(item)), block, timeout)
+
     def get(self, block: bool = True, timeout: float | None = None) -> str:
-        text = super().get(block, timeout)
-        self._on_take(text)
-        return text
+        sent, for_agent = super().get(block, timeout)
+        self._on_take(sent)
+        return for_agent
 
     def take_untaken(self) -> list[str]:
         """Empty the inbox without reporting, for a turn that has ended."""
         left = []
         while True:
             try:
-                left.append(super().get(block=False))
+                left.append(super().get(block=False)[0])
             except queue.Empty:
                 return left
 
