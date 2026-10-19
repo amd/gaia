@@ -59,6 +59,7 @@ from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .routers import agents as agents_router_mod
+from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
@@ -731,6 +732,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
+    app.include_router(changes_router_mod.router)
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)

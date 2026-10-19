@@ -758,6 +758,78 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 </AccordionGroup>
 
+### Undo a turn's file changes
+
+Before an agent tool writes, edits, creates or deletes a file, GAIA saves the
+file as it was under `<GAIA home>/snapshots/<session_id>/<turn_id>/`. The copies
+live with the agent, not the UI, so any client can list and undo them.
+Deleting a chat deletes its copies.
+
+<AccordionGroup>
+  <Accordion title="GET /api/sessions/{session_id}/changes">
+    Every turn in the session that changed files, oldest first.
+
+    **Response:**
+    ```json
+    {
+      "turns": [
+        {
+          "turn_id": "20261016153012-1a2b3c4d",
+          "message_id": 42,
+          "finished_at": "2026-10-16T15:30:40+00:00",
+          "restored_at": null,
+          "files": [{"path": "C:\\notes\\todo.md", "change": "edited", "tool": "edit_file"}],
+          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": []}],
+          "incomplete": true
+        }
+      ]
+    }
+    ```
+
+    `message_id` is the assistant message that answered the turn. `change` is
+    `edited`, `created` or `deleted`. `incomplete` is true when the turn ran
+    something GAIA can't copy ahead of time — a shell command outside the
+    read-only tier, a Python snippet or script, or an MCP tool not marked
+    read-only — and `untracked` lists each one. Undo does not cover what those
+    changed.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/changes/{turn_id}/diff">
+    What the turn did to each file, as a unified diff from the copy saved
+    before the turn to the copy saved when it ended. Binary files carry
+    `binary: true` with `before_size` and `after_size` instead of a diff; a diff
+    over 200,000 characters is cut and carries `truncated: true`.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/{turn_id}/undo">
+    Put every file the turn changed back as it was before the turn: edited and
+    deleted files get their old bytes, created files are removed, and folders
+    the turn created are removed when empty.
+
+    **Request:** `{"force": false}`
+
+    It is all or nothing. Every file is checked first; a write that fails
+    part-way puts back the files already restored. Returns **409** without
+    changing anything when a file changed after the turn (`detail.conflicts`
+    names each one; send `"force": true` to overwrite those changes), when the
+    turn was already undone, when a saved copy is damaged, when the turn never
+    finished, or while a turn is running in the chat. **404** means the copies
+    are gone, usually removed by the retention limit.
+  </Accordion>
+
+  <Accordion title="GET /api/settings/undo">
+    The retention limits and current use:
+    `{"retention_days": 7, "max_mb": 500, "used_bytes": 18233, "turns": 3, "path": "..."}`.
+    Stored as `undo_retention_days` and `undo_max_mb` in `~/.gaia/config.json`.
+  </Accordion>
+
+  <Accordion title="PUT /api/settings/undo">
+    Set `retention_days` (1–365) and `max_mb` (10–100000), then remove history
+    past the new limits. Turns older than the time limit go first, then the
+    oldest until the total fits. The size limit never removes the newest turn.
+  </Accordion>
+</AccordionGroup>
+
 ### Chat
 
 <AccordionGroup>

@@ -173,6 +173,11 @@ class EmbeddedLemonadeError(RuntimeError):
     """An embedded Lemonade operation failed. Message names the remedy."""
 
 
+class EmbeddedLemonadeNotAnswering(EmbeddedLemonadeError):
+    """The recorded server process is up but not answering. Nothing was started
+    or stopped, so asking again later may find it back."""
+
+
 class _PortTaken(Exception):
     """lemond exited because another program holds the port it was given."""
 

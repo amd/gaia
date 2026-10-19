@@ -201,8 +201,13 @@ async def send_message(
             try:
                 db.add_message(request.session_id, "user", request.message)
                 model_messages = []
+                turn_box: dict = {}
                 response_text = await srv._get_chat_response(
-                    db, session, agent_request, model_messages=model_messages
+                    db,
+                    session,
+                    agent_request,
+                    model_messages=model_messages,
+                    turn_box=turn_box,
                 )
                 # Clean LLM output artifacts (same pipeline as streaming path)
                 if response_text:
@@ -218,6 +223,8 @@ async def send_message(
                     response_text,
                     model_messages=model_messages or None,
                 )
+                if "recording" in turn_box:
+                    turn_box["recording"].link_message(msg_id)
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 
