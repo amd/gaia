@@ -14,6 +14,7 @@ import ipaddress
 import os
 import re
 import socket
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Tuple
@@ -44,6 +45,33 @@ BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}
 #: Carrier-grade NAT (RFC 6598). ``ipaddress`` does not call it private, but
 #: Tailscale addresses every machine on the user's mesh from it.
 CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _abort_stream(response: requests.Response) -> None:
+    """Unblock a read in progress on ``response``'s socket from another thread.
+
+    Closing the response is not enough on every platform: a thread blocked in
+    ``recv`` stays blocked until the socket is shut down.
+    """
+    raw = getattr(response, "raw", None)
+    conn_sock = getattr(getattr(raw, "_connection", None), "sock", None)
+    fp = getattr(getattr(raw, "_fp", None), "fp", None)
+    fp_sock = getattr(getattr(fp, "raw", fp), "_sock", None)
+    for sock in {s for s in (conn_sock, fp_sock) if s is not None}:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError as e:
+            log.debug("Socket already closed while aborting a fetch: %s", e)
+    response.close()
+
+
+class FetchDeadlineExceeded(requests.exceptions.Timeout):
+    """A fetch or download ran past its overall deadline.
+
+    The per-request ``timeout`` bounds each socket read, so a server that sends
+    a byte just inside it, again and again, never trips it. This bounds the
+    whole operation: every redirect hop and the body.
+    """
 
 
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
@@ -309,6 +337,11 @@ class WebClient:
     """
 
     DEFAULT_TIMEOUT = 30
+    #: Whole fetch, redirects and body included. At the 10 MB body cap this
+    #: still allows a ~85 KB/s link.
+    DEFAULT_FETCH_DEADLINE = 120
+    #: Whole download; a 100 MB file needs ~55 KB/s to finish inside it.
+    DEFAULT_DOWNLOAD_DEADLINE = 1800
     DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10 MB
     DEFAULT_MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
     DEFAULT_USER_AGENT = "GAIA-Agent/0.15 (https://github.com/amd/gaia)"
@@ -322,8 +355,12 @@ class WebClient:
         max_download_size: int = None,
         user_agent: str = None,
         rate_limit: float = None,
+        fetch_deadline: float = None,
+        download_deadline: float = None,
     ):
         self._timeout = timeout or self.DEFAULT_TIMEOUT
+        self._fetch_deadline = fetch_deadline or self.DEFAULT_FETCH_DEADLINE
+        self._download_deadline = download_deadline or self.DEFAULT_DOWNLOAD_DEADLINE
         self._max_response_size = max_response_size or self.DEFAULT_MAX_RESPONSE_SIZE
         self._max_download_size = max_download_size or self.DEFAULT_MAX_DOWNLOAD_SIZE
         self._user_agent = user_agent or self.DEFAULT_USER_AGENT
@@ -420,6 +457,67 @@ class WebClient:
             time.sleep(self._rate_limit - elapsed)
         self._domain_last_request[domain] = time.monotonic()
 
+    # -- Deadlines -----------------------------------------------------------
+
+    def _hop_timeout(self, deadline: float, url: str, what: str, limit: float):
+        """The per-read timeout for the next request, capped by what is left."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._deadline_error(url, what, limit)
+        return min(self._timeout, remaining)
+
+    @staticmethod
+    def _deadline_error(
+        url: str, what: str, limit: float, received: int = 0
+    ) -> FetchDeadlineExceeded:
+        got = f" after receiving {received} bytes" if received else ""
+        return FetchDeadlineExceeded(
+            f"The {what} of {url} did not finish within {limit:.0f}s{got}, so it "
+            "was stopped. The server is sending too slowly or not at all. Try "
+            "again later, or use a different source."
+        )
+
+    def _read_chunks(
+        self,
+        response: requests.Response,
+        deadline: float,
+        url: str,
+        what: str,
+        limit: float,
+    ):
+        """Yield ``response``'s body, stopping the read at ``deadline``.
+
+        A chunk read blocks until 8 KB arrive, which at a byte per read timeout
+        is hours, so a check between chunks is not enough: a timer unblocks the
+        socket from another thread when the deadline passes.
+        """
+        fired = threading.Event()
+
+        def abort() -> None:
+            fired.set()
+            _abort_stream(response)
+
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), abort)
+        timer.daemon = True
+        timer.start()
+        received = 0
+        try:
+            try:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if fired.is_set():
+                        break
+                    received += len(chunk)
+                    yield chunk
+            except Exception as e:
+                if fired.is_set():
+                    raise self._deadline_error(url, what, limit, received) from e
+                raise
+            # An unblocked socket can also read as a clean, truncated end.
+            if fired.is_set():
+                raise self._deadline_error(url, what, limit, received)
+        finally:
+            timer.cancel()
+
     # -- HTTP Methods --------------------------------------------------------
 
     def get(self, url: str, **kwargs) -> requests.Response:
@@ -447,17 +545,26 @@ class WebClient:
 
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
+        # Started after the rate-limit wait: that wait is ours, not the server's.
+        deadline = time.monotonic() + self._fetch_deadline
 
         # Disable auto-redirects -- we follow manually to validate each hop.
         # Force streaming so we can cap decompressed body size before it
         # reaches memory (requests would otherwise eagerly decode gzip).
-        kwargs.setdefault("timeout", self._timeout)
+        caller_timeout = kwargs.pop("timeout", None)
         kwargs["allow_redirects"] = False
         kwargs["stream"] = True
 
         current_url = url
         for redirect_count in range(self.MAX_REDIRECTS + 1):
-            response = self._session.request(method, current_url, **kwargs)
+            hop_timeout = self._hop_timeout(
+                deadline, url, "fetch", self._fetch_deadline
+            )
+            if caller_timeout is not None:
+                hop_timeout = caller_timeout
+            response = self._session.request(
+                method, current_url, timeout=hop_timeout, **kwargs
+            )
 
             # Pre-check declared Content-Length (still useful — rejects cheap
             # DoS before we stream anything).
@@ -471,6 +578,9 @@ class WebClient:
 
             # Not a redirect -- consume body with a hard byte cap and return.
             if response.status_code not in (301, 302, 303, 307, 308):
+                # Read first: apparent_encoding reads response.content, which
+                # would pull the body outside the deadline-bounded read.
+                self._consume_body_capped(response, deadline, url)
                 # Use apparent_encoding for better charset handling
                 if response.encoding and response.apparent_encoding:
                     if (
@@ -478,7 +588,6 @@ class WebClient:
                         and response.apparent_encoding.lower() != "iso-8859-1"
                     ):
                         response.encoding = response.apparent_encoding
-                self._consume_body_capped(response)
                 return response
 
             # Follow redirect -- validate the new URL
@@ -486,7 +595,7 @@ class WebClient:
             if not redirect_url:
                 # No Location header; cap body just like a normal response
                 # before returning.
-                self._consume_body_capped(response)
+                self._consume_body_capped(response, deadline, url)
                 return response
 
             # Resolve relative redirects
@@ -525,8 +634,16 @@ class WebClient:
 
         raise ValueError(f"Too many redirects (max {self.MAX_REDIRECTS})")
 
-    def _consume_body_capped(self, response: requests.Response) -> None:
+    def _consume_body_capped(
+        self,
+        response: requests.Response,
+        deadline: float = None,
+        url: str = "",
+    ) -> None:
         """Read ``response`` body in chunks up to ``self._max_response_size``.
+
+        Past ``deadline`` (a ``time.monotonic()`` value) the read is abandoned
+        with :class:`FetchDeadlineExceeded`.
 
         Because we forced ``stream=True`` in ``_request``, ``response.content``
         would otherwise lazily fetch everything on first access. This replaces
@@ -545,7 +662,13 @@ class WebClient:
 
         chunks = []
         total = 0
-        for chunk in response.iter_content(chunk_size=8192):
+        if deadline is None:
+            body = response.iter_content(chunk_size=8192)
+        else:
+            body = self._read_chunks(
+                response, deadline, url or response.url, "fetch", self._fetch_deadline
+            )
+        for chunk in body:
             if not chunk:
                 continue
             total += len(chunk)
@@ -785,12 +908,15 @@ class WebClient:
         self.validate_url(url)
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
+        requested_url = url
+        limit = self._download_deadline
+        deadline = time.monotonic() + limit
 
         # Stream the download
         response = self._session.get(
             url,
             stream=True,
-            timeout=self._timeout,
+            timeout=self._hop_timeout(deadline, url, "download", limit),
             allow_redirects=False,
         )
 
@@ -809,7 +935,7 @@ class WebClient:
             response = self._session.get(
                 redirect_url,
                 stream=True,
-                timeout=self._timeout,
+                timeout=self._hop_timeout(deadline, requested_url, "download", limit),
                 allow_redirects=False,
             )
             url = redirect_url
@@ -905,7 +1031,9 @@ class WebClient:
         downloaded = 0
         try:
             with part_file as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in self._read_chunks(
+                    response, deadline, requested_url, "download", limit
+                ):
                     downloaded += len(chunk)
                     if downloaded > max_size:
                         raise ValueError(
