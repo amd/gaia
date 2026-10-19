@@ -25,6 +25,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia.connectors._refresh_lock import held_sync, locked_write
 from gaia.connectors.activation_watcher import note_local_write
 from gaia.connectors.activations import (
     activate_agent,
@@ -492,7 +493,7 @@ async def revoke_connection_async(provider: str) -> Dict[str, Any]:
     from gaia.connectors.flow import revoke_provider_token
 
     result = await revoke_provider_token(provider)
-    delete_connection(provider)
+    await locked_write(provider, delete_connection, provider)
     logger.info(
         "api: revoked connection provider=%s revoke_supported=%s "
         "revoked_remotely=%s",
@@ -640,21 +641,22 @@ def import_forwarded_connection(
     #    threaded through explicitly or a forwarded grant silently downgrades an
     #    already-classified mailbox to unknown (#2466). A caller that knows the
     #    kind passes it; otherwise the stored value carries over.
-    resolved_account_type = account_type or (
-        (peek_connection(provider) or {}).get("account_type")
-    )
-    save_connection(
-        provider=provider,
-        account_email=account,
-        refresh_token=refresh_token,
-        scopes=list(scopes),
-        client_id_hash=prov.client_id_hash,
-        connected_at=connected_at,
-        account_type=resolved_account_type,
-        # #2591 review: mark it so a later disconnect never revokes the
-        # host app's own OAuth grant — see save_connection's docstring.
-        forwarded=True,
-    )
+    with held_sync(provider):
+        resolved_account_type = account_type or (
+            (peek_connection(provider) or {}).get("account_type")
+        )
+        save_connection(
+            provider=provider,
+            account_email=account,
+            refresh_token=refresh_token,
+            scopes=list(scopes),
+            client_id_hash=prov.client_id_hash,
+            connected_at=connected_at,
+            account_type=resolved_account_type,
+            # #2591 review: mark it so a later disconnect never revokes the
+            # host app's own OAuth grant — see save_connection's docstring.
+            forwarded=True,
+        )
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh
     #    refreshes against the forwarded client. The v1 store is single-slot

@@ -281,6 +281,17 @@
           }
         ]
       },
+      "currentStep": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Currentstep"
+      },
       "data": {
         "anyOf": [
           {},
@@ -351,6 +362,31 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "narration": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Narration"
+      },
+      "planNarrations": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Plannarrations"
       },
       "planSteps": {
         "anyOf": [
@@ -607,6 +643,20 @@
       "session_id"
     ],
     "title": "CancelStreamRequest",
+    "type": "object"
+  },
+  "ChatModelRequest": {
+    "description": "One of setup's default chat models.",
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "ChatModelRequest",
     "type": "object"
   },
   "ChatRequest": {
@@ -892,6 +942,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -1765,6 +1816,17 @@
         "title": "Output Tokens",
         "type": "integer"
       },
+      "place": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Place"
+      },
       "steps": {
         "anyOf": [
           {
@@ -1994,6 +2056,24 @@
     "title": "KnowledgeUpdate",
     "type": "object"
   },
+  "LimitRequest": {
+    "description": "``limit_usd`` None removes the limit.",
+    "properties": {
+      "limit_usd": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Limit Usd"
+      }
+    },
+    "title": "LimitRequest",
+    "type": "object"
+  },
   "LoadModelRequest": {
     "properties": {
       "ctx_size": {
@@ -2007,6 +2087,11 @@
           }
         ],
         "title": "Ctx Size"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
       },
       "model_name": {
         "title": "Model Name",
@@ -3368,6 +3453,23 @@
         ],
         "title": "Lemonade Error"
       },
+      "lemonade_probe": {
+        "anyOf": [
+          {
+            "enum": [
+              "ok",
+              "down",
+              "timed_out",
+              "error"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Probe"
+      },
       "lemonade_running": {
         "default": false,
         "title": "Lemonade Running",
@@ -3720,6 +3822,40 @@
     "title": "ToolConfirmRequest",
     "type": "object"
   },
+  "UndoRequest": {
+    "properties": {
+      "force": {
+        "default": false,
+        "description": "Undo even files changed after the turn, losing those changes.",
+        "title": "Force",
+        "type": "boolean"
+      }
+    },
+    "title": "UndoRequest",
+    "type": "object"
+  },
+  "UndoSettings": {
+    "properties": {
+      "max_mb": {
+        "maximum": 100000.0,
+        "minimum": 10.0,
+        "title": "Max Mb",
+        "type": "integer"
+      },
+      "retention_days": {
+        "maximum": 365.0,
+        "minimum": 1.0,
+        "title": "Retention Days",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "retention_days",
+      "max_mb"
+    ],
+    "title": "UndoSettings",
+    "type": "object"
+  },
   "UpdateScheduleRequest": {
     "description": "Request to update a scheduled task.",
     "properties": {
@@ -3817,6 +3953,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -3918,6 +4055,17 @@
         ],
         "title": "Cached Tokens"
       },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
       "elapsed_seconds": {
         "anyOf": [
           {
@@ -3939,6 +4087,17 @@
           }
         ],
         "title": "Error"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
       },
       "prompt_tokens": {
         "anyOf": [

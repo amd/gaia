@@ -32,6 +32,7 @@ from gaia.daemon.errors import (
     DaemonHungError,
     DaemonStartError,
     DaemonVersionError,
+    LemonadeNotAnsweringError,
 )
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -554,6 +555,8 @@ def ensure_lemonade(
             must already be running: this never starts another home's daemon.
 
     Raises:
+        LemonadeNotAnsweringError: GAIA's server is up but not answering yet;
+            the daemon left it alone, so asking again later may find it back.
         DaemonError: The daemon is unreachable, has nothing to start (another
             server is configured, or GAIA's own is not installed), or the
             server would not start. The message names the remedy.
@@ -589,6 +592,8 @@ def ensure_lemonade(
             f"Server: {e}. Check `gaia daemon status` and the daemon log at "
             f"{paths.log_path()}."
         ) from e
+    if r.status_code == 503 and r.headers.get("Retry-After"):
+        raise LemonadeNotAnsweringError(_error_detail(r))
     if r.status_code != 200:
         raise DaemonError(
             f"the daemon could not start Lemonade Server: {_error_detail(r)}"

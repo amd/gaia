@@ -43,9 +43,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -127,9 +124,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -173,9 +167,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -215,9 +206,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -384,9 +372,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -426,9 +411,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
