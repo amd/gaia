@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Stdio transport for MCP protocol communication via subprocess."""
 
+import bisect
 import collections
 import functools
 import json
@@ -98,10 +99,16 @@ _QUALIFIER_WORDS = frozenset(
         "scope",
         "prefix",
         "through",
+        "attempt",
         "attempts",
         "age",
         "days",
+        "retry",
         "retries",
+        "expiry",
+        "expires",
+        "lifetime",
+        "budget",
     }
 )
 # ... or it is a database's key: SORT_KEY, PARTITION_KEY, PRIMARY_KEY.
@@ -178,144 +185,433 @@ def _is_secret_name(name: str) -> bool:
     return _names_a_secret(name)
 
 
-# One character of a secret's non-ASCII run, as it can arrive: any non-ASCII
-# character or "?" (a code page's replacement, an undecodable byte, mojibake),
-# or a \xNN / \uNNNN / \UNNNNNNNN escape behind any run of backslashes.
-_RUN_UNIT = r"(?:[?\x80-\U0010ffff]|\\+(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8}))"
-# The same, after a run of backslashes that already matched the escape's own.
-_BARE_RUN_UNIT = r"(?:[?\x80-\U0010ffff]|(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8}))"
-_RUN_CHAR = re.compile(r"[?\x80-\U0010ffff]")
-_ESCAPE_BEFORE = re.compile(r"\\+(?i:x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})\Z")
-# A run of k non-ASCII characters can arrive as anything from one character
-# (bytes a UTF-8 decode collapsed) to four units per character (escapes).
-_UNITS_PER_CHAR = 4
+# Finding a known secret in text a server wrote. Rather than describing every
+# encoding in a pattern, the text is decoded into views that each map back to
+# the original, and the secret is looked up in each as a plain string.
+#
+# Escapes an encoder can write a character in (JSON, Python's repr and
+# ascii(), Go, C), matched as runs of one kind so a long run is one step.
+_SHORT_ESCAPES = {
+    "\\": "\\",
+    "/": "/",
+    "'": "'",
+    '"': '"',
+    "t": "\t",
+    "n": "\n",
+    "r": "\r",
+    "b": "\b",
+    "f": "\f",
+    "v": "\v",
+    "0": "\0",
+    "e": "\x1b",
+    "a": "\x07",
+}
 
 
-@functools.lru_cache(maxsize=256)
-def _run_after(units: int) -> "re.Pattern[str]":
-    return re.compile(f"{_RUN_UNIT}{{1,{units}}}")
+def _escape_runs(short: str, byte: str, digit: str) -> "re.Pattern[str]":
+    """Runs of one kind of escape: short ones, or hex ones of one width.
 
-
-@functools.lru_cache(maxsize=256)
-def _core_pattern(core: str) -> "re.Pattern[str]":
-    """*core* (starting and ending in ASCII) as one linear-time pattern.
-
-    Each ASCII character matches itself behind any run of backslashes, or
-    as a ``\\uNNNN`` / ``\\xNN`` escape (and ``\\t``-style for control
-    characters); a run of ``m`` backslashes matches ``m`` or more; a run of
-    ``k`` non-ASCII characters is one bounded repetition of ``_RUN_UNIT``.
-    Every piece ends in a character other than a backslash, so no run of
-    backslashes is shared between pieces, and the whole pattern starts only
-    at the first backslash of a run.
+    The backslash leads the pattern, outside any group, so the search for a
+    match is a fast scan for it.
     """
-    parts = []
+    return re.compile(
+        r"\\(?:"
+        rf"({short}(?:\\{short})*)"
+        rf"|(x{byte}(?:\\x{byte})*)"
+        rf"|(u{digit}{{4}}(?:\\u{digit}{{4}})*)"
+        rf"|(U{digit}{{8}}(?:\\U{digit}{{8}})*))"
+    )
+
+
+_HEX_DIGIT = "[0-9a-fA-F]"
+# Readings of a backslash. Every escape, a doubled backslash included:
+_ALL_ESCAPES = _escape_runs(r"[\\/'\"tnrbfv0ea]", _HEX_DIGIT * 2, _HEX_DIGIT)
+# a backslash before another escape as a literal backslash ("\\u4e2d" is an
+# escaped backslash then "u4e2d", or a backslash then an escape):
+_LITERAL_BACKSLASH = _escape_runs(r"[/'\"tnrbfv0ea]", _HEX_DIGIT * 2, _HEX_DIGIT)
+# and hex escapes only, any other backslash being the secret's own: of any
+# character, or as Python's backslashreplace writes them, lowercase and for
+# non-ASCII characters only.
+_HEX_ONLY = _escape_runs("(?!)", _HEX_DIGIT * 2, _HEX_DIGIT)
+_BACKSLASHREPLACED = _escape_runs("(?!)", "[89a-f][0-9a-f]", "[0-9a-f]")
+# The two readings of a backslash run differ only where an even run is
+# followed by what could start an escape: an odd one decodes the same.
+# Two backslashes lead the pattern so the search for it is a fast scan.
+_EVEN_BACKSLASHES_BEFORE_ESCAPE = re.compile(
+    r"\\\\(?<=(?<!\\)\\\\)(?:\\\\)*[/'\"tnrbfv0eaxuU]"
+)
+_SHORT_ESCAPE = re.compile(r"\\[\\/'\"tnrbfv0ea]")
+_HEX_ESCAPE = re.compile(r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})")
+_NON_ASCII_ESCAPE = re.compile(
+    r"\\(?:x[89a-f][0-9a-f]|u(?!00[0-7])[0-9a-f]{4}|U[0-9a-f]{8})"
+)
+_DECODE_PASSES = 3
+_MAX_VIEWS = 16
+# Characters a code page or an encoder mangles: non-ASCII, "?", U+FFFD. A
+# secret's run of them matches any run, so it still matches when its
+# non-ASCII characters arrive replaced, as mojibake, or as bytes a UTF-8
+# decode collapsed.
+_MANGLED_CHAR = r"[?\x80-\U0010ffff]"
+_MANGLED_RUN = re.compile(_MANGLED_CHAR + "+")
+# A run of k secret characters arrives as at most this many times k.
+_RUN_SCALE = 4
+
+
+def _escape_segments(match: "re.Match[str]", non_ascii_only: bool) -> list:
+    """``(start, end, text, width)`` for a run of escapes, in order.
+
+    Each character of *text* comes from *width* characters of the run; a
+    width of 0 maps the text to the whole segment. *text* None keeps the
+    segment as written.
+    """
+    start, end = match.span()
+    run = match[0]
+    if match[1] is not None:
+        return [(start, end, "".join(map(_SHORT_ESCAPES.__getitem__, run[1::2])), 2)]
+    width = 4 if match[2] is not None else 6 if match[3] is not None else 10
+    codes = [int(run[i + 2 : i + width], 16) for i in range(0, len(run), width)]
+    if all(
+        (code < 0xD800 or 0xDFFF < code <= 0x10FFFF)
+        and (code >= 0x80 or not non_ascii_only)
+        for code in codes
+    ):
+        return [(start, end, "".join(map(chr, codes)), width)]
+    # Surrogate pairs, codes out of range, or ASCII left alone: one at a time.
+    segments = []
     i = 0
-    # Right after a run of backslashes, the next piece takes no backslashes of
-    # its own: two pieces splitting one run would make a long run quadratic.
-    after_run = False
-    while i < len(core):
-        char = core[i]
-        if ord(char) >= 128:
-            j = i
-            while j < len(core) and ord(core[j]) >= 128:
-                j += 1
-            units = _UNITS_PER_CHAR * (j - i)
-            if after_run:
-                parts.append(f"{_BARE_RUN_UNIT}{_RUN_UNIT}{{0,{units - 1}}}")
-            else:
-                parts.append(f"{_RUN_UNIT}{{1,{units}}}")
-            after_run = False
-            i = j
-        elif char == "\\":
-            j = i
-            while j < len(core) and core[j] == "\\":
-                j += 1
-            quote = j < len(core) and core[j] == '"'
-            parts.append(f"\\\\{{{j - i},}}" + ('"' if quote else ""))
-            after_run = not quote
-            i = j + (1 if quote else 0)
+    while i < len(codes):
+        at, code = start + i * width, codes[i]
+        if (
+            0xD800 <= code <= 0xDBFF
+            and i + 1 < len(codes)
+            and 0xDC00 <= codes[i + 1] <= 0xDFFF
+        ):
+            pair = 0x10000 + ((code - 0xD800) << 10) + (codes[i + 1] - 0xDC00)
+            segments.append((at, at + 2 * width, chr(pair), 0))
+            i += 2
+            continue
+        keep = code > 0x10FFFF or (non_ascii_only and code < 0x80)
+        segments.append((at, at + width, None if keep else chr(code), width))
+        i += 1
+    return segments
+
+
+def _run_decoder(non_ascii_only: bool):
+    """A ``re.sub`` replacement decoding a run of escapes."""
+    # A run decodes the same wherever it is, and adversarial text repeats a few.
+    cache: Dict[str, str] = {}
+    lookup = cache.get
+
+    def decode(match: "re.Match[str]") -> str:
+        written = match[0]
+        decoded = lookup(written)
+        if decoded is None:
+            decoded = "".join(
+                match.string[start:end] if new is None else new
+                for start, end, new, _width in _escape_segments(match, non_ascii_only)
+            )
+            if len(cache) < 4096:
+                cache[written] = decoded
+        return decoded
+
+    return decode
+
+
+# Each reading: its pattern, the replacement, the mapped segments, and a check
+# that skips it where it would only repeat the first reading's view.
+_READINGS = tuple(
+    (
+        pattern,
+        _run_decoder(non_ascii),
+        functools.partial(_escape_segments, non_ascii_only=non_ascii),
+        needed,
+    )
+    for pattern, non_ascii, needed in (
+        (_ALL_ESCAPES, False, lambda _text: True),
+        (
+            _LITERAL_BACKSLASH,
+            False,
+            lambda text: _EVEN_BACKSLASHES_BEFORE_ESCAPE.search(text) is not None,
+        ),
+        (
+            _HEX_ONLY,
+            False,
+            lambda text: _SHORT_ESCAPE.search(text) is not None
+            and _HEX_ESCAPE.search(text) is not None,
+        ),
+        (
+            _BACKSLASHREPLACED,
+            True,
+            lambda text: _NON_ASCII_ESCAPE.search(text) is not None,
+        ),
+    )
+)
+_ALL, _LITERAL, _HEX, _NON_ASCII = _READINGS
+# The readings tried at each depth. A backslash backslashreplace wrote is only
+# in the text as it arrived, and a raw one at most one layer in: deeper
+# layers escape their own.
+_READINGS_AT_DEPTH = (
+    (_ALL, _LITERAL, _NON_ASCII),
+    (_ALL, _LITERAL, _HEX),
+    (_ALL,),
+)
+
+
+class _View:
+    """A rewrite of its parent's text, mapped back to it.
+
+    The root view is the text searched, at *offset* in the original. The map
+    is built only when a hit needs it.
+    """
+
+    __slots__ = ("text", "parent", "reading", "offset", "_pieces", "_starts")
+
+    def __init__(self, text: str, parent: "Optional[_View]", reading=None, offset=0):
+        self.text = text
+        self.parent = parent
+        self.reading = reading
+        self.offset = offset
+        self._pieces: Optional[list] = None
+        self._starts: List[int] = []
+
+    @classmethod
+    def rewrite(cls, parent: "_View", reading) -> "Optional[_View]":
+        """*parent* with every match of *reading* rewritten, or None if unchanged."""
+        pattern, replace = reading[:2]
+        text = pattern.sub(replace, parent.text)
+        return None if text == parent.text else cls(text, parent, reading)
+
+    def piece_at(self, index: int) -> tuple:
+        """``(start, end, source_start, source_end, width)`` holding *index*."""
+        if self._pieces is None:
+            self._map()
+        return self._pieces[bisect.bisect_right(self._starts, index) - 1]
+
+    def _map(self) -> None:
+        source = self.parent.text
+        pattern, _replace, segments_of = self.reading[:3]
+        pieces: list = []
+        at = position = 0
+        for match in pattern.finditer(source):
+            for start, end, new, width in segments_of(match):
+                if new is None:
+                    continue
+                if start > position:
+                    pieces.append((at, at + start - position, position, start, 1))
+                    at += start - position
+                pieces.append((at, at + len(new), start, end, width))
+                at += len(new)
+                position = end
+        pieces.append((at, at + len(source) - position, position, len(source), 1))
+        if at + len(source) - position != len(self.text):
+            raise AssertionError("decoded view and its map disagree")
+        self._pieces = pieces
+        self._starts = [piece[0] for piece in pieces]
+
+    def to_source(self, start: int, end: int) -> Tuple[int, int]:
+        """A span of this view as a span of its parent's text."""
+        first, last = self.piece_at(start), self.piece_at(end - 1)
+        if first[4]:
+            start = first[2] + (start - first[0]) * first[4]
         else:
-            parts.append(_ascii_piece(char, bare=after_run))
-            after_run = False
-            i += 1
-    # Start at the first backslash of a run, or a long run is quadratic.
-    return re.compile(r"(?<!\\)" + "".join(parts))
+            start = first[2]
+        end = last[2] + (end - last[0]) * last[4] if last[4] else last[3]
+        return start, end
+
+    def to_original(self, start: int, end: int) -> Tuple[int, int]:
+        view = self
+        while view.parent is not None:
+            start, end = view.to_source(start, end)
+            view = view.parent
+        return start + view.offset, end + view.offset
 
 
-_SHORT_ESCAPES = {"\t": "t", "\n": "n", "\r": "r", "\b": "b", "\f": "f"}
+def _decoded_views(root: _View) -> List[_View]:
+    """*root* and its decodings, each reading of each view, three passes deep."""
+    views = [root]
+    seen = {root.text}
+    frontier = [root]
+    for depth in range(_DECODE_PASSES):
+        decoded = []
+        for view in frontier:
+            if "\\" not in view.text:
+                continue
+            for reading in _READINGS_AT_DEPTH[depth]:
+                if len(views) >= _MAX_VIEWS:
+                    return views
+                if not reading[3](view.text):
+                    continue
+                child = _View.rewrite(view, reading)
+                if child is None or child.text in seen:
+                    continue
+                seen.add(child.text)
+                views.append(child)
+                decoded.append(child)
+        frontier = decoded
+    return views
 
 
-def _ascii_piece(char: str, bare: bool = False) -> str:
-    """One ASCII character, raw or escaped as any encoder writes it.
+@functools.lru_cache(maxsize=256)
+def _loose_pattern(secret: str) -> "Optional[re.Pattern[str]]":
+    """*secret* with each run of mangleable characters as a run of any.
 
-    *bare* leaves out the backslashes before it, for a piece that follows a
-    run of backslashes the previous piece already matched.
+    Each run may be up to ``_RUN_SCALE`` times as long; one at either end is
+    matched up to that length next to the rest. None when the secret has no
+    such run, or too few ASCII letters and digits for a loose match not to
+    catch ordinary text.
+    """
+    parts = _MANGLED_RUN.split(secret)
+    runs = _MANGLED_RUN.findall(secret)
+    if not runs or len(re.findall(r"[A-Za-z0-9]", "".join(parts))) < 4:
+        return None
+    pattern = re.escape(parts[0])
+    for run, part in zip(runs, parts[1:]):
+        pattern += f"{_MANGLED_CHAR}{{1,{_RUN_SCALE * len(run)}}}" + re.escape(part)
+    # A lookahead, so overlapping matches are all found.
+    return re.compile(f"(?=({pattern}))")
+
+
+@functools.lru_cache(maxsize=256)
+def _period(text: str) -> int:
+    """The shortest shift that maps *text* onto itself."""
+    return next(
+        (shift for shift in range(1, len(text)) if text[shift:] == text[:-shift]),
+        len(text),
+    )
+
+
+def _repeat_length(text: str, start: int, period: int) -> int:
+    """How far *text* goes on repeating itself every *period* from *start*."""
+    longest = len(text) - start
+    known, step = 0, 64
+    while known < longest:
+        step = min(step, longest - known)
+        at = start + known
+        if text[at : at + step] != text[at - period : at - period + step]:
+            break
+        known += step
+        step *= 2
+    else:
+        return known
+    # The mismatch is within the last step: halve it down.
+    while step > 1:
+        step //= 2
+        at = start + known
+        if text[at : at + step] == text[at - period : at - period + step]:
+            known += step
+    return known
+
+
+def _occurrences(haystack: str, needle: str):
+    """Spans of *haystack* that are *needle*, overlapping ones as one span.
+
+    A needle repeating through the text is jumped over in one step rather
+    than found once per character.
+    """
+    period = _period(needle)
+    start = haystack.find(needle)
+    while start != -1:
+        end = start + len(needle)
+        if period < len(needle):
+            end += _repeat_length(haystack, end, period) // period * period
+        yield start, end
+        start = haystack.find(needle, end - len(needle) + 1)
+
+
+def _anchor_finders(char: str) -> list:
+    """Finders of *char* raw, and of the tail of any escape of it, whatever
+    wrote the backslash: each returns the next position from a start, or -1.
+
+    Separate, so each search is a fast scan for a literal.
     """
     code = ord(char)
-    slashes, escape = ("", "") if bare else (r"\\*", r"\\+")
-    alternatives = [
-        slashes + re.escape(char),
-        escape + f"(?i:u00{code:02x}|x{code:02x})",
-    ]
-    if char in _SHORT_ESCAPES:
-        alternatives.append(escape + _SHORT_ESCAPES[char])
-    return "(?:" + "|".join(alternatives) + ")"
-
-
-def _extend_back(text: str, start: int, units: int) -> int:
-    """Move *start* back over up to *units* run units before it."""
-    for _ in range(units):
-        if start > 0 and _RUN_CHAR.match(text, start - 1):
-            start -= 1
-            continue
-        escape = _ESCAPE_BEFORE.search(text, max(0, start - 24), start)
-        if escape is None:
-            break
-        start = escape.start()
-    return start
-
-
-def _secret_spans(secret: str, text: str) -> List[Tuple[int, int]]:
-    """Where *secret* appears in *text*, in any form it can arrive in.
-
-    The search runs in linear time: it anchors on the secret's ASCII core,
-    with each inner non-ASCII run as one bounded repetition, then extends
-    over the leading and trailing non-ASCII runs by at most four units per
-    character. That covers JSON at any depth, Python's escapes and any
-    single-byte code page, including bytes a UTF-8 decode collapsed into
-    fewer characters.
-
-    A secret whose ASCII core has fewer than 4 letters or digits is matched
-    only exactly, raw or JSON-escaped: the loose form would match ordinary
-    text written in its script.
-    """
-    i = 0
-    while i < len(secret) and ord(secret[i]) >= 128:
-        i += 1
-    j = len(secret)
-    while j > i and ord(secret[j - 1]) >= 128:
-        j -= 1
-    lead, core, trail = i, secret[i:j], len(secret) - j
-    if len(re.findall(r"[A-Za-z0-9]", core)) < 4:
-        forms = {
-            secret,
-            json.dumps(secret)[1:-1],
-            json.dumps(secret, ensure_ascii=False)[1:-1],
-        }
-        exact = re.compile(
-            "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    tails = [rf"[xX]{code:02x}", rf"u00{code:02x}", rf"U000000{code:02x}"]
+    tails += [re.escape(key) for key, value in _SHORT_ESCAPES.items() if value == char]
+    hexed = "|".join(tails).replace(f"{code:02x}", f"(?i:{code:02x})")
+    finders = [lambda text, start: text.find(char, start)]
+    for written_backslash in (r"\\", "5[cC]"):
+        pattern = re.compile(rf"{written_backslash}(?:{hexed})")
+        finders.append(
+            lambda text, start, pattern=pattern: (
+                -1 if (match := pattern.search(text, start)) is None else match.start()
+            )
         )
-        return [m.span() for m in exact.finditer(text)]
-    spans = []
-    for match in _core_pattern(core).finditer(text):
-        start, end = match.span()
-        if lead:
-            start = _extend_back(text, start, _UNITS_PER_CHAR * lead)
-        if trail:
-            after = _run_after(_UNITS_PER_CHAR * trail).match(text, end)
-            if after:
-                end = after.end()
-        spans.append((start, end))
+    return finders
+
+
+def _anchor_count(text: str, char: str) -> int:
+    """At least how often the anchors :func:`_anchor_finders` finds for *char* are in *text*."""
+    code = ord(char)
+    count = text.count(char) + text.count(f"{code:02x}")
+    if f"{code:02x}" != f"{code:02X}":
+        count += text.count(f"{code:02X}")
+    return count + sum(
+        text.count(key) for key, value in _SHORT_ESCAPES.items() if value == char
+    )
+
+
+def _candidate_windows(text: str, secrets: List[str]) -> List[Tuple[int, int]]:
+    """Spans of *text* that could hold an encoded secret, in order, merged.
+
+    Each lies around an occurrence of the secret's rarest ASCII character, raw
+    or escaped, as far as the longest form the secret can be written in, and
+    never starts inside a run of backslashes.
+    """
+    windows = []
+    for secret in secrets:
+        ascii_chars = {char for char in secret if ord(char) < 128}
+        if not ascii_chars:
+            return [(0, len(text))]
+        reach = _LONGEST_FORM_PER_CHAR * len(secret) + 16
+        anchor = min(sorted(ascii_chars), key=lambda char: _anchor_count(text, char))
+        finders = _anchor_finders(anchor)
+        found = [find(text, 0) for find in finders]
+        while True:
+            pending = [at for at in found if at != -1]
+            if not pending:
+                break
+            at = min(pending)
+            # Also covers every anchor in the next *reach* characters, so the
+            # search can skip them.
+            windows.append((max(0, at - reach), min(len(text), at + 2 * reach)))
+            found = [
+                find(text, at + reach) if -1 < next_at < at + reach else next_at
+                for find, next_at in zip(finders, found)
+            ]
+    windows.sort()
+    merged: List[List[int]] = []
+    for start, end in windows:
+        while start > 0 and text[start - 1] == "\\":
+            start -= 1
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _secret_spans(secrets: List[str], text: str) -> List[Tuple[int, int]]:
+    """Every span of *text* where one of *secrets* appears, in any form."""
+    spans = [span for secret in secrets for span in _occurrences(text, secret)]
+    loose = [_loose_pattern(secret) for secret in secrets]
+    loose = [pattern for pattern in loose if pattern is not None]
+    # Not only when the text has non-ASCII: escaped UTF-8 bytes decode to mojibake.
+    if "\\" not in text and not loose:
+        return spans
+    for start, end in _candidate_windows(text, secrets):
+        window = text[start:end]
+        if "\\" not in window and not (loose and _MANGLED_RUN.search(window)):
+            continue
+        for view in _decoded_views(_View(window, None, offset=start)):
+            if view.parent is not None:
+                for secret in secrets:
+                    for start_in_view, end_in_view in _occurrences(view.text, secret):
+                        spans.append(view.to_original(start_in_view, end_in_view))
+            for pattern in loose:
+                spans += [
+                    view.to_original(*match.span(1))
+                    for match in pattern.finditer(view.text)
+                ]
     return spans
 
 
@@ -332,7 +628,9 @@ _CHILD_SCAN_MAX_S = 8.0
 # secret at the cut is still matched whole. The rest of a longer line is read
 # and dropped.
 _STDERR_LINE_CHARS = 8192
-_STDERR_WINDOW_CHARS = _STDERR_LINE_CHARS + 4096
+# More than the longest one character of a secret can be written as within
+# three decodes: an escape whose backslash is itself escaped, twice over.
+_LONGEST_FORM_PER_CHAR = 32
 
 # Lines of server stderr kept for crash diagnostics.
 _STDERR_TAIL_LINES = 200
@@ -562,28 +860,46 @@ class StdioTransport(MCPTransport):
         in, and of nothing else. Debug logs of raw traffic (``debug=True``)
         can still hold other server output.
         """
-        # Spans, merged, so two secrets that overlap leave no piece of either.
-        spans = [
-            span
-            for secret in self._secrets()
-            for span in _secret_spans(secret, text)
-            if span[1] > span[0]
-        ]
-        if not spans:
-            return text
-        spans.sort()
-        merged = [list(spans[0])]
-        for start, end in spans[1:]:
-            if start <= merged[-1][1]:
+        return self._clean(text, len(text))
+
+    def _secret_spans(self, text: str) -> List[List[int]]:
+        """Where this server's secrets appear in *text*, merged and in order.
+
+        Merged, so two secrets that overlap leave no piece of either.
+        """
+        spans = sorted(
+            span for span in _secret_spans(self._secrets(), text) if span[1] > span[0]
+        )
+        merged: List[List[int]] = []
+        for start, end in spans:
+            if merged and start <= merged[-1][1]:
                 merged[-1][1] = max(merged[-1][1], end)
             else:
                 merged.append([start, end])
+        return merged
+
+    def _clean(self, text: str, limit: int) -> str:
+        """The first *limit* characters of *text*, with every secret redacted.
+
+        A secret that starts before the limit is redacted whole, even where it
+        runs past it.
+        """
         out, last = [], 0
-        for start, end in merged:
+        for start, end in self._secret_spans(text):
+            if start >= limit:
+                break
             out += [text[last:start], "<redacted>"]
             last = end
-        out.append(text[last:])
+        if last < limit:
+            out.append(text[last:limit])
         return "".join(out)
+
+    @property
+    def _stderr_window(self) -> int:
+        """Characters of a stderr line read at once: the kept part, plus room
+        for the longest form any secret can be written in to end past it."""
+        longest = max((len(secret) for secret in self._secrets()), default=0)
+        return _STDERR_LINE_CHARS + max(4096, _LONGEST_FORM_PER_CHAR * longest)
 
     def redact_value(self, value: Any) -> Any:
         """*value* (a decoded reply) with every string in it redacted, keys too.
@@ -673,18 +989,20 @@ class StdioTransport(MCPTransport):
             while True:
                 # Bounded: a server writing endlessly without a newline must
                 # not grow GAIA's memory with it.
-                line = stream.readline(_STDERR_WINDOW_CHARS)
+                window = self._stderr_window
+                line = stream.readline(window)
                 if not isinstance(line, str) or not line:
                     return
-                cut = len(line) >= _STDERR_WINDOW_CHARS and not line.endswith("\n")
-                if cut:
+                ended = line.endswith("\n")
+                if not ended and len(line) >= window:
                     self._discard_rest_of_line(stream)
-                # Cleaned over a window wider than what is kept, so the cap
-                # can't cut a secret in two.
-                line = self.redact(line)
-                if cut or len(line) > _STDERR_LINE_CHARS:
-                    line = line[:_STDERR_LINE_CHARS] + " [line cut]\n"
-                tail.append(line)
+                body = line[:-1] if ended else line
+                # The original is cut, not the cleaned text: a secret across
+                # the cut is still matched whole, within the window.
+                kept = self._clean(body, _STDERR_LINE_CHARS)
+                if len(body) > _STDERR_LINE_CHARS or not (ended or len(line) < window):
+                    kept += " [line cut]"
+                tail.append(kept + "\n")
         except (OSError, ValueError) as e:
             logger.debug("MCP server stderr closed: %s", e)
 

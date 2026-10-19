@@ -6,6 +6,7 @@ Each test runs a real stub server (a tiny Python script) so the pipes,
 blocking reads, and process lifecycle are the real ones.
 """
 
+import json
 import os
 import re
 import sys
@@ -1447,10 +1448,16 @@ _QUALIFIER_ROWS = [
     "scope",
     "prefix",
     "through",
+    "attempt",
     "attempts",
     "age",
     "days",
+    "retry",
     "retries",
+    "expiry",
+    "expires",
+    "lifetime",
+    "budget",
 ]
 _COUNT_ROWS = ["max", "min", "num", "first"]
 _KEY_KIND_ROWS = ["sort", "partition", "primary", "cache", "foreign", "composite"]
@@ -1516,6 +1523,11 @@ def test_a_database_key_is_not_a_credential(word):
         ("MAX_SECRET_AGE", False),
         ("TOKEN_RETRIES", False),
         ("API_KEY_DAYS", False),
+        ("TOKEN_EXPIRY", False),
+        ("TOKEN_LIFETIME", False),
+        ("TOKEN_BUDGET", False),
+        ("AUTH_RETRY", False),
+        ("MAX_PASSWORD_ATTEMPT", False),
     ],
 )
 def test_name_splitting_and_switches(name, secret):
@@ -1633,6 +1645,18 @@ def test_stderr_lines_are_cleaned_whole_then_capped(tmp_path):
         ("Zq9v<Ke7wP2", "Zq9v\\u003CKe7wP2"),  # uppercase hex
         ("Zq9v\\\u00e9Ke7w", "Zq9v\\\\\\u00e9Ke7w"),  # backslash, then an escape
         ("Zq9v\\Ke7wP2", "Zq9v\\\\\\\\Ke7wP2"),  # backslash, escaped twice
+        ("Zq9v\vKe7wP2", "Zq9v\\vKe7wP2"),  # C's \v, \0, \e
+        ("Zq9v\0Ke7wP2", "Zq9v\\0Ke7wP2"),
+        ("Zq9v\x1bKe7wP2", "Zq9v\\eKe7wP2"),
+        ("Zq9v'Ke7wP2", "Zq9v\\U00000027Ke7wP2"),  # eight-digit escape
+        ("Zq9vKe7w\U0001f600", "Zq9vKe7w\\U0001F600"),
+        ("Zq9vKe7w\U0001f600", "Zq9vKe7w\\ud83d\\ude00"),  # surrogate pair
+        ("Zq9v\\Ke7wP2", "Zq9v\\x5cKe7wP2"),  # backslash as a hex escape
+        ("Zq9v\\Ke7wP2", "Zq9v\\u005CKe7wP2"),
+        ("Zq9v\\Ke7wP2", "Zq9v\\u005c\\u005cKe7wP2"),
+        ("Zq9vKe7w\u00e9", "Zq9vKe7w\\xc3\\xa9"),  # UTF-8 bytes, as repr(bytes)
+        # The secret's own backslash beside what backslashreplace wrote.
+        ("Zq9v\\xcEKe7w\u20ac", "Zq9v\\xcEKe7w\\u20ac"),
     ],
     ids=[
         "go-json",
@@ -1643,11 +1667,115 @@ def test_stderr_lines_are_cleaned_whole_then_capped(tmp_path):
         "upper-hex",
         "backslash-escape",
         "double-backslash",
+        "vertical-tab",
+        "nul",
+        "esc",
+        "eight-digit",
+        "eight-digit-upper",
+        "surrogate-pair",
+        "backslash-as-x",
+        "backslash-as-u",
+        "backslash-twice-as-u",
+        "utf8-bytes",
+        "own-backslash-and-backslashreplace",
     ],
 )
 def test_escaped_forms_of_a_secret_are_redacted_too(secret, arrived):
     t = StdioTransport(sys.executable, args=["--api-key", secret])
     assert t.redact(f"x {arrived} y") == "x <redacted> y", (secret, arrived)
+
+
+@pytest.mark.parametrize("layers", [1, 2, 3])
+def test_a_secret_json_escaped_up_to_three_times_is_redacted(layers):
+    secret = 'Zq9v"Ke7w\\P2\u00e9\tx'
+    arrived = secret
+    for _ in range(layers):
+        arrived = json.dumps(arrived)[1:-1]
+    t = StdioTransport(sys.executable, args=["--api-key", secret])
+    assert t.redact(f"x {arrived} y") == "x <redacted> y", arrived
+
+
+def test_a_secret_repeating_through_the_text_is_redacted_whole():
+    t = StdioTransport(sys.executable, args=["--api-key", "abababab"])
+    assert t.redact("x " + "ab" * 10 + "a y") == "x <redacted>a y"
+    t = StdioTransport(sys.executable, args=["--api-key", "a" * 40])
+    started = time.perf_counter()
+    assert t.redact("a" * 1_000_000) == "<redacted>"
+    # In one step, not once per character.
+    assert time.perf_counter() - started < 0.2
+
+
+def test_redaction_stays_fast_on_dense_escapes():
+    """Text built so every position could start an escaped secret."""
+    backslash = "\\"
+    cases = [
+        ("Zq9vKe7w\u20ac\U0001f600", "Zq9vKe7w\u20ac"),
+        ("Zq9vKe7wP2" * 20, "Zq9vKe7wP2" * 20),
+        ("x41x41x41x41", "x41x41x41x4"),
+        ("0" * 8, "0" * 7),
+    ]
+    for secret, near in cases:
+        t = StdioTransport(sys.executable, args=["--api-key", secret])
+        for text in (
+            "".join(backslash * 3 + c for c in near) * (1_000_000 // (4 * len(near))),
+            (backslash * 50 + near[0]) * (1_000_000 // 51),
+            "".join(backslash + "u%04x" % ord(c) for c in near)
+            * (1_000_000 // (6 * len(near))),
+        ):
+            started = time.perf_counter()
+            t.redact(text)
+            took = time.perf_counter() - started
+            # Generous: this guards against blow-ups, not absolute speed.
+            assert took < 2.0, f"{took:.2f}s on {text[:20]!r}"
+
+
+def _stderr_of(tmp_path, body: str, *args: str) -> str:
+    """The stderr a server that writes *body* and dies leaves in its error."""
+    script = tmp_path / "write_stderr.py"
+    script.write_text(
+        "import sys\n"
+        f"sys.stderr.write({body!r})\n"
+        "sys.stderr.flush()\n"
+        "sys.exit(4)\n"
+    )
+    transport = StdioTransport(sys.executable, args=["-u", str(script), *args])
+    try:
+        # Dies at once, but a loaded machine can let it outlast connect()'s check.
+        assert transport.connect()
+        transport._process.wait(timeout=30)
+        return str(transport._process_died_error())
+    except RuntimeError as died:
+        return str(died)
+    finally:
+        transport.disconnect()
+
+
+def test_a_long_escaped_secret_across_the_stderr_cap_goes_whole(tmp_path):
+    """The secret's written form runs far past the cap: it is still read whole."""
+    secret = "Zq9vKe7wP2" * 70
+    written = "".join("\\\\u%04x" % ord(c) for c in secret)
+    assert len(written) > 4096
+    stderr = _stderr_of(
+        tmp_path, "x" * (8192 - 14) + written + "\n", "--api-key", secret
+    )
+    assert "u005a" not in stderr and "<redacted>" in stderr
+    assert "[line cut]" in stderr
+
+
+def test_stderr_is_cut_before_it_is_cleaned(tmp_path):
+    """Redacting first would shrink the line and pull in a secret the read cut."""
+    import random
+
+    pick = random.Random(5)
+    secret = "".join(pick.choice("abcdefghijkmnpqrstuvwxyz") for _ in range(500))
+    stderr = _stderr_of(tmp_path, secret * 49 + "\n", "--api-key", secret)
+    assert secret[:40] not in stderr and "<redacted>" in stderr
+
+
+def test_a_stderr_line_of_exactly_the_cap_is_kept_whole(tmp_path):
+    assert "[line cut]" not in _stderr_of(tmp_path, "x" * 8192 + "\n")
+    assert "[line cut]" not in _stderr_of(tmp_path, "x" * 8192)
+    assert "[line cut]" in _stderr_of(tmp_path, "x" * 8193 + "\n")
 
 
 def test_ordinary_escapes_beside_a_secret_shape_stay(tmp_path):
