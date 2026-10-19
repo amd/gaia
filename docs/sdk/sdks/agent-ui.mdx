@@ -447,6 +447,8 @@ class AttachDocumentRequest(BaseModel):
 
 ## REST API Endpoints
 
+Every other path serves the Agent UI page, except paths under `/api`: an unknown one returns a JSON **404** (`{"detail": "Not Found"}`), and a known one called with the wrong method returns **405**.
+
 ### System
 
 <AccordionGroup>
@@ -672,6 +674,8 @@ class AttachDocumentRequest(BaseModel):
 
     **Response:** `SessionResponse`
 
+    A `title` longer than 200 characters is a **422**.
+
     From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
     agent: an omitted `agent_type` becomes `gaia` and any other value is a
     **422**. See [Flagship only](#flagship-only).
@@ -701,7 +705,7 @@ class AttachDocumentRequest(BaseModel):
     }
     ```
 
-    Changing `agent_type`, `device`, or `mail_provider` while a chat turn is running on the session returns **409**; retry once the turn finishes. Renames are always accepted.
+    Changing `agent_type`, `device`, or `mail_provider` while a chat turn is running on the session returns **409**; retry once the turn finishes. Renames are accepted mid-turn. A `title` longer than 200 characters is a **422**; the Agent UI's rename box stops at 200.
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">

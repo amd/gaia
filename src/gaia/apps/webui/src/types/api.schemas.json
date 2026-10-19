@@ -892,6 +892,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -3850,6 +3851,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
