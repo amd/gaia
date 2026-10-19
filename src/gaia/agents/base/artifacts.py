@@ -115,7 +115,9 @@ class ArtifactStore:
         page holds at most ``PAGE_CHARS``; ``remaining`` and ``next_offset``
         say where the rest of the requested span continues.
         """
-        if entry is None and not offset and limit is None and handle in self._whole:
+        with self._lock:
+            whole = handle in self._whole
+        if entry is None and not offset and limit is None and whole:
             # Small models drop the stub's entry=1; a whole result still comes back.
             entry = 1
         if entry is not None:

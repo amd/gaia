@@ -505,7 +505,7 @@ def _overflow(tagged: bool):
 
 
 @pytest.mark.parametrize("tagged", [False, True], ids=["plain", "tagged"])
-def test_context_overflow_path_is_unchanged(agent, tagged):
+def test_context_overflow_with_nothing_to_archive_is_not_retried(agent, tagged):
     sent = _script(agent, _overflow(tagged), _overflow(tagged))
     result = agent.process_query("Check the ledger", max_steps=5)
     # Nothing to put away, so no retry that would only be refused again (#2780).

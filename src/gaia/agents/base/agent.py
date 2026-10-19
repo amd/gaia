@@ -7620,6 +7620,7 @@ Do NOT wrap conversational replies in JSON.
         system_prompt, tools = self.system_prompt, self._openai_tools
         before = request_tokens(messages, system_prompt, tools)
         # Sized in a throwaway store first: nothing is archived for a retry that won't run.
+        # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
         trial = self._shrink_messages_for_overflow(messages, ArtifactStore())
         after = request_tokens(trial, system_prompt, tools)
         freed = max(0, before - after)
