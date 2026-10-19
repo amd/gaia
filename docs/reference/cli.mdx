@@ -3234,11 +3234,14 @@ server's memory when GAIA is not in use:
 - **A server that is briefly not answering is waited for.** A request, a
   `/model` switch, or a CLI command such as `gaia llm` that finds GAIA's server
   unreachable shows "Reconnecting to the model server…" and waits up to 60
-  seconds while the daemon brings it back, then carries on. A new agent session
-  waits the same way while it starts, but only logs the message. If the server
-  is not back by then, the request fails with an
-  error that says so and points at `gaia daemon status`. A Lemonade you run
-  yourself, or one `LEMONADE_BASE_URL` names, is never waited on.
+  seconds from finding it gone while the daemon brings it back, then carries
+  on. A new agent session waits the same way while it starts, but only logs the
+  message. If the server is not back by then, the request fails with an error
+  that says so and points at `gaia daemon status`. A Lemonade you run yourself,
+  or one `LEMONADE_BASE_URL` names, is never waited on.
+- **Closing a TUI session never stops the server other sessions use.** On
+  Windows the daemon and GAIA's server leave the session's process group when
+  its agent starts them, so they keep running for every other session.
 - **`gaia daemon stop` stops the server, whoever started it,** including the one
   first-time setup starts. If the daemon is not running, it still stops GAIA's
   server.
@@ -3299,6 +3302,16 @@ than doing a direct load that would evict another process's model — check
 `gaia daemon status`. A daemon left running at an incompatible version is
 reported as a warning and loads proceed unbrokered; `gaia daemon restart`
 restores serialization.
+
+A daemon that is running but slow to answer is **not killed** for it. GAIA
+gives it 10 more seconds, then reports it busy: commands fail with an error
+naming its pid, and `gaia daemon status` shows `running, but not answering`.
+Its status check waits on nothing else, so a daemon that has not answered it
+for two minutes, across probes no more than a minute apart, is hung: the next `gaia daemon start` (or any command that
+starts the daemon) replaces it, and `gaia daemon restart` does so at once. A
+daemon whose port refuses connections, answers as something else, or whose pid
+now belongs to another program is replaced right away. An exiting app does not
+wait on a busy daemon.
 
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running

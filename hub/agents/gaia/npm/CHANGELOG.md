@@ -14,6 +14,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/query/{run_id}/cancel` takes it out of the queue. Before, the stream went
   silent for the whole wait, so a client could not tell a queued turn from a
   dead one.
+- **A turn cut short by closing the TUI is saved as interrupted.** The session
+  history got a turn only once it ended, so closing the TUI mid-turn saved it
+  as an ordinary "stopped" answer, or, if the TUI had to kill the agent, lost
+  the question entirely. The question is now saved when the turn starts, and a
+  turn the TUI's closing cut short ends with "This answer was interrupted when
+  GAIA closed." A resumed session (`GAIA_HISTORY_FILE`) sees it. Questions
+  queued before the close are saved as they ended.
 - **No more approval prompts for files that aren't there.** Naming a missing
   file or folder outside the allowed paths opened a 10-minute approval prompt,
   and only after it did the agent learn the file didn't exist; a retry asked
