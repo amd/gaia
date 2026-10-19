@@ -53,10 +53,14 @@ def test_a_file_written_in_pieces_is_reported_once_with_its_final_content(tmp_pa
                 f.write(f"part {i}\n")
             handler.on_modified(_event(target))
 
-        assert handler.wait_idle(10)
+        # Polled rather than wait_idle(), so this fails on the symptom alone.
+        deadline = time.monotonic() + 10
+        while not seen and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(WINDOW * 2)  # any later, duplicate report lands by now
         assert seen == ["".join(f"part {i}\n" for i in range(1, 6))]
     finally:
-        handler.close()
+        getattr(handler, "close", lambda: None)()
 
 
 def test_a_file_still_growing_without_events_is_not_reported_yet(tmp_path):
@@ -208,3 +212,77 @@ def test_real_watcher_reports_a_copied_file_once_complete(tmp_path):
             time.sleep(0.05)
         assert watcher._handler.wait_idle(10)
     assert seen == ["".join(f"line {i}\n" for i in range(5))]
+
+
+def test_a_file_still_locked_by_its_writer_is_retried(tmp_path):
+    """An exclusive open (Windows) makes the reader's read fail with
+    PermissionError even though the file has settled."""
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    attempts = []
+
+    def read(path):
+        attempts.append(path)
+        if len(attempts) < 3:
+            raise PermissionError(13, "being used by another process", path)
+
+    handler = FileChangeHandler(
+        on_created=read, extensions=[".txt"], debounce_seconds=0.1
+    )
+    try:
+        handler.on_created(_event(target))
+        assert handler.wait_idle(10)
+        assert len(attempts) == 3
+        assert handler.telemetry["files_created"] == 1
+    finally:
+        handler.close()
+
+
+def test_a_file_locked_for_good_is_given_up_on_loudly(tmp_path, caplog):
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    attempts = []
+
+    def read(path):
+        attempts.append(path)
+        raise PermissionError(13, "being used by another process", path)
+
+    handler = FileChangeHandler(
+        on_created=read, extensions=[".txt"], debounce_seconds=0.05
+    )
+    try:
+        handler.on_created(_event(target))
+        assert handler.wait_idle(10)
+        assert len(attempts) == 4  # the first try and three retries
+        assert "still locked" in caplog.text
+    finally:
+        handler.close()
+
+
+def test_a_dispatch_bug_is_logged_and_dispatch_continues(tmp_path, monkeypatch, caplog):
+    target = tmp_path / "a.txt"
+    target.write_text("x")
+    seen = []
+    handler = FileChangeHandler(
+        on_created=seen.append, extensions=[".txt"], debounce_seconds=0
+    )
+    real_settle = handler._settle
+    calls = []
+
+    def broken_once(checked, now):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("bug in settle")
+        return real_settle(checked, now)
+
+    monkeypatch.setattr(handler, "_settle", broken_once)
+    try:
+        handler.on_created(_event(target))
+        time.sleep(0.3)
+        handler.on_created(_event(target))
+        assert handler.wait_idle(10)
+        assert seen == [str(target)]
+        assert "bug in settle" in caplog.text
+        assert handler._dispatcher.is_alive()
+    finally:
+        handler.close()

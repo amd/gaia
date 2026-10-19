@@ -65,6 +65,11 @@ FilterCallback = Callable[[str], bool]
 # debounce window cannot spin on stat.
 _MIN_RECHECK_SECONDS = 0.05
 
+# How many times a callback that hit a file still locked by its writer
+# (PermissionError, e.g. an exclusive open on Windows) is retried, 1, 2 and 4
+# windows (of at least a second) apart, before the change is given up on.
+_MAX_LOCKED_RETRIES = 3
+
 # Default chunk size for file hashing (64KB)
 HASH_CHUNK_SIZE = 65536
 
@@ -302,6 +307,7 @@ class FileChangeHandler(FileSystemEventHandler):
         self._dispatcher: Optional[threading.Thread] = None
         self._busy = False
         self._closed = False
+        self._locked_retries: Dict[str, int] = {}
 
         # Telemetry
         self._telemetry: Dict[str, Any] = {
@@ -395,36 +401,54 @@ class FileChangeHandler(FileSystemEventHandler):
 
     def _dispatch_loop(self) -> None:
         while True:
-            with self._cond:
-                while True:
-                    if self._closed:
-                        return
-                    now = time.monotonic()
-                    due = [(p, e) for p, e in self._pending.items() if e[1] <= now]
-                    if self._ready or due:
-                        items = list(self._ready)
-                        self._ready.clear()
-                        self._busy = True
-                        break
-                    if self._pending:
-                        next_due = min(e[1] for e in self._pending.values())
-                        self._cond.wait(max(0.0, next_due - now))
-                    else:
-                        self._cond.wait()
             try:
-                # stat outside the lock, as in _schedule_settle.
-                checked = [(p, e, self._signature(p)) for p, e in due]
-                with self._cond:
-                    items.extend(self._settle(checked, time.monotonic()))
-                for item in items:
-                    with self._cond:
-                        if self._closed:
-                            break
-                    self._run_callback(*item)
-            finally:
+                if not self._dispatch_once():
+                    return
+            except Exception:
+                # A bug here must not end dispatch silently on stderr; log it
+                # and keep serving, after a pause so it cannot spin.
+                logger.exception("File watcher dispatch failed; continuing")
                 with self._cond:
                     self._busy = False
                     self._cond.notify_all()
+                time.sleep(1.0)
+
+    def _dispatch_once(self) -> bool:
+        """Run one batch. False once the handler is closed."""
+        with self._cond:
+            while True:
+                if self._closed:
+                    return False
+                now = time.monotonic()
+                due = [(p, e) for p, e in self._pending.items() if e[1] <= now]
+                if self._ready or due:
+                    items = list(self._ready)
+                    self._ready.clear()
+                    self._busy = True
+                    break
+                if self._pending:
+                    next_due = min(e[1] for e in self._pending.values())
+                    self._cond.wait(max(0.0, next_due - now))
+                else:
+                    self._cond.wait()
+        try:
+            # stat outside the lock, as in _schedule_settle.
+            checked = [(p, e, self._signature(p)) for p, e in due]
+            with self._cond:
+                items.extend(self._settle(checked, time.monotonic()))
+            for item in items:
+                if self._closed:
+                    logger.info(
+                        "File watcher closed; dropping %d unreported change(s)",
+                        len(items) - items.index(item),
+                    )
+                    return False
+                self._run_callback(*item)
+        finally:
+            with self._cond:
+                self._busy = False
+                self._cond.notify_all()
+        return True
 
     def _run_callback(self, kind: str, *paths: str) -> None:
         callback = {
@@ -438,11 +462,48 @@ class FileChangeHandler(FileSystemEventHandler):
         logger.debug(f"File {kind}: {' -> '.join(paths)}")
         try:
             callback(*paths)
+        except PermissionError:
+            if kind in ("created", "modified") and self._retry_locked(kind, paths[0]):
+                return
+            logger.exception(f"Error in on_{kind} callback for {paths[0]}")
+            return
         except Exception:
             # Nothing above this thread can handle it; log the traceback.
             logger.exception(f"Error in on_{kind} callback for {paths[0]}")
             return
+        self._locked_retries.pop(paths[0], None)
         self._update_telemetry(f"files_{kind}")
+
+    def _retry_locked(self, kind: str, file_path: str) -> bool:
+        """Report ``file_path`` again after another window, a bounded number of
+        times; its writer may still hold it open exclusively."""
+        tries = self._locked_retries.get(file_path, 0)
+        if tries >= _MAX_LOCKED_RETRIES:
+            self._locked_retries.pop(file_path, None)
+            logger.error(
+                f"Gave up on {file_path}: still locked after "
+                f"{_MAX_LOCKED_RETRIES} retries"
+            )
+            return False
+        self._locked_retries[file_path] = tries + 1
+        logger.warning(
+            f"{file_path} is locked by another program; retrying "
+            f"({tries + 1}/{_MAX_LOCKED_RETRIES})"
+        )
+        signature = self._signature(file_path)
+        with self._cond:
+            if self._closed:
+                return True
+            self._pending.setdefault(
+                file_path,
+                [
+                    kind,
+                    time.monotonic() + max(self._debounce_seconds, 1.0) * (2**tries),
+                    signature,
+                ],
+            )
+            self._cond.notify()
+        return True
 
     def wait_idle(self, timeout: Optional[float] = None) -> bool:
         """Block until every reported event has been dispatched.
