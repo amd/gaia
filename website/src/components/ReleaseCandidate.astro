@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 // The release candidate, for people who want to try the next release before it
-// ships. Deliberately quiet: collapsed, small, muted, and at the foot of the page,
-// so the stable downloads stay the default. Renders nothing unless there is a
+// ships. It sits directly under the stable download as a single orange line that
+// opens to the installers, so testers find it without hunting while the stable
+// download stays the one primary button. Renders nothing unless there is a
 // candidate newer than the latest stable release (pickReleaseCandidate).
 //
 // The links come from the GitHub pre-release, not the hub catalog: the catalog
@@ -24,15 +25,18 @@ const COMMANDS = ['pip install --pre amd-gaia', 'npm i -g @amd-gaia/agent-ui@nex
 ---
 
 {candidate && (
-  <details data-release-candidate class:list={['mx-auto w-full max-w-[720px] text-left', className]}>
-    <summary class="cursor-pointer list-none text-[12px] text-g-muted transition-colors hover:text-g-text">
-      Try the release candidate · {candidate.tag}
+  <details data-release-candidate class:list={['group mx-auto w-full max-w-[720px] text-left', className]}>
+    <summary class="inline-flex cursor-pointer list-none items-center gap-2.5 border border-g-rc-dim bg-g-bg2/90 px-3.5 py-2 font-mono text-[13px] text-g-muted transition-colors hover:border-g-rc hover:text-g-text [&::-webkit-details-marker]:hidden">
+      <span class="h-1.5 w-1.5 flex-none animate-g-breathe rounded-full bg-g-rc" aria-hidden="true"></span>
+      <span class="whitespace-nowrap text-g-rc">{candidate.tag}</span>
+      <span>release candidate<span class="hidden sm:inline"> — try it early</span></span>
+      <span class="transition-transform group-open:rotate-90" aria-hidden="true">→</span>
     </summary>
 
-    <div class="mt-3 space-y-3">
-      <p class="g-body text-[13px]">
+    <div class="mt-4 space-y-3 border border-g-border bg-g-bg2 p-5 text-left">
+      <p class="g-body text-[14px]">
         A pre-release of v{candidate.version} for testing before it ships. Expect rough
-        edges — the downloads at the top of this page are the stable release.
+        edges — the download above is the stable release.
       </p>
 
       {candidate.downloads.length > 0 && (
@@ -41,9 +45,9 @@ const COMMANDS = ['pip install --pre amd-gaia', 'npm i -g @amd-gaia/agent-ui@nex
             <li>
               <a
                 href={d.url}
-                class="inline-flex items-baseline gap-2 text-[13px] text-g-muted transition-colors hover:text-g-accent-text"
+                class="inline-flex items-baseline gap-2 text-[14px] text-g-muted transition-colors hover:text-g-rc"
               >
-                <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                <span class="text-g-rc" aria-hidden="true">↓</span>
                 <span>{d.label} · {formatBytes(d.sizeBytes)}</span>
               </a>
             </li>
@@ -53,7 +57,7 @@ const COMMANDS = ['pip install --pre amd-gaia', 'npm i -g @amd-gaia/agent-ui@nex
 
       <div class="space-y-1.5">
         {COMMANDS.map((cmd) => (
-          <div tabindex="0" class="g-cmd-plain overflow-x-auto text-[12px]">
+          <div tabindex="0" role="region" aria-label={`Command: ${cmd}`} class="g-cmd-plain overflow-x-auto text-[12.5px]">
             <span class="text-g-code-accent" aria-hidden="true">$</span>
             <code class="whitespace-nowrap bg-transparent p-0">{cmd}</code>
           </div>
@@ -64,7 +68,7 @@ const COMMANDS = ['pip install --pre amd-gaia', 'npm i -g @amd-gaia/agent-ui@nex
         href={candidate.htmlUrl}
         target="_blank"
         rel="noopener noreferrer"
-        class="g-label inline-block text-g-gold-text hover:underline"
+        class="g-label inline-block text-g-rc hover:underline"
       >
         Every file and the release notes on GitHub →
       </a>

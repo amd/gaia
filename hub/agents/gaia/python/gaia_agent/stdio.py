@@ -72,6 +72,7 @@ import threading
 import traceback
 from typing import Any, Dict, List, Optional
 
+from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.agents.base.readiness import (
@@ -85,6 +86,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     cloud_model_provider,
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
     running_embedded_lemonade_url,
 )
@@ -92,6 +94,7 @@ from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.version import version as gaia_version
 
 logger = get_logger(__name__)
 
@@ -468,6 +471,9 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         "model_display": _model_display_name(model_id, is_claude),
         "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
         "model_remote": is_claude or bool(cloud_provider),
+        # The header shows these, not an install record that may name another build.
+        "agent_version": agent_version,
+        "gaia_version": gaia_version,
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
@@ -823,22 +829,28 @@ def _format_model_list(agent: Any) -> str:
     """The ``/model`` (no-arg) answer: every switchable id, current one marked."""
     chat = agent.chat
     current = chat.effective_model
-    lines = ["**Claude (remote — sent to Anthropic):**"]
+    default = resolve_default_chat_model()
+
+    def marker(model_id: str) -> str:
+        return (" (default)" if model_id == default else "") + (
+            " ← current" if model_id == current else ""
+        )
+
+    lines = ["**Claude (cloud — sent to Anthropic):**"]
     for model_id, label in CLAUDE_MODELS.items():
-        marker = " ← current" if model_id == current else ""
-        lines.append(f"- `{model_id}` — {label}{marker}")
+        lines.append(f"- `{model_id}` — {label}{marker(model_id)}")
 
     lines.append("")
     try:
         models = _lemonade_models(_lemonade_url(agent))
     except RuntimeError as exc:
-        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
+        lines.append("**On this machine (downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
         for provider, heading in (
-            (None, "Local (Lemonade — downloaded, chat-capable models)"),
-            ("fireworks", "Fireworks AI (remote — via Lemonade)"),
-            ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
+            (None, "On this machine (downloaded, chat-capable models)"),
+            ("fireworks", "Fireworks AI (cloud)"),
+            ("amd", "AMD LLM Gateway (cloud)"),
         ):
             lines.append(f"**{heading}:**")
             group = [m for m in models if cloud_model_provider(m) == provider]
@@ -849,8 +861,7 @@ def _format_model_list(agent: Any) -> str:
                     else "- (not connected — run `/provider` to connect it)"
                 )
             for model_id in group:
-                marker = " ← current" if model_id == current else ""
-                lines.append(f"- `{model_id}`{marker}")
+                lines.append(f"- `{model_id}`{marker(model_id)}")
             lines.append("")
 
     lines.append("")
@@ -892,10 +903,11 @@ def run_model_command(agent: Any, query: str, out) -> None:
         use_claude=bool(agent._use_claude),
         cloud_provider_lookup=lookup if callable(lookup) else None,
     )
+    name = display if location.provider == "claude" else location.model_name
     _write(
         {
             "type": "final",
-            "answer": f"Switched to **{display}**. {location.describe()}",
+            "answer": f"Switched to **{name}** {location.placement()}",
         },
         out,
     )
@@ -1182,6 +1194,31 @@ def _memory_dump_event(agent: Any) -> Dict[str, Any]:
     return {"type": "final", "answer": json.dumps(payload)}
 
 
+def _usage_from_result(value: Any) -> Dict[str, Any]:
+    """Token counts for a turn that ended without printing its answer.
+
+    Error exits (and a step limit whose summary could not be written) return
+    the answer instead of printing it, so no ``answer`` event carried the usage
+    and the TUI cost meter read the turn as unmeasured. Same omit-don't-fake
+    rule as the printed path: a count that is absent or zero is left out.
+    """
+    if not isinstance(value, dict):
+        return {}
+    usage: Dict[str, Any] = {}
+    for src, dst in (
+        ("steps_taken", "steps"),
+        ("input_tokens", "input_tokens"),
+        ("output_tokens", "tokens"),
+    ):
+        count = value.get(src)
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            usage[dst] = count
+    cached = value.get("cached_tokens")
+    if "input_tokens" in usage and isinstance(cached, int) and cached >= 0:
+        usage["cached_tokens"] = cached
+    return usage
+
+
 def run_turn(
     agent: Any,
     query: str,
@@ -1332,7 +1369,11 @@ def run_turn(
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
-        _write({"type": "final", "answer": answer}, out)
+        final: Dict[str, Any] = {"type": "final", "answer": answer}
+        usage = _usage_from_result(value)
+        if usage:
+            final["usage"] = usage
+        _write(final, out)
     finally:
         # Every exit path, including the early returns above: leaving a dead
         # turn's handler attached would send the next decision to a thread that

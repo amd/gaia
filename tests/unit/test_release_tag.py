@@ -306,12 +306,61 @@ def test_publish_stamps_only_release_candidates(publish):
 
 def test_npm_latest_never_moves_for_an_rc(publish):
     steps = publish["publish-npm"]["steps"]
-    publishes = [s for s in steps if "npm publish" in s.get("run", "")]
+    publishes = [s for s in steps if "npm_publish_once.py" in s.get("run", "")]
     assert len(publishes) == 2
-    final = next(s for s in publishes if "--tag" not in s["run"])
-    rc = next(s for s in publishes if "--tag next" in s["run"])
+    final = next(s for s in publishes if "--dist-tag latest" in s["run"])
+    rc = next(s for s in publishes if "--dist-tag next" in s["run"])
     assert final["if"] == NOT_RC
     assert rc["if"] == IS_RC
+
+
+def test_npm_is_only_published_through_the_idempotent_helper(publish):
+    # A bare `npm publish` fails a re-run on an already-published version.
+    for job_id, job in publish.items():
+        for step in job.get("steps", []):
+            assert "npm publish" not in step.get("run", ""), (job_id, step.get("name"))
+
+
+# ── Phase 0 (#5172): RCs never cancel each other, need no approval ──────────
+
+
+def test_a_new_tag_never_cancels_a_release_in_flight():
+    concurrency = _workflow("publish.yml")["concurrency"]
+    assert concurrency["cancel-in-progress"] is False
+    # Per tag: a re-run of one tag queues behind itself, other tags run.
+    assert "github.ref" in concurrency["group"]
+
+
+def test_only_a_final_waits_for_a_reviewer(publish):
+    env = publish["approve-publish"]["environment"]
+    assert env == (
+        "${{ needs.validate.outputs.is_rc == 'true' && 'publish-rc' || 'publish' }}"
+    )
+    # The OIDC trusted publishers are bound to these environment names.
+    assert publish["publish-pypi"]["environment"]["name"] == "pypi"
+    assert publish["publish-npm"]["environment"]["name"] == "npm"
+
+
+def test_a_superseded_rc_stops_after_approval_before_any_publish(publish):
+    steps = publish["approve-publish"]["steps"]
+    (check,) = _steps(publish["approve-publish"], "newer tag of this release")
+    assert "release_tag.py superseded" in check["run"]
+    assert "ls-remote" in check["run"]
+    assert "continue-on-error" not in check
+    # Every publish job sits behind approve-publish.
+    assert publish["publish-pypi"]["needs"] == "approve-publish"
+    assert "approve-publish" in publish["publish-npm"]["needs"]
+    assert steps.index(check) == len(steps) - 1
+
+
+def test_nothing_publishes_unless_the_tagged_commit_passed_ci(publish):
+    gate = publish["ci-green"]
+    assert gate["needs"] == "validate"
+    assert gate["permissions"]["actions"] == "write"
+    assert "check_release_ci.py" in gate["steps"][-1]["run"]
+    approve = publish["approve-publish"]
+    assert "ci-green" in approve["needs"]
+    assert "needs.ci-green.result == 'success'" in approve["if"]
 
 
 def test_an_rc_github_release_is_a_prerelease(publish):
@@ -326,12 +375,6 @@ def test_an_rc_github_release_is_a_prerelease(publish):
     assert rc["with"]["prerelease"] is True
     assert rc["with"]["make_latest"] is False
     assert rc["with"]["files"] == final["with"]["files"]
-
-
-def test_context7_is_not_refreshed_for_an_rc(publish):
-    job = publish["refresh-context7"]
-    assert NOT_RC in job["if"]
-    assert "validate" in job["needs"]
 
 
 def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
@@ -432,3 +475,51 @@ def test_final_release_notes_diff_from_the_previous_final_not_an_rc(tmp_path):
 
     args = [a.replace("$CURRENT_TAG", "v0.25.0") for a in describe[1:]]
     assert _git(tmp_path, *args) == "v0.24.1"
+
+
+# ── Superseded release candidates ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "tag, others, newer",
+    [
+        ("v0.25.0-rc3", ["v0.25.0-rc1", "v0.25.0-rc2", "v0.25.0-rc3"], None),
+        ("v0.25.0-rc3", ["v0.25.0-rc3", "v0.25.0-rc4"], "v0.25.0-rc4"),
+        # Numeric, not lexical: rc10 is newer than rc9.
+        ("v0.25.0-rc9", ["v0.25.0-rc10"], "v0.25.0-rc10"),
+        ("v0.25.0-rc10", ["v0.25.0-rc9"], None),
+        # The final outranks every RC.
+        ("v0.25.0-rc3", ["v0.25.0-rc5", "v0.25.0"], "v0.25.0"),
+        # Another release's tags do not count, and a prefix match is not a match.
+        ("v0.25.0-rc3", ["v0.25.1-rc1", "v0.26.0", "v0.25.0.1"], None),
+        # Tags that are not release tags are ignored, not errors.
+        ("v0.25.0-rc3", ["agent-pkg-gaia-v0.3.0", "v0.25.0-rc4-broken", ""], None),
+        # A final is never superseded.
+        ("v0.25.0", ["v0.25.0-rc9", "v0.25.0"], None),
+    ],
+)
+def test_superseded_by(tag, others, newer):
+    assert release_tag.superseded_by(tag, others) == newer
+
+
+def test_superseded_cli_fails_and_names_the_newer_tag(monkeypatch, capsys):
+    import io
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("v0.25.0-rc1 v0.25.0-rc2"))
+    assert release_tag.main(["superseded", "v0.25.0-rc1"]) == 1
+    err = capsys.readouterr().err
+    assert "v0.25.0-rc2" in err and "nothing was published" in err
+
+
+def test_superseded_cli_passes_for_the_newest(monkeypatch):
+    import io
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("v0.25.0-rc1 v0.25.0-rc2"))
+    assert release_tag.main(["superseded", "v0.25.0-rc2"]) == 0
+
+
+def test_superseded_cli_rejects_a_malformed_tag(monkeypatch):
+    import io
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert release_tag.main(["superseded", "release-1"]) == 1

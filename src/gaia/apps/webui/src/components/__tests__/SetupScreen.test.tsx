@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { SetupCheck, SetupRunStatus, SetupStep } from '../../types';
+import type { LemonadeFound, LemonadeTarget, SetupCheck, SetupRunStatus, SetupStep } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -35,6 +35,16 @@ const FAILED: SetupRunStatus = {
     command: 'gaia init --profile chat',
 };
 
+const TARGET: LemonadeTarget = {
+    mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
+    api_key_stored: false, gaia_installed: false, offer: true,
+    what_gaia_does: 'GAIA registers its embedding model on your server.',
+};
+const FOUND: LemonadeFound = {
+    url: 'http://localhost:13305/api/v1', status: 'ok', version: '10.3.0', minimum: '10.0.0',
+    message: 'Lemonade Server v10.3.0 is running at http://localhost:13305/api/v1.',
+};
+
 beforeEach(() => {
     sessionStorage.clear();
     localStorage.clear();
@@ -43,6 +53,7 @@ beforeEach(() => {
     mockedApi.getOnboardingPreflight.mockRejectedValue(new Error('no probe'));
     mockedApi.getSetupStatus.mockResolvedValue({ state: 'idle' });
     mockedApi.startSetup.mockResolvedValue(READY);
+    mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: false });
 });
 
 async function start(choice?: RegExp) {
@@ -131,6 +142,37 @@ describe('SetupScreen', () => {
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
     });
 
+    it("on the user's own Lemonade, connects with no key and says their server is left alone", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({
+            ...TARGET, mode: 'external', saved_mode: 'external', source: 'config',
+            base_url: FOUND.url, saved_base_url: FOUND.url, offer: false,
+        });
+        mockedApi.connectProvider.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProvider>>);
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'amd',
+            models: [{ id: 'amd.m1', context_length: null, downloaded: true, labels: [], rank: 1, note: null, evidence: null }],
+        });
+        mockedApi.selectModel.mockResolvedValue({ provider: 'amd', model: 'amd.m1', label: 'm1', remote: true, is_default: false });
+
+        await start(/AMD LLM Gateway/);
+        expect(await screen.findByText(/doesn.t send your server a key or change its setup/)).toBeInTheDocument();
+        expect(screen.queryByText(/key goes to GAIA/)).not.toBeInTheDocument();
+        expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /Connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
+        expect(mockedApi.connectProvider).toHaveBeenCalledWith('amd', { api_key: undefined });
+    });
+
+    it('still asks for the key when LEMONADE_BASE_URL picks the server', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({
+            ...TARGET, mode: 'external', source: 'env', base_url: FOUND.url, offer: false,
+        });
+        await start(/AMD LLM Gateway/);
+        expect(await screen.findByLabelText('API key')).toBeInTheDocument();
+        expect(screen.getByText(/key goes to GAIA/)).toBeInTheDocument();
+    });
+
     it('shows the cloud download size and drops the local chat-model reason for a cloud choice', async () => {
         const check: SetupCheck = {
             ...CHECK,
@@ -175,5 +217,75 @@ describe('SetupScreen', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Start setup' }));
         fireEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
         await waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+    });
+});
+
+describe('SetupScreen: a Lemonade the user already runs', () => {
+    function offer(found: LemonadeFound | null) {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found });
+        mockedApi.setLemonadeTarget.mockResolvedValue({ ...TARGET, daemon: null });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+    }
+
+    it('offers it with what GAIA does there, and saves the URL on Use mine', async () => {
+        offer(FOUND);
+        expect(await screen.findByText('Use the Lemonade you already run at http://localhost:13305/api/v1 (v10.3.0)')).toBeInTheDocument();
+        expect(screen.getByText(TARGET.what_gaia_does)).toBeInTheDocument();
+        expect(screen.queryByLabelText('Lemonade API key')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Use mine' }));
+        await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
+            { mode: 'external', base_url: FOUND.url, api_key: undefined },
+        ));
+        expect(await screen.findByText(/GAIA will use your Lemonade Server at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
+    });
+
+    it("saves GAIA's own when declined", async () => {
+        offer(FOUND);
+        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own/ }));
+        await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
+        expect(await screen.findByText('GAIA will set up its own Lemonade Server.')).toBeInTheDocument();
+    });
+
+    it('asks for the key a protected server needs, and never shows it back', async () => {
+        offer({ ...FOUND, status: 'needs_key' });
+        const key = await screen.findByLabelText('Lemonade API key');
+        expect(key).toHaveAttribute('type', 'password');
+        expect(screen.getByRole('button', { name: 'Use mine' })).toBeDisabled();
+
+        fireEvent.change(key, { target: { value: 'sk-secret' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Use mine' }));
+        await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
+            { mode: 'external', base_url: FOUND.url, api_key: 'sk-secret' },
+        ));
+        await screen.findByRole('status');
+        expect(screen.queryByDisplayValue('sk-secret')).not.toBeInTheDocument();
+        expect(document.body.textContent).not.toContain('sk-secret');
+    });
+
+    it("shows the server's rejection verbatim and reveals the key field", async () => {
+        offer(FOUND);
+        const message = 'The Lemonade Server at http://localhost:13305/api/v1 rejected the API key. Check the key it was started with (its LEMONADE_API_KEY).';
+        mockedApi.setLemonadeTarget.mockRejectedValue(Object.assign(new Error(message), { reason: 'bad_key' }));
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(message);
+        expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
+    });
+
+    it('explains a too-old server and offers no way to use it', async () => {
+        const message = 'The Lemonade Server at http://localhost:8000/api/v1 is v9.0.0; GAIA needs v10.0.0 or newer.';
+        offer({ ...FOUND, status: 'too_old', message });
+        expect(await screen.findByText(message)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
+    });
+
+    it('does not look for one once a choice is saved', async () => {
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        await waitFor(() => expect(mockedApi.getLemonadeTarget).toHaveBeenCalled());
+        expect(mockedApi.detectLemonade).not.toHaveBeenCalled();
+        expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
     });
 });

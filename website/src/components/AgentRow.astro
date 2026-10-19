@@ -32,7 +32,7 @@ const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_byt
   data-tier={agent.security_tier}
   data-deprecated={agent.deprecated ? 'true' : 'false'}
 >
-  <span class="g-chip h-11 w-11 rounded-[11px]">
+  <span class="g-chip h-11 w-11">
     <AgentIcon name={agent.icon} class="h-5 w-5" />
   </span>
 
@@ -43,7 +43,7 @@ const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_byt
           'font-display text-[17px] font-semibold',
           agent.deprecated ? 'text-g-muted line-through' : 'text-g-text',
         ]}>{agent.name}</span>
-      <span class="mono text-[11.5px] text-g-faint">v{agent.latest_version}</span>
+      <span class="mono text-[12.5px] text-g-faint">v{agent.latest_version}</span>
       <span class={agent.security_tier === 'verified' ? 'g-badge' : 'g-badge-muted'}>
         {securityTierLabel(agent.security_tier)}
       </span>
@@ -53,10 +53,10 @@ const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_byt
   </span>
 
   <span class="hidden items-center gap-5 sm:flex">
-    <span class="mono text-[11px] uppercase tracking-[0.08em] text-g-faint">
+    <span class="mono text-[12.5px] uppercase tracking-[0.08em] text-g-faint">
       {categoryLabel(agent.category)}
     </span>
-    {size && <span class="mono min-w-[64px] text-right text-[11.5px] text-g-faint">{size}</span>}
+    {size && <span class="mono min-w-[64px] text-right text-[12.5px] text-g-faint">{size}</span>}
     <span class="text-g-accent-text" aria-hidden="true">→</span>
   </span>
 </a>

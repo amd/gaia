@@ -294,12 +294,12 @@ def test_real_loop_requires_correct_file_write_and_readback(agent, tmp_path):
 
 
 @pytest.mark.parametrize("max_steps", [1, 10])
-def test_persistent_lie_is_suppressed_and_status_incomplete(agent, max_steps):
+def test_persistent_lie_is_caveated_and_status_incomplete(agent, max_steps):
     claim = {"answer": "I saved the result to `summary.md`."}
     script(agent, claim, claim)
     result = agent.process_query("Save the result to `summary.md`", max_steps=max_steps)
     assert result["status"] == "incomplete"
-    assert claim["answer"] not in result["result"]
+    assert result["result"].startswith(claim["answer"])
     assert "No successful write" in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
 
@@ -575,7 +575,8 @@ def test_subclass_cannot_reintroduce_an_unsupported_test_claim(agent):
     script(agent, {"answer": "I did not run tests."})
     result = agent.process_query("Check the code", max_steps=1)
     assert result["status"] == "incomplete"
-    assert "All tests pass." not in result["result"]
+    assert result["result"].startswith("All tests pass.")
+    assert "No tests were run this turn." in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
 
 
@@ -1066,7 +1067,7 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     )
     result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
     assert result["status"] == "incomplete"
-    assert lie["answer"] not in result["result"]
+    assert result["result"].startswith(lie["answer"])
     assert "was declined, so nothing was saved" in result["result"]
     correction = sent[2][-1]["content"]
     assert "[check:completion]" in correction

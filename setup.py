@@ -14,19 +14,11 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 
 tkml_version = "5.0.4"
 
-# Standalone AMD production agent wheels (issues #1102, #1179). Each ships as
-# a separate 'gaia-agent-<id>' PyPI package depending on this framework
-# wheel. Deliberately NOT an extras_require entry: this list is read
-# statically by util/list_agent_packages.py (single source of truth for
-# .github/workflows/publish_agents.yml's build/publish matrix and
-# tests/unit/test_agent_pypi_publish.py) without ever being handed to pip's
-# resolver. An extras_require entry naming these packages made 'pip install
-# "amd-gaia[agents]"' unsatisfiable while the wheels are unpublished
-# (publish_agents.yml's publish job is paused), which made the resolver
-# silently downgrade amd-gaia itself to the newest release that didn't
-# declare the extra (#2240) -- see setup.py history / PR fixing #2240 for
-# the incident. Do not move this back into extras_require until the wheels
-# are live on PyPI.
+# Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
+# util/list_agent_packages.py for build_agent_package.yml and
+# util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
+# wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
+# silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
     "gaia-agent-email",
     "gaia-agent-chat",
@@ -158,6 +150,9 @@ setup(
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
         # <4: APScheduler 4 drops apscheduler.schedulers/.events, which gaia.schedule imports.
         "apscheduler>=3.10.0,<4.0",
+        # Agent UI schedules run "daily at 9am" in the PC's own time zone;
+        # tzlocal names it (IANA) and pulls in tzdata on Windows for zoneinfo.
+        "tzlocal>=4.0",
         "tomli-w>=1.0.0",
         "tomli>=2.0.0; python_version < '3.11'",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621

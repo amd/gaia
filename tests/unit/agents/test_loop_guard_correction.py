@@ -12,6 +12,8 @@ service.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -206,23 +208,33 @@ def test_rate_limited_calls_do_not_count_toward_the_limit(agent):
     wait.assert_called_with(_throttled(2.0))
 
 
-def test_rate_limit_wait_is_capped(agent):
-    with patch("gaia.agents.base.agent.time.sleep") as sleep:
-        agent._wait_out_rate_limit(_throttled(60.0))
-    sleep.assert_called_once_with(Agent._RATE_LIMIT_WAIT_CAP_S)
+@pytest.fixture
+def own_sleeps():
+    """Record, without sleeping, the ``time.sleep`` calls on this test's thread."""
+    # Patching time.sleep reaches every thread, and an earlier test's thread may poll.
+    real_sleep, test_thread, calls = time.sleep, threading.get_ident(), []
+
+    def _sleep(seconds):
+        if threading.get_ident() == test_thread:
+            calls.append(seconds)
+        else:
+            real_sleep(seconds)
+
+    with patch("gaia.agents.base.agent.time.sleep", _sleep):
+        yield calls
 
 
-def test_rate_limit_wait_honours_the_cancel_event(agent):
-    import threading
+def test_rate_limit_wait_is_capped(agent, own_sleeps):
+    agent._wait_out_rate_limit(_throttled(60.0))
+    assert own_sleeps == [Agent._RATE_LIMIT_WAIT_CAP_S]
 
+
+def test_rate_limit_wait_honours_the_cancel_event(agent, own_sleeps):
     agent._cancel_event = threading.Event()
-    with (
-        patch("gaia.agents.base.agent.time.sleep") as sleep,
-        patch.object(agent._cancel_event, "wait") as wait,
-    ):
+    with patch.object(agent._cancel_event, "wait") as wait:
         agent._wait_out_rate_limit(_throttled(3.0))
     wait.assert_called_once_with(3.0)
-    sleep.assert_not_called()
+    assert own_sleeps == []
 
 
 # ---------------------------------------------------------------------------
@@ -428,3 +440,43 @@ def test_alternating_between_two_calls_is_a_loop(agent):
     # Rounds one and two ran; the third round's closing call was corrected.
     assert agent.calls == 5
     assert len(_corrections(sent)) == 1
+
+
+# ---------------------------------------------------------------------------
+# A refused call is not left showing as running (#5177)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [
+        [_legacy_call()] * 3,
+        [_native_call("c1"), _native_call("c2"), _native_call("c3")],
+    ],
+    ids=["legacy", "native"],
+)
+def test_a_refused_repeat_is_not_left_running(agent, calls):
+    """The Agent UI never counts a running tool as idle, so a refused call left
+    open would keep a stuck turn from ever being stopped."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = SSEOutputHandler()
+    agent.console = handler
+    agent.results = [{"status": "error", "error": "[Errno 21] Is a directory"}]
+    _stub_chat(agent, *calls, _answer("done differently"))
+
+    agent.process_query("fix it", max_steps=10)
+
+    assert handler.tool_running() is False
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    types = [e.get("type") for e in events if e]
+    assert types.count("tool_start") == 3
+    assert types.count("tool_end") == 3
+    refused = [
+        e
+        for e in events
+        if e and e.get("type") == "tool_result" and "repeated" in str(e)
+    ]
+    assert len(refused) == 1 and refused[0]["success"] is False

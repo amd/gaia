@@ -372,7 +372,9 @@ land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
-— runs without asking.
+— runs without asking. A write or edit inside the agent's own scratch
+folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
+so running a script from it asks every time and carries no `always_scope`. So does a shell command run there or naming a path there, and a script handed a scratch path as an argument.
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.
@@ -387,7 +389,7 @@ Design a workflow around the approval path, not around a fixed tool list.
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/","confirm_id":"…","always_scope":"pytest","risk":"execute"}
+data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest (runs the test code it finds)","risk":"execute"}
 ```
 
 Answer it on the same run, then keep reading the stream:
@@ -398,7 +400,15 @@ POST /v1/gaia/query/{run_id}/tool_decision
 ```
 
 `summary` is the command or call itself, shown once — your UI supplies the
-question. `risk` says what the call does (`read`, `write`, `execute`,
+question. For a shell command it can carry two more lines: `in <folder>` when
+the command runs outside the workspace, and one plain sentence on what a `write`
+or `execute` command can do. Show it as-is. A CLI a skill would grant (`git
+commit`, `python script.py`) with no such skill loaded arrives here as a prompt,
+not a refusal. So does a command GAIA's own checks don't cover (`git push`,
+`python -c`, a path outside the project): its `summary` is the exact line the
+shell will run, unshortened, then `in <folder>`, then a risk sentence, and it
+carries no `always_scope` — offer allow-once and deny only. `allow` runs that
+line once; the next call asks again. `risk` says what the call does (`read`, `write`, `execute`,
 `destructive`); label by it rather than by tool name, since `run_shell_command`
 is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
@@ -467,10 +477,16 @@ intermediate files, so they stay out of the user's project. It is created per
 agent under the system temp dir, deleted when the agent closes, and is the only
 part of the temp dir the agent may use.
 
-**In 0.1.1 narrowing it is a construction-time setting only.** The packaged
-sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
-`--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in
-your own Python process:
+**To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
+sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
+The scope becomes the overlap with the default; an entry outside it is ignored
+with a warning and never widens it, and out-of-scope paths are refused without a
+prompt, even under full access. The scratch directory stays writable. An empty,
+relative or missing entry stops the sidecar at startup. It confines the agent's
+tools, not code they run: a `run_python` script or shell command can still read
+anything the OS user can, so isolating a run from files it must not see needs a
+separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
+list instead (the variable still narrows it):
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -508,7 +524,10 @@ request for every item in a document to it, and it drives
 `extract_document_items` and `save_extracted_items` so a long transcript yields
 a complete, source-quoted inventory rather than a summary. A skill turns that
 inventorying on only by listing `extract_document_items` in `tools_required`;
-wording such as "find every call site" in another skill does not.
+wording such as "find every call site" in another skill does not. Loading it
+registers the tools at once, so `load_skill` never reports them missing; coverage
+is enforced only when the request itself names a source document or asks for
+every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's
@@ -699,7 +718,8 @@ and <https://amd-gaia.ai/docs/guides/gaia>.
 The stdio TUI supports `/provider` for Local, Fireworks AI, and AMD LLM Gateway.
 Keys are entered in a masked field and sent directly to local Lemonade's runtime
 auth API, never as agent queries. `/model` lists supported discovered cloud and
-downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
+downloaded local models, marking the configured default with `(default)`;
+`/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.

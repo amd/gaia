@@ -22,7 +22,13 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools import search_scope
+from gaia.agents.tools.document_text import (
+    document_type,
+    index_only_error,
+    read_document,
+)
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     file_read_record,
@@ -32,6 +38,7 @@ from gaia.agents.tools.file_edit import (
 from gaia.agents.tools.path_access import read_access_error, readable_entry
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
+    confine_roots,
     is_broad_root,
     root_depth,
     search_roots,
@@ -612,14 +619,17 @@ class FileSearchToolsMixin:
 
                     logger.debug("Phase 1: Searching common document locations...")
 
-                    common_locations = [
-                        home / "Documents",
-                        home / "Downloads",
-                        home / "Desktop",
-                        home / "OneDrive",
-                        home / "Google Drive",
-                        home / "Dropbox",
-                    ]
+                    common_locations = confine_roots(
+                        self,
+                        [
+                            home / "Documents",
+                            home / "Downloads",
+                            home / "Desktop",
+                            home / "OneDrive",
+                            home / "Google Drive",
+                            home / "Dropbox",
+                        ],
+                    )
 
                     # By path, not string prefix: a root ~/Doc must not cover ~/Documents.
                     for location in common_locations:
@@ -718,19 +728,20 @@ class FileSearchToolsMixin:
                 logger.debug("Phase 2: Deep search across drive(s)...")
 
                 if platform.system() == "Windows":
-                    # Search all available drives on Windows
                     import string
 
-                    for drive_letter in string.ascii_uppercase:
-                        drive = Path(f"{drive_letter}:/")
-                        if drive.exists():
-                            logger.debug(f"Searching drive {drive_letter}:...")
-                            search_location(drive, max_depth=999)
-                            if len(matching_files) >= 10:
-                                break
+                    drives = [
+                        Path(f"{letter}:/")
+                        for letter in string.ascii_uppercase
+                        if Path(f"{letter}:/").exists()
+                    ]
                 else:
-                    # On Linux/Mac, search from root
-                    search_location(Path("/"), max_depth=999)
+                    drives = [Path("/")]
+                for drive in confine_roots(self, drives):
+                    logger.debug("Searching %s...", drive)
+                    search_location(drive, max_depth=999)
+                    if len(matching_files) >= 10:
+                        break
 
                 # Stop progress indicator
                 if hasattr(self, "console") and hasattr(self.console, "stop_progress"):
@@ -872,12 +883,14 @@ class FileSearchToolsMixin:
             Automatically detects file type and provides appropriate analysis:
             - Python files (.py): Syntax validation + symbol extraction (functions/classes)
             - Markdown files (.md): Headers + code blocks + links
+            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
+              long; continue at next_offset until it is null
             - Other text files: Raw content
 
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size (1..8000 characters); omitted preserves full analysis.
+                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -927,35 +940,11 @@ class FileSearchToolsMixin:
                         ),
                     }
 
-                # Document formats must be indexed via index_document, not read directly.
-                # The tool docstring explicitly scopes read_file to text files (Python,
-                # Markdown, etc.); binary document types are not supported.  Returning
-                # a clear error here stops the LLM from spinning on a useless
-                # "[Binary file, X bytes]" success response.
-                doc_ext = os.path.splitext(file_path)[1].lower()
-                if doc_ext in {
-                    ".pdf",
-                    ".docx",
-                    ".doc",
-                    ".pptx",
-                    ".ppt",
-                    ".xlsx",
-                    ".xls",
-                    ".odt",
-                    ".ods",
-                    ".odp",
-                    ".epub",
-                }:
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"Cannot read {doc_ext} files directly — they are binary document formats. "
-                            f"Call index_document('{file_path}') to index it, "
-                            "then use query_specific_file or query_documents to retrieve content. "
-                            "If index_document returns 'Access denied', ask the user to index the "
-                            "file via the Document Library (attachment icon in the UI)."
-                        ),
-                    }
+                unreadable = index_only_error(file_path)
+                if unreadable:
+                    return unreadable
+                if document_type(file_path) is not None:
+                    return read_document(self, file_path, offset, limit)
 
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
@@ -1513,7 +1502,7 @@ class FileSearchToolsMixin:
                 except ImportError:
                     error = (
                         "Excel support requires openpyxl. "
-                        "Install with: pip install openpyxl. "
+                        f"{missing_package_hint('openpyxl')} "
                         "Alternatively, save the file as CSV and try again."
                     )
                 except Exception as e:
@@ -2886,7 +2875,10 @@ class FileSearchToolsMixin:
                 logger.error(f"Missing dependency for data analysis: {e}")
                 return {
                     "status": "error",
-                    "error": f"Missing dependency: {e}. Try: pip install python-dateutil openpyxl",
+                    "error": (
+                        f"Missing dependency: {e}. "
+                        f"{missing_package_hint('python-dateutil', 'openpyxl')}"
+                    ),
                     "has_errors": True,
                     "operation": "analyze_data_file",
                 }

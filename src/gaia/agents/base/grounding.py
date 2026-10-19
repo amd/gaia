@@ -7,10 +7,13 @@ Three checks, each comparing the answer's prose with the turn's tool record:
 * **look** — the request names a file or symbol and no tool touched it, or the
   answer says something does not exist with no lookup on record.
 * **content** — values the answer presents as data (table cells, rows of a
-  data block, decimals, dates) that appear in no tool output, argument, or
-  earlier message.
+  data block, decimals, dates) that appear in no tool output or earlier
+  message. A tool's own arguments are not evidence for what it returned.
 * **action** — the answer says it searched, read, ran, tested, verified or
   documented something, and no tool of that kind ran.
+
+Figures in the files the turn wrote are checked by
+:mod:`gaia.agents.base.deliverables`.
 
 Each returns :class:`Finding` objects; the agent loop turns them into one
 correction, then — if the next answer still has them — reasons for the
@@ -30,7 +33,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 from gaia.agents.base.checks import check_kind
-from gaia.agents.base.claims import absence_claim, action_claims, admits_unverified
+from gaia.agents.base.claims import (
+    absence_claim,
+    action_claims,
+    admits_unverified,
+    read_claims,
+)
 from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.verification import is_check_execution, observed_text
 
@@ -40,6 +48,18 @@ ACTION = "action"
 
 #: How much of one tool result is kept for the checks.
 OBSERVED_MAX_CHARS = 400_000
+
+
+def observed_excerpt(text: str, limit: int = OBSERVED_MAX_CHARS) -> str:
+    """*text* cut to *limit* chars, keeping both ends.
+
+    A long log puts its results last — timings, test summaries — so a head-only
+    cut drops exactly the values an answer reports.
+    """
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n" + text[-half:]
 
 
 @dataclass(frozen=True)
@@ -99,6 +119,62 @@ def _slashed(text: str) -> str:
     return text.replace("\\", "/").lower()
 
 
+def _arg_strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for sub in value.values():
+            yield from _arg_strings(sub)
+    elif isinstance(value, (list, tuple)):
+        for sub in value:
+            yield from _arg_strings(sub)
+
+
+#: Arguments that hold code a tool runs: its literals are not findings.
+_CODE_ARGS = ("code", "script", "command", "cmd")
+_CODE_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w]|\.\d)")
+_OUTPUT_NUMBER = re.compile(
+    r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?"
+)
+
+
+def evidence_text(record: Dict[str, Any], code_literals: bool = False) -> str:
+    """What *record*'s result shows, minus what the call itself put there.
+
+    A search result that repeats its query, or a "no occurrence of '$12'"
+    reply, would otherwise make the call's own arguments look confirmed.
+    With *code_literals*, numbers a script hard-codes are also dropped from
+    what it printed: ``print(95)`` is not a source for 95.
+    """
+    text = record.get("observed") or ""
+    args = record.get("args") or {}
+    for value in _arg_strings(args):
+        if not any(ch.isdigit() for ch in value):
+            continue
+        for quote in ("'", '"', "“"):
+            close = "”" if quote == "“" else quote
+            text = text.replace(f"{quote}{value}{close}", " ")
+        if len(value) >= 8:
+            text = text.replace(value, " ")
+    if code_literals:
+        literals: Set[float] = set()
+        for key in _CODE_ARGS:
+            code = args.get(key) if isinstance(args, dict) else None
+            if isinstance(code, str):
+                literals.update(float(m) for m in _CODE_NUMBER.findall(code))
+        literals -= {0.0, 1.0}
+        if literals:
+            text = _OUTPUT_NUMBER.sub(
+                lambda m: (
+                    " "
+                    if float(m.group(0).replace(",", "")) in literals
+                    else m.group(0)
+                ),
+                text,
+            )
+    return text
+
+
 def _looked(record: Dict[str, Any]) -> bool:
     return _ran(record) and _has(_name(record), _READ_WORDS + _EXEC_WORDS)
 
@@ -128,30 +204,47 @@ def _touched_docs(record: Dict[str, Any]) -> bool:
 
 #: Extensions that make a bare token a file name rather than a word.
 _FILE_SUFFIX = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
-#: ``parse_updated()`` or `parse_updated`: project code, not a library call.
-_SYMBOL = re.compile(
-    r"`([A-Za-z_][A-Za-z0-9_]*)(?:\(\))?`|\b([A-Za-z_][A-Za-z0-9_]*)\(\)"
+#: Suffixes files actually carry, so ``self.Y`` or ``Y.shape`` is not a file.
+_FILE_EXTENSIONS = frozenset(
+    "py pyi pyx ipynb js jsx mjs cjs ts tsx vue svelte json jsonl yaml yml toml "
+    "ini cfg conf env lock xml html htm css scss less md mdx rst txt csv tsv log "
+    "sql sh bash zsh ps1 bat cmd c h cc cpp cxx hpp hh hxx cu cuh hip cl s asm "
+    "go rs java kt kts scala cs fs rb php swift m mm r jl lua pl dart zig "
+    "cmake mk gradle proto graphql tf pdf docx xlsx pptx png jpg jpeg gif svg "
+    "webp wav mp3 mp4 zip gz tar".split()
 )
+#: ``parse_updated()``: a call is code to read. A bare name may be a variable,
+#: field, parameter or repository, so it is not.
+_SYMBOL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\(\)")
+_QUOTED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1", re.M | re.S)
+
+
+def _is_file_name(base: str) -> bool:
+    suffix = _FILE_SUFFIX.search(base)
+    return bool(suffix) and suffix.group(0)[1:].lower() in _FILE_EXTENSIONS
 
 
 def named_targets(query: str) -> List[str]:
-    """Files and snake_case symbols *query* names, in order.
+    """Files and snake_case functions *query* names, in order.
 
-    A file needs an extension ("dates.py", "toybox/dates.py"); a directory or
-    the working folder the request opens with is not something to read. A
-    capitalised ``Name.js`` is a framework, not a file. A symbol needs an
+    A file needs a known extension ("dates.py", "toybox/dates.py"); a
+    directory, the working folder the request opens with, or an attribute
+    like ``self.Y`` is not something to read. A capitalised ``Name.js`` is a
+    framework, not a file. A function is written as a call with an
     underscore, no dot and no capitals, so ``parse_updated()`` counts and
-    ``print()``, ``os.path.join()`` or ``LEMONADE_BASE_URL`` do not.
+    ``print()``, ``os.path.join()`` or a bare `row_stride` do not. Code
+    blocks the request quotes are material it hands over, not targets.
     """
+    query = _QUOTED_BLOCK.sub("\n", query or "")
     targets: List[str] = []
-    for path in mentioned_paths(query or ""):
+    for path in mentioned_paths(query):
         base = re.split(r"[\\/]", path.rstrip("\\/"))[-1]
         framework = base[:1].isupper() and base.endswith(".js")
-        if not _FILE_SUFFIX.search(base) or framework:
+        if not _is_file_name(base) or framework:
             continue
         targets.append(path)
-    for match in _SYMBOL.finditer(query or ""):
-        symbol = match.group(1) or match.group(2)
+    for match in _SYMBOL.finditer(query):
+        symbol = match.group(1)
         if "_" in symbol.strip("_") and symbol.islower() and symbol not in targets:
             targets.append(symbol)
     return targets
@@ -164,22 +257,28 @@ def _read_it(target: str, records: Iterable[Dict[str, Any]]) -> bool:
     """True when a successful call read *target*.
 
     A file counts when a read or command call names it — by file name, since
-    tools get relative and absolute spellings of the same file. A symbol also
-    counts when a search or read result shows it. A failed read, a listing,
-    and a file name that only appears in a ``dir`` output did not read it.
+    tools get relative and absolute spellings of the same file. A failed
+    read, a listing, and a file name that only appears in a ``dir`` output
+    did not read it. A symbol counts when any successful call names or shows
+    it, a listing included: that tool put it in front of the model.
     """
-    key = _slashed(re.split(r"[\\/]", target.rstrip("\\/"))[-1])
-    is_file = bool(_FILE_SUFFIX.search(target))
+    key = _target_key(target)
+    is_file = _is_file_name(key)
     for record in records:
         name = _name(record)
-        if not _ran(record) or record.get("failed") or _has(name, _LISTING_WORDS):
+        if not _ran(record) or record.get("failed"):
             continue
         if is_file:
-            if not _has(name, _FINDER_WORDS) and key in _args_text(record):
+            lister = _has(name, _FINDER_WORDS + _LISTING_WORDS)
+            if not lister and key in _args_text(record):
                 return True
         elif key in _args_text(record) or key in _slashed(record.get("observed") or ""):
             return True
     return False
+
+
+def _target_key(target: str) -> str:
+    return _slashed(re.split(r"[\\/]", target.rstrip("\\/"))[-1])
 
 
 def _names(items: Sequence[str]) -> str:
@@ -208,30 +307,40 @@ def look_findings(
     target an earlier turn (*history*) already discussed is not asked for again.
     A "not found" only counts in a turn about something the request named, so
     explaining what a 404 means is not a claim about the disk.
+
+    Once the turn has read one of the request's targets, the others are
+    candidates it chose to leave: they count only when the answer says it read
+    them or says they don't exist. An answer that says it read a target counts
+    whether or not the file is on disk.
     """
     targets = named_targets(query)
     if not targets:
         return []
     findings: List[Finding] = []
     absent = absence_claim(answer)
+    absent_text = _slashed(absent or "")
+    claimed = [_slashed(clause) for clause in read_claims(answer)]
     earlier = _slashed(history)
     missed = []
     found: List[str] = []
-    where_is = {
-        t: locate(t) if locate else None for t in targets if _FILE_SUFFIX.search(t)
-    }
+    where_is = {t: locate(t) if locate else None for t in targets if _is_file_name(t)}
     about_project = any(where_is.values()) or any(_ran(r) for r in records)
+    engaged = any(_read_it(t, records) for t in targets)
     for target in targets:
         if _read_it(target, records) or _slashed(target) in earlier:
             continue
+        key = _target_key(target)
+        said_read = any(key in clause for clause in claimed)
+        if engaged and not said_read and key not in absent_text:
+            continue
         if target not in where_is:
-            if about_project:
+            if about_project or said_read:
                 missed.append(target)
             continue
         where = where_is[target]
         if where:
             found.append(f"`{target}` is at `{where}`")
-        if absent is not None or where:
+        if absent is not None or where or said_read:
             missed.append(target)
     if missed:
         names = _names(missed)
@@ -264,7 +373,8 @@ _ABSENT_NOTE = "I said something doesn't exist without searching for it this tur
 # content: values presented as data that no tool produced
 # ---------------------------------------------------------------------------
 
-_GROUPED = re.compile(r"(?<![\w.,])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w,]|\.\d)")
+#: "293,500,000,000, up 4%": a comma after the figure ends it.
+_GROUPED = re.compile(r"(?<![\w.,])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?!\w|[,.]\d)")
 _PLAIN = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w]|\.\d)")
 _DATE = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 _FENCE = re.compile(
@@ -276,10 +386,40 @@ _DATA_FENCES = frozenset(
 )
 _CODE_LINE = re.compile(r"[()=;{}]|\b(?:def|import|return|class|print)\b")
 _TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{2,}")
+#: Unit → (dimension, factors to its base unit). KB/MB/GB mean 1000 or 1024.
+_UNIT_SCALES: Dict[str, "tuple[str, tuple[float, ...]]"] = {
+    "ns": ("time", (1e-9,)),
+    "us": ("time", (1e-6,)),
+    "µs": ("time", (1e-6,)),
+    "μs": ("time", (1e-6,)),
+    "ms": ("time", (1e-3,)),
+    "s": ("time", (1.0,)),
+    "sec": ("time", (1.0,)),
+    "secs": ("time", (1.0,)),
+    "b": ("size", (1.0,)),
+    "kb": ("size", (1e3, 1024.0)),
+    "mb": ("size", (1e6, 1024.0**2)),
+    "gb": ("size", (1e9, 1024.0**3)),
+    "kib": ("size", (1024.0,)),
+    "mib": ("size", (1024.0**2,)),
+    "gib": ("size", (1024.0**3,)),
+}
+_UNIT = r"ns|us|µs|μs|ms|secs|sec|s|kib|mib|gib|kb|mb|gb|b"
 #: A cell or field that is one value and nothing else: "181.0", "12%", "3.5s".
 _PURE_VALUE = re.compile(
-    r"^\s*\**\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*(%|s|ms|sec|secs)?\s*\**\s*$",
+    r"^\s*\**\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
+    rf"(%|{_UNIT})?\s*\**\s*$",
     re.I,
+)
+#: A column's unit: "median (µs)", "size [MB]".
+_HEADER_UNIT = re.compile(rf"[(\[]\s*({_UNIT})\s*[)\]]", re.I)
+#: A unit right after a number in prose: "0.342 ms".
+_PROSE_UNIT = re.compile(rf"\s?({_UNIT})(?![\w/])", re.I)
+#: A number with an explicit unit in evidence: "0.3417 ms", "1572864 B".
+#: Case-sensitive, so "5 b" or "8 Mb" (bits) is not read as bytes.
+_SOURCE_QUANTITY = re.compile(
+    r"(?<![\w.])(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s?"
+    r"(ns|us|µs|μs|ms|secs|sec|s|KiB|MiB|GiB|KB|kB|MB|GB|B)(?![\w/])"
 )
 _PURE_DATE = re.compile(r"^\s*\**\s*(\d{4}-\d{2}-\d{2})\s*\**\s*$")
 #: Column headers whose numbers the answer assigns itself.
@@ -303,24 +443,82 @@ class _Value:
     text: str
     number: Optional[float]
     decimals: int
+    #: A key of ``_UNIT_SCALES`` when the answer states one.
+    unit: Optional[str] = None
+    #: The figure as written before its scale: 293.5 of "$293.5B".
+    mantissa: Optional["_Value"] = None
 
 
-def _value(text: str) -> _Value:
+def _value(text: str, unit: Optional[str] = None) -> _Value:
     if _DATE.fullmatch(text):
         return _Value(text, None, 0)
     plain = text.replace(",", "")
     decimals = len(plain.split(".", 1)[1]) if "." in plain else 0
-    return _Value(text, float(plain), decimals)
+    return _Value(text, float(plain), decimals, unit)
 
 
-def _cell_value(cell: str) -> Optional[_Value]:
+def _unit(text: Optional[str]) -> Optional[str]:
+    key = (text or "").lower()
+    return key if key in _UNIT_SCALES else None
+
+
+_MAGNITUDES: Dict[str, float] = {
+    "k": 1e3,
+    "thousand": 1e3,
+    "m": 1e6,
+    "mm": 1e6,
+    "mn": 1e6,
+    "mil": 1e6,
+    "million": 1e6,
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "t": 1e12,
+    "tn": 1e12,
+    "trillion": 1e12,
+}
+#: Scales that need no currency sign: "14.5 million". A bare "B" is bytes.
+_WORD_MAGNITUDES = frozenset({"thousand", "million", "billion", "trillion", "bn"})
+#: "$14.5M", "$293.5B", "€2.1bn", "14.5 million": an amount and its scale.
+_SCALED = re.compile(
+    r"(?<![\w.,])(?P<cur>(?:US|C|A)?\$|€|£|¥)?\s?"
+    r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?"
+    r"(?P<mag>thousand|million|billion|trillion|mil|mn|mm|bn|tn|[kmbt])(?!\w)",
+    re.I,
+)
+
+
+def _scaled_amounts(text: str) -> List["tuple[re.Match[str], _Value]"]:
+    """Each scaled amount in *text*, valued in full to its written precision.
+
+    "$14.5M" is 14,500,000 to the nearest 100,000. A lone letter is a scale
+    only after a currency sign, so "$293.5B" is billions and "8 B" stays bytes.
+    """
+    found = []
+    for match in _SCALED.finditer(text):
+        magnitude = match.group("mag").lower()
+        if not match.group("cur") and magnitude not in _WORD_MAGNITUDES:
+            continue
+        scale = _MAGNITUDES[magnitude]
+        mantissa = _value(match.group("n"))
+        full = mantissa.number * scale
+        if not math.isfinite(full):
+            continue
+        places = mantissa.decimals - round(math.log10(scale))
+        found.append(
+            (match, _Value(match.group(0).strip(), full, places, mantissa=mantissa))
+        )
+    return found
+
+
+def _cell_value(cell: str, column_unit: Optional[str] = None) -> Optional[_Value]:
     date = _PURE_DATE.match(cell)
     if date:
         return _value(date.group(1))
     match = _PURE_VALUE.match(cell)
     if not match:
         return None
-    value = _value(match.group(1))
+    value = _value(match.group(1), _unit(match.group(2)) or column_unit)
     if match.group(2) == "%" or value.decimals or abs(value.number) >= 100:
         return value
     return None  # counts, week numbers, ordinals: too common to judge
@@ -345,7 +543,8 @@ def _table_values(lines: List[str]) -> List[_Value]:
         for col, cell in enumerate(cells):
             if col < len(header) and _ORDINAL_HEADER.match(header[col]):
                 continue
-            value = _cell_value(cell)
+            unit = _HEADER_UNIT.search(header[col]) if col < len(header) else None
+            value = _cell_value(cell, _unit(unit.group(1)) if unit else None)
             if value is not None:
                 values.append(value)
     return values
@@ -357,6 +556,17 @@ def _prose_values(text: str) -> List[_Value]:
     for match in _DATE.finditer(text):
         values.append(_value(match.group(0)))
     text = _DATE.sub(" ", text)
+    scaled = _scaled_amounts(text)
+    for match, value in scaled:
+        raw = match.group("n")
+        lead = text[max(0, match.start() - 24) : match.start()]
+        if not ("." in raw or "," in raw):
+            continue
+        if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
+            continue
+        values.append(value)
+    for match, _ in reversed(scaled):
+        text = text[: match.start()] + " " + text[match.end() :]
     for match in list(_GROUPED.finditer(text)) + list(_PLAIN.finditer(text)):
         raw = match.group(0)
         after = text[match.end() : match.end() + 1]
@@ -365,7 +575,8 @@ def _prose_values(text: str) -> List[_Value]:
         lead = text[max(0, match.start() - 24) : match.start()]
         if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
             continue
-        values.append(_value(raw))
+        unit = _PROSE_UNIT.match(text, match.end())
+        values.append(_value(raw, _unit(unit.group(1)) if unit else None))
     return values
 
 
@@ -398,13 +609,26 @@ def presented_values(answer: str) -> List[_Value]:
         return []  # no table or data block: prose numbers are not presented data
     prose = "\n".join(line for line in lines if not line.strip().startswith("|"))
     values.extend(_prose_values(prose))
-    seen: Set[str] = set()
+    seen: Set["tuple[str, Optional[str]]"] = set()
     unique = []
     for value in values:
-        if value.text not in seen:
-            seen.add(value.text)
+        if (value.text, value.unit) not in seen:
+            seen.add((value.text, value.unit))
             unique.append(value)
     return unique
+
+
+#: Numbers in evidence text, units attached or not: "341.7us", "1.50x", "3.4e-04".
+_SOURCE_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?!\d|\.\d)")
+
+
+def _source_numbers(text: str) -> Set[float]:
+    numbers: Set[float] = set()
+    for match in _SOURCE_NUMBER.finditer(text):
+        number = float(match.group(0).replace(",", ""))
+        if math.isfinite(number):
+            numbers.update((number, abs(number)))
+    return numbers
 
 
 class _Corpus:
@@ -414,16 +638,45 @@ class _Corpus:
         self.dates = set(_DATE.findall(text))
         text = _DATE.sub(" ", text)
         # "2,184.0" is a CSV row to one reader and 2184 to another: keep both.
-        self.numbers = {
+        self.numbers = _source_numbers(text) | {
             float(match.group(0).replace(",", ""))
             for pattern in (_GROUPED, _PLAIN)
             for match in pattern.finditer(text)
         }
+        # "$293.5B" in a source also holds 293,500,000,000.
+        self.numbers.update(value.number for _, value in _scaled_amounts(text))
+        # Each unit-tagged number in its dimension's base unit (seconds, bytes).
+        self.quantities: Dict[str, Set[float]] = {}
+        for match in _SOURCE_QUANTITY.finditer(text):
+            dimension, factors = _UNIT_SCALES[match.group(2).lower()]
+            number = float(match.group(1))
+            self.quantities.setdefault(dimension, set()).update(
+                number * f for f in factors if math.isfinite(number * f)
+            )
         self._rounded: Dict[int, Set[int]] = {}
 
     def holds(self, value: _Value) -> bool:
         if value.number is None:
             return value.text in self.dates
+        if value.decimals < 0:
+            # Only to its precision: "0.45 shown as 45%" would let $30,000 source $3M.
+            return any(_rounds_to(n, value) for n in self.numbers) or (
+                value.mantissa is not None and self._holds_number(value.mantissa)
+            )
+        return self._holds_number(value) or self._holds_converted(value)
+
+    def _holds_converted(self, value: _Value) -> bool:
+        """*value* rounds from an evidence quantity in another unit of its dimension."""
+        if value.unit is None:
+            return False
+        dimension, factors = _UNIT_SCALES[value.unit]
+        return any(
+            _rounds_to(base / factor, value)
+            for base in self.quantities.get(dimension, ())
+            for factor in factors
+        )
+
+    def _holds_number(self, value: _Value) -> bool:
         places = value.decimals
         if places not in self._rounded:
             scale = 10**places
@@ -437,50 +690,69 @@ class _Corpus:
             }
         return round(value.number * 10**places) in self._rounded[places]
 
+    def sources(self, value: _Value) -> List[float]:
+        """The evidence numbers *value* is a rounding of."""
+        if value.number is None:
+            return []
+        return [n for n in self.numbers if _rounds_to(n, value)][:3]
+
 
 def _rounds_to(number: float, value: _Value) -> bool:
     half = 0.5 * 10 ** (-value.decimals)
     return math.isfinite(number) and abs(number - value.number) <= half + 1e-9
 
 
-def _derived(value: _Value, operands: Sequence[float]) -> bool:
-    """*value* is one arithmetic step from two grounded values the answer shows."""
-    for i, a in enumerate(operands):
-        for b in operands[i + 1 :]:
-            results = [a + b, abs(a - b), a * b, (a + b) / 2]
-            for x, y in ((a, b), (b, a)):
-                if y:
-                    results += [x / y, 100 * x / y]
-            if any(_rounds_to(r, value) for r in results):
-                return True
+def _derived(value: _Value, operands: Sequence[Set[float]]) -> bool:
+    """*value* is one arithmetic step from two grounded values the answer shows.
+
+    Each set is one shown value and the evidence numbers it rounds. Pairing
+    a value with its own source would ground its double, its half, 1 and 100%.
+    """
+    for i, left in enumerate(operands):
+        for right in operands[i + 1 :]:
+            if left & right:
+                continue
+            for a in left:
+                for b in right:
+                    results = [a + b, abs(a - b), a * b, (a + b) / 2]
+                    for x, y in ((a, b), (b, a)):
+                        if y:
+                            results += [x / y, 100 * x / y]
+                    if any(_rounds_to(r, value) for r in results):
+                        return True
     return False
 
 
 def content_findings(
     answer: str, records: Sequence[Dict[str, Any]], context: str = ""
 ) -> List[Finding]:
-    """Values the answer presents that no tool output, argument or message holds.
+    """Values the answer presents that no tool output or message holds.
 
     *context* is everything else the model was given this turn — the request
-    and earlier messages. A value one arithmetic step from two grounded values
-    the answer also shows is grounded (a total, a difference, an average of
-    two). Silent when no tool ran: an answer from knowledge has nothing to be
-    grounded in, and the look check owns that case.
+    and earlier messages. A value one arithmetic step from two grounded
+    numbers the answer also states, prose included, is grounded (a total, a
+    difference, an average of two, a ratio) — computed from the shown numbers
+    and from the evidence values they round. Silent when no tool ran: an
+    answer from knowledge has nothing to be grounded in, and the look check
+    owns that case.
     """
     if not any(_ran(r) for r in records):
         return []
     values = presented_values(answer)
     if not values:
         return []
-    corpus = _Corpus(
-        "\n".join(
-            [context]
-            + [observed_text(r.get("args") or {}) for r in records]
-            + [r.get("observed") or "" for r in records]
-        )
-    )
+    corpus = _Corpus("\n".join([context] + [evidence_text(r) for r in records]))
     grounded = [v for v in values if corpus.holds(v)]
-    operands = [v.number for v in grounded if v.number is not None][:40]
+    stated = grounded + [
+        v
+        for v in (_value(m.group(0)) for m in _PLAIN.finditer(_DATE.sub(" ", answer)))
+        if corpus.holds(v)
+    ]
+    by_value: Dict[float, Set[float]] = {}
+    for v in stated:
+        if v.number is not None and len(by_value) < 20:
+            by_value.setdefault(v.number, {v.number}).update(corpus.sources(v))
+    operands = list(by_value.values())
     missing = [
         v.text
         for v in values

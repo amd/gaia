@@ -2,7 +2,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Build the macOS installer package for the GAIA terminal hub.
+# Build the macOS installer package for the GAIA Terminal UI.
 #
 #   ./build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <dir>
 #
@@ -16,7 +16,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # One source of truth for the identifiers: distribution.xml takes them as
-# placeholders rather than repeating them.
+# placeholders rather than repeating them. The ids keep the legacy
+# "terminal-hub" name so an upgrade replaces the earlier package's receipts.
 readonly PKG_IDENTIFIER="ai.amd.gaia.terminal-hub"
 readonly DOCS_IDENTIFIER="ai.amd.gaia.terminal-hub.docs"
 readonly COMPONENT_PKG="gaia-terminal-hub-component.pkg"

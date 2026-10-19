@@ -38,6 +38,21 @@ type Model struct {
 	SizeGB *float64 `json:"size_gb"`
 	Loaded bool     `json:"loaded"`
 	Error  string   `json:"error"`
+	// Downloaded is whether the server already has it; nil from a gaia too old
+	// to say.
+	Downloaded *bool `json:"downloaded"`
+}
+
+// Missing is the models the server does not have yet. A model whose state was
+// not reported counts as missing, as it always did.
+func (s Status) Missing() []Model {
+	var out []Model
+	for _, m := range s.Models {
+		if m.Downloaded == nil || !*m.Downloaded {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Status is the answer to "is this profile set up, and does it load?".
@@ -112,8 +127,8 @@ func Verify(ctx context.Context, claudeMode bool, chatModel string) (Status, err
 	return status, nil
 }
 
-// parseStatus reads the JSON object off the LAST line that holds one: GAIA's
-// logger shares stdout, so warnings can precede it.
+// parseStatus reads the JSON object off the LAST line that holds one, so a
+// stray line printed before it is skipped.
 func parseStatus(out string) (Status, error) {
 	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

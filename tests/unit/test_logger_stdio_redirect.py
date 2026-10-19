@@ -3,11 +3,10 @@
 
 """Tests for routing console logging to stderr in stdio transports.
 
-`gaia mcp serve --stdio` speaks JSON-RPC over stdout. GAIA's console log
-handler writes to stdout, so any log line emitted during a request corrupts
-the protocol frame and the session goes quiet after the first reply (#2472).
-``route_console_logging_to_stderr`` moves stdout log handlers to stderr so the
-protocol stream stays clean.
+`gaia mcp serve --stdio` speaks JSON-RPC over stdout, so any log line emitted
+there corrupts the protocol frame and the session goes quiet after the first
+reply (#2472). GAIA's console handler defaults to stderr, and
+``route_console_logging_to_stderr`` moves any handler left on stdout.
 """
 
 import io
@@ -28,11 +27,26 @@ def clean_root():
     root.handlers[:] = before
 
 
+def test_console_handler_defaults_to_stderr(clean_root, monkeypatch, tmp_path):
+    fake_stdout = io.StringIO()
+    fake_stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", fake_stdout)
+    monkeypatch.setattr(sys, "stderr", fake_stderr)
+
+    gl = GaiaLogger(log_file=tmp_path / "t.log")
+    logging.getLogger("gaia.test.default").warning("diagnostic-line")
+
+    assert gl.console_handler.stream is fake_stderr
+    assert fake_stdout.getvalue() == ""
+    assert "diagnostic-line" in fake_stderr.getvalue()
+
+
 def test_redirect_switches_stdout_handler_to_stderr(clean_root, monkeypatch, tmp_path):
     fake_stdout = io.StringIO()
     monkeypatch.setattr(sys, "stdout", fake_stdout)
 
     gl = GaiaLogger(log_file=tmp_path / "t.log")
+    gl.console_handler.setStream(fake_stdout)
 
     console = [
         h
@@ -41,7 +55,7 @@ def test_redirect_switches_stdout_handler_to_stderr(clean_root, monkeypatch, tmp
         and not isinstance(h, logging.FileHandler)
         and h.stream is fake_stdout
     ]
-    assert console, "expected a stdout console handler after GaiaLogger init"
+    assert console, "expected the console handler to be pointed at stdout"
 
     gl.route_console_logging_to_stderr()
 

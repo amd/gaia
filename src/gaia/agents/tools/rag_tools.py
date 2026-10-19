@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
+from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,
@@ -23,6 +24,7 @@ from gaia.agents.tools.path_access import (
 )
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
+from gaia.rag.sdk import EmbeddingUnavailableError
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
@@ -168,6 +170,49 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
             "another tool instead of searching it. Calling index_document again "
             f"with the same path waits up to {int(INDEX_FOREGROUND_BUDGET_S)}s "
             "more and returns success once the document is searchable."
+        ),
+    }
+
+
+def _rag_not_available() -> str:
+    return f"RAG not available. {missing_extra_hint('rag')}"
+
+
+def _embedding_next_step(unreachable: bool, retry: str) -> str:
+    if unreachable:
+        from gaia.llm.lemonade_launcher import describe_start_hint
+
+        return f"{describe_start_hint().instruction} Then {retry}."
+    return (
+        "Check that the embedding model is installed (run `gaia init "
+        "--profile rag`) and that Lemonade Server's log shows no load "
+        f"error, then {retry}."
+    )
+
+
+def _embedding_error(error: EmbeddingUnavailableError) -> Dict[str, Any]:
+    """The result for a search the embedder could not run — never "no results"."""
+    return {
+        "status": "error",
+        "error_type": "embedding_unavailable",
+        "error": f"Document search did not run. {error}",
+        "next_step": _embedding_next_step(error.unreachable, "retry the search"),
+        "instruction": (
+            "Tell the user document search is unavailable, why, and the next "
+            "step. The documents were not searched, so do not say they hold "
+            "no relevant information."
+        ),
+    }
+
+
+def _index_embedding_error(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """The result for a document the embedder could not index."""
+    return {
+        "status": "error",
+        "error_type": "embedding_unavailable",
+        "error": f"Indexing failed: {stats.get('error')}",
+        "next_step": _embedding_next_step(
+            bool(stats.get("lemonade_unreachable")), "index it again"
         ),
     }
 
@@ -340,6 +385,8 @@ class RAGToolsMixin:
                 )
 
                 # First, use embedding-based retrieval
+                embedding_errors: List[EmbeddingUnavailableError] = []
+                key_failures: List[Exception] = []
                 for search_key in search_keys:
                     try:
                         # Use RAG to retrieve chunks
@@ -402,12 +449,21 @@ class RAGToolsMixin:
                                     f"[DEBUG] Embedding search '{search_key}': found {len(chunks)} chunks (indices: {chunk_global_indices})"
                                 )
                     except Exception as e:
+                        key_failures.append(e)
+                        if isinstance(e, EmbeddingUnavailableError):
+                            embedding_errors.append(e)
                         logger.warning(f"Search key '{search_key}' failed: {e}")
                         if debug_info:
                             debug_info["embedding_retrieval"].append(
                                 {"search_key": search_key, "error": str(e)}
                             )
                         continue
+
+                # Keyword hits alone would pass a half-run search off as a result.
+                if search_keys and len(key_failures) == len(search_keys):
+                    if embedding_errors:
+                        return _embedding_error(embedding_errors[-1])
+                    raise key_failures[-1]
 
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks
@@ -693,21 +749,17 @@ class RAGToolsMixin:
                     )
 
                 return result
+            except EmbeddingUnavailableError as e:
+                return _embedding_error(e)
             except Exception as e:
                 logger.error(f"Error in query_documents: {e}")
-                # Graceful degradation - inform agent to use general knowledge
                 return {
-                    "status": "fallback",
-                    "message": "Document search is temporarily unavailable",
-                    "error": str(e),
+                    "status": "error",
+                    "error": f"Document search failed: {type(e).__name__}: {e}",
                     "instruction": (
-                        "The document search system encountered an error. "
-                        "Please answer the user's question using your general knowledge "
-                        "and inform them that document search is unavailable."
-                    ),
-                    "fallback_response": (
-                        "I apologize, but I'm currently unable to search the indexed documents. "
-                        "Let me try to answer your question based on my general knowledge instead."
+                        "Tell the user document search failed and why. The "
+                        "documents were not searched, so do not say they hold "
+                        "no relevant information."
                     ),
                 }
 
@@ -728,7 +780,7 @@ class RAGToolsMixin:
                 if not rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 # Debug information collection
@@ -802,6 +854,10 @@ class RAGToolsMixin:
                                     rag.indexed_files, resolved, file_path, basename
                                 )
                                 auto_indexed = True
+                            elif (
+                                idx_result.get("error_type") == "embedding_unavailable"
+                            ):
+                                return _index_embedding_error(idx_result)
                             else:
                                 return {
                                     "status": "error",
@@ -860,6 +916,8 @@ class RAGToolsMixin:
                     debug_info["keyword_retrieval"] = []
 
                 # First, do embedding-based retrieval
+                embedding_errors: List[EmbeddingUnavailableError] = []
+                key_failures: List[Exception] = []
                 for search_key in search_keys:
                     try:
                         # Use the new per-file retrieval method
@@ -921,11 +979,19 @@ class RAGToolsMixin:
                                     }
                                 )
                     except Exception as e:
+                        key_failures.append(e)
+                        if isinstance(e, EmbeddingUnavailableError):
+                            embedding_errors.append(e)
                         logger.warning(f"Search key '{search_key}' failed: {e}")
                         if debug_info:
                             debug_info["embedding_retrieval"].append(
                                 {"search_key": search_key, "error": str(e)}
                             )
+
+                if search_keys and len(key_failures) == len(search_keys):
+                    if embedding_errors:
+                        return _embedding_error(embedding_errors[-1])
+                    raise key_failures[-1]
 
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks
@@ -1131,6 +1197,9 @@ class RAGToolsMixin:
                 # Build chunk entries; omit ``page`` when absent so the
                 # agent can't template ``page null`` into the citation.
                 # See the companion comment in query_documents above.
+                # Every chunk names its file, as in query_documents, so a fact
+                # can be cited and the chunk card can show where it came from.
+                source_path = str(Path(target_file).resolve())
                 formatted_chunks = []
                 for i, (chunk, score) in enumerate(zip(top_chunks, top_scores)):
                     _page = extract_page_from_chunk(
@@ -1141,6 +1210,7 @@ class RAGToolsMixin:
                     )
                     _entry = {
                         "chunk_id": i + 1,
+                        "source_file": source_path,
                         "content": chunk,
                         "relevance_score": float(score),
                         "_debug_chunk_index": (
@@ -1156,6 +1226,7 @@ class RAGToolsMixin:
                     "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
+                    "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
                 }
@@ -1166,21 +1237,18 @@ class RAGToolsMixin:
 
                 return result
 
+            except EmbeddingUnavailableError as e:
+                return _embedding_error(e)
             except Exception as e:
                 logger.error(f"Error in query_specific_file: {e}")
-                # Graceful degradation
                 return {
-                    "status": "fallback",
-                    "message": f"Unable to search in {file_path}",
-                    "error": str(e),
-                    "instruction": (
-                        f"Could not search in the specific file '{file_path}'. "
-                        "Inform the user about this issue and offer to help with general knowledge."
+                    "status": "error",
+                    "error": (
+                        f"Searching '{file_path}' failed: {type(e).__name__}: {e}"
                     ),
-                    "fallback_response": (
-                        f"I encountered an error while trying to search in '{file_path}'. "
-                        "The file might not be properly indexed or there was a technical issue. "
-                        "Would you like me to try answering based on general knowledge instead?"
+                    "instruction": (
+                        f"Tell the user '{file_path}' could not be searched and "
+                        "why. Do not say it holds no relevant information."
                     ),
                 }
 
@@ -1198,7 +1266,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 # Debug information collection
@@ -1368,7 +1436,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 # Before the existence probe, as in read_file.
@@ -1446,6 +1514,11 @@ class RAGToolsMixin:
                         "reindexed": result.get("reindexed", False),
                     }
                 else:
+                    if result.get("error_type") == "embedding_unavailable":
+                        return {
+                            **_index_embedding_error(result),
+                            "file_name": result.get("file_name", Path(file_path).name),
+                        }
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
@@ -1555,7 +1628,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
                 status = self.rag.get_status()
 
@@ -1609,7 +1682,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
@@ -1927,7 +2000,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
@@ -2036,7 +2109,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "error": _rag_not_available(),
                     }
 
                 dir_path = Path(directory_path).expanduser().resolve()
@@ -2080,7 +2153,9 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 indexed_files = []
                 failed_files = []
+                failure_reasons: Dict[str, str] = {}
                 skipped_files = []
+                embedding_failure: Optional[Dict[str, Any]] = None
 
                 # Get files to index
                 if recursive:
@@ -2102,9 +2177,17 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                                 logger.info(f"Indexed: {file_path.name}")
                             else:
                                 failed_files.append(str(file_path))
+                                failure_reasons[file_path.name] = str(
+                                    result.get("error", "unknown error")
+                                )
+                                if result.get("error_type") == "embedding_unavailable":
+                                    # Every remaining file would fail the same way.
+                                    embedding_failure = _index_embedding_error(result)
+                                    break
                         except Exception as e:
                             logger.warning(f"Failed to index {file_path}: {e}")
                             failed_files.append(str(file_path))
+                            failure_reasons[file_path.name] = f"{type(e).__name__}: {e}"
                     else:
                         skipped_files.append(str(file_path))
 
@@ -2112,7 +2195,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                 if indexed_files:
                     self.rebuild_system_prompt()
 
-                return {
+                result = {
                     "status": "success",
                     "indexed_count": len(indexed_files),
                     "failed_count": len(failed_files),
@@ -2121,8 +2204,20 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                     "failed_files": (
                         [Path(f).name for f in failed_files] if failed_files else []
                     ),
+                    "failure_reasons": failure_reasons,
                     "message": f"Indexed {len(indexed_files)} files from {dir_path.name}",
                 }
+                if embedding_failure is not None:
+                    return {**result, **embedding_failure}
+                if failed_files and not indexed_files:
+                    result["status"] = "error"
+                    result["error"] = (
+                        f"None of the {len(failed_files)} files in "
+                        f"{dir_path.name} could be indexed."
+                    )
+                elif failed_files:
+                    result["message"] += f"; {len(failed_files)} failed"
+                return result
 
             except Exception as e:
                 logger.error(f"Error indexing directory: {e}")

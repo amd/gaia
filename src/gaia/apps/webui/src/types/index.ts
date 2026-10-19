@@ -241,6 +241,8 @@ export interface InferenceStats {
     time_to_first_token: number;
     input_tokens: number;
     output_tokens: number;
+    /** The agent's own step count for the turn. */
+    steps?: number | null;
 }
 
 export interface Message {
@@ -393,7 +395,7 @@ export interface SystemStatus {
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string;
+    lemonade_url: string | null;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;
@@ -521,6 +523,8 @@ export interface ParsedSchedule {
     days_of_week: number[] | null;
     description: string;
     next_run_at: string | null;
+    /** IANA zone the times are in. */
+    timezone?: string | null;
     valid: boolean;
 }
 
@@ -544,6 +548,8 @@ export interface CommandOutput {
     stdout: string;
     stderr: string;
     returnCode: number;
+    /** Why a non-zero exit is an answer, not a failure (grep's 1: no match). */
+    expectedExit?: string | null;
     cwd?: string;
     durationSeconds?: number;
     truncated?: boolean;
@@ -661,6 +667,7 @@ export interface StreamEvent {
         stdout: string;
         stderr: string;
         return_code: number;
+        expected_exit?: string | null;
         cwd?: string;
         duration_seconds?: number;
         truncated?: boolean;
@@ -671,6 +678,8 @@ export interface StreamEvent {
     confirm_id?: string;
     /** What "always allow" would grant for this call; absent means it is not offered. */
     always_scope?: string;
+    /** What the call does: read, write, execute, or destructive (for permission_request events). */
+    risk?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
     /** Question id to echo back on POST /chat/user-input (for needs_input events). */
@@ -759,6 +768,43 @@ export interface SetupRunStatus {
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+}
+
+// ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────
+
+export type LemonadeMode = 'gaia' | 'external';
+
+/** GET /api/lemonade/target: the server GAIA uses now and who chose it. */
+export interface LemonadeTarget {
+    mode: LemonadeMode;
+    /** null until the user (or `gaia init`) has chosen. */
+    saved_mode: LemonadeMode | null;
+    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
+    source: 'env' | 'config' | 'gaia';
+    base_url: string | null;
+    saved_base_url: string | null;
+    api_key_stored: boolean;
+    gaia_installed: boolean;
+    /** Nobody has chosen yet: offer a Lemonade found running. */
+    offer: boolean;
+    what_gaia_does: string;
+}
+
+export type LemonadeProbeStatus = 'ok' | 'needs_key' | 'bad_key' | 'too_old' | 'not_lemonade' | 'unreachable';
+
+/** A Lemonade the user already runs, from GET /api/lemonade/detect. */
+export interface LemonadeFound {
+    url: string;
+    status: LemonadeProbeStatus;
+    version: string | null;
+    minimum: string | null;
+    message: string;
+}
+
+export interface LemonadeTargetBody {
+    mode: LemonadeMode;
+    base_url?: string;
+    api_key?: string;
 }
 
 // ── AI providers (GET /api/providers) ─────────────────────────────────────

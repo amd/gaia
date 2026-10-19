@@ -161,6 +161,77 @@ def _run_main(argv, monkeypatch, tmp_path):
     main()
 
 
+class TestIdleTimeoutSetting:
+    """`gaia config set lemonade_idle_timeout_minutes N` is what the docs give.
+
+    Only the keys that pick which Lemonade GAIA uses go to the "use my
+    Lemonade" handler; the idle timeout is an ordinary validated setting.
+    """
+
+    KEY = "lemonade_idle_timeout_minutes"
+
+    @pytest.fixture(autouse=True)
+    def _no_lemonade_switch(self, monkeypatch):
+        from gaia.llm import lemonade_choice
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("the Lemonade-choice handler was reached")
+
+        monkeypatch.setattr("gaia.cli._set_lemonade_config", refuse)
+        monkeypatch.setattr(lemonade_choice, "apply_to_daemon", refuse)
+
+    @pytest.mark.parametrize("value, stored", [("30", 30), ("0", 0), (" 5 ", 5)])
+    def test_whole_minutes_are_saved(
+        self, value, stored, monkeypatch, tmp_path, capsys
+    ):
+        _run_main(["config", "set", self.KEY, value], monkeypatch, tmp_path)
+
+        assert json.loads((tmp_path / "config.json").read_text())[self.KEY] == stored
+        assert f"{self.KEY} = {stored}" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("value", ["-1", "ten", "1.5", "", "true"])
+    def test_anything_else_is_refused_and_nothing_saved(
+        self, value, monkeypatch, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(["config", "set", self.KEY, value], monkeypatch, tmp_path)
+
+        assert exc.value.code != 0
+        err = capsys.readouterr().err
+        assert self.KEY in err and "whole number of 0 or more" in err
+        assert not (tmp_path / "config.json").exists()
+
+    def test_the_daemon_reads_the_saved_timeout(self, monkeypatch, tmp_path):
+        from gaia.daemon.lemonade_clients import idle_timeout_seconds
+
+        _run_main(["config", "set", self.KEY, "0"], monkeypatch, tmp_path)
+        assert idle_timeout_seconds() is None
+        _run_main(["config", "set", self.KEY, "2"], monkeypatch, tmp_path)
+        assert idle_timeout_seconds() == 120.0
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("lemonade_mode", "external"),
+        ("lemonade_base_url", "http://localhost:13305"),
+        ("lemonade_api_key_stored", "true"),
+    ],
+)
+def test_lemonade_choice_keys_still_go_to_their_handler(
+    key, value, monkeypatch, tmp_path
+):
+    seen = []
+    monkeypatch.setattr(
+        "gaia.cli._set_lemonade_config", lambda *args: seen.append(args[:2])
+    )
+
+    _run_main(["config", "set", key, value], monkeypatch, tmp_path)
+
+    assert seen == [(key, value)]
+    assert not (tmp_path / "config.json").exists()
+
+
 class TestConfigCLI:
     def test_set_then_get(self, monkeypatch, tmp_path, capsys):
         _run_main(

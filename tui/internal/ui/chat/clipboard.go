@@ -6,6 +6,7 @@ package chat
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,10 @@ type clipboardResultMsg struct {
 	err   error
 }
 
+// clipboardOut is where the OSC 52 sequence goes — the terminal. A test swaps
+// it to read back exactly what would have been sent.
+var clipboardOut io.Writer = os.Stdout
+
 // copyToClipboard emits the OSC 52 sequence on stdout.
 //
 // Writing straight to os.Stdout under Bubble Tea is safe ONLY because this
@@ -48,7 +53,7 @@ func copyToClipboard(text, label string) tea.Cmd {
 		if strings.TrimSpace(text) == "" {
 			return clipboardResultMsg{label: label, err: fmt.Errorf("nothing to copy")}
 		}
-		if _, err := os.Stdout.WriteString(ansi.SetClipboard(ansi.SystemClipboard, text)); err != nil {
+		if _, err := io.WriteString(clipboardOut, ansi.SetClipboard(ansi.SystemClipboard, text)); err != nil {
 			return clipboardResultMsg{label: label, err: err}
 		}
 		return clipboardResultMsg{label: label}
@@ -297,7 +302,7 @@ func formatByteSize(n int) string {
 
 // quotePathForComposer wraps path in double quotes when it contains
 // whitespace, matching how Windows Terminal already quotes a dropped file's
-// path before it ever reaches the composer (see docs/guides/terminal-hub.mdx)
+// path before it ever reaches the composer (see docs/guides/tui.mdx)
 // — a pasted screenshot's temp path must parse the same way a dropped one
 // does, and %TEMP% commonly contains a space (the Windows profile directory
 // name).

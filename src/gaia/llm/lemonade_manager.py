@@ -17,10 +17,12 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
+    InsufficientMemoryError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
     cloud_model_provider,
+    fit_ctx_to_free_memory,
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_default_chat_model,
@@ -673,10 +675,15 @@ class LemonadeManager:
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
         requested_ctx = min_context_size
-        if min_context_size is None:
-            min_context_size = resolve_ctx_size(device=device)
         chat_model = model or resolve_default_chat_model()
         is_cloud = cloud_model_provider(chat_model) is not None
+        if min_context_size is None:
+            min_context_size = resolve_ctx_size(device=device)
+            if not is_cloud:
+                # The window the chat model's own load gets when memory is short.
+                min_context_size = fit_ctx_to_free_memory(
+                    chat_model, min_context_size, base_url
+                )
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -1335,6 +1342,9 @@ class LemonadeManager:
                 prompt=False,
                 auto_download=True,
             )
+        except InsufficientMemoryError:
+            # Already says how much memory is needed; a restart would not help.
+            raise
         except Exception as e:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {model!r} with "

@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { NeedsInputCard } from '../render/NeedsInputCard';
 import * as api from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 
 vi.mock('../../services/api');
 const mockedApi = vi.mocked(api);
@@ -31,6 +32,8 @@ const basicData = {
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.respondToInput.mockResolvedValue({ status: 'ok', request_id: 'req-1' });
+    // The agent is still waiting on this question (expiry is in NeedsInputCard.expiry.test).
+    useChatStore.setState({ liveQuestions: { 'req-1': { sessionId: 'session-1', expiresAt: null } } });
 });
 
 describe('NeedsInputCard — rendering', () => {

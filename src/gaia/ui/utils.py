@@ -161,6 +161,29 @@ def session_to_response(
     )
 
 
+def _steps_to_response(msg: dict, step_model) -> Optional[list]:
+    """A message's persisted steps; one unreadable step never hides the rest."""
+    raw_steps = msg["agent_steps"]
+    if isinstance(raw_steps, str):
+        try:
+            raw_steps = json.loads(raw_steps)
+        except json.JSONDecodeError as e:
+            logger.error("Message %s has unreadable agent_steps: %s", msg.get("id"), e)
+            return None
+    steps = []
+    for raw in raw_steps:
+        try:
+            steps.append(step_model(**raw))
+        except (TypeError, ValueError) as e:
+            logger.error(
+                "Message %s: dropped step %r that no longer validates: %s",
+                msg.get("id"),
+                raw.get("id") if isinstance(raw, dict) else raw,
+                e,
+            )
+    return steps
+
+
 def message_to_response(msg: dict) -> MessageResponse:
     """Convert database message dict to response model."""
     from .models import AgentStepResponse
@@ -177,13 +200,7 @@ def message_to_response(msg: dict) -> MessageResponse:
 
     agent_steps = None
     if msg.get("agent_steps"):
-        try:
-            raw_steps = msg["agent_steps"]
-            if isinstance(raw_steps, str):
-                raw_steps = json.loads(raw_steps)
-            agent_steps = [AgentStepResponse(**s) for s in raw_steps]
-        except Exception:
-            agent_steps = None
+        agent_steps = _steps_to_response(msg, AgentStepResponse)
 
     # Map inference_stats column to stats response field
     stats = None
@@ -483,6 +500,34 @@ def resolve_upload_links(message: str) -> str:
         return f"{match.group('bang')}[{match.group('label')}]({path})"
 
     return _UPLOAD_LINK_RE.sub(_sub, message)
+
+
+def attached_upload_paths(message: str) -> List[str]:
+    """The upload copies *message* links to, after :func:`resolve_upload_links`.
+
+    These are GAIA's own copies of files the user just picked, so the turn may
+    read them without asking. Only a regular file directly inside
+    ``uploads_dir()``, linked the way ``resolve_upload_links`` writes it,
+    counts — never a symlink, a subfolder, or a path that escapes the folder.
+    """
+    root = uploads_dir().resolve()
+    prefix = str(root) + os.sep
+    if prefix not in message:
+        return []
+    found = set()
+    for match in re.finditer(
+        r"\]\(" + re.escape(prefix) + r"(?P<name>[^)\s\\/]+)\)", message
+    ):
+        name = match.group("name")
+        if name in (".", ".."):
+            continue
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.resolve().parent != root:
+            continue
+        found.add(str(path))
+    return sorted(found)
 
 
 def document_roots() -> List[Path]:

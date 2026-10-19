@@ -29,8 +29,9 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
-- `TIER_REFUSE` for what a yes/no can't describe honestly (`gh auth token`, encoded PowerShell, `git -c`), however the program is spelled, and for shapes the runner can't execute (stray operators, broken quoting)
-- Every command on a line validated before any of it runs, so one `TIER_REFUSE` segment stops the whole line
+- `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
+- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), and for folders no approval may open
+- Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
 - Path validation for all file-like arguments
 - Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
 - Rate limits prevent DOS attacks
@@ -244,13 +245,15 @@ class ShellToolsMixin:
 
         Returns:
             {
-                "status": "success" | "error",
+                "status": "success" | "error",   # "error" when a command failed
+                "error": str,    # On failure: "'<step>' exited with code N: <last stderr line>"
+                "expected_exit": str,  # A documented answer exit, e.g. grep's 1 (no match)
                 "command": str,
                 "stdout": str,   # every command's output, in order
                 "stderr": str,
                 "return_code": int,   # the last command that ran
                 "has_errors": bool,
-                "steps": list,   # [{"command": str, "return_code": int}, ...]
+                "steps": list,   # [{"command": str, "return_code": int, "expected_exit"?: str}, ...]
                 "duration_seconds": float,
                 "timeout": int,           # The applied timeout
                 "timeout_class": str,     # Which class it came from
@@ -300,6 +303,25 @@ class ShellToolsMixin:
         """
         pass
 ```
+
+### Exit Status
+
+A command that ran and failed is `status: "error"`, and `error` names the first
+step that failed with nothing on the line handling it, its exit code, and the
+last line of its stderr. A timeout, a Stop, and a missing program are errors
+too. `stdout`, `stderr`, `return_code` and `steps` are filled in either way.
+
+- `a || b` handles a failure of `a`; `a; b` and `a && b` do not, so `pytest -q; ls`
+  is an error even though `ls` exits 0.
+- A test, lint or build runner whose own summary reports failures is an error
+  even at exit 0, as with `pytest | tail` under cmd.exe.
+- A few programs document exit 1 as an answer rather than a failure: `grep`,
+  `egrep`, `fgrep`, `rg` and `findstr` (nothing matched), `diff`, `cmp` and `fc`
+  (the inputs differ), `git grep`, and `git diff` with `--exit-code`, `--quiet`
+  or `--no-index`. That exit stays `status: "success"` and the result carries
+  `expected_exit` with the reason. In a pipeline only the last stage counts, and
+  on macOS and Linux, where GAIA runs each stage itself, only when every earlier
+  stage exited 0. Exit 2 or higher is still an error.
 
 ### Adaptive Timeouts
 
@@ -490,12 +512,12 @@ Global-flag classes (`_git_policy_argv` in `shell_tools.py`):
 | `GIT_GLOBAL_FLAGS_WITH_VALUE` | `-C`, `--git-dir`, `--work-tree`, `--namespace` | Skipped with their value (`--opt=v` or `--opt v`); the paths then get the same allowed-paths check as `working_directory` |
 | `GIT_GLOBAL_FLAGS_NO_VALUE` | `-P`, `--no-pager`, `--bare`, `--literal-pathspecs`, … | Skipped |
 | `GIT_TERMINAL_FLAGS` | `--version`, `--help`, `-h`, `--man-path`, … | Are the whole command; nothing follows |
-| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Always refused — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks |
+| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Never stepped over — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks — so the call is a one-time approval (`TIER_CONFIRM_ONCE`), and refused if it also deletes or discards work |
 
 Matching on the subcommand alone, as the old allowlist did, let
 `git branch -D main` and `git remote add` through unprompted; the policy table
 reads the flags too. `git config` is outside the read-only floor for the same
-reason `-c` is refused: it writes values (`core.pager`, `alias.*`) that execute
+reason `-c` is never stepped over: it writes values (`core.pager`, `alias.*`) that execute
 commands.
 
 ### Path Traversal Prevention
@@ -576,7 +598,7 @@ def test_an_undescribable_invocation_is_refused():
 def test_run_shell_command_git_read_allowed(agent):
     """Test git read operations are allowed."""
     result = agent.run_shell_command("git status")
-    assert result["status"] == "success" or "not a git repository" in result["stderr"]
+    assert result["status"] == "success" or "not a git repository" in result["error"]
 
 def test_run_shell_command_path_traversal_blocked(agent, monkeypatch):
     """Test path traversal prevention."""

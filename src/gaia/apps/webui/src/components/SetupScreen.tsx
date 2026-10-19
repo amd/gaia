@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useModelStore } from '../stores/modelStore';
-import type { PreflightReport, ProviderId, SetupCheck, SetupRunStatus, SetupStep } from '../types';
+import { lemonadeKeyRejected } from '../utils/lemonade';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupRunStatus, SetupStep } from '../types';
 import './SetupScreen.css';
 
 const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
@@ -45,6 +46,103 @@ function StepIcon({ status, n }: { status?: SetupStep['status']; n: number }) {
     return <>{n}</>;
 }
 
+const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too_old'];
+
+/**
+ * First run on a PC that already runs Lemonade: offer it, so GAIA does not
+ * install a second server and a second copy of every model.
+ */
+function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'gaia') => void }) {
+    const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
+    const [checkError, setCheckError] = useState<string | null>(null);
+    const [key, setKey] = useState('');
+    const [needsKey, setNeedsKey] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
+
+    useEffect(() => {
+        let live = true;
+        (async () => {
+            const target = await api.getLemonadeTarget();
+            if (!target.offer) return;
+            const { found } = await api.detectLemonade();
+            if (live && found && OFFERED.includes(found.status)) {
+                setOffer({ target, found });
+                setNeedsKey(found.status === 'needs_key');
+            }
+        })().catch((err) => {
+            if (live) setCheckError(err instanceof Error ? err.message : String(err));
+        });
+        return () => { live = false; };
+    }, []);
+
+    const choose = useCallback(async (mode: 'external' | 'gaia') => {
+        if (!offer) return;
+        setBusy(true);
+        setError(null);
+        try {
+            await api.setLemonadeTarget(mode === 'external'
+                ? { mode, base_url: offer.found.url, api_key: key.trim() || undefined }
+                : { mode });
+            setKey('');
+            setChosen(mode);
+            onChosen(mode);
+        } catch (err) {
+            if (lemonadeKeyRejected(err)) setNeedsKey(true);
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusy(false);
+        }
+    }, [offer, key, onChosen]);
+
+    if (checkError) {
+        return <p className="setup-hint">Could not check for a Lemonade Server you already run: {checkError}</p>;
+    }
+    if (!offer) return null;
+    const { target, found } = offer;
+    if (chosen) {
+        return (
+            <p className="setup-hint" role="status">
+                {chosen === 'external'
+                    ? `GAIA will use your Lemonade Server at ${found.url} and won't install its own.`
+                    : 'GAIA will set up its own Lemonade Server.'}
+            </p>
+        );
+    }
+    if (found.status === 'too_old') {
+        return <p className="setup-hint">{found.message}</p>;
+    }
+    return (
+        <form className="setup-lemonade" aria-label="Use your Lemonade Server" onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
+            <span className="setup-choice-title">
+                Use the Lemonade you already run at {found.url}{found.version ? ` (v${found.version})` : ''}
+            </span>
+            <span className="setup-choice-note">{target.what_gaia_does}</span>
+            {needsKey && (
+                <input
+                    className="settings-input"
+                    type="password"
+                    autoComplete="off"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder="The API key your Lemonade Server was started with"
+                    aria-label="Lemonade API key"
+                />
+            )}
+            <div className="setup-row">
+                <button type="submit" className="btn-primary" disabled={busy || (needsKey && !key.trim())}>
+                    {busy && <Loader2 size={13} className="spin" />} Use mine
+                </button>
+                <button type="button" className="btn-secondary" disabled={busy} onClick={() => void choose('gaia')}>
+                    Use GAIA&rsquo;s own
+                </button>
+            </div>
+            {error && <p className="setup-error" role="alert">{error}</p>}
+        </form>
+    );
+}
+
 interface SetupScreenProps {
     /** What `gaia init --check` said; the screen is shown only when it is not ready. */
     initial: SetupCheck;
@@ -67,6 +165,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const [key, setKey] = useState('');
     const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean }>({ busy: false, error: null, done: false });
     const [showLog, setShowLog] = useState(false);
+    // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
+    const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const cloud = choice !== 'local';
@@ -77,6 +177,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const installed = run?.state === 'ready';
 
     useEffect(() => {
+        api.getLemonadeTarget()
+            .then((t) => setUsersServer(t.source === 'config'))
+            .catch((err) => console.warn('[SetupScreen] could not read which Lemonade GAIA uses', err));
         api.getOnboardingPreflight()
             .then(setHardware)
             .catch((err) => setHardwareError(err instanceof Error ? err.message : String(err)));
@@ -120,7 +223,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const connect = useCallback(async () => {
         setKeyState({ busy: true, error: null, done: false });
         try {
-            await api.connectProvider(choice, { api_key: key || undefined });
+            await api.connectProvider(choice, { api_key: (!usersServer && key) || undefined });
             const { models } = await api.listProviderModels(choice);
             const pick = models.find((m) => m.rank === 1) ?? models[0];
             if (!pick) throw new Error('Connected, but the provider listed no chat models.');
@@ -130,7 +233,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         } catch (err) {
             setKeyState({ busy: false, error: err instanceof Error ? err.message : String(err), done: false });
         }
-    }, [choice, key, selectModel]);
+    }, [choice, key, selectModel, usersServer]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
@@ -162,6 +265,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                         </div>
                         {!run && (
                             <div className="setup-step-body">
+                                <ExistingLemonadeOffer onChosen={(mode) => setUsersServer(mode === 'external')} />
                                 <div className="setup-choices" role="radiogroup" aria-label="Where GAIA runs">
                                     {CHOICES.map((c) => (
                                         <button
@@ -262,9 +366,15 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             </button>
                                         ))}
                                     </div>
-                                    <p className="setup-hint">The key goes to GAIA&rsquo;s local model server and your OS credential store, nowhere else.</p>
+                                    {usersServer ? (
+                                        <p className="setup-hint">
+                                            GAIA uses this provider as your Lemonade Server already has it set up. It doesn&rsquo;t send your server a key or change its setup.
+                                        </p>
+                                    ) : (
+                                        <p className="setup-hint">The key goes to GAIA&rsquo;s local model server and your OS credential store, nowhere else.</p>
+                                    )}
                                     <div className="setup-row">
-                                        <input
+                                        {!usersServer && <input
                                             className="settings-input"
                                             type="password"
                                             autoComplete="off"
@@ -272,7 +382,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             onChange={(e) => setKey(e.target.value)}
                                             placeholder="Paste API key (blank uses a key already configured)"
                                             aria-label="API key"
-                                        />
+                                        />}
                                         <button type="submit" className="btn-primary" disabled={keyState.busy}>
                                             {keyState.busy && <Loader2 size={13} className="spin" />} Connect
                                         </button>

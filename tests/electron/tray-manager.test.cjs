@@ -95,6 +95,87 @@ describe("TrayManager icon loading", () => {
     );
     expect(electronMock.nativeImage.createEmpty).not.toHaveBeenCalled();
   });
+
+  test("fails loudly when the tray-icon asset cannot be decoded", () => {
+    setPlatform("linux");
+    electronMock.nativeImage.createFromPath.mockImplementationOnce((p) => ({
+      _path: p,
+      isEmpty: () => true,
+    }));
+
+    expect(() => new TrayManager(createMockWindow())).toThrow(
+      /icon asset could not be decoded: .*tray-icon\.png/
+    );
+  });
+});
+
+// The Linux tray shipped a flat red 16px square as its "logo" (#5268).
+describe("Linux tray-icon asset", () => {
+  const realFs = jest.requireActual("fs");
+  const zlib = require("zlib");
+  const path = require("path");
+  const { assertTrayLogoPng } = require("./_helpers/tray-icon-png.cjs");
+
+  const WEBUI = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
+  const ASSETS = path.join(WEBUI, "assets");
+
+  function solidPng(size, rgba) {
+    const chunk = (type, data) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length);
+      // The decoder under test skips CRCs, so a zero CRC is fine here.
+      return Buffer.concat([len, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(size, 0);
+    ihdr.writeUInt32BE(size, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 4).fill(Buffer.from(rgba))]);
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk("IHDR", ihdr),
+      chunk("IDAT", zlib.deflateSync(Buffer.concat(Array(size).fill(row)))),
+      chunk("IEND", Buffer.alloc(0)),
+    ]);
+  }
+
+  test.each([
+    ["tray-icon.png", 32],
+    ["tray-icon@2x.png", 64],
+  ])("%s is the %ipx GAIA logo, not a placeholder", (file, size) => {
+    const buf = realFs.readFileSync(path.join(ASSETS, file));
+    expect(() => assertTrayLogoPng(buf, size, file)).not.toThrow();
+  });
+
+  test("the check rejects the old flat red square", () => {
+    expect(() => assertTrayLogoPng(solidPng(32, [226, 60, 64, 255]), 32, "red")).toThrow(
+      /corner .* is opaque/
+    );
+  });
+
+  test("the check rejects a transparent-cornered flat placeholder", () => {
+    const buf = solidPng(32, [226, 60, 64, 0]);
+    expect(() => assertTrayLogoPng(buf, 32, "flat")).toThrow(/distinct visible colours/);
+  });
+
+  test("the check rejects a wrong-sized icon", () => {
+    const buf = realFs.readFileSync(path.join(ASSETS, "tray-icon.png"));
+    expect(() => assertTrayLogoPng(buf, 16, "small")).toThrow(/expected 16x16, got 32x32/);
+  });
+
+  test("Linux resolves the icon next to services/, which is packed into the asar", () => {
+    setPlatform("linux");
+    new TrayManager(createMockWindow());
+    const loadedPath = electronMock.nativeImage.createFromPath.mock.calls[0][0];
+    expect(path.normalize(loadedPath)).toBe(path.join(ASSETS, "tray-icon.png"));
+
+    // Packaged, the same __dirname-relative path lives inside app.asar, so
+    // both directories must stay in electron-builder's `files:` list.
+    const builderYml = realFs.readFileSync(path.join(WEBUI, "electron-builder.yml"), "utf8");
+    expect(builderYml).toMatch(/^\s*-\s*services\/\*\*\/\*\s*$/m);
+    expect(builderYml).toMatch(/^\s*-\s*assets\/\*\*\/\*\s*$/m);
+  });
 });
 
 describe("TrayManager.setNotificationCount", () => {

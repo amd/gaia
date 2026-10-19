@@ -7,7 +7,7 @@ icon: "wrench"
 # GAIA Terminal UI — Developer Manual
 
 For working *on* the TUI, or driving it from a test or an assistant. Using it
-day to day is the [user manual](/guides/terminal-hub).
+day to day is the [user manual](/guides/tui).
 
 ## What it is made of
 
@@ -87,6 +87,30 @@ shows behaviour already fixed elsewhere — that has produced bug reports for
 things fixed on another branch. Build from a merged integration branch, or state
 explicitly which slice you tested.
 
+The header's `agent gaia v<x>` and the welcome line's `GAIA core <y>` come from
+the running agent only: the `agent_version` and `gaia_version` fields of its
+model-state `status` ping (stdio), or the peer's own version (HTTP). Never from
+`~/.gaia/agents/<id>/.installed`. No version on screen means the agent that
+answered predates those fields, which is itself the answer to "which build?".
+
+### Patched dependencies
+
+`tui/third_party/` holds patched copies of upstream modules, wired in with
+`replace` in `tui/go.mod`; its `README.md` lists each patch and why. Bubble Tea
+is one of them: v1.3.10's Windows console reader drops the Ctrl state on
+Backspace and Delete, so the copy reports Ctrl+Backspace as `ctrl+h` and adds a
+`ctrl+delete` key (also mapped from `ESC[3;5~` on VT terminals). Upgrading Bubble
+Tea means re-applying the lines marked `GAIA patch`, or dropping the copy once
+upstream has the fix.
+
+### Status and error lines
+
+A status or error line is one sentence on what is wrong plus the one next step.
+Daemon errors implement `daemon.Briefer`; render `daemon.Brief(err)` on the line
+and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. In
+`--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
+no `[harness]` tag.
+
 ## The control API
 
 Off by default. `--control` auto-assigns a port; `--control-port N` pins one. It
@@ -165,6 +189,27 @@ drive (`GAIA_DAEMON_HOME` set) and relaunch.
 `esc` quits on `preflight` (there is no screen behind it) and clears the
 composer on an idle `chat`. With the `d` details pane open, it closes the pane
 first.
+
+## Copy and selection keys
+
+The terminal owns the mouse by default, so a plain drag is the terminal's own
+selection and the app never sees it. That selection can't scroll the
+transcript, which is why the app has its own.
+
+| Input | What happens | Code (`internal/ui/chat/`) |
+|---|---|---|
+| `Ctrl+T` | Toggles the app mouse (Cell-Motion capture); the status bar names the current owner | `selectmode.go`, `mousecapture.go` |
+| Drag, app mouse | In-app selection by content row, so it survives scrolling. Past the top or bottom edge a 50 ms tick scrolls up to 5 lines and extends it. Release copies over OSC 52 | `selection.go` |
+| `Shift`+click, app mouse | Extends the current selection and copies it | `selection.go` |
+| `Enter` / `Esc`, with a selection | Copies it again / clears it | `model.go` (`handleKey`) |
+| `/copy`, `/copy all` | Message picker (`↑`/`↓`, `Enter`, `Esc`) / whole transcript as markdown. Both run mid-turn | `copycmd.go` |
+| `Ctrl+Y`, `Ctrl+B` | Last answer / its last code block | `clipboard.go` |
+
+Copied text is plain: each message's span records its chrome (`msgSpan.gutter`,
+`bodyStart`/`bodyEnd`), and a message covered end to end is copied from its
+source markdown. The control API's `mouse` actions are single-point gestures, so
+a drag can't be driven through it; `selection_test.go` covers it, decoding the
+OSC 52 payload. OSC 52 is write-only, so a screen capture can't confirm a copy.
 
 ## Giving it a terminal
 
@@ -275,6 +320,6 @@ registration and 400 (#1655). `gaia init` gets this right;
 
 ## Related
 
-- [User manual](/guides/terminal-hub)
+- [User manual](/guides/tui)
 - [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md) — install and binaries
 - [CLI reference](/reference/cli)

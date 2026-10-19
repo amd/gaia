@@ -158,6 +158,13 @@ func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || 
 func IsCloudID(id string) bool {
 	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.")
 }
+
+// ChatProviders are the places chat can run, in the order they are offered:
+// this PC first, then the cloud providers Lemonade routes to.
+var ChatProviders = []string{"local", "fireworks", "amd"}
+
+// IsCloudProvider reports whether chat on provider leaves this PC.
+func IsCloudProvider(provider string) bool { return provider != "" && IsCloudID(provider+".") }
 func Label(provider string) string {
 	switch provider {
 	case "local":
@@ -201,6 +208,9 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 	if err := validateURL(base, true); err != nil {
 		return err
 	}
+	if err := RefuseRequest(method, path); err != nil {
+		return err
+	}
 	var body io.Reader
 	if data != nil {
 		b, err := json.Marshal(data)
@@ -214,7 +224,11 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		return fmt.Errorf("Invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(base); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := c.HTTP.Do(req)
@@ -293,6 +307,9 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	if strings.TrimSpace(p.Header) == "" || strings.ContainsAny(p.Header+p.Prefix, "\r\n") {
 		return fmt.Errorf("Enter a valid authentication header and prefix")
 	}
+	if ExternalModeActive() {
+		return c.useRegistered(ctx, p, key)
+	}
 	target := c
 	if key != "" {
 		// Registration and key must land on the same server, and only one a key may reach.
@@ -311,9 +328,41 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	}
 	return nil
 }
+
+// useRegistered is Configure on the user's own server: GAIA registers nothing
+// there and hands it no key, so it succeeds only when the provider is already
+// registered with these settings and the user pasted no key.
+func (c *Client) useRegistered(ctx context.Context, p Provider, key string) error {
+	what := "register " + Label(p.Name) + " there"
+	if key != "" {
+		return RefuseSetupChange("hand it your " + Label(p.Name) + " key")
+	}
+	providers, err := c.Providers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, have := range providers {
+		if have.Name != p.Name {
+			continue
+		}
+		// Header and prefix count only when the server reports them.
+		same := strings.EqualFold(strings.TrimRight(have.BaseURL, "/"), strings.TrimRight(p.BaseURL, "/")) &&
+			(have.Header == "" || (strings.EqualFold(have.Header, p.Header) && have.Prefix == p.Prefix))
+		if same {
+			return nil
+		}
+		what = "change its " + Label(p.Name) + " settings"
+	}
+	return RefuseSetupChange(what)
+}
+
 func (c *Client) Clear(ctx context.Context, provider string) error {
 	if provider != "fireworks" && provider != "amd" {
 		return fmt.Errorf("Unknown provider")
+	}
+	// The user's own server keeps its key; the caller still forgets GAIA's copy.
+	if ExternalModeActive() {
+		return nil
 	}
 	return c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
 }

@@ -69,7 +69,7 @@
               "setup",
               "quickstart",
               "guides/agent-ui",
-              "guides/terminal-hub",
+              "guides/tui",
               "guides/memory",
               {
                 "group": "User Guides",
@@ -202,7 +202,8 @@
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
                       "sdk/sdks/audio",
-                      "sdk/sdks/governance"
+                      "sdk/sdks/governance",
+                      "sdk/sdks/skills"
                     ]
                   },
                   {
@@ -553,6 +554,10 @@
     "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
+    {
+      "source": "/guides/terminal-hub",
+      "destination": "/guides/tui"
+    },
     {
       "source": "/cpp",
       "destination": "/cpp/quickstart"

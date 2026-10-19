@@ -1050,17 +1050,18 @@ rerun of the same command replaces an earlier run: if `pytest tests/` failed and
 
 ### Grounding checks
 
-Three more checks compare the answer with the turn's tool record
-(`gaia.agents.base.grounding`). They exist because small local models answer
+Four more checks compare the answer, and the files the turn wrote, with the
+turn's tool record (`gaia.agents.base.grounding`, `gaia.agents.base.deliverables`). They exist because small local models answer
 without looking and report work they never did:
 
 | Check | Fires when |
 |-------|------------|
 | look | The request names a file (that exists) or a lowercase snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. A symbol only counts in a turn about the project (a named file exists or a tool ran), so "what does `max_tokens` do?" is not a lookup request. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
-| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output, tool argument, or earlier user or tool message. A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output or earlier user or tool message. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A scaled amount matches its other spellings ("$14.5M" and "14,500,000"; a "B" after a currency sign is billions, not bytes). A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$293.5B", "$293.5 billion" and "293,500,000,000", "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them gets no note. This check never asks the model for a correction: a false positive would have it edit a correct deliverable, so what it finds goes straight into the "not confirmed" note, naming the file and figures. The file is never edited. |
 | action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
 
-Each check asks for at most one correction per turn, before the answer is
+Each check except file asks for at most one correction per turn, before the answer is
 marked answered, so the lookup it asks for is not refused as off-request work.
 An answer that already admits the gap ("I haven't opened it", "these figures
 are unverified") is not corrected. If a gap survives its correction, or no step
@@ -1099,7 +1100,11 @@ a rewrite, a file listing, a binary metadata summary, or only the last page is
 insufficient. `read_file` pages and archived `read_tool_output` continuations
 must cover the complete output. Source-code edits without a save instruction
 or claim retain the existing test-verification policy. Binary outputs require
-path-specific write evidence but are not forced through a text reader.
+path-specific write evidence but are not forced through a text reader. A script
+output larger than 64 KB may instead be checked in part after its latest write:
+a non-empty range read, or a later successful run that names the file and
+prints something (`wc -l`, `head`, a row count). A run that failed, printed
+nothing, or rewrote the file is not a check, and smaller outputs are read whole.
 
 For Python and shell executors, the loop compares file metadata before and after
 the call for requested and previously tracked targets, plus literal Python path
@@ -1108,15 +1113,22 @@ A successful executor call alone is not proof of a save; a failed call that
 changed an output invalidates earlier evidence. A file last modified during a
 successful executor call, such as `ls > listing.txt`, counts as written once it
 is read back; one touched by a failed call does not, and such a file proves only
-its own path, never a pathless "saved it to a file" claim. Cached transcripts are
-not new writes.
+its own path, never a pathless "saved it to a file" claim. A requested file or
+folder that no tool reports writing is checked the same way, so a script that
+builds its output paths at run time still fulfils the save; files in the folder
+are found only within the read boundary. A bare folder name in the answer
+("saved in `reports`") is fulfilled by files written inside any folder of that
+name. Cached transcripts are not new writes.
 Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from
 an index or list is not a file deletion.
 
-The loop offers one bounded correction for missing artifact evidence. If work or
-readback remains missing, the emitted answer names the gaps and `process_query`
+The loop offers one bounded correction for missing artifact evidence. That
+correction reopens the turn, so writing the output, running the script that
+produces it, and reading it back are not refused as work after the answer;
+files inside a folder the request or the correction names are always in scope.
+If work or readback remains missing, the emitted answer names the gaps and `process_query`
 returns `status: "incomplete"` with `completion_gaps`. When the turn ended on an
 error, such as an unreachable server, the error message and `failed` status are
 kept and the gaps are listed beneath it. A blocked save cannot be
@@ -1329,10 +1341,14 @@ semantic recall of every implicit item. Recall must be measured against known
 source items. General summaries, advice about extraction, negated enumeration
 requests, analysis of code files ("find all bugs in `main.py`"), binary documents
 such as PDFs, and agents without a file permission validator do not activate this
-path. Active extraction skills can activate it. Sources are existing files a
-request reads from; a path after "to" or "into" is an output, and a name that is
-not a file ("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are
-left to code tools.
+path. An active extraction skill registers the tools, but enforces coverage only
+when the request names a source document or asks for every item; a redaction or
+rewrite that happens to load the skill is not checked. Sources are existing files
+a request reads from. Every file the request names as a deliverable, and every
+file the turn wrote, is an output and never a source; a name that is not a file
+("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are left to code
+tools. When a source still lacks an extraction, the answer is kept and a short
+"I couldn't confirm all of this" list follows it.
 
 Existing memory hooks record extraction actions and compact provenance (source
 fingerprint, page coverage and item count), while conversation history retains the

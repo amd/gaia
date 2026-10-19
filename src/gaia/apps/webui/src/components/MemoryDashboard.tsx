@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
     X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock, ArrowLeft,
     Brain, MessageSquare, Wrench, TrendingUp, ChevronLeft, ChevronRight,
@@ -277,7 +277,10 @@ const DOMAIN_COLORS: Record<string, string> = {
 // ── Main Component ──────────────────────────────────────────────────────
 
 export function MemoryDashboard() {
-    const { setShowMemoryDashboard } = useChatStore();
+    const { setShowMemoryDashboard, sessions, setCurrentSession } = useChatStore();
+    const sessionTitles = useMemo(() => new Map(sessions.map(s => [s.id, s.title])), [sessions]);
+    // Chats deleted from the sidebar keep their memory turns but have no title.
+    const convLabel = (sessionId: string) => sessionTitles.get(sessionId) || `${sessionId.slice(0, 8)}...`;
 
     // Data state
     const [stats, setStats] = useState<MemoryStats | null>(null);
@@ -1885,7 +1888,7 @@ export function MemoryDashboard() {
                                                     <div className="mem-conv-info">
                                                         <div className="mem-conv-session-id">
                                                             <span className={`mem-conv-turn-role ${turn.role}`}>{turn.role}</span>
-                                                            {' '}{turn.session_id.slice(0, 8)}...
+                                                            {' '}{convLabel(turn.session_id)}
                                                         </div>
                                                         <div className="mem-conv-preview">{turn.content}</div>
                                                     </div>
@@ -1908,7 +1911,7 @@ export function MemoryDashboard() {
                                                 onClick={() => viewConversation(c.session_id)}>
                                                 <div className="mem-conv-info">
                                                     <div className="mem-conv-session-id">
-                                                        {c.session_id.slice(0, 8)}...
+                                                        {convLabel(c.session_id)}
                                                         {c.consolidated && (
                                                             <span className="mem-consolidated-badge" title="Consolidated">
                                                                 <GitMerge size={11} />
@@ -1938,10 +1941,18 @@ export function MemoryDashboard() {
                             {convDetail && (
                                 <div className="mem-conv-detail-overlay">
                                     <div className="mem-conv-detail-header">
-                                        <h2>Session: {convDetail.sessionId.slice(0, 12)}...</h2>
-                                        <button className="btn-icon" onClick={() => setConvDetail(null)}>
-                                            <X size={16} />
-                                        </button>
+                                        <h2>{convLabel(convDetail.sessionId)}</h2>
+                                        <div className="mem-conv-detail-actions">
+                                            {sessionTitles.has(convDetail.sessionId) && (
+                                                <button className="btn-secondary"
+                                                    onClick={() => setCurrentSession(convDetail.sessionId)}>
+                                                    Open chat
+                                                </button>
+                                            )}
+                                            <button className="btn-icon" onClick={() => setConvDetail(null)} aria-label="Close conversation">
+                                                <X size={16} />
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="mem-conv-detail-body">
                                         {convDetail.turns.map(turn => (

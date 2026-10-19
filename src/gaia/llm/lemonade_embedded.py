@@ -16,7 +16,8 @@ Layout under ``$GAIA_HOME/lemonade`` (``~/.gaia/lemonade`` by default)::
     dist/<version>/     unpacked artifact (lemond, lemonade, resources/)
     cache/              lemond cache_dir -- downloaded backends live in bin/
     config/config.json  lemond config_dir
-    state.json          the running instance: pid, port, API key, version
+    state.json          the running instance: pid, port, API key, version, owner
+    last_port.json      the port the last start used, preferred by the next one
     lemond.log          daemon stdout/stderr
 
 ``cache/`` and ``config/`` are deliberately *not* versioned: backends run from
@@ -26,6 +27,7 @@ acceptable. lemond invalidates stale binaries itself via the
 ``clear_bin_if_lemonade_below`` pin in its ``backend_versions.json``.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -42,6 +44,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -145,6 +148,12 @@ _STOP_TIMEOUT = 20.0
 _DOWNLOAD_TIMEOUT = 300
 
 
+#: What :meth:`EmbeddedLemonade._identify` makes of a recorded pid.
+OWN = "own"
+OTHER = "other"
+UNKNOWN = "unknown"
+
+
 class EmbeddedLemonadeError(RuntimeError):
     """An embedded Lemonade operation failed. Message names the remedy."""
 
@@ -168,6 +177,11 @@ class EmbeddedStatus:
         unresponsive_pid: A daemon process that is alive but not answering.
             Set only when ``running`` is False; the caller must stop it rather
             than start a second one.
+        owner_pid: The GAIA daemon that owns the instance, if one claimed it.
+            None for one ``gaia init`` or ``gaia lemonade embedded start``
+            started that no daemon has taken over yet.
+        owner_started: That daemon's process start time, so a recycled pid is
+            not mistaken for it.
     """
 
     installed: bool
@@ -178,13 +192,15 @@ class EmbeddedStatus:
     base_url: Optional[str] = None
     dist_dir: Optional[Path] = None
     unresponsive_pid: Optional[int] = None
+    owner_pid: Optional[int] = None
+    owner_started: Optional[float] = None
 
 
 def pid_exists(pid: int) -> bool:
     """Whether a process with *pid* is running. Standard library only.
 
-    Cheap enough for every URL resolution, unlike the image-name check in
-    :meth:`EmbeddedLemonade._daemon_alive`, so it can be wrong only for a
+    Cheap enough for every URL resolution, unlike the identity check in
+    :meth:`EmbeddedLemonade._identify`, so it can be wrong only for a
     recycled pid -- which then fails to connect, as before.
     """
     if pid <= 0:
@@ -214,6 +230,71 @@ def pid_exists(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+#: lemond processes this process spawned, by pid. Holding the handle is what
+#: lets an unexpected exit be reported with its exit code (#5261).
+_SPAWNED: Dict[int, subprocess.Popen] = {}
+
+#: How much of lemond.log to scan for its last lines; the file grows unbounded.
+_LOG_TAIL_BYTES = 64 * 1024
+
+# Seconds between the Windows FILETIME epoch (1601) and the Unix one.
+_FILETIME_EPOCH_OFFSET = 11644473600
+
+
+def _windows_exit_info(pid: int) -> Optional[Tuple[int, float]]:
+    """Exit code and exit time of a finished Windows process, by pid.
+
+    Readable only while some process still holds a handle to it -- the daemon
+    that spawned it does. None when it cannot be opened or is still running.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    # A private WinDLL, so the restype set here leaves ctypes.windll alone.
+    kernel32 = ctypes.WinDLL("kernel32")  # type: ignore[attr-defined]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        code = wintypes.DWORD(0)
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return None
+        if code.value == 259:  # STILL_ACTIVE
+            return None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+        exited = times[1]
+        ticks = (exited.dwHighDateTime << 32) | exited.dwLowDateTime
+        return code.value, ticks / 1e7 - _FILETIME_EPOCH_OFFSET
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
+    """``(exit code, exit time)`` of a lemond that is gone; either may be None."""
+    info = _windows_exit_info(pid)
+    if info is not None:
+        return info
+    process = _SPAWNED.get(pid)
+    if process is not None and process.poll() is not None:
+        return process.returncode, None
+    return None, None
+
+
+def _describe_exit_code(code: Optional[int]) -> str:
+    if code is None:
+        return "exit code unavailable"
+    if code < 0:
+        return f"killed by signal {-code}"
+    if code > 0x7FFFFFFF:
+        return f"exit code {code} (0x{code:08X})"
+    return f"exit code {code}"
 
 
 #: Display adapters whose Vulkan cooperative-matrix path fails under the
@@ -378,6 +459,86 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+_LOOPBACKS = ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"))
+# The machine has no IPv6 stack: nothing can hold a port on ::1.
+_NO_FAMILY = (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT)
+
+
+def _binds(family: int, host: str, port: int, reuseport: bool) -> bool:
+    """Whether a socket of *family* can bind *host*:*port* right now."""
+    try:
+        sock = socket.socket(family, socket.SOCK_STREAM)
+    except OSError as e:
+        if family == socket.AF_INET6 and e.errno in _NO_FAMILY:
+            return True
+        raise
+    with sock:
+        if reuseport:
+            # Only the POSIX path passes reuseport; Windows has no SO_REUSEPORT.
+            sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_REUSEPORT, 1  # pylint: disable=no-member
+            )
+        try:
+            sock.bind((host, port))
+        except OSError as e:
+            return family == socket.AF_INET6 and e.errno in _NO_FAMILY
+    return True
+
+
+def _answers(family: int, host: str, port: int) -> bool:
+    """Whether something accepts TCP connections on *host*:*port*."""
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except ConnectionRefusedError:
+        return False
+    except TimeoutError:
+        return True  # a listener whose backlog is full
+    except OSError as e:
+        if family == socket.AF_INET6 and e.errno in _NO_FAMILY + (errno.ENETUNREACH,):
+            return False
+        raise
+
+
+def _listening_on(port: int) -> bool:
+    """Whether any local socket, on any address, listens on *port*."""
+    import psutil
+
+    return any(
+        c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port
+        for c in psutil.net_connections(kind="tcp")
+    )
+
+
+def _port_free(port: int) -> bool:
+    """Whether lemond could bind *port* on loopback with nothing listening there.
+
+    lemond (cpp-httplib) binds 127.0.0.1 and ::1 with SO_REUSEPORT on POSIX,
+    which is what lets it reuse a port its last run left in TIME_WAIT; a bind
+    without it fails there for up to a minute. So the POSIX probe binds the
+    same way. SO_REUSEPORT also binds through a live same-user listener -- the
+    user's own lemond, say -- so a connect must find nobody answering first.
+
+    Windows has no SO_REUSEPORT and TIME_WAIT never blocks a plain bind. But a
+    bind there only conflicts with the exact same address (127.0.0.1 ignores
+    0.0.0.0 and ::), and a refused connect takes ~2 s, so the OS's listener
+    table decides instead.
+    """
+    if sys.platform == "win32":
+        if _listening_on(port):
+            return False
+        return all(
+            _binds(family, host, port, reuseport=False) for family, host in _LOOPBACKS
+        )
+    # Connect before binding: a connect that lands on its own ephemeral port
+    # leaves a TIME_WAIT on *port*, which the bind then reports as taken.
+    if any(_answers(family, host, port) for family, host in _LOOPBACKS):
+        return False
+    return all(
+        _binds(family, host, port, reuseport=True) for family, host in _LOOPBACKS
+    )
+
+
 def _extract(archive: Path, dest: Path) -> None:
     """Unpack *archive* into *dest*, validating every member.
 
@@ -479,6 +640,12 @@ class EmbeddedLemonade:
     def state_path(self) -> Path:
         """JSON file recording the running instance."""
         return self.root / "state.json"
+
+    @property
+    def last_port_path(self) -> Path:
+        """The port the last start used. Survives ``stop`` so the next start
+        lands on the same port."""
+        return self.root / "last_port.json"
 
     @property
     def log_path(self) -> Path:
@@ -837,41 +1004,77 @@ class EmbeddedLemonade:
         except (urllib.error.URLError, OSError, ValueError):
             return None
 
-    @staticmethod
-    def _daemon_alive(pid: int) -> bool:
-        """Whether *pid* is a live ``lemond`` process.
+    def _identify(self, pid: int, port: int, api_key: str) -> str:
+        """Whether *pid* is the lemond GAIA started for this state record.
 
-        Checked by image name, not just existence, so a recycled pid belonging
-        to some unrelated program is never mistaken for GAIA's daemon.
+        A recycled pid must never be mistaken for GAIA's server, because the
+        caller kills what this approves. :data:`OWN` needs all three:
+
+        - the executable is a ``lemond`` under this install's ``dist/`` tree;
+        - its command line carries ``--port <port>`` from the record;
+        - its ``LEMONADE_API_KEY`` is the recorded key. When the OS will not
+          show another process's environment, the first two decide: nothing
+          else runs a binary out of GAIA's private directory.
+
+        A user's own lemond, another app's server, or any process that took
+        over the pid is :data:`OTHER` and is left alone. A ``lemond`` whose
+        command line the OS will not show -- one started from an elevated
+        terminal, say -- is :data:`UNKNOWN`: neither killed nor forgotten.
 
         Args:
             pid: Process id from the state file.
+            port: Port from the state file.
+            api_key: API key from the state file.
 
         Returns:
-            True if a running process with that id is a lemond binary.
+            :data:`OWN`, :data:`OTHER` or :data:`UNKNOWN`.
         """
+        import psutil
+
         try:
-            if platform.system() == "Windows":
-                result = subprocess.run(
-                    ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                    **windows_hidden_popen_kwargs(),
-                )
-                return "lemond" in result.stdout.lower()
-            result = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "comm="],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-            return "lemond" in result.stdout.lower()
-        except (OSError, subprocess.SubprocessError) as e:
-            log.warning("Could not check whether pid %s is alive: %s", pid, e)
+            proc = psutil.Process(pid)
+            cmdline = proc.cmdline()
+        except psutil.NoSuchProcess:
+            return OTHER
+        except psutil.AccessDenied:
+            try:
+                name = proc.name()
+            except psutil.NoSuchProcess:
+                return OTHER
+            except psutil.AccessDenied:
+                return UNKNOWN
+            return UNKNOWN if Path(name).stem.lower() == "lemond" else OTHER
+        if not self._is_own_cmdline(cmdline, port):
+            return OTHER
+        try:
+            env = proc.environ()
+        except psutil.AccessDenied:
+            return OWN
+        except psutil.NoSuchProcess:
+            return OTHER
+        return OWN if env.get("LEMONADE_API_KEY") == api_key else OTHER
+
+    def _is_own_cmdline(self, cmdline: List[str], port: int) -> bool:
+        """Whether *cmdline* runs this install's lemond on *port*."""
+        if not cmdline:
             return False
+        exe = Path(cmdline[0])
+        if exe.stem.lower() != "lemond":
+            return False
+        dist_root = os.path.normcase(str((self.root / "dist").resolve()))
+        try:
+            exe_dir = os.path.normcase(str(exe.resolve().parent))
+            inside = os.path.commonpath([dist_root, exe_dir]) == dist_root
+        except (OSError, ValueError):
+            # ValueError: different drives on Windows -- not under dist/.
+            return False
+        if not inside:
+            return False
+        args = cmdline[1:]
+        return any(
+            arg == "--port" and i + 1 < len(args) and args[i + 1] == str(port)
+            for i, arg in enumerate(args)
+        )
 
     def status(self) -> EmbeddedStatus:
         """Report whether the embedded instance is installed and running.
@@ -904,6 +1107,10 @@ class EmbeddedLemonade:
             self._clear_state()
             return stopped
 
+        owner_pid = state.get("owner_pid")
+        owner_pid = int(owner_pid) if owner_pid else None
+        owner_started = state.get("owner_started")
+        owner_started = float(owner_started) if owner_started else None
         if self._health(int(port), api_key) is not None:
             return EmbeddedStatus(
                 installed=installed,
@@ -913,13 +1120,25 @@ class EmbeddedLemonade:
                 pid=int(pid),
                 base_url=self.base_url_for(int(port)),
                 dist_dir=self.dist_dir if installed else None,
+                owner_pid=owner_pid,
+                owner_started=owner_started,
             )
 
-        if self._daemon_alive(int(pid)):
+        spawned = _SPAWNED.get(int(pid))
+        if spawned is not None and spawned.poll() is not None:
+            identity = OTHER
+        else:
+            identity = self._identify(int(pid), int(port), api_key)
+        if identity != OTHER:
             log.warning(
-                "Embedded Lemonade (pid %s) is running but not answering on port %s",
+                "Embedded Lemonade (pid %s) is not answering on port %s%s",
                 pid,
                 port,
+                (
+                    ""
+                    if identity == OWN
+                    else ", and GAIA may not inspect it to confirm it is its own"
+                ),
             )
             return EmbeddedStatus(
                 installed=installed,
@@ -928,11 +1147,75 @@ class EmbeddedLemonade:
                 port=int(port),
                 dist_dir=self.dist_dir if installed else None,
                 unresponsive_pid=int(pid),
+                owner_pid=owner_pid,
+                owner_started=owner_started,
             )
 
-        log.debug("Recorded instance (pid %s) is gone; clearing state", pid)
+        self._report_gone(state)
         self._clear_state()
         return stopped
+
+    def _log_tail(self, lines: int = 3) -> str:
+        """The last *lines* non-health lines of lemond's log, `` | ``-joined."""
+        try:
+            with open(self.log_path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - _LOG_TAIL_BYTES))
+                text = handle.read().decode("utf-8", errors="replace")
+        except OSError as e:
+            return f"<{self.log_path} unreadable: {e}>"
+        kept = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and "health" not in line.lower()
+        ]
+        return " | ".join(kept[-lines:]) or f"<{self.log_path} is empty>"
+
+    def _report_gone(self, state: dict) -> None:
+        """Log how a recorded lemond ended, unless GAIA stopped it on purpose."""
+        pid = int(state["pid"])
+        spawned = _SPAWNED.get(pid)
+        if state.get("stop_requested_by"):
+            log.debug("Recorded instance (pid %s) is gone; GAIA stopped it", pid)
+            _SPAWNED.pop(pid, None)
+            return
+        code, exited_at = _exit_details(pid)
+        started_at = state.get("started_at")
+        if started_at:
+            end = exited_at if exited_at is not None else time.time()
+            when = (
+                f"started {time.strftime('%H:%M:%S', time.localtime(started_at))}, "
+                f"{'exited' if exited_at is not None else 'found gone'} "
+                f"{end - float(started_at):.0f}s later"
+            )
+        else:
+            when = "start time not recorded"
+        log.warning(
+            "Embedded Lemonade exited without GAIA stopping it: pid %s, port %s, "
+            "%s, %s%s. Last lines of %s: %s",
+            pid,
+            state.get("port"),
+            when,
+            _describe_exit_code(code),
+            "" if spawned is not None else " (not started by this process)",
+            self.log_path,
+            self._log_tail(),
+        )
+        _SPAWNED.pop(pid, None)
+
+    def recorded_health(self) -> Tuple[bool, Optional[dict]]:
+        """Ask the recorded instance for its ``/health`` payload.
+
+        Returns:
+            ``(recorded, health)``: whether an instance is recorded at all, and
+            its health payload, or None when it did not answer.
+        """
+        state = self._read_state()
+        port = state.get("port") if state else None
+        api_key = state.get("api_key") if state else None
+        if not (port and api_key):
+            return False, None
+        return True, self._health(int(port), api_key)
 
     def current_api_key(self) -> Optional[str]:
         """Return the API key of the recorded instance, if there is one.
@@ -946,6 +1229,101 @@ class EmbeddedLemonade:
         """
         state = self._read_state()
         return state.get("api_key") if state else None
+
+    def claim(self, owner_pid: int, owner_started: Optional[float] = None) -> None:
+        """Record the GAIA daemon that owns the running instance.
+
+        Args:
+            owner_pid: The daemon's pid.
+            owner_started: Its process start time.
+
+        Raises:
+            EmbeddedLemonadeError: No instance is recorded to claim.
+        """
+        with self._instance_lock():
+            state = self._read_state()
+            if not state:
+                raise EmbeddedLemonadeError(
+                    f"No embedded Lemonade is recorded in {self.state_path}, so "
+                    "there is nothing to take ownership of. Start it with "
+                    "`gaia daemon start`."
+                )
+            owner = {"owner_pid": owner_pid, "owner_started": owner_started}
+            if any(state.get(k) != v for k, v in owner.items()):
+                self._write_state({**state, **owner})
+
+    @contextmanager
+    def _instance_lock(self, timeout: float = _START_TIMEOUT + 30.0):
+        """Hold the cross-process lock over starting, stopping or claiming.
+
+        ``gaia init``, ``gaia lemonade embedded start`` and the daemon can each
+        start the server. Without this, two that start at once both spawn, and
+        the one that loses the port clears the state file the winner wrote,
+        leaving a server nothing can find to stop.
+
+        Raises:
+            EmbeddedLemonadeError: Another GAIA process held it past *timeout*.
+        """
+        from gaia.daemon.lock import try_lock, unlock
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self.root / "instance.lock"
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            deadline = time.monotonic() + timeout
+            while not try_lock(fd):
+                if time.monotonic() >= deadline:
+                    raise EmbeddedLemonadeError(
+                        f"Another GAIA process has been starting or stopping "
+                        f"Lemonade Server for {timeout:.0f}s and holds {path}. "
+                        f"Wait for it, or check {self.log_path}, then retry."
+                    )
+                time.sleep(0.1)
+            try:
+                yield
+            finally:
+                unlock(fd)
+        finally:
+            os.close(fd)
+
+    def _read_last_port(self) -> Optional[int]:
+        """The port the last start used, or None when there is no usable record."""
+        try:
+            raw = json.loads(self.last_port_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as e:
+            log.warning(
+                "Ignoring unreadable %s (%s); choosing a new port",
+                self.last_port_path,
+                e,
+            )
+            return None
+        port = raw.get("port") if isinstance(raw, dict) else None
+        if isinstance(port, bool) or not isinstance(port, int):
+            log.warning(
+                "Ignoring %s: it holds no port number; choosing a new port",
+                self.last_port_path,
+            )
+            return None
+        return port if 1024 <= port <= 65535 else None
+
+    def _choose_port(self) -> int:
+        """Reuse the last start's port while it is free, else take a new one."""
+        last = self._read_last_port()
+        if last is not None:
+            if _port_free(last):
+                return last
+            log.info(
+                "Port %s from the last start is in use by another program; "
+                "starting on a new port",
+                last,
+            )
+        return _free_port()
+
+    def _record_port(self, port: int) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.last_port_path.write_text(json.dumps({"port": port}), encoding="utf-8")
 
     def _write_env_file(self, port: int, api_key: str) -> Path:
         """Write the sourceable credentials file for the running instance.
@@ -1015,13 +1393,19 @@ class EmbeddedLemonade:
         port: Optional[int] = None,
         timeout: float = _START_TIMEOUT,
         install_if_missing: bool = True,
+        owner_pid: Optional[int] = None,
+        owner_started: Optional[float] = None,
     ) -> EmbeddedStatus:
         """Start the private daemon and wait for it to answer.
 
         Args:
-            port: Port to bind. A free one is chosen when omitted.
+            port: Port to bind. When omitted, the last start's port is reused
+                if it is free, else a free one is chosen; either way it is
+                recorded for the next start.
             timeout: Seconds to wait for the health endpoint.
             install_if_missing: Download the artifact when it is not unpacked.
+            owner_pid: The GAIA daemon starting it, recorded as its owner.
+            owner_started: That daemon's process start time.
 
         Returns:
             Status of the running instance.
@@ -1030,6 +1414,19 @@ class EmbeddedLemonade:
             EmbeddedLemonadeError: Not installed, the daemon exited, or it
                 never became healthy.
         """
+        with self._instance_lock():
+            return self._start_locked(
+                port, timeout, install_if_missing, owner_pid, owner_started
+            )
+
+    def _start_locked(
+        self,
+        port: Optional[int],
+        timeout: float,
+        install_if_missing: bool,
+        owner_pid: Optional[int],
+        owner_started: Optional[float],
+    ) -> EmbeddedStatus:
         existing = self.status()
         if existing.running:
             if existing.version != self.version:
@@ -1061,7 +1458,7 @@ class EmbeddedLemonade:
             self.install()
 
         self.write_config()
-        port = port or _free_port()
+        port = port or self._choose_port()
         api_key = secrets.token_urlsafe(32)
 
         env = child_env({"LEMONADE_API_KEY": api_key, **vulkan_workarounds()})
@@ -1091,6 +1488,8 @@ class EmbeddedLemonade:
                 cwd=str(self.dist_dir),
                 **kwargs,
             )
+        _SPAWNED[process.pid] = process
+        started_at = time.time()
 
         # Record the instance before waiting: an interrupt during the wait must
         # still leave `stop` able to find and kill what we just spawned.
@@ -1100,6 +1499,9 @@ class EmbeddedLemonade:
                 "port": port,
                 "api_key": api_key,
                 "version": self.version,
+                "owner_pid": owner_pid,
+                "owner_started": owner_started,
+                "started_at": started_at,
             }
         )
 
@@ -1126,8 +1528,11 @@ class EmbeddedLemonade:
                     f"it was doing, then retry."
                 )
         except BaseException:
+            _SPAWNED.pop(process.pid, None)
             self._terminate(process)
-            self._clear_state()
+            recorded = self._read_state()
+            if recorded is None or recorded.get("pid") == process.pid:
+                self._clear_state()
             raise
 
         self._write_state(
@@ -1136,9 +1541,13 @@ class EmbeddedLemonade:
                 "port": port,
                 "api_key": api_key,
                 "version": self.version,
+                "owner_pid": owner_pid,
+                "owner_started": owner_started,
+                "started_at": started_at,
             }
         )
         self._write_env_file(port, api_key)
+        self._record_port(port)
         log.info("Embedded Lemonade %s ready on port %s", self.version, port)
         return EmbeddedStatus(
             installed=True,
@@ -1148,6 +1557,8 @@ class EmbeddedLemonade:
             pid=process.pid,
             base_url=self.base_url_for(port),
             dist_dir=self.dist_dir,
+            owner_pid=owner_pid,
+            owner_started=owner_started,
         )
 
     def stop(self, timeout: float = _STOP_TIMEOUT) -> bool:
@@ -1155,8 +1566,8 @@ class EmbeddedLemonade:
 
         Reaches a daemon that has stopped answering as well as a healthy one,
         so a stalled server can still be cleaned up. The pid is only signalled
-        after it is confirmed to be a lemond process, so a recycled pid is
-        never killed by mistake.
+        after :meth:`_identify` confirms it is GAIA's lemond, so a recycled
+        pid -- or a user's own Lemonade -- is never killed by mistake.
 
         Args:
             timeout: Seconds to wait for the daemon to exit.
@@ -1165,8 +1576,13 @@ class EmbeddedLemonade:
             True if an instance was stopped, False if none was running.
 
         Raises:
-            EmbeddedLemonadeError: The process would not terminate.
+            EmbeddedLemonadeError: The process would not terminate, or the
+                recorded pid could not be confirmed as GAIA's server.
         """
+        with self._instance_lock():
+            return self._stop_locked(timeout)
+
+    def _stop_locked(self, timeout: float) -> bool:
         current = self.status()
         state = self._read_state()
         if state is None or not (current.running or current.unresponsive_pid):
@@ -1176,13 +1592,37 @@ class EmbeddedLemonade:
         pid = int(state["pid"])
         port = int(state["port"])
         api_key = state["api_key"]
+        identity = self._identify(pid, port, api_key)
+        if identity == UNKNOWN:
+            raise EmbeddedLemonadeError(
+                f"GAIA may not inspect pid {pid}, the Lemonade Server recorded in "
+                f"{self.state_path}, so it did not stop it. It was probably "
+                "started from an administrator terminal: run "
+                "`gaia lemonade embedded stop` from one."
+            )
+        if identity == OTHER:
+            # Something answers with GAIA's key, but the recorded pid now runs
+            # another program: never signal it.
+            raise EmbeddedLemonadeError(
+                f"GAIA's Lemonade Server answers on port {port}, but pid {pid} "
+                f"recorded in {self.state_path} is not it, so GAIA killed "
+                f"nothing. Stop the server by hand (`gaia kill --port {port}`), "
+                f"then delete {self.state_path}."
+            )
         log.info("Stopping embedded Lemonade (pid %s, port %s)", pid, port)
 
-        self._kill_tree(pid)
+        # Any process that finds it gone now knows the exit was deliberate.
+        self._write_state({**state, "stop_requested_by": os.getpid()})
+        try:
+            self._kill_tree(pid)
+        except EmbeddedLemonadeError:
+            self._write_state(state)
+            raise
+        _SPAWNED.pop(pid, None)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             gone = self._health(port, api_key, timeout=1.0) is None
-            if gone and not self._daemon_alive(pid):
+            if gone and self._identify(pid, port, api_key) != OWN:
                 self._clear_state()
                 log.info("Embedded Lemonade stopped")
                 return True
@@ -1252,9 +1692,13 @@ class EmbeddedLemonade:
                 # start() makes the daemon a session leader, so its backends
                 # share its process group. killpg/getpgid are POSIX-only, so
                 # the no-member warning is a false positive on Windows.
-                os.killpg(  # pylint: disable=no-member
-                    os.getpgid(pid), signal.SIGTERM  # pylint: disable=no-member
-                )
+                pgid = os.getpgid(pid)  # pylint: disable=no-member
+                if pgid == pid:
+                    os.killpg(pgid, signal.SIGTERM)  # pylint: disable=no-member
+                else:
+                    # Not a group leader, so the group is someone else's:
+                    # signal lemond and its own descendants only.
+                    EmbeddedLemonade._kill_descendants_then(pid)
         except ProcessLookupError:
             log.debug("Process %s already gone", pid)
         except (OSError, subprocess.SubprocessError) as e:
@@ -1262,6 +1706,52 @@ class EmbeddedLemonade:
                 f"Could not terminate embedded Lemonade (pid {pid}): {e}. Kill "
                 f"it by hand and delete the state file, then retry."
             ) from e
+
+    @staticmethod
+    def _kill_descendants_then(pid: int) -> None:
+        """SIGTERM *pid*'s descendants, then *pid* itself."""
+        import psutil
+
+        try:
+            children = psutil.Process(pid).children(recursive=True)
+        except psutil.NoSuchProcess as e:
+            raise ProcessLookupError(pid) from e
+        for child in children:
+            try:
+                os.kill(child.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                log.debug("Backend pid %s already gone", child.pid)
+        os.kill(pid, signal.SIGTERM)
+
+    def unload_models(self, timeout: float = 30.0) -> bool:
+        """Unload every model from the running instance; the server stays up.
+
+        Returns:
+            True if the instance unloaded, False if none is running.
+
+        Raises:
+            EmbeddedLemonadeError: The instance refused or did not answer.
+        """
+        current = self.status()
+        api_key = self.current_api_key()
+        if not current.running or not api_key:
+            return False
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{current.port}/api/v1/unload",
+            method="POST",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                response.read()
+        except (urllib.error.URLError, OSError) as e:
+            raise EmbeddedLemonadeError(
+                f"GAIA's Lemonade Server on port {current.port} did not unload its "
+                f"models: {e}. Read {self.log_path}; `gaia lemonade embedded stop` "
+                "frees the memory by stopping it."
+            ) from e
+        log.info("Unloaded every model from embedded Lemonade (port %s)", current.port)
+        return True
 
     def _terminate(self, process: subprocess.Popen) -> None:
         """Kill a daemon that never became healthy, and anything it spawned.

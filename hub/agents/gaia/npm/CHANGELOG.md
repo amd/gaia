@@ -6,6 +6,152 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Finished work is no longer replaced by "I can't confirm this is done".** A
+  redaction task that loaded the `document-extract` skill had its answer swapped
+  for a coverage warning about its own `redaction_log.csv`, and a task with two
+  named outputs only knew about the last one. Every file the request names, and
+  every file the turn wrote, is now an output and never a source; the skill
+  checks coverage only when the request names a source document or asks for
+  every item. No check replaces a non-empty answer any more: an unproven
+  save, test result or extraction keeps the answer and adds a short "I
+  couldn't confirm all of this" list after it; a turn that ends early keeps
+  what it said ahead of its report; and a tool that keeps failing ends with the
+  model's answer from what it found, then the failure. A failed image request
+  is no longer rewritten into advice to start GAIA with an `--sd` flag that
+  does not exist. `load_skill` no longer tells the model the extraction tools
+  cannot run when it is about to register them, and a rejected extractor reply
+  is now logged.
+- **`run_python` works in the Agent UI without a project.** It ran from the
+  server's own folder, which is not an allowed path, so every approved snippet
+  was refused and the agent fell back to slower shell commands. With no project
+  and a working directory you did not allow, a snippet now runs in the agent's
+  scratch directory, and its result says so. A project outside the allowed
+  paths is still refused.
+- **An "always" answer for a shell command no longer covers code in the
+  scratch folder.** A command run there or naming a path there — `cd` into it
+  then `python -m explore`, or `pytest`, `make`, `pip install`, `uv run` or
+  `go run` pointed at it — and a script handed a scratch path as an argument
+  now ask every time, with no `always_scope`, the same as a script there.
+  `always_scope` labels for commands that run code they do not show now say so:
+  `pytest (runs the test code it finds)`, `make (runs the Makefile's
+  commands)`, `python -m explore (runs that Python module)`.
+- **Exploring data no longer asks twice per step.** Each step wrote a helper
+  script into the agent's own scratch folder and ran it, so a data task asked
+  for approval about 30 times. Writes inside that folder now run unasked
+  (writes anywhere else still ask). Running a script from it asks each time
+  and offers no `always_scope`, since what is in that folder changes without
+  a prompt.
+- **A command no loaded skill grants asks you instead of failing.** `python
+  script.py`, `git commit` or `pip install` with no skill granting them used to
+  come back as "needs a skill grant … declares 'shell:execute:git' in its
+  SKILL.md", which nobody could act on. They now raise the approval prompt; a
+  skill grant still skips it for reads. A prompt's `summary` for a write or
+  code-running command ends with one plain line on what it can do, and the
+  `in <folder>` line also appears when an earlier `cd` moved the session. A
+  call you decline tells the agent not to reach the same result another way,
+  and a run nobody can answer refuses in one plain sentence.
+- **Commands GAIA's checks don't cover ask once instead of failing.** `git
+  push`, `git fetch`, `python -c`, PowerShell the checks can't read, a line with
+  shell operators, or a path outside the allowed folders used to be refused
+  outright. They now raise a prompt whose `summary` is the exact line the shell
+  will run, its full folder and a risk sentence, with no `always_scope`; an
+  approval runs that line once. Still refused with no prompt: an encoded
+  PowerShell command or invisible characters, a line whose quoting can't be
+  split the way the shell would, such a line that also deletes or discards work
+  (`git push --force`, `git reset --hard`, `rm` outside the project), and
+  folders no approval can open.
+- **`run_python` and `execute_python_file` work in the released binary.** The
+  binary has no Python interpreter, so it handed every script to its own
+  argument parser, which rejected it, and no calculation, chart or `.xlsx`
+  could be produced. It now runs scripts itself, with openpyxl, python-docx,
+  python-pptx, reportlab, pypdf, pandas, numpy, matplotlib and the full
+  standard library bundled for them. The Windows binary grows from 147 MB to
+  168 MB.
+- **Long Python data jobs can finish.** `run_python` gave up after 60 s and
+  the agent abandoned `execute_python_file` at 180 s even when it had asked
+  for 15 minutes, while the script kept running and left a corrupt workbook
+  behind. Python runs now get 120 s by default and up to 1800 s on request,
+  the agent waits that long, and a run that runs out of time is killed with
+  every process it started; the result names the files that changed while it
+  ran so the agent checks them instead of reporting them finished.
+- **Document search says when it could not search.** With the embedding
+  model or Lemonade Server down, `query_documents` and `query_specific_file`
+  answered "no relevant information found", so the agent told the user their
+  documents held nothing on the topic. They now return an error naming the
+  cause (Lemonade unreachable, or the embedding model failing) and how to fix
+  it. `index_document` and `index_directory` report the same cause, and
+  `index_directory` stops at the first such file and reports an error when no
+  file could be indexed. Hints for a missing optional package (RAG, PDF, Excel,
+  HTML parsing) say in a frozen build that it isn't bundled, and from source
+  give the install command for the running Python.
+- **A failed tool call is reported as a failure.** `run_shell_command` returned
+  `status: success` for a command that exited non-zero, so the TUI and Agent UI
+  showed a failed build or test run as a passed step. It is now `status: error`
+  with an `error` naming the failing step, its exit code and the last stderr
+  line; `stdout`, `stderr` and `return_code` are unchanged. grep's no-match and
+  diff's "inputs differ" (exit 1) stay a success and say so in `expected_exit`.
+  An MCP tool that answers `isError`, a DuckDuckGo search that was blocked, a
+  `tasklist`/`wmctrl`/`osascript` window listing that failed, a notification
+  whose PowerShell died, and an `open_url` with no browser to open are errors
+  too. Install hints in a frozen build no longer name the binary as a Python to
+  run pip with.
+- **Reviewing a few documents reads them in full.** `read_file` on a Word,
+  PDF or Excel file returned `[Binary file, N bytes]`, so to compare a term
+  sheet against a draft agreement the agent indexed them and ran a handful of
+  searches, and missed a closing date that differed between the two because no
+  search asked for it. `read_file` now returns the extracted text, in parts sized
+  to the model's budget that say where the next part starts, and the prompt
+  tells the agent to read a few documents in full for a review, comparison or
+  reconciliation and keep indexing for large collections and single lookups.
+- **`fetch_page` no longer drops the middle of a long page.** Text past
+  `max_length` was cut to its head and tail, which is where a product page keeps
+  its menus and footer, not its price. It now returns the first part with a
+  marker naming the offset of the next, takes `offset` to continue and `find` to
+  jump to the passages containing a word, says so when a word is not on the
+  page, and flags a page with almost no static text as rendered by JavaScript.
+  `Length:` now reports the whole page rather than the excerpt.
+- **Long desktop tasks finish with their deliverables instead of a bare "I
+  can't confirm this is done".** Picking a controller from nine datasheets and
+  pricing a 40-unit BOM ran out of its 50 steps while still searching for
+  prices, and the reply dropped the recommendation the agent had already
+  written. The agent's default step limit is now **150** (a `/query`
+  `max_steps` or `GAIA_AGENT_MAX_STEPS` still wins); at 20, 10 and 5 steps left
+  it is told to write the requested files from what it has, marking unverified
+  values, and a turn that still runs out keeps its findings and lists what is
+  missing after them.
+- **The model notice is one line.** Switching or restoring a model printed a
+  four-sentence paragraph that named the model twice and said "via Lemonade".
+  It now reads like "Switched to **DeepSeek-V4.1-Flash** on the AMD LLM Gateway
+  (cloud). Your messages, and anything read from files or memory, are sent
+  there." The `/model` list drops "via Lemonade" from its headings and marks
+  the configured default model with `(default)`.
+- **Single-file search results name their file.** `query_specific_file` put the
+  path only at the top of its result, so each chunk arrived with no source and
+  the chunk cards showed none. Every chunk now carries `source_file`, and the
+  result lists it in `source_files`, as `query_documents` already did.
+- **The turn log counts the answer of a streamed turn.** With `GAIA_TURN_LOG`
+  set, a turn whose answer streamed out recorded `answer_chars: 0`. It now
+  records the length of the answer the user saw.
+- **`run_python` and `execute_python_file` work in the released binary.** The
+  binary has no Python interpreter, so it handed every script to its own
+  argument parser, which rejected it, and no calculation, chart or `.xlsx`
+  could be produced. It now runs scripts itself, with pypdf, pymupdf,
+  python-docx, python-pptx, openpyxl, xlsxwriter, reportlab, pandas, numpy,
+  matplotlib and the full standard library bundled for them, and both tools
+  name those libraries to the model. A script that starts `sys.executable`
+  (`-m`, `-c`, a file) runs too; `-m pip` says packages can't be installed
+  and lists what is bundled. The Windows binary grows from 147 MB to 168 MB.
+- **A Python script that fails is reported as a failure.** A non-zero exit
+  came back as `status: success`, so the TUI showed a failed run as
+  successful. It is now `status: error`, with an `error` naming the exit code
+  and the last stderr line; `stdout`, `stderr` and `return_code` are unchanged.
+- **`GAIA_ALLOWED_PATHS` confines a run to the folders you name.** The agent
+  could read anything under the user's home and nothing narrowed that short of
+  embedding it, so an evaluation run could read the graders' answer keys. Set
+  to absolute folders, it narrows every file tool, search, index and shell path
+  check to them — it never widens, an invalid value stops startup, and code the
+  agent runs (`run_python`, shell) is not confined.
+
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens
