@@ -6,6 +6,8 @@ import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Loader2 } from 'lucide-re
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
+import { CloudPrices } from './settings/CloudPrices';
+import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
 import { ChatModelChoice, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
@@ -471,6 +473,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             </button>
                                         ))}
                                     </div>
+                                    <CloudPrices provider={choice} limit={3} />
                                     {usersServer ? (
                                         <p className="setup-hint">
                                             GAIA uses this provider as your Lemonade Server already has it set up. It doesn&rsquo;t send your server a key or change its setup.
