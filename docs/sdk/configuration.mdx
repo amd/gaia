@@ -152,7 +152,7 @@ never repeats output. Each retry shows a status line such as
 | `GAIA_LLM_RETRY_BASE_DELAY` | `2` | Backoff base in seconds: retry *n* waits up to `base × 2ⁿ`. |
 | `GAIA_LLM_RETRY_MAX_DELAY` | `30` | Longest single wait in seconds, `Retry-After` included. |
 | `GAIA_LLM_RETRY_DEADLINE` | `120` | Seconds one request may spend across all its attempts and waits, apart from time spent behind a model load (below) and time the PC spends asleep. |
-| `GAIA_LLM_LOAD_WAIT` | `600` | Seconds one request may wait for Lemonade while it is busy or loading a model. `0` gives up at once. |
+| `GAIA_LLM_LOAD_WAIT` | `600` | Seconds one request may wait for Lemonade while it is busy or loading a model. `0` gives up at once. Also bounds the model load in `create_lemonade_client(auto_load=True)`, which always gets at least 60 s. |
 | `GAIA_LLM_STREAM_IDLE_TIMEOUT` | `120` | Seconds a stream may send nothing before it counts as stalled. Time the PC spends asleep doesn't count. |
 | `GAIA_LLM_HOSTED_REPLY_TIMEOUT` | `300`, or longer for a long reply | Seconds a hosted model may take to send a whole reply without streaming. |
 

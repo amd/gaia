@@ -264,14 +264,13 @@ class Context7Service(ExternalMCPService):
             return cached
 
         # Rate limit check before API call
-        can_proceed, reason = self._rate_limiter.can_make_request()
+        can_proceed, reason = self._rate_limiter.acquire()
         if not can_proceed:
             logger.warning(f"Context7 rate limited: {reason}")
             return None
 
         # Resolve via API
         logger.info(f"Resolving library ID for '{library}' via Context7 API")
-        self._rate_limiter.consume_token()
         resolved_id = self.resolve_library_id(library)
 
         # Record success/failure for circuit breaker
@@ -327,7 +326,7 @@ class Context7Service(ExternalMCPService):
             }
 
         # Rate limit check before API call
-        can_proceed, reason = self._rate_limiter.can_make_request()
+        can_proceed, reason = self._rate_limiter.acquire()
         if not can_proceed:
             logger.warning(f"Context7 rate limited: {reason}")
             return {
@@ -337,7 +336,6 @@ class Context7Service(ExternalMCPService):
             }
 
         # Make API call
-        self._rate_limiter.consume_token()
         arguments = {"topic": query}
         if resolved_id:
             arguments["context7CompatibleLibraryID"] = resolved_id
