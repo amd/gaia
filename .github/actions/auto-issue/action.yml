@@ -34,8 +34,12 @@ inputs:
     description: 'resolve only: never close unmarked issues with these exact titles (newline-separated)'
     required: false
     default: ''
+  up-to-version:
+    description: 'resolve only: close only issues whose version (from the key, or a legacy title) is this one or earlier on the same major.minor line'
+    required: false
+    default: ''
   title:
-    description: 'report only: title for a new issue'
+    description: 'report only: title for a new issue (also applied on `update: edit`)'
     required: false
     default: ''
   body:
@@ -83,6 +87,7 @@ runs:
         AI_KEY_PREFIX: ${{ inputs.key-prefix }}
         AI_EXCEPT_KEY: ${{ inputs.except-key }}
         AI_EXCEPT_TITLE: ${{ inputs.except-title }}
+        AI_UP_TO_VERSION: ${{ inputs.up-to-version }}
         AI_TITLE: ${{ inputs.title }}
         AI_BODY: ${{ inputs.body }}
         AI_UPDATE: ${{ inputs.update }}
@@ -110,6 +115,7 @@ runs:
             [ -n "$AI_KEY_PREFIX" ] && args+=(--key-prefix="$AI_KEY_PREFIX")
             [ -n "$AI_EXCEPT_KEY" ] && args+=(--except-key="$AI_EXCEPT_KEY")
             [ -n "$AI_EXCEPT_TITLE" ] && args+=(--except-title="$AI_EXCEPT_TITLE")
+            [ -n "$AI_UP_TO_VERSION" ] && args+=(--up-to-version="$AI_UP_TO_VERSION")
             args+=(--note="${AI_NOTE:-Recovered in run $RUN_URL. Closing automatically; reopen if the problem is back.}")
             ;;
           *)

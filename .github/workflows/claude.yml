@@ -1850,6 +1850,7 @@ jobs:
       # Its own checkout: the main one above uses RELEASE_PAT, and an expired PAT is
       # one of the failures this step has to report.
       - name: Check out the auto-issue action
+        id: auto_issue_checkout
         if: failure() && steps.tag.outputs.SKIP != 'true'
         uses: actions/checkout@v7
         with:
@@ -1857,10 +1858,18 @@ jobs:
           sparse-checkout: .github/actions/auto-issue
           persist-credentials: false
 
+      - name: Report that no issue could be filed
+        if: failure() && steps.tag.outputs.SKIP != 'true' && steps.auto_issue_checkout.outcome == 'failure'
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch }}
+        run: |
+          echo "::error::Release notes generation failed for ${TAG_NAME} and the tracking issue could not be filed (checking out .github/actions/auto-issue failed). Write the release notes by hand or re-run this workflow."
+          exit 1
+
       # One issue per tag: a re-run of the same tag comments on it, and a green
       # re-run closes it.
       - name: Notify on failure
-        if: failure() && steps.tag.outputs.SKIP != 'true'
+        if: failure() && steps.tag.outputs.SKIP != 'true' && steps.auto_issue_checkout.outcome == 'success'
         uses: ./.auto-issue/.github/actions/auto-issue
         with:
           mode: report

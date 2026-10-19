@@ -103,6 +103,27 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           }
 
+          # Only a guard that actually ran and passed may close its issue: an earlier
+          # exit (no commits, a release PR already open) says nothing about later guards.
+          CLEARED_KEYS="" CLEARED_TITLES=""
+          guard_passed() {
+            # $1 = condition key, $2 = the exact title its issue carries.
+            CLEARED_KEYS=$(printf '%s\n%s' "$CLEARED_KEYS" "release-check/$1")
+            CLEARED_TITLES=$(printf '%s\n%s' "$CLEARED_TITLES" "$2")
+          }
+          emit_cleared() {
+            [ -n "$CLEARED_KEYS" ] || return 0
+            {
+              echo "cleared_keys<<GAIA_AUTO_ISSUE_EOF"
+              printf '%s\n' "$CLEARED_KEYS"
+              echo "GAIA_AUTO_ISSUE_EOF"
+              echo "cleared_titles<<GAIA_AUTO_ISSUE_EOF"
+              printf '%s\n' "$CLEARED_TITLES"
+              echo "GAIA_AUTO_ISSUE_EOF"
+            } >> "$GITHUB_OUTPUT"
+          }
+          trap emit_cleared EXIT
+
           # Guard 1b: a hotfix tag (vX.Y.Z.W) as the latest release is genuinely ambiguous —
           # "the next patch" isn't well-defined (another hotfix digit, or the next vX.Y.Z+1?)
           # — so stop and let a human decide rather than guessing.
@@ -116,6 +137,7 @@ jobs:
           - Checked by run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
+          guard_passed hotfix-tag "Release check: latest tag is hotfix-shaped, next version is ambiguous"
 
           # Naive next patch version from $PREV (vX.Y.Z -> vX.Y.(Z+1)). Only a candidate —
           # Guard 4 below can still reject it if main's version.py disagrees.
@@ -183,6 +205,8 @@ jobs:
           - Checked by run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
+          guard_passed staged-not-tagged "Release check: $TARGET already staged on main, not tagged"
+          guard_passed version-mismatch "Release check: version.py on main doesn't match any expected version"
 
           # Guard 5: HEAD must be fully green before drafting a release from it — a release
           # drafted off red CI would ship whatever broke it.
@@ -234,6 +258,7 @@ jobs:
           - Checked by run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
+          guard_passed ci-not-green "Release check: main's CI is not green, nightly release drafting is paused"
 
           # Guard 6: scope check — same rubric as gaia-release/SKILL.md Phase 1 step 1.
           # A patch release is only safe when the pending work is fix/docs/chore/ci-shaped;
@@ -277,6 +302,7 @@ jobs:
           - Compare: https://github.com/$GITHUB_REPOSITORY/compare/$PREV...main"
             exit 0
           fi
+          guard_passed minor-major-pending "Release check: minor/major-shaped changes pending on main"
 
           echo "Will draft a patch release: $PREV -> $TARGET ($COMMIT_COUNT commits, $FEAT_COUNT feats)"
           echo "should_draft=true" >> "$GITHUB_OUTPUT"
@@ -292,17 +318,15 @@ jobs:
           body: ${{ steps.scope.outputs.condition_body }}
           labels: devops
 
-      # Each guard's issue describes a state main is in tonight. Once the check reaches
-      # a different verdict, the other guards' issues are stale, so close them.
+      # Close the issues of guards that ran and passed this run; guards that never ran keep theirs.
       - name: Close release-check issues whose condition cleared
+        if: steps.scope.outputs.cleared_keys != ''
         uses: ./.github/actions/auto-issue
         with:
           mode: resolve
-          key-prefix: release-check/
-          except-key: ${{ steps.scope.outputs.condition_key }}
-          legacy-title-prefix: "Release check: "
-          except-title: ${{ steps.scope.outputs.condition_title }}
-          note: "No longer applies: the nightly patch-release check reached a different verdict in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; the check reopens a new issue if this comes back."
+          key: ${{ steps.scope.outputs.cleared_keys }}
+          legacy-title: ${{ steps.scope.outputs.cleared_titles }}
+          note: "No longer applies: this guard passed in the nightly patch-release check, run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; the check files a new issue if it comes back."
 
   draft:
     needs: check

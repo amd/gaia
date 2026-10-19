@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,8 +39,11 @@ R = "amd/gaia"
 
 
 class FakeGh:
-    def __init__(self, issues=None, list_error=None, list_output=None):
+    def __init__(
+        self, issues=None, list_error=None, list_output=None, write_error=None
+    ):
         self.issues = issues or []
+        self.write_error = write_error
         self.list_error = list_error
         self.list_output = list_output
         self.calls: list[list[str]] = []
@@ -56,6 +60,8 @@ class FakeGh:
             if self.list_output is not None:
                 return self.list_output
             return json.dumps(self.issues)
+        if self.write_error:
+            raise self.write_error
         if argv[:2] == ["issue", "create"]:
             return "https://github.com/amd/gaia/issues/9999\n"
         return ""
@@ -163,6 +169,7 @@ def test_edit_mode_rewrites_the_body_and_keeps_exactly_one_marker(tmp_path):
     body = edit[edit.index("--body") + 1]
     assert body.startswith("new state")
     assert body.count("gaia-auto-issue") == 1
+    assert edit[edit.index("--title") + 1] == "WF failed"
 
 
 def test_edit_mode_stamps_a_marker_on_an_adopted_legacy_issue(tmp_path):
@@ -238,28 +245,82 @@ def test_resolve_with_nothing_open_writes_nothing():
     assert gh.writes() == []
 
 
-def test_a_passing_tag_closes_every_earlier_tags_issue_marked_or_legacy():
-    gh = FakeGh(
-        [
-            _issue(1, "Flagship eval did not pass on v0.25.0-rc15"),
-            _issue(
-                2, "Flagship eval did not pass on v0.25.0", key="eval-flagship/v0.25.0"
-            ),
-            _issue(3, "Nightly flagship eval did not pass"),
-            _issue(4, "Agent release eval did not pass on x", key="eval-agent-gaia/x"),
-        ]
-    )
-    _resolve(
+def _eval_issues():
+    return [
+        _issue(1, "Flagship eval did not pass on v0.25.0-rc15"),
+        _issue(2, "Flagship eval did not pass on v0.25.0", key="eval-flagship/v0.25.0"),
+        _issue(3, "Flagship eval did not pass on v0.25.2", key="eval-flagship/v0.25.2"),
+        _issue(4, "Flagship eval did not pass on v0.26.0-rc1"),
+        _issue(5, "Flagship eval did not pass on v0.24.3", key="eval-flagship/v0.24.3"),
+        _issue(6, "Flagship eval did not pass on main"),
+        _issue(7, "Nightly flagship eval did not pass"),
+        _issue(8, "Agent release eval did not pass on x", key="eval-agent-gaia/x"),
+    ]
+
+
+def _resolve_eval(gh, version):
+    return _resolve(
         gh,
         "--key-prefix",
         "eval-flagship/",
         "--legacy-title-prefix",
         "Flagship eval did not pass on ",
+        f"--up-to-version={version}",
     )
+
+
+def test_a_passing_tag_closes_only_itself_and_earlier_tags_on_its_line():
+    gh = FakeGh(_eval_issues())
+    _resolve_eval(gh, "v0.25.1")
+    # Not v0.25.2 (newer), v0.26.0-rc1 or v0.24.3 (other lines), or an unparseable title.
     assert sorted(c[2] for c in gh.writes()) == ["1", "2"]
 
 
-def test_release_check_closes_the_other_conditions_but_never_the_current_one():
+def test_a_final_release_supersedes_its_own_rcs_but_an_rc_not_the_final():
+    gh = FakeGh(_eval_issues())
+    _resolve_eval(gh, "v0.25.0-rc16")
+    assert [c[2] for c in gh.writes()] == ["1"]
+
+    gh = FakeGh(_eval_issues())
+    _resolve_eval(gh, "v0.25.0")
+    assert sorted(c[2] for c in gh.writes()) == ["1", "2"]
+
+
+def test_a_green_rerun_of_the_same_tag_closes_that_tags_issue():
+    gh = FakeGh(_eval_issues())
+    _resolve_eval(gh, "v0.26.0-rc1")
+    assert [c[2] for c in gh.writes()] == ["4"]
+
+
+def test_agent_release_versions_are_read_from_the_package_tag():
+    gh = FakeGh(
+        [
+            _issue(1, "t", key="eval-agent-gaia/agent-pkg-gaia-v0.3.0"),
+            _issue(2, "t", key="eval-agent-gaia/agent-pkg-gaia-v0.3.2"),
+            _issue(
+                3, "Agent release eval did not pass on agent-pkg-gaia-v0.3.0 (dispatch)"
+            ),
+        ]
+    )
+    _resolve(
+        gh,
+        "--key-prefix",
+        "eval-agent-gaia/",
+        "--legacy-title-prefix",
+        "Agent release eval did not pass on ",
+        "--up-to-version=agent-pkg-gaia-v0.3.1",
+    )
+    assert sorted(c[2] for c in gh.writes()) == ["1", "3"]
+
+
+def test_an_unparseable_ceiling_is_refused():
+    gh = FakeGh(_eval_issues())
+    with pytest.raises(SystemExit):
+        _resolve_eval(gh, "main")
+    assert gh.writes() == []
+
+
+def test_release_check_closes_only_the_guards_that_ran_and_passed():
     gh = FakeGh(
         [
             _issue(4175, "Release check: minor/major-shaped changes pending on main"),
@@ -274,29 +335,37 @@ def test_release_check_closes_the_other_conditions_but_never_the_current_one():
             _issue(5000, "Release check: x", key="release-check/hotfix-tag"),
         ]
     )
-    current_title = (
-        "Release check: main's CI is not green, nightly release drafting is paused"
-    )
+    # The run exited at guard 5 (CI red): guards 1b and 4 passed, 6 never ran.
     _resolve(
         gh,
-        "--key-prefix",
-        "release-check/",
-        "--except-key",
-        "release-check/ci-not-green",
-        "--legacy-title-prefix",
-        "Release check: ",
-        "--except-title",
-        current_title,
+        "--key=\nrelease-check/hotfix-tag\nrelease-check/staged-not-tagged"
+        "\nrelease-check/version-mismatch",
+        "--legacy-title=\nRelease check: latest tag is hotfix-shaped, next version is "
+        "ambiguous\nRelease check: v0.25.1 already staged on main, not tagged"
+        "\nRelease check: version.py on main doesn't match any expected version",
     )
-    assert sorted(c[2] for c in gh.writes()) == ["4175", "4888", "5000"]
+    assert sorted(c[2] for c in gh.writes()) == ["4888", "5000"]
 
 
-def test_release_check_with_no_condition_closes_all_of_them():
-    gh = FakeGh([_issue(1, "Release check: a"), _issue(2, "z", key="release-check/b")])
-    _resolve(
-        gh, "--key-prefix", "release-check/", "--legacy-title-prefix", "Release check: "
+def test_a_failing_gh_write_reports_its_stderr_not_the_body(tmp_path, capsys):
+    err = subprocess.CalledProcessError(
+        1,
+        ["gh", "issue", "comment", "12", "--body", "SECRET BODY"],
+        "",
+        "HTTP 403: nope",
     )
-    assert sorted(c[2] for c in gh.writes()) == ["1", "2"]
+    gh = FakeGh([_issue(12, "t", key="wf/failure")], write_error=err)
+    assert _report(gh, tmp_path, body="SECRET BODY") == 1
+    out = capsys.readouterr().out
+    assert "::error::gh issue comment failed (exit 1): HTTP 403: nope" in out
+    assert "SECRET BODY" not in out
+
+
+def test_a_failing_close_is_reported_and_exits_non_zero(capsys):
+    err = subprocess.CalledProcessError(4, ["gh", "issue", "close", "8"], "", "gone")
+    gh = FakeGh([_issue(8, "t", key="wf/failure")], write_error=err)
+    assert _resolve(gh, "--key", "wf/failure") == 1
+    assert "::error::gh issue close failed (exit 4): gone" in capsys.readouterr().out
 
 
 def test_failed_lookup_closes_nothing_and_exits_non_zero(capsys):
@@ -396,3 +465,39 @@ def test_action_inputs_cover_everything_the_workflows_pass():
         unknown = set(step.get("with", {})) - known
         assert not unknown, f"{name}:{job_id} passes unknown inputs {unknown}"
         assert step["with"]["mode"] in ("report", "resolve")
+
+
+def _nightly_scope_run():
+    wf = yaml.safe_load(
+        (WORKFLOWS / "nightly-patch-release.yml").read_text(encoding="utf-8")
+    )
+    steps = wf["jobs"]["check"]["steps"]
+    return next(s for s in steps if s.get("id") == "scope")["run"], steps
+
+
+def test_every_release_check_guard_records_both_outcomes():
+    run, _ = _nightly_scope_run()
+    raised = re.findall(r"record_condition ([a-z-]+)", run)
+    passed = re.findall(r"guard_passed ([a-z-]+)", run)
+    assert sorted(raised) == sorted(passed) and len(raised) == 5
+    # Each guard is marked passed only after its own condition block.
+    for key in raised:
+        assert run.index(f"record_condition {key}") < run.index(f"guard_passed {key}")
+
+
+def test_release_check_resolve_closes_only_passed_guards():
+    _, steps = _nightly_scope_run()
+    (resolve,) = [s for s in steps if s.get("with", {}).get("mode") == "resolve"]
+    w = resolve["with"]
+    assert "key-prefix" not in w and "legacy-title-prefix" not in w
+    assert w["key"] == "${{ steps.scope.outputs.cleared_keys }}"
+    assert w["legacy-title"] == "${{ steps.scope.outputs.cleared_titles }}"
+
+
+def test_prefix_resolves_are_capped_at_the_passing_version():
+    for name, _job, _i, _jobdef, step in _action_steps():
+        w = step.get("with", {})
+        if w.get("mode") == "resolve" and "key-prefix" in w:
+            assert w.get(
+                "up-to-version"
+            ), f"{name} closes every version of {w['key-prefix']}"

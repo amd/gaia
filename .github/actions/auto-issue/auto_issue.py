@@ -70,6 +70,18 @@ def validate_key(key: str) -> str:
     return key
 
 
+VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?")
+
+
+def parse_version(text: str) -> tuple[int, int, int, float] | None:
+    """Last ``X.Y.Z[-rcN]`` in ``text``; a final release sorts after its RCs."""
+    found = VERSION_RE.findall(text)
+    if not found:
+        return None
+    major, minor, patch, rc = found[-1]
+    return int(major), int(minor), int(patch), int(rc) if rc else float("inf")
+
+
 def issue_keys(body: str | None) -> set[str]:
     return set(MARKER_RE.findall(body or ""))
 
@@ -90,12 +102,23 @@ class Selector:
     legacy_title_prefixes: list[str] = field(default_factory=list)
     except_keys: set[str] = field(default_factory=set)
     except_titles: set[str] = field(default_factory=set)
+    #: When set, only issues for this version or an earlier one on the same
+    #: major.minor line match; an unparseable version never matches.
+    up_to_version: tuple[int, int, int, float] | None = None
 
     def matches(self, issue: dict) -> bool:
         keys = issue_keys(issue.get("body"))
         title = issue.get("title") or ""
         if keys & self.except_keys or title in self.except_titles:
             return False
+        if self.up_to_version is not None:
+            found = parse_version(" ".join(sorted(keys)) if keys else title)
+            if (
+                found is None
+                or found[:2] != self.up_to_version[:2]
+                or found > self.up_to_version
+            ):
+                return False
         if keys:
             # A marked issue is matched by its marker only, never by title.
             return bool(keys & self.keys) or any(
@@ -192,6 +215,8 @@ def report(
                     number,
                     "--repo",
                     repo,
+                    "--title",
+                    title,
                     "--body",
                     with_marker(body, key),
                 ]
@@ -275,11 +300,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--key-prefix", action="append")
     s.add_argument("--except-key", action="append")
     s.add_argument("--except-title", action="append")
+    s.add_argument("--up-to-version")
     s.add_argument("--note", required=True)
     return p
 
 
 def main(argv: Sequence[str] | None = None, run: Runner = gh) -> int:
+    try:
+        return _main(argv, run)
+    except subprocess.CalledProcessError as e:
+        # Never echo argv: it carries the whole issue body.
+        verb = " ".join(str(a) for a in list(e.cmd)[1:3])
+        detail = (e.stderr or e.stdout or "").strip() or "no output"
+        print(f"::error::gh {verb} failed (exit {e.returncode}): {detail}")
+        return 1
+
+
+def _main(argv: Sequence[str] | None, run: Runner) -> int:
     args = build_parser().parse_args(argv)
     selector = Selector(
         legacy_titles=set(_lines(args.legacy_title)),
@@ -308,6 +345,10 @@ def main(argv: Sequence[str] | None = None, run: Runner = gh) -> int:
     selector.key_prefixes = [validate_key(k) for k in _lines(args.key_prefix)]
     selector.except_keys = set(_lines(args.except_key))
     selector.except_titles = set(_lines(args.except_title))
+    if args.up_to_version:
+        selector.up_to_version = parse_version(args.up_to_version)
+        if selector.up_to_version is None:
+            raise SystemExit(f"--up-to-version {args.up_to_version!r} has no X.Y.Z")
     if not (
         selector.keys
         or selector.key_prefixes

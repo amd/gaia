@@ -480,9 +480,9 @@ jobs:
             release) or a scenario that could not be measured (infrastructure, or no Claude quota).
             The job summary names which. `cancelled` means nothing was measured.
 
-            A later release whose eval passes closes this issue.
+            A passing re-run, or a later passing release on the same major.minor line, closes this issue.
 
-      # A passing release supersedes every earlier release's failure.
+      # Closes this release's and earlier releases' issues on the same major.minor line only; newer or other lines stay open.
       - name: Close earlier releases' eval issues
         if: needs.gaia-eval.result == 'success'
         uses: ./.github/actions/auto-issue
@@ -490,6 +490,7 @@ jobs:
           mode: resolve
           key-prefix: eval-agent-gaia/
           legacy-title-prefix: "Agent release eval did not pass on "
+          up-to-version: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
           note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if that release's failure still needs a look."
 
   # ── Stage 2: native sidecar freeze on every platform ────────────────

@@ -2245,9 +2245,9 @@ jobs:
             `cancelled` rather than `failure` means no measurement happened at all - a manual cancel, or a
             lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
 
-            A later tag whose eval passes closes this issue.
+            A passing re-run, or a later passing tag on the same major.minor line, closes this issue.
 
-      # A passing tag supersedes every earlier tag's failure: the release line now measures green.
+      # Closes this tag's and earlier tags' issues on the same major.minor line only; newer or other lines stay open.
       - name: Close earlier tags' eval issues
         if: env.PASSED == 'true'
         uses: ./.github/actions/auto-issue
@@ -2255,4 +2255,5 @@ jobs:
           mode: resolve
           key-prefix: eval-flagship/
           legacy-title-prefix: "Flagship eval did not pass on "
+          up-to-version: ${{ github.ref_name }}
           note: "The flagship eval passed on `${{ github.ref_name }}` in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if this tag's failure still needs a look."
