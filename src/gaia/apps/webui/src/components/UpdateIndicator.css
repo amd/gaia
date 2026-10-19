@@ -32,7 +32,7 @@
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
 
-    animation: update-chip-fade-in 200ms ease-out;
+    animation: update-chip-fade-in var(--duration) var(--ease);
 }
 
 @keyframes update-chip-fade-in {

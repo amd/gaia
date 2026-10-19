@@ -77,7 +77,10 @@ def build_broker_router(
     launch tokens to agent ids; *broker* is the shared :class:`ModelSlotBroker`.
     """
 
-    def require_caller(authorization: Optional[str] = Header(default=None)) -> str:
+    # Async: a sync dependency would take a worker-pool thread on every call.
+    async def require_caller(
+        authorization: Optional[str] = Header(default=None),
+    ) -> str:
         where = (
             f"the client token in {instance_path()} (host-side), or the "
             "sidecar's launch token"

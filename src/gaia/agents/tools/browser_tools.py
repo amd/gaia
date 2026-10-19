@@ -12,8 +12,11 @@ search the web, and download files for local analysis.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
+
+from gaia.agents.base.file_snapshots import before_change
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,20 @@ _NEAR_EMPTY_NOTE = (
     "if you have one; otherwise try another source, or report the value as not "
     "found.]"
 )
+
+
+def _download_denied(validator, dest_path: Path) -> str:
+    """Why *dest_path* may not be written, and where a download can go instead."""
+    message = validator.access_denied_message(str(dest_path))
+    if not validator.grant_refusal_reason(str(dest_path)):
+        return message
+    downloads = Path(os.path.realpath(os.path.expanduser("~/Downloads")))
+    if Path(os.path.realpath(dest_path.parent)) == downloads:
+        return f"{message} Save it inside a folder this session already allows."
+    return (
+        f"{message} Save it somewhere else instead, such as save_to='~/Downloads' "
+        "or a folder this session already allows."
+    )
 
 
 def _find_spans(text: str, term: str) -> List[Tuple[int, int]]:
@@ -349,39 +366,33 @@ class BrowserToolsMixin:
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Download is disabled."
 
-            # Validate save path with PathValidator if available
-            if hasattr(mixin, "_path_validator") and mixin._path_validator:
+            validator = getattr(mixin, "_path_validator", None)
+
+            # Refuse a blocked folder (/etc, ~/.ssh, ...) before any request.
+            if validator:
                 resolved_dir = str(Path(save_to).expanduser().resolve())
-                # Allowlist check — may prompt the user in an interactive TTY;
-                # auto-denies in Agent UI / API server contexts (see #495 S1).
-                if not mixin._path_validator.is_path_allowed(
-                    resolved_dir, prompt_user=True
-                ):
-                    return f"Error: Access denied to directory: {save_to}"
-                # Blocklist check — prevents downloading into /etc, /bin,
-                # ~/.ssh, etc. even if the allowlist somehow let it through.
-                is_blocked, reason = mixin._path_validator.is_write_blocked(
-                    resolved_dir
-                )
+                is_blocked, reason = validator.is_write_blocked(resolved_dir)
                 if is_blocked:
                     return f"Error: {reason}"
 
-            # Screen the *resolved file path* (not just the directory) against
-            # the sensitive-filename guardrail before a single byte is written.
-            # The directory check above catches blocked dirs, but the final
-            # filename (from Content-Disposition or URL) could be something
-            # like `credentials.json` that is_write_blocked would reject for
-            # write_file. WebClient.download calls this before creating the
-            # file, so a blocked download leaves the filesystem untouched.
+            # WebClient calls this with the final file path before creating
+            # anything, so a refusal leaves the filesystem untouched.
             def _screen_destination(dest_path: Path) -> None:
-                validator = getattr(mixin, "_path_validator", None)
-                if not validator:
-                    return
-                is_blocked, reason = validator.is_write_blocked(str(dest_path))
-                if is_blocked:
-                    raise ValueError(
-                        f"Downloaded file blocked by security policy: {reason}"
-                    )
+                if validator:
+                    is_blocked, reason = validator.is_write_blocked(str(dest_path))
+                    if is_blocked:
+                        raise ValueError(
+                            f"Downloaded file blocked by security policy: {reason}"
+                        )
+                    # Ask about the folder when it can be granted whole, so one
+                    # approval covers later downloads; else (e.g. ~) the one file.
+                    # The response stays open while the user answers.
+                    target = dest_path.parent
+                    if validator.grant_refusal_reason(str(target)):
+                        target = dest_path
+                    if not validator.is_path_allowed(str(target), prompt_user=True):
+                        raise ValueError(_download_denied(validator, dest_path))
+                before_change(dest_path, "download_file")
 
             try:
                 result = mixin._web_client.download(

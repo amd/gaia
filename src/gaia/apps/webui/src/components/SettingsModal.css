@@ -10,16 +10,11 @@
 .settings-section:last-child { margin-bottom: 0; }
 
 .settings-section h4 {
-    font-size: 13px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     margin-bottom: 14px;
-    border-left: 2px solid var(--accent);
-    margin-left: -8px;
-    padding-left: 6px;
 }
 
 .status-grid { display: flex; flex-direction: column; gap: 8px; }
@@ -41,7 +36,9 @@
 .status-row--has-hint { align-items: flex-start; }
 .status-label { font-size: 13px; font-family: var(--font-sans); flex-shrink: 0; padding-top: 1px; }
 .status-value-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
-.status-value { font-size: 13px; font-weight: 600; font-family: var(--font-mono); }
+.status-value { font-size: 13px; font-weight: 600; font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
+}
 .status-value.ok { color: var(--accent-green); }
 .status-value.warn { color: var(--accent-yellow); }
 /* Model names can be very long; clip them and keep the full name in the tooltip. */
@@ -87,6 +84,18 @@
     padding: 8px 0;
     font-size: 14px;
     font-family: var(--font-sans);
+}
+/* A long path wraps under its own column; the label stays on one line. */
+.setting-row-path {
+    gap: 16px;
+}
+.setting-row-path > :first-child {
+    flex-shrink: 0;
+}
+.setting-row-path > :last-child {
+    min-width: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
 }
 .setting-path {
     font-family: var(--font-mono);
@@ -157,9 +166,9 @@
     transition: all var(--duration) var(--ease);
 }
 .btn-model-save:hover:not(:disabled) {
-    background: var(--accent-fill);
+    background: var(--accent-fill-hover);
     color: var(--accent-fill-text);
-    border-color: var(--accent-fill);
+    border-color: var(--accent-light);
 }
 .btn-model-save:disabled {
     opacity: 0.4;
@@ -230,14 +239,15 @@
 }
 .btn-ctx-preset {
     padding: 4px 10px;
-    font-size: 12px;
-    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-family: var(--font-sans);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: border-color 120ms, color 120ms, background 120ms;
+    transition: border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
+    font-variant-numeric: tabular-nums;
 }
 .btn-ctx-preset:hover:not(:disabled) {
     border-color: var(--border);
@@ -357,7 +367,7 @@
 .btn-force-redownload:hover:not(:disabled) { border-color: var(--accent-yellow); color: var(--accent-yellow); }
 
 /* Spinner inside buttons */
-.btn-spinner { animation: spin 0.8s linear infinite; flex-shrink: 0; }
+.btn-spinner { animation: spin var(--duration-spin) var(--ease-linear) infinite; flex-shrink: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .mcp-dot--running {
@@ -424,7 +434,7 @@
 }
 
 .toggle-switch input:checked + .toggle-track {
-    background: var(--accent-fill);
+    background: var(--accent-solid);
 }
 
 .toggle-switch input:checked + .toggle-track::before {

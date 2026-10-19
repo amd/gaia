@@ -25,6 +25,9 @@ from gaia.ui.routers import setup as setup_router
 def gaia_home(tmp_path, monkeypatch):
     home = tmp_path / "gaia-home"
     monkeypatch.setenv("GAIA_HOME", str(home))
+    # GAIA's own Lemonade unless a test says the user chose theirs.
+    monkeypatch.setattr(sr, "users_lemonade_url", lambda: None)
+    monkeypatch.setattr(setup_router, "users_lemonade_url", lambda: None)
     return home
 
 
@@ -224,6 +227,18 @@ def test_describe_progress_bar_and_failure():
     assert failed.text == "user.embeddinggemma-300m-GGUF - Request failed"
 
 
+def test_describe_reads_the_chat_model_setup_chose():
+    progress = sr.describe(
+        "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models (AMD iGPU)"
+    )
+    assert progress is not None and progress.chat_model == "Qwen3.6-35B-A3B-GGUF"
+    assert progress.phase is None and not progress.text
+    mine = sr.describe(
+        "   Chat model: Gemma-4-E4B-it-GGUF (default_model in ~/.gaia/config.json)"
+    )
+    assert mine is not None and mine.chat_model == "Gemma-4-E4B-it-GGUF"
+
+
 # ── SetupRun.view ──────────────────────────────────────────────────────────
 
 
@@ -263,6 +278,26 @@ def test_view_carries_the_command_and_a_bounded_log():
     assert view["command"] == "gaia init --profile gaia --skip-chat-model"
     assert view["log_tail"] == [str(i) for i in range(60, 100)]
     assert "under 1 GB" in view["steps"][1]["detail"]
+
+
+def test_steps_never_promise_a_download_size_setup_has_not_chosen():
+    steps = sr.step_labels(False)
+    assert "6 GB" not in steps[1]["detail"]
+    assert "fits this PC" in steps[1]["detail"]
+
+
+def test_view_names_the_chat_model_once_setup_picks_it():
+    run = sr.SetupRun(False, phase=sr.PHASE_MODELS, chat_model="Qwen3.6-35B-A3B-GGUF")
+    view = run.view()
+    assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
+    assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
+
+
+def test_use_mine_replaces_the_install_step():
+    steps = sr.step_labels(False, users_server="http://localhost:13305/api/v1")
+    assert steps[0]["label"] == "Use your Lemonade Server"
+    assert steps[0]["detail"] == "http://localhost:13305/api/v1"
+    assert all("Install" not in s["label"] for s in steps)
 
 
 # ── SetupRunner ────────────────────────────────────────────────────────────
@@ -345,6 +380,25 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert argv[3:] == sr.run_args(True)
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
+
+
+def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
+    output = (
+        "Step 1/5: Starting Lemonade Server...\n"
+        "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models\n"
+        "Step 2/5: Downloading models for 'gaia' profile...\n"
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setattr(
+        sr, "users_lemonade_url", lambda: "http://localhost:13305/api/v1"
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
+    assert view["steps"][0]["label"] == "Use your Lemonade Server"
+    assert "Qwen3.6-35B-A3B-GGUF" in view["steps"][1]["detail"]
 
 
 def test_init_error_lines_are_not_wrapped_at_80_columns(monkeypatch):
@@ -541,6 +595,17 @@ def test_check_route_needs_the_ui_header(client, monkeypatch):
     )
     assert resp.status_code == 403
     assert called == []
+
+
+def test_check_route_steps_follow_use_mine(client, monkeypatch):
+    test_client, _ = client
+    monkeypatch.setattr(setup_router, "check", lambda **_k: {"ready": False})
+    monkeypatch.setattr(
+        setup_router, "users_lemonade_url", lambda: "http://localhost:13305/api/v1"
+    )
+    body = test_client.get("/api/setup/check").json()
+    assert body["steps"][0]["label"] == "Use your Lemonade Server"
+    assert body["cloud_steps"][0]["label"] == "Use your Lemonade Server"
 
 
 def test_check_route_unanswered_is_503(client, monkeypatch):

@@ -201,6 +201,42 @@ def test_a_request_the_pc_slept_through_keeps_its_retry_budget(pc):
     assert len(attempts) == 2
 
 
+def _busy_client(pc, statuses):
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeStatus
+
+    client = LemonadeClient(base_url="http://127.0.0.1:1/api/v1", verbose=False)
+    client._retry_sleep = pc.run
+    busy = LemonadeStatus(running=False)
+    busy.busy = True
+    ready = LemonadeStatus(running=True)
+    answers = iter(statuses)
+
+    def get_status(**_kwargs):
+        answer = next(answers)
+        if answer == "sleep":
+            pc.sleep(EIGHT_HOURS)
+        return ready if answer == "ready" else busy
+
+    client.get_status = get_status
+    return client, ready
+
+
+def test_a_busy_server_wait_the_pc_slept_through_keeps_waiting(pc):
+    """The load wait (600 s) leaves the sleep out, like the retry budget."""
+    client, ready = _busy_client(pc, ["sleep", "busy", "ready"])
+    assert client._wait_while_busy("m") is ready
+
+
+def test_a_busy_server_wait_still_gives_up_while_awake(pc, monkeypatch):
+    from gaia.llm.lemonade_client import LemonadeUnresponsiveError
+
+    monkeypatch.setenv("GAIA_LLM_LOAD_WAIT", "10")
+    client, _ready = _busy_client(pc, ["busy"] * 100)
+    with pytest.raises(LemonadeUnresponsiveError):
+        client._wait_while_busy("m")
+    assert pc.awake() - 1000.0 <= 10.0 + 1e-9
+
+
 def test_a_tool_the_pc_slept_through_is_not_timed_out(pc):
     """A tool's 180 s limit, like every other limit, leaves the sleep out."""
     from gaia.agents.base.agent import Agent

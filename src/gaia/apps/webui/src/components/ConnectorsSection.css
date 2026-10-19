@@ -64,8 +64,8 @@
 }
 
 .connector-tile-type {
-    font-size: 10px;
-    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
@@ -285,11 +285,9 @@
     margin-bottom: 10px;
 }
 .mcp-key-label {
-    font-size: 11px;
-    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
 }
 .mcp-key-input {
     padding: 7px 10px;
@@ -313,11 +311,9 @@
 }
 
 .grants-header {
-    font-size: 10px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-family: var(--font-sans);
     color: var(--text-muted);
     margin-bottom: 8px;
 }
@@ -404,7 +400,7 @@
 }
 
 .spin {
-    animation: spin 1s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 @keyframes spin {
@@ -540,11 +536,9 @@
 }
 
 .agent-mcps-section-header {
-    font-size: 10px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-family: var(--font-sans);
     color: var(--text-muted);
     margin-bottom: 8px;
 }
@@ -610,8 +604,8 @@
 }
 
 .agent-mcp-readonly-badge {
-    font-size: 10px;
-    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);

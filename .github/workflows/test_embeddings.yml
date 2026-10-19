@@ -44,8 +44,8 @@ permissions:
 jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
-    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
-    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    # Strix Point: its models fit there, and the 128 GB Halo pool stays free for the evals.
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 30
