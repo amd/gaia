@@ -13,7 +13,8 @@ import json
 import os
 import secrets
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 from urllib.parse import urlparse
 
@@ -61,6 +62,10 @@ SUPPORTED_PROTOCOL_VERSIONS = frozenset(
 )
 MCP_PROTOCOL_VERSION = "2025-11-25"
 
+# How long a client may go silent while sending its request. It bounds socket
+# reads only, never the tool call, which can wait minutes on a busy Lemonade.
+REQUEST_READ_TIMEOUT_SECONDS = 30
+
 
 class GAIAMCPBridge:
     """HTTP-native MCP Bridge for GAIA - no WebSockets needed!"""
@@ -80,9 +85,13 @@ class GAIAMCPBridge:
         self.agents = {}
         self.tools = {}
         self.llm_client = None
-        self.chat_sdk = None
-        self.verbose = verbose
         self.chat_sdk = None  # Lazy initialized in _execute_chat
+        self.verbose = verbose
+        # Requests run on their own threads. The provider keeps per-call state on
+        # the instance, so queries take turns (Lemonade serializes them anyway).
+        self._llm_lock = threading.Lock()
+        # One AgentSDK holds one conversation, so chats take turns writing it.
+        self._chat_lock = threading.Lock()
         global VERBOSE
         VERBOSE = verbose
 
@@ -153,14 +162,14 @@ class GAIAMCPBridge:
 
     def _execute_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute LLM query."""
-        if not self.llm_client:
-            self.llm_client = create_client("lemonade", base_url=self.base_url)
-
-        response = self.llm_client.generate(
-            prompt=args.get("query", ""),
-            model=args.get("model"),
-            max_tokens=args.get("max_tokens", 500),
-        )
+        with self._llm_lock:
+            if not self.llm_client:
+                self.llm_client = create_client("lemonade", base_url=self.base_url)
+            response = self.llm_client.generate(
+                prompt=args.get("query", ""),
+                model=args.get("model"),
+                max_tokens=args.get("max_tokens", 500),
+            )
 
         return {"success": True, "result": response}
 
@@ -169,17 +178,13 @@ class GAIAMCPBridge:
         try:
             from gaia.chat.sdk import AgentConfig, AgentSDK
 
-            # Initialize chat SDK if not already done
-            if self.chat_sdk is None:
-                # AgentSDK uses the global LLM configuration, not a base_url
-                config = AgentConfig()
-                self.chat_sdk = AgentSDK(config=config)
-
-            # Get the query
             query = args.get("query", "")
 
-            # Send message and get response
-            chat_response = self.chat_sdk.send(query)
+            with self._chat_lock:
+                if self.chat_sdk is None:
+                    # AgentSDK uses the global LLM configuration, not a base_url
+                    self.chat_sdk = AgentSDK(config=AgentConfig())
+                chat_response = self.chat_sdk.send(query)
 
             # Extract the text response
             if hasattr(chat_response, "text"):
@@ -197,6 +202,10 @@ class GAIAMCPBridge:
 
 class MCPHTTPHandler(BaseHTTPRequestHandler):
     """HTTP handler for MCP protocol."""
+
+    # Socket timeout: a client that stops sending mid-request is dropped instead
+    # of holding its handler thread forever.
+    timeout = REQUEST_READ_TIMEOUT_SECONDS
 
     def __init__(self, *args, bridge: GAIAMCPBridge = None, **kwargs):
         self.bridge = bridge or GAIAMCPBridge()
@@ -388,7 +397,27 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         ctype = self.headers.get("content-type", "")
 
         if ctype.startswith("application/json") and content_length > 0:
-            body = self.rfile.read(content_length)
+            try:
+                body = self.rfile.read(content_length)
+            except TimeoutError:
+                logger.warning(
+                    "MCP request body not received within %ss: %s %s",
+                    self.timeout,
+                    self.command,
+                    self.path,
+                )
+                self.close_connection = True
+                self.send_json(
+                    408,
+                    {
+                        "error": (
+                            f"Request body not received within {self.timeout}s "
+                            f"(Content-Length {content_length}). Send the whole "
+                            "body, or fix the Content-Length header."
+                        )
+                    },
+                )
+                return
             try:
                 data = json.loads(body.decode("utf-8"))
                 self.log_request_details("POST", self.path, data)
@@ -546,8 +575,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if VERBOSE:
             # We already log detailed info in log_request_details and send_json
             pass
-        elif "/health" not in args[0]:
-            # In non-verbose mode, skip health checks but log everything else
+        # Skip health checks. args[0] is the request line, or an int or exception
+        # when the stdlib logs an error such as a read timeout.
+        elif "/health" not in str(args[0] if args else ""):
             super().log_message(format, *args)
 
 
@@ -580,6 +610,21 @@ def resolve_bind_host(host, authenticated=False):
     return host
 
 
+def create_server(bridge, bind_host, port):
+    """Build the bridge's HTTP server: one thread per request.
+
+    A tool call can sit behind another app's request on a shared Lemonade for
+    minutes, so ``/health`` and ``/status`` must not queue behind it.
+    """
+
+    def handler(*args, **kwargs):
+        return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
+
+    server = ThreadingHTTPServer((bind_host, port), handler)
+    server.daemon_threads = True
+    return server
+
+
 def start_server(
     host="localhost",
     port=MCP_BRIDGE_PORT,
@@ -600,14 +645,10 @@ def start_server(
     # Create bridge with verbose flag
     bridge = GAIAMCPBridge(host, port, base_url, verbose=verbose, auth_token=auth_token)
 
-    # Create handler with bridge
-    def handler(*args, **kwargs):
-        return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
-
     # Start server - use bind_host for actual socket binding
     logger.info(f"Creating HTTP server on {bind_host}:{port}")
     try:
-        server = HTTPServer((bind_host, port), handler)
+        server = create_server(bridge, bind_host, port)
         logger.info(
             f"HTTP server created successfully, listening on {bind_host}:{port}"
         )
