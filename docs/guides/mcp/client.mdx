@@ -316,7 +316,10 @@ connect wait is the longest `timeout` any of them sets:
 
 A tool call waits for the longer of the server's `timeout` and the agent's own
 per-tool limit less 5 seconds (`GAIA_AGENT_TOOL_TIMEOUT`, 180 seconds by
-default, so 175).
+default, so 175). Inside an agent turn the agent's limit still applies, so a
+server `timeout` above it ends the call with the agent's generic timeout
+rather than an error naming the server. For a tool that needs longer, raise
+`GAIA_AGENT_TOOL_TIMEOUT` as well.
 
 ### Popular MCP Servers
 

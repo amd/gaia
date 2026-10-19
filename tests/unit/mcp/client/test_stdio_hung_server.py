@@ -182,6 +182,44 @@ def test_a_server_flooding_stderr_still_gets_its_reply_read(tmp_path):
     assert box.get("result") == {"jsonrpc": "2.0", "id": 0, "result": {}}
 
 
+def test_secrets_are_found_once_not_per_stderr_line(tmp_path, monkeypatch):
+    calls = []
+    real = stdio_module.secrets_from_launch
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(stdio_module, "secrets_from_launch", counting)
+    script = _stub(
+        tmp_path,
+        """
+        for i in range(500):
+            print("log line", i, file=sys.stderr)
+        sys.stderr.flush()
+        send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+        """,
+    )
+    transport = StdioTransport(
+        sys.executable,
+        args=["-u", str(script), "--api-key", "Zq9vKe7wP2xx"],
+        timeout=30,
+    )
+    transport.name = "stub"
+    assert transport.connect()
+    try:
+        box, _ = _call_with_watchdog(lambda: transport.send_request("tools/list"))
+        deadline = time.monotonic() + 5
+        while len(transport._stderr_tail) < 500 and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        transport.disconnect()
+
+    assert box.get("result") == {"jsonrpc": "2.0", "id": 0, "result": {}}
+    assert len(transport._stderr_tail) == 200
+    assert len(calls) == 1
+
+
 def test_cancelled_tool_call_stops_waiting_on_a_hung_server(tmp_path):
     script = _stub(tmp_path, "time.sleep(3600)")
     transport = _transport(script, timeout=60)
@@ -753,6 +791,32 @@ def test_a_server_ping_gets_an_empty_result(tmp_path):
         "id": "srv-ping",
         "result": {},
     }
+
+
+def test_a_ping_reply_cannot_outlast_the_request_deadline(tmp_path):
+    # Pings late with an id bigger than any pipe buffer, then stops reading,
+    # so the reply to the ping can't be written.
+    script = _stub(
+        tmp_path,
+        """
+        time.sleep(2.5)
+        send({"jsonrpc": "2.0", "id": "p" * 2_000_000, "method": "ping"})
+        time.sleep(3600)
+        """,
+    )
+    transport = _transport(script, timeout=3)
+    try:
+        box, elapsed = _call_with_watchdog(
+            lambda: transport.send_request("tools/list"), limit=15
+        )
+    finally:
+        transport.disconnect()
+
+    assert isinstance(box.get("exc"), TimeoutError), box
+    assert "stopped reading" in str(box["exc"])
+    # The request's own 3 s, not 2.5 s more for the ping reply on top.
+    assert elapsed < 4.8, elapsed
+    assert not transport.is_connected()
 
 
 class _FakeClient:
@@ -1465,7 +1529,7 @@ _KEY_KIND_ROWS = ["sort", "partition", "primary", "cache", "foreign", "composite
 
 @pytest.mark.parametrize("word", _SECRET_WORD_ROWS)
 def test_each_secret_word_names_a_secret(word):
-    from gaia.mcp.client.transports.stdio import _is_secret_flag, _is_secret_name
+    from gaia.mcp.client.redaction import _is_secret_flag, _is_secret_name
 
     assert _is_secret_name(f"SERVICE_{word.upper()}")
     assert _is_secret_flag(f"--service-{word}")
@@ -1473,14 +1537,14 @@ def test_each_secret_word_names_a_secret(word):
 
 @pytest.mark.parametrize("word", _QUALIFIER_ROWS)
 def test_each_qualifier_makes_a_secret_word_ordinary(word):
-    from gaia.mcp.client.transports.stdio import _is_secret_name
+    from gaia.mcp.client.redaction import _is_secret_name
 
     assert not _is_secret_name(f"API_TOKEN_{word.upper()}")
 
 
 @pytest.mark.parametrize("word", _COUNT_ROWS)
 def test_each_count_prefix_makes_a_secret_word_ordinary(word):
-    from gaia.mcp.client.transports.stdio import _is_secret_flag, _is_secret_name
+    from gaia.mcp.client.redaction import _is_secret_flag, _is_secret_name
 
     assert not _is_secret_name(f"{word.upper()}_TOKENS")
     assert not _is_secret_flag(f"--{word}-tokens")
@@ -1488,7 +1552,7 @@ def test_each_count_prefix_makes_a_secret_word_ordinary(word):
 
 @pytest.mark.parametrize("word", _KEY_KIND_ROWS)
 def test_a_database_key_is_not_a_credential(word):
-    from gaia.mcp.client.transports.stdio import _is_secret_name
+    from gaia.mcp.client.redaction import _is_secret_name
 
     assert not _is_secret_name(f"TABLE_{word.upper()}_KEY")
     assert _is_secret_name("TABLE_API_KEY")
@@ -1531,7 +1595,7 @@ def test_a_database_key_is_not_a_credential(word):
     ],
 )
 def test_name_splitting_and_switches(name, secret):
-    from gaia.mcp.client.transports.stdio import _is_secret_flag, _is_secret_name
+    from gaia.mcp.client.redaction import _is_secret_flag, _is_secret_name
 
     check = _is_secret_flag if name.startswith("-") else _is_secret_name
     assert check(name) is secret

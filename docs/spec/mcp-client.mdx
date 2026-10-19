@@ -1105,9 +1105,10 @@ def send_request(
         method (str): JSON-RPC method name
         params (Dict[str, Any], optional): Parameters dictionary
         timeout (float, optional): Seconds to wait for the reply; defaults
-            to the transport's `timeout`, or for `tools/call` the agent's
-            per-tool limit (`GAIA_AGENT_TOOL_TIMEOUT`, 180 s by default) less
-            5 s, so the error names the server rather than a generic timeout
+            to the transport's `timeout`, or for `tools/call` the longer of
+            that and the agent's per-tool limit (`GAIA_AGENT_TOOL_TIMEOUT`,
+            180 s by default) less 5 s, so the error names the server rather
+            than a generic timeout
 
     Returns:
         Dict[str, Any]: JSON-RPC response
