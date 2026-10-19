@@ -30,9 +30,8 @@
 # enforce:true breach blocks the refresh from committing a regressed card.
 #
 # Runner-only by construction (`gaia eval agent` needs Lemonade + the Agent UI
-# backend on AMD hardware; the dev boxes must never start Lemonade). Shares
-# the serial `lemonade-eval` slot; a full refresh occupies it for many hours —
-# check `gh run list` before dispatching.
+# backend on AMD hardware; the dev boxes must never start Lemonade). Runs on
+# the ephemeral devlab-dispatch pool, so it holds no `lemonade-eval` slot.
 #
 # KNOWN RESIDUAL GAP (same as email): this workflow can only govern what IT
 # commits; a hand-edited SCORECARD.md in an unrelated PR bypasses these guards
@@ -70,10 +69,9 @@ on:
         default: ''
 
 concurrency:
-  # The serial Lemonade slot — shared with every other self-hosted eval so two
-  # runs never race-evict each other's model. Declared at the workflow level
-  # only (single job; declaring it at BOTH levels is a self-deadlock).
-  group: lemonade-eval
+  # One refresh per branch at a time, so two runs never race the card commit.
+  # Not `lemonade-eval`: each run gets its own ephemeral machine and Lemonade.
+  group: gaia-scorecard-refresh-${{ github.ref }}
   cancel-in-progress: false
   queue: max
 

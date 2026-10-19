@@ -402,7 +402,7 @@ jobs:
   # ── Stage 1c: judged gaia eval (report only, self-hosted) ──────────
   # A bounded subset of the judged suite (the cheap categories — the full
   # 13-category run is the nightly/dispatch profile; a release must not hold
-  # the serial Lemonade slot for a day). ADVISORY: `publish` does not need it,
+  # a Strix Halo runner for a day). ADVISORY: `publish` does not need it,
   # so a ~5 h eval, an infrastructure error or an exhausted Claude quota never
   # holds or blocks a release. The job still goes red on a breached quality bar
   # or an unmeasured scenario (the callee's own gates), and `eval-report` files
