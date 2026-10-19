@@ -28,7 +28,9 @@ Example:
 import hashlib
 import logging
 import os
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
@@ -172,8 +174,16 @@ class FileChangeHandler(FileSystemEventHandler):
     - Callbacks for created, modified, deleted, and moved events
     - File extension filtering
     - Custom filter predicates
-    - Debouncing to prevent duplicate events
+    - Waiting until a file has settled before reporting it
     - Telemetry tracking
+
+    Callbacks run on the handler's own dispatch thread, never on the observer's,
+    so a slow callback (a reindex) cannot hold up event delivery. A created or
+    modified file is reported once it has had no events for
+    ``debounce_seconds`` and its size and modification time held still across
+    that window, so a file still being written is not read half-finished. A
+    burst of events for one file becomes one callback. Deletes and moves are
+    reported in order as they arrive and cancel a pending report for the path.
 
     Example:
         from gaia.utils import FileChangeHandler
@@ -241,7 +251,9 @@ class FileChangeHandler(FileSystemEventHandler):
             filter_func: Custom filter function. If provided, called with file path
                         and should return True to process the event.
                         Takes precedence over extensions filter.
-            debounce_seconds: Minimum time between processing same file.
+            debounce_seconds: How long a created or modified file must go
+                without events, its size and mtime unchanged, before its
+                callback runs.
             ignore_directories: If True, ignores directory events.
 
         Example:
@@ -278,9 +290,14 @@ class FileChangeHandler(FileSystemEventHandler):
         self._debounce_seconds = debounce_seconds
         self._ignore_directories = ignore_directories
 
-        # Debounce tracking
-        self._last_processed: Dict[str, float] = {}
-        self._max_cache_size = 1000
+        # Settle tracking: path -> [kind, due time, (size, mtime_ns) or None].
+        # Guarded by _cond, which also wakes the dispatch thread.
+        self._pending: Dict[str, list] = {}
+        self._ready: deque = deque()
+        self._cond = threading.Condition()
+        self._dispatcher: Optional[threading.Thread] = None
+        self._busy = False
+        self._closed = False
 
         # Telemetry
         self._telemetry: Dict[str, Any] = {
@@ -306,26 +323,143 @@ class FileChangeHandler(FileSystemEventHandler):
         file_lower = file_path.lower()
         return any(file_lower.endswith(ext) for ext in self._extensions)
 
-    def _is_debounced(self, file_path: str) -> bool:
-        """Check if file was recently processed (within debounce window)."""
-        current_time = time.time()
-        last_time = self._last_processed.get(file_path, 0)
+    @staticmethod
+    def _signature(file_path: str):
+        try:
+            st = os.stat(file_path)
+        except OSError:
+            return None
+        return (st.st_size, st.st_mtime_ns)
 
-        if current_time - last_time <= self._debounce_seconds:
-            return True
+    def _ensure_dispatcher(self) -> None:
+        # Caller holds _cond.
+        if self._dispatcher is None or not self._dispatcher.is_alive():
+            self._dispatcher = threading.Thread(
+                target=self._dispatch_loop, name="file-watch-dispatch", daemon=True
+            )
+            self._dispatcher.start()
 
-        # Update last processed time
-        self._last_processed[file_path] = current_time
+    def _schedule_settle(self, kind: str, file_path: str) -> None:
+        """Report ``file_path`` once it has stopped changing."""
+        with self._cond:
+            if self._closed:
+                return
+            entry = self._pending.get(file_path)
+            first_kind = entry[0] if entry else kind
+            self._pending[file_path] = [
+                first_kind,
+                time.monotonic() + self._debounce_seconds,
+                self._signature(file_path),
+            ]
+            self._ensure_dispatcher()
+            self._cond.notify()
 
-        # LRU cache eviction to prevent memory leaks
-        if len(self._last_processed) > self._max_cache_size:
-            num_to_remove = self._max_cache_size // 10
-            sorted_items = sorted(self._last_processed.items(), key=lambda x: x[1])
-            for path, _ in sorted_items[:num_to_remove]:
-                del self._last_processed[path]
-            logger.debug(f"Cleaned up {num_to_remove} old entries from debounce cache")
+    def _schedule_now(self, *item) -> None:
+        with self._cond:
+            if self._closed:
+                return
+            self._ready.append(item)
+            self._ensure_dispatcher()
+            self._cond.notify()
 
-        return False
+    def _take_settled(self, now: float) -> List[tuple]:
+        # Caller holds _cond.
+        settled = []
+        for path, entry in list(self._pending.items()):
+            kind, due, signature = entry
+            if due > now:
+                continue
+            current = self._signature(path)
+            if current is None:
+                # Gone before it settled; its delete event reports that.
+                del self._pending[path]
+                logger.debug(f"File vanished before it settled: {path}")
+            elif current != signature:
+                # Still being written: wait another full window.
+                entry[1] = now + self._debounce_seconds
+                entry[2] = current
+            else:
+                del self._pending[path]
+                settled.append((kind, path))
+        return settled
+
+    def _dispatch_loop(self) -> None:
+        while True:
+            with self._cond:
+                while True:
+                    if self._closed:
+                        return
+                    items = list(self._ready)
+                    self._ready.clear()
+                    now = time.monotonic()
+                    items.extend(self._take_settled(now))
+                    if items:
+                        self._busy = True
+                        break
+                    if self._pending:
+                        next_due = min(e[1] for e in self._pending.values())
+                        self._cond.wait(max(0.0, next_due - now))
+                    else:
+                        self._cond.wait()
+            try:
+                for item in items:
+                    self._run_callback(*item)
+            finally:
+                with self._cond:
+                    self._busy = False
+                    self._cond.notify_all()
+
+    def _run_callback(self, kind: str, *paths: str) -> None:
+        callback = {
+            "created": self._on_created,
+            "modified": self._on_modified,
+            "deleted": self._on_deleted,
+            "moved": self._on_moved,
+        }[kind]
+        if callback is None:
+            return
+        logger.debug(f"File {kind}: {' -> '.join(paths)}")
+        try:
+            callback(*paths)
+        except Exception:
+            # Nothing above this thread can handle it; log the traceback.
+            logger.exception(f"Error in on_{kind} callback for {paths[0]}")
+            return
+        self._update_telemetry(f"files_{kind}")
+
+    def wait_idle(self, timeout: Optional[float] = None) -> bool:
+        """Block until every reported event has been dispatched.
+
+        Returns False if ``timeout`` passed first, for example while a file is
+        still changing.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._cond:
+            while self._pending or self._ready or self._busy:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._cond.wait(remaining if remaining is not None else 0.5)
+        return True
+
+    def reopen(self) -> None:
+        """Accept events again after :meth:`close`."""
+        with self._cond:
+            self._closed = False
+
+    def close(self) -> None:
+        """Stop the dispatch thread. Pending reports are dropped and logged."""
+        with self._cond:
+            self._closed = True
+            dropped = len(self._pending) + len(self._ready)
+            self._pending.clear()
+            self._ready.clear()
+            self._cond.notify_all()
+            dispatcher = self._dispatcher
+        if dropped:
+            logger.info(f"File watcher closed with {dropped} unreported change(s)")
+        if dispatcher is not None and dispatcher is not threading.current_thread():
+            dispatcher.join(timeout=5.0)
 
     def _update_telemetry(self, event_type: str) -> None:
         """Update telemetry statistics."""
@@ -348,48 +482,25 @@ class FileChangeHandler(FileSystemEventHandler):
         """Handle file creation."""
         if self._ignore_directories and event.is_directory:
             return
-
         if self._on_created and self._should_process(event.src_path):
-            if not self._is_debounced(event.src_path):
-                logger.debug(f"File created: {event.src_path}")
-                try:
-                    self._on_created(event.src_path)
-                    self._update_telemetry("files_created")
-                except Exception as e:
-                    logger.error(
-                        f"Error in on_created callback for {event.src_path}: {e}"
-                    )
+            self._schedule_settle("created", event.src_path)
 
     def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification."""
         if self._ignore_directories and event.is_directory:
             return
-
         if self._on_modified and self._should_process(event.src_path):
-            if not self._is_debounced(event.src_path):
-                logger.debug(f"File modified: {event.src_path}")
-                try:
-                    self._on_modified(event.src_path)
-                    self._update_telemetry("files_modified")
-                except Exception as e:
-                    logger.error(
-                        f"Error in on_modified callback for {event.src_path}: {e}"
-                    )
+            self._schedule_settle("modified", event.src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
         """Handle file deletion."""
         if self._ignore_directories and event.is_directory:
             return
-
-        if self._on_deleted and self._should_process(event.src_path):
-            logger.debug(f"File deleted: {event.src_path}")
-            try:
-                self._on_deleted(event.src_path)
-                self._update_telemetry("files_deleted")
-                # Clean up from debounce cache
-                self._last_processed.pop(event.src_path, None)
-            except Exception as e:
-                logger.error(f"Error in on_deleted callback for {event.src_path}: {e}")
+        if self._should_process(event.src_path):
+            with self._cond:
+                self._pending.pop(event.src_path, None)
+            if self._on_deleted:
+                self._schedule_now("deleted", event.src_path)
 
     def on_moved(self, event: FileSystemEvent) -> None:
         """Handle file move/rename."""
@@ -402,14 +513,9 @@ class FileChangeHandler(FileSystemEventHandler):
         if self._on_moved and dest_path:
             # Process if either source or destination matches filter
             if self._should_process(src_path) or self._should_process(dest_path):
-                logger.debug(f"File moved: {src_path} -> {dest_path}")
-                try:
-                    self._on_moved(src_path, dest_path)
-                    self._update_telemetry("files_moved")
-                    # Update debounce cache
-                    self._last_processed.pop(src_path, None)
-                except Exception as e:
-                    logger.error(f"Error in on_moved callback for {src_path}: {e}")
+                with self._cond:
+                    self._pending.pop(src_path, None)
+                self._schedule_now("moved", src_path, dest_path)
 
     @property
     def telemetry(self) -> Dict[str, Any]:
@@ -522,6 +628,7 @@ class FileWatcher:
             logger.warning("FileWatcher already running")
             return
 
+        self._handler.reopen()
         self._observer = Observer()
         self._observer.schedule(
             self._handler,
@@ -543,6 +650,7 @@ class FileWatcher:
             self._observer.stop()
             self._observer.join(timeout=5.0)
             self._observer = None
+            self._handler.close()
             logger.info(f"Stopped watching: {self._directory}")
 
     @property

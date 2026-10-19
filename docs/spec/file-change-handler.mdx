@@ -42,10 +42,11 @@ FileChangeHandler provides a reusable file system watcher for GAIA agents. It mo
    - Filename pattern matching
    - Ignore patterns (e.g., temp files, hidden files)
 
-3. **Debouncing**
-   - Prevent duplicate events
-   - Configurable debounce time
-   - Handle rapid successive changes
+3. **Settling**
+   - Report a created or modified file once it has had no events, and no size or
+     mtime change, for the configured window
+   - Coalesce rapid successive changes into one callback
+   - Run callbacks on a dispatch thread, off the observer thread
 
 4. **Callback System**
    - `on_created(event)` callback

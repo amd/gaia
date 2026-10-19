@@ -117,7 +117,7 @@ class IntakeAgent(Agent, DatabaseMixin):
 | `on_moved` | `Callable` | `None` | Callback for moved files `(src, dest)` |
 | `extensions` | `List[str]` | defaults | File extensions to watch |
 | `filter_func` | `Callable` | `None` | Custom filter predicate |
-| `debounce_seconds` | `float` | `2.0` | Debounce time |
+| `debounce_seconds` | `float` | `2.0` | How long a file must stay unchanged before it is reported |
 | `recursive` | `bool` | `False` | Watch subdirectories |
 
 #### Methods
@@ -139,7 +139,7 @@ class IntakeAgent(Agent, DatabaseMixin):
 | `on_moved` | `Callable[[str, str], None]` | `None` | Called with (src, dest) |
 | `extensions` | `List[str]` | defaults | Extensions to watch |
 | `filter_func` | `Callable[[str], bool]` | `None` | Custom filter |
-| `debounce_seconds` | `float` | `2.0` | Min time between events |
+| `debounce_seconds` | `float` | `2.0` | How long a file must stay unchanged before it is reported |
 | `ignore_directories` | `bool` | `True` | Skip directory events |
 
 ## Examples
@@ -208,22 +208,26 @@ When `extensions` is not specified, FileChangeHandler watches these file types:
 
 ## Best Practices
 
-### Use Debouncing
+### Files Are Reported Once They Settle
 
-Debouncing prevents duplicate events when files are modified multiple times quickly:
+A created or modified file is reported once it has gone `debounce_seconds` with no
+events and no change in size or modification time, so a file still being copied in is
+never read half-written, and a burst of saves becomes one callback. Deletes and moves
+are reported as they arrive.
 
 ```python
-# 2 second debounce (default)
+# Report a file once it has been unchanged for 2 seconds (default)
 watcher = FileWatcher(
     directory="./data",
     on_modified=process,
-    debounce_seconds=2.0,  # Ignore events within 2 seconds
+    debounce_seconds=2.0,
 )
 ```
 
 ### Handle Errors in Callbacks
 
-Callbacks run in the observer thread. Errors are caught and logged:
+Callbacks run on the watcher's own dispatch thread, one at a time, so a slow callback
+does not hold up event delivery. Errors are caught and logged with their traceback:
 
 ```python
 def safe_process(path: str):
