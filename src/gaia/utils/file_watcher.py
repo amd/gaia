@@ -331,7 +331,12 @@ class FileChangeHandler(FileSystemEventHandler):
     def _signature(file_path: str):
         try:
             st = os.stat(file_path)
-        except OSError:
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            logger.warning(
+                f"Cannot check {file_path}, so it will not be reindexed: {e}"
+            )
             return None
         return (st.st_size, st.st_mtime_ns)
 
@@ -412,6 +417,9 @@ class FileChangeHandler(FileSystemEventHandler):
                 with self._cond:
                     items.extend(self._settle(checked, time.monotonic()))
                 for item in items:
+                    with self._cond:
+                        if self._closed:
+                            break
                     self._run_callback(*item)
             finally:
                 with self._cond:

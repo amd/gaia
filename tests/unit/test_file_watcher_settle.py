@@ -132,6 +132,61 @@ def test_a_file_deleted_before_it_settles_is_not_reported(tmp_path):
 
 
 @pytest.mark.skipif(not check_watchdog_available(), reason="watchdog not installed")
+def test_a_file_that_cannot_be_checked_is_logged_not_silently_dropped(
+    tmp_path, monkeypatch, caplog
+):
+    target = tmp_path / "locked.txt"
+    target.write_text("x")
+    seen = []
+    handler = FileChangeHandler(
+        on_created=seen.append, extensions=[".txt"], debounce_seconds=WINDOW
+    )
+
+    def _denied(path, *a, **k):
+        raise PermissionError(13, "Access is denied", str(path))
+
+    monkeypatch.setattr("gaia.utils.file_watcher.os.stat", _denied)
+    try:
+        with caplog.at_level("WARNING", logger="gaia.utils.file_watcher"):
+            handler.on_created(_event(target))
+            assert handler.wait_idle(10)
+        assert seen == []
+        assert any(
+            "Cannot check" in r.getMessage() and str(target) in r.getMessage()
+            for r in caplog.records
+        )
+    finally:
+        handler.close()
+
+
+def test_close_stops_the_rest_of_a_batch_already_taken(tmp_path):
+    first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+    started, release, seen = threading.Event(), threading.Event(), []
+
+    def on_deleted(path):
+        seen.append(path)
+        started.set()
+        release.wait(10)
+
+    handler = FileChangeHandler(
+        on_deleted=on_deleted, extensions=[".txt"], debounce_seconds=WINDOW
+    )
+    with handler._cond:
+        handler._ready.extend([("deleted", str(first)), ("deleted", str(second))])
+        handler._ensure_dispatcher()
+        handler._cond.notify()
+    assert started.wait(10)
+    closer = threading.Thread(target=handler.close)
+    closer.start()
+    deadline = time.monotonic() + 10
+    while not handler._closed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    release.set()
+    closer.join(10)
+
+    assert seen == [str(first)]
+
+
 def test_real_watcher_reports_a_copied_file_once_complete(tmp_path):
     seen = []
     watcher = FileWatcher(
