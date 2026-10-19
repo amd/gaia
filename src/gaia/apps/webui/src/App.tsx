@@ -14,6 +14,8 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useChatAlerts } from './hooks/useChatAlerts';
+import { startActiveRunsPoll } from './services/activeRuns';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
@@ -63,7 +65,6 @@ function App() {
     const setSystemStatus = useChatStore((s) => s.setSystemStatus);
     const setBackendConnected = useChatStore((s) => s.setBackendConnected);
     const setAgents = useChatStore((s) => s.setAgents);
-    const setRunningSessions = useChatStore((s) => s.setRunningSessions);
     const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
     const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
     const openSettings = useChatStore((s) => s.openSettings);
@@ -201,7 +202,7 @@ function App() {
                     if (!initial && list.length === 0 && useChatStore.getState().sessions.length > 0) return;
                     // Includes the model and inference location, so a model change reaches the indicators.
                     const fp = list
-                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}`)
+                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}|${s.unread}|${s.pinned}|${s.last_run_status}|${s.kind}`)
                         .join('\n');
                     if (fp === sessionFingerprint.current) return;
                     sessionFingerprint.current = fp;
@@ -214,16 +215,9 @@ function App() {
         return () => clearInterval(t);
     }, [setSessions]);
 
-    useEffect(() => {
-        const poll = () => {
-            api.getActiveRuns()
-                .then((d) => setRunningSessions(d.session_ids || []))
-                .catch((err) => log.api.debug('Active-run poll failed', err));
-        };
-        poll();
-        const t = setInterval(poll, 2_600);
-        return () => clearInterval(t);
-    }, [setRunningSessions]);
+    useEffect(() => startActiveRunsPoll(), []);
+
+    useChatAlerts();
 
     // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
     const urlResolved = useRef(false);

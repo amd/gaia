@@ -4,8 +4,9 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
+import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
 
 /** Settings sections, in the order the settings nav shows them. */
@@ -17,6 +18,7 @@ export type SettingsSection =
     | 'connectors'
     | 'memory'
     | 'privacy'
+    | 'notifications'
     | 'advanced';
 
 /**
@@ -26,6 +28,10 @@ export type SettingsSection =
  * preference is cosmetic, so the default stands in rather than failing the
  * whole store's construction -- but never without a trace.
  */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+    return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function readPref(key: string, fallback: string): string {
     if (typeof window === 'undefined') return fallback;
     try {
@@ -44,6 +50,23 @@ function readPref(key: string, fallback: string): string {
 function readThemePreference(): ThemePreference {
     const v = readPref('gaia-chat-theme', 'system');
     return v === 'light' || v === 'dark' ? v : 'system';
+}
+
+/** The saved palette; anything unrecognised reads as the default look. */
+export function readPalette(): PaletteId {
+    const v = readPref('gaia-chat-palette', 'default');
+    return (PALETTE_IDS.has(v) ? v : 'default') as PaletteId;
+}
+
+/** The saved custom colors, or the starting pair when none or a broken value is saved. */
+export function readCustomColors(): CustomColors {
+    try {
+        const saved = JSON.parse(readPref('gaia-chat-custom-colors', 'null')) as Partial<CustomColors> | null;
+        if (saved && isHexColor(saved.accent) && isHexColor(saved.base)) return { accent: saved.accent, base: saved.base };
+    } catch (err) {
+        log.system.warn('Saved custom colors unreadable; starting from the default pair.', err);
+    }
+    return DEFAULT_CUSTOM;
 }
 
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
@@ -88,6 +111,14 @@ interface ChatState {
      *  "still running" spinner on backgrounded sessions. */
     runningSessionIds: string[];
     setRunningSessions: (ids: string[]) => void;
+    /** Chats waiting in line for the model, first to run next first (#5226). */
+    queuedSessionIds: string[];
+    /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
+    awaitingBySession: Record<string, AwaitingUser>;
+    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
+    activeRunsAt: number;
+    /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
+    setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -170,6 +201,11 @@ interface ChatState {
     /** A first message queued before its chat view mounted; ChatView sends it. */
     pendingPrompt: string | null;
     setThemePreference: (pref: ThemePreference) => void;
+    /** Color palette; `default` is the built-in warm gray look. */
+    palette: PaletteId;
+    customColors: CustomColors;
+    setPalette: (palette: PaletteId) => void;
+    setCustomColors: (colors: CustomColors) => void;
     /** Re-resolve a `system` preference after the OS appearance changed. */
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
@@ -204,11 +240,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             // Reference-stable update: skip the set() when the running set is
             // unchanged so the polled refresh doesn't re-render the sidebar.
-            const prev = state.runningSessionIds;
-            if (prev.length === ids.length && prev.every((id) => ids.includes(id))) {
-                return state;
-            }
+            if (sameIds(state.runningSessionIds, ids)) return state;
             return { runningSessionIds: ids };
+        }),
+    queuedSessionIds: [],
+    awaitingBySession: {},
+    activeRunsAt: 0,
+    setActiveRuns: (runs, requestedAt) =>
+        set((state) => {
+            const next: Partial<ChatState> = { activeRunsAt: requestedAt };
+            if (!sameIds(state.runningSessionIds, runs.session_ids)) next.runningSessionIds = runs.session_ids;
+            if (state.queuedSessionIds.join() !== runs.queued.join()) next.queuedSessionIds = runs.queued;
+            if (JSON.stringify(state.awaitingBySession) !== JSON.stringify(runs.awaiting_user)) {
+                next.awaitingBySession = runs.awaiting_user;
+            }
+            return next;
         }),
     setSessions: (sessions) =>
         set((state) => ({
@@ -371,13 +417,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
         applyTheme(theme);
+        applyPalette(get().palette, get().customColors, theme);
         set({ themePreference: pref, theme });
     },
     syncSystemTheme: () => {
         if (get().themePreference !== 'system') return;
         const theme = resolveTheme('system');
         applyTheme(theme);
+        applyPalette(get().palette, get().customColors, theme);
         set({ theme });
+    },
+    palette: readPalette(),
+    customColors: readCustomColors(),
+    setPalette: (palette) => {
+        writePref('gaia-chat-palette', palette);
+        applyPalette(palette, get().customColors, get().theme);
+        set({ palette });
+    },
+    setCustomColors: (colors) => {
+        writePref('gaia-chat-custom-colors', JSON.stringify(colors));
+        applyPalette('custom', colors, get().theme);
+        writePref('gaia-chat-palette', 'custom');
+        set({ customColors: colors, palette: 'custom' });
     },
     sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
     sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',

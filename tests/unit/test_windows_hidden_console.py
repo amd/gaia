@@ -193,7 +193,7 @@ def test_agent_ui_mcp_server_gets_a_hidden_console(on_windows, spawned, monkeypa
 # -- every spawn in the background paths carries a helper --------------------
 
 _HELPERS = {"windows_hidden_popen_kwargs", "background_popen_kwargs"}
-_SPAWNS = {"Popen", "run", "check_output", "call", "check_call"}
+_SPAWNS = {"Popen", "run", "check_output", "call", "check_call", "popen_outliving_job"}
 
 # Modules whose spawns can run under a console-less parent (the daemon, the
 # Agent UI backend, a sidecar). A spawn meant to be seen opts out explicitly.

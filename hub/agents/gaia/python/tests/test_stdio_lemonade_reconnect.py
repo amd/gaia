@@ -59,12 +59,18 @@ class _Agent:
 
 
 class _WaitingClient:
-    """The live Lemonade client, as the switch sees it."""
+    """The live Lemonade client, as the switch sees it.
+
+    *outcome*: True waits and follows the server to NEW_URL; False is a server
+    that is not GAIA's; "back" is GAIA's server already answering where the
+    client points; an exception is raised from the wait.
+    """
 
     def __init__(self, outcome):
         self.url = OLD_URL
         self.outcome = outcome
         self.waits = []
+        self.follows_gaia_lemonade = outcome is not False
 
     def current_base_url(self):
         return self.url
@@ -75,6 +81,8 @@ class _WaitingClient:
             if on_status:
                 on_status(lc.RECONNECTING_MESSAGE)
             raise self.outcome
+        if self.outcome == "back":
+            return False
         if self.outcome:
             on_status(lc.RECONNECTING_MESSAGE)
             self.url = NEW_URL
@@ -152,6 +160,31 @@ class TestTheSwitchWaits:
         assert agent.rebuilt == 0
         assert listed == [OLD_URL]
 
+    def test_a_server_back_before_the_wait_is_listed_again(
+        self, monkeypatch, quiet_header
+    ):
+        """It restarted on its port while the failed listing was still
+        retrying: there is nothing left to wait for, so the switch lists again."""
+        attempts = []
+
+        def _models(base_url):
+            attempts.append(base_url)
+            if len(attempts) == 1:
+                raise RuntimeError(f"Lemonade Server is not reachable at {base_url}.")
+            return [CLOUD_MODEL]
+
+        monkeypatch.setattr(stdio, "_lemonade_models", _models)
+        monkeypatch.setattr(stdio, "create_client", lambda **kw: object())
+        live = _WaitingClient(outcome="back")
+        agent = _Agent(live)
+
+        events = _run(agent, CLOUD_MODEL)
+
+        assert events[-1]["type"] == "final"
+        assert attempts == [OLD_URL, OLD_URL]
+        assert live.waits == [CLOUD_MODEL]
+        assert agent.chat.config.model == CLOUD_MODEL
+
     def test_a_server_that_is_not_gaias_keeps_its_own_error(
         self, monkeypatch, quiet_header
     ):
@@ -165,7 +198,7 @@ class TestTheSwitchWaits:
         assert [e["type"] for e in events] == ["error"]
         assert "not reachable at" in events[0]["detail"]
         assert listed == [OLD_URL]
-        assert live.waits == [CLOUD_MODEL]
+        assert live.waits == [], "a server that is not GAIA's is never waited on"
 
     def test_from_claude_it_waits_through_a_client_for_the_configured_server(
         self, monkeypatch, quiet_header

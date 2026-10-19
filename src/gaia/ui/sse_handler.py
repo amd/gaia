@@ -1857,6 +1857,16 @@ class SSEOutputHandler(OutputHandler):
             )
         return result
 
+    def waiting_on(self) -> Optional[str]:
+        """``"permission"`` or ``"question"`` while the turn is paused on the user."""
+        with self._confirm_lock:
+            if self._confirm_id is not None or self._relay_confirm_id is not None:
+                return "permission"
+        with self._user_input_lock:
+            if self._user_input_events:
+                return "question"
+        return None
+
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
         with self._confirm_lock:
