@@ -877,7 +877,7 @@ class RAGSDK:
         )
         reporter.start()
         try:
-            return self.embedder.embeddings(
+            response = self.embedder.embeddings(
                 batch_texts,
                 model=self.config.embedding_model,
                 timeout=EMBED_BATCH_TIMEOUT_S,
@@ -885,7 +885,9 @@ class RAGSDK:
         finally:
             answered.set()
             reporter.join()
-            wait_callback(0)
+        # Cleared only on success so a raising callback can't mask the real error.
+        wait_callback(0)
+        return response
 
     @staticmethod
     def _vectors_from_response(
