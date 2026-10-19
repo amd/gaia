@@ -844,7 +844,7 @@ class WebClient:
     def _consume_body_capped(
         self,
         response: requests.Response,
-        deadline: "_Deadline | None" = None,
+        deadline: "_Deadline",
     ) -> None:
         """Read ``response`` body in chunks up to ``self._max_response_size``.
 
@@ -868,11 +868,7 @@ class WebClient:
 
         chunks = []
         total = 0
-        if deadline is None:
-            body = response.iter_content(chunk_size=8192)
-        else:
-            body = self._read_chunks(response, deadline)
-        for chunk in body:
+        for chunk in self._read_chunks(response, deadline):
             if not chunk:
                 continue
             total += len(chunk)
