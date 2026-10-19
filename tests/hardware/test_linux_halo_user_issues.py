@@ -17,11 +17,13 @@ a user's own Lemonade received. Every check writes its evidence to
 - EU-1: with "use my own Lemonade", GAIA sends that server no setup change and
   never starts a server of its own.
 
-Linux with an amdgpu card only. ``GAIA_HW_REQUIRE=1`` (set in CI) turns a
-missing prerequisite into a failure instead of a skip.
+Linux with an amdgpu card only, and opt-in: the module skips unless
+``GAIA_HW_RUN=1`` is set, so a plain ``pytest tests/`` never starts real
+installs. ``GAIA_HW_REQUIRE=1`` (set in CI) also opts in, and turns a missing
+prerequisite into a failure instead of a skip.
 
 Run locally from a venv that has GAIA installed:
-    pytest tests/hardware/test_linux_halo_user_issues.py -v -s
+    GAIA_HW_RUN=1 pytest tests/hardware/test_linux_halo_user_issues.py -v -s
 """
 
 from __future__ import annotations
@@ -48,7 +50,6 @@ sys.path.insert(0, str(HERE))
 from halo_harness import (  # noqa: E402
     GEMMA,
     SMALL_MODEL,
-    WORK_ROOT,
     Scenario,
     amdgpu_present,
     evidence,
@@ -57,6 +58,7 @@ from halo_harness import (  # noqa: E402
     process_tree,
     sysfs_gpu_used,
     wait_until,
+    work_root,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.real_model]
@@ -66,6 +68,8 @@ if not sys.platform.startswith("linux"):
     _MISSING = "Linux only"
 elif not amdgpu_present():
     _MISSING = "no amdgpu card in /sys/class/drm"
+elif "1" not in (os.environ.get("GAIA_HW_RUN"), os.environ.get("GAIA_HW_REQUIRE")):
+    _MISSING = "set GAIA_HW_RUN=1 to run the Strix Halo hardware checks"
 if _MISSING:
     if os.environ.get("GAIA_HW_REQUIRE") == "1":
         raise RuntimeError(f"GAIA_HW_REQUIRE=1 but this machine cannot run: {_MISSING}")
@@ -93,7 +97,7 @@ def fresh_install():
     Its Hugging Face cache starts empty too, so "Gemma was not downloaded" is
     read off the disk rather than inferred.
     """
-    hf_home = WORK_ROOT / "fresh-install-hf"
+    hf_home = work_root() / "fresh-install-hf"
     scenario = Scenario("fresh-install", hf_home=hf_home)
     try:
         yield scenario

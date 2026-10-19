@@ -27,11 +27,29 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 import psutil
 import requests
 
-WORK_ROOT = Path(
-    os.environ.get("GAIA_HW_WORKDIR") or tempfile.mkdtemp(prefix="gaia-linux-halo-")
-)
-EVIDENCE = Path(os.environ.get("GAIA_HW_EVIDENCE") or WORK_ROOT / "evidence.md")
-ARTIFACTS = Path(os.environ.get("GAIA_HW_ARTIFACTS") or WORK_ROOT / "artifacts")
+_work_root: Optional[Path] = None
+
+
+def work_root() -> Path:
+    """The run's scratch directory, made on first use so a skipped run leaves none."""
+    global _work_root
+    if _work_root is None:
+        configured = os.environ.get("GAIA_HW_WORKDIR")
+        _work_root = (
+            Path(configured)
+            if configured
+            else Path(tempfile.mkdtemp(prefix="gaia-linux-halo-"))
+        )
+    return _work_root
+
+
+def evidence_path() -> Path:
+    return Path(os.environ.get("GAIA_HW_EVIDENCE") or work_root() / "evidence.md")
+
+
+def artifacts_dir() -> Path:
+    return Path(os.environ.get("GAIA_HW_ARTIFACTS") or work_root() / "artifacts")
+
 
 #: Variables that would point GAIA somewhere other than the scenario's HOME,
 #: or at another checkout's source. The root conftest sets several of them.
@@ -58,8 +76,9 @@ GEMMA = "Gemma-4-E4B-it-GGUF"
 def evidence(line: str = "") -> None:
     """Append *line* to the evidence file and echo it to the test log."""
     print(line, flush=True)
-    EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
-    with open(EVIDENCE, "a", encoding="utf-8") as f:
+    path = evidence_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
@@ -170,7 +189,7 @@ class Scenario:
 
     def __init__(self, name: str, hf_home: Optional[Path] = None):
         self.name = name
-        self.root = WORK_ROOT / name
+        self.root = work_root() / name
         if self.root.exists():
             raise RuntimeError(
                 f"{self.root} already exists, so this scenario would not start cold."
@@ -369,7 +388,7 @@ class Scenario:
                 proc.kill()
             except psutil.NoSuchProcess:
                 pass
-        dest = ARTIFACTS / self.name
+        dest = artifacts_dir() / self.name
         dest.mkdir(parents=True, exist_ok=True)
         for pattern in ("*.log", "**/*.log", "**/state.json", "**/last_port.json"):
             for path in self.root.glob(pattern):

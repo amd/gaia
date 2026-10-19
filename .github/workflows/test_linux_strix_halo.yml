@@ -84,7 +84,7 @@ jobs:
           # Not every pool host has curl, which the uv installer needs.
           mkdir -p "$RUNNER_TEMP/uv-bin"
           python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
-            https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz \
+            https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz \
             "$RUNNER_TEMP/uv.tar.gz"
           tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/uv-bin" --strip-components=1
           UV="$RUNNER_TEMP/uv-bin/uv"
