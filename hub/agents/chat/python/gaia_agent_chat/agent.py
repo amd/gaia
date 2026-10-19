@@ -2628,7 +2628,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,
-            choices: list = None,
+            choices: List[str] = None,
             default_if_no_response: str = None,
             timeout_seconds: int = 300,
             continue_if_no_response: bool = True,
@@ -2802,6 +2802,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.schedule(event_handler, directory, recursive=True)
             observer.start()
             self.observers.append(observer)
+            self.file_handlers.append(event_handler)
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
@@ -2867,6 +2868,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.stop()
             observer.join()
         self.observers.clear()
+        # Each handler reindexes on its own thread; stop those too. A core
+        # without close() reindexes inline, so there is nothing to stop.
+        handlers = self.__dict__.get("file_handlers", [])
+        for handler in handlers:
+            close = getattr(handler, "close", None)
+            if close is not None:
+                close()
+        handlers.clear()
 
     def load_session(self, session_id: str) -> bool:
         """

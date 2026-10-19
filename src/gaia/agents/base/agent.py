@@ -146,6 +146,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -2348,6 +2349,7 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeUnresponsiveError,
                 cloud_model_provider,
                 resolve_ctx_size,
             )
@@ -2359,7 +2361,10 @@ Do NOT wrap conversational replies in JSON.
 
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
-                LemonadeClient(base_url=base_url, verbose=False).health_check()
+                try:
+                    LemonadeClient(base_url=base_url, verbose=False).health_check()
+                except LemonadeUnresponsiveError:
+                    LemonadeManager.report_busy(base_url, quiet=silent_mode)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -5124,6 +5129,10 @@ Do NOT wrap conversational replies in JSON.
                     prop["description"] = desc
                 if param_info.get("enum"):
                     prop["enum"] = list(param_info["enum"])
+                if prop["type"] == "array":
+                    # gpt-oss's chat template reads ``items`` on every array;
+                    # without it Lemonade answers every request with HTTP 500.
+                    prop["items"] = dict(param_info.get("items") or {})
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
@@ -9457,6 +9466,10 @@ Do NOT wrap conversational replies in JSON.
                             f"*Technical details: {str(e)}*"
                         )
                         break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        cancelled_by_console = True
+                        break
                     except Exception as e:
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
@@ -9646,6 +9659,11 @@ Do NOT wrap conversational replies in JSON.
                             f"Please make sure Lemonade Server is running.\n\n"
                             f"*Technical details: {str(e)}*"
                         )
+                        break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        self.console.stop_progress()
+                        cancelled_by_console = True
                         break
                     except Exception as e:
                         self.console.stop_progress()

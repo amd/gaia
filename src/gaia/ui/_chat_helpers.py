@@ -14,6 +14,7 @@ patches take effect.
 """
 
 import asyncio
+import concurrent.futures
 import copy
 import importlib.util
 import json
@@ -23,6 +24,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -33,7 +35,7 @@ from gaia.agents.install_hints import (
     agent_import_error_message,
     agent_not_installed_message,
 )
-from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import (
     InferenceLocation,
@@ -41,6 +43,12 @@ from gaia.llm.inference_location import (
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
+from gaia.stream_timeout import (
+    DEFAULT_STREAM_TIMEOUT_SECONDS,
+    MAX_STREAM_TIMEOUT_SECONDS,
+    STREAM_TIMEOUT_ENV,
+    stream_timeout_from_env,
+)
 from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
@@ -238,44 +246,27 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
-_STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
-# Longer than one model call may stay silent (an hour of slow local prefill),
-# so a quiet model is always ended by the LLM layer, not by this limit.
-_DEFAULT_STREAM_TIMEOUT_SECONDS = 4500
-_MAX_STREAM_TIMEOUT_SECONDS = 86400
+# Shared with the messaging bridges (gaia.stream_timeout).
+_STREAM_TIMEOUT_ENV = STREAM_TIMEOUT_ENV
+_DEFAULT_STREAM_TIMEOUT_SECONDS = DEFAULT_STREAM_TIMEOUT_SECONDS
+_MAX_STREAM_TIMEOUT_SECONDS = MAX_STREAM_TIMEOUT_SECONDS
+_stream_timeout_from_env = stream_timeout_from_env
 # How often a waiting turn checks whether it has gone idle.
 _IDLE_POLL_SECONDS = 0.2
+# How long an ended turn waits for its agent thread before freeing the model.
+_PRODUCER_STOP_GRACE_SECONDS = 5.0
+
+# Chats whose stopped turn left its agent thread running (session_id -> thread).
+_stopping_sessions: dict[str, threading.Thread] = {}
 
 
-def _stream_timeout_from_env() -> int:
-    """Resolve the turn's no-progress limit in seconds from ``GAIA_STREAM_TIMEOUT``.
-
-    A turn is stopped only after this long without progress; a turn that keeps
-    making progress has no time limit. Unset or empty returns the 4500 s
-    default. Any other value must be a whole number of seconds from 1 to 86400.
-
-    Raises:
-        ValueError: the variable is set to a non-integer or out-of-range value.
-    """
-    raw = os.environ.get(_STREAM_TIMEOUT_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_STREAM_TIMEOUT_SECONDS
-    remedy = (
-        f"Set it to a whole number of seconds from 1 to "
-        f"{_MAX_STREAM_TIMEOUT_SECONDS} (e.g. {_STREAM_TIMEOUT_ENV}=1800), or "
-        f"unset it for the {_DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
-        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
-    )
-    try:
-        value = int(raw)
-    except ValueError as e:
-        raise ValueError(
-            f"{_STREAM_TIMEOUT_ENV}={raw!r} is not a whole number of seconds. "
-            f"{remedy}"
-        ) from e
-    if not 1 <= value <= _MAX_STREAM_TIMEOUT_SECONDS:
-        raise ValueError(f"{_STREAM_TIMEOUT_ENV}={value} is out of range. {remedy}")
-    return value
+def stuck_producer(session_id: str) -> Optional[threading.Thread]:
+    """The stopped turn's agent thread still running in *session_id*, if any."""
+    thread = _stopping_sessions.get(session_id)
+    if thread is not None and not thread.is_alive():
+        _stopping_sessions.pop(session_id, None)
+        return None
+    return thread
 
 
 # Read once at import so a bad value stops the Agent UI server at startup.
@@ -293,6 +284,74 @@ _mcp_status_lock = threading.Lock()
 # path (_maybe_load_expected_model) and the boot-time preload task in server.py.
 # Public (no underscore) because it is intentionally accessed cross-module.
 model_load_lock = threading.Lock()
+
+# Building an agent and ``_register_tools`` write the process-global tool
+# registry, then snapshot it: two at once can hand one agent the other's tools.
+tool_registry_lock = threading.RLock()
+
+
+class TurnStopped(Exception):
+    """The turn was stopped while it waited to build its agent."""
+
+
+# A build that holds the registry longer than this is stuck (a hung MCP server).
+_REGISTRY_WAIT_LIMIT_S = 120.0
+
+
+@contextmanager
+def writing_tool_registry(handler=None):
+    """Hold ``tool_registry_lock`` while an agent is built or re-registers tools.
+
+    A turn that has to wait (a stopped chat's agent thread, or the warm-up, is
+    still building) says so and gives the model to other chats meanwhile.
+    Stop ends the wait with :class:`TurnStopped`.
+
+    Raises:
+        TurnStopped: the turn was stopped while waiting.
+        TimeoutError: the registry stayed held past ``_REGISTRY_WAIT_LIMIT_S``.
+    """
+    if not tool_registry_lock.acquire(blocking=False):
+        slot = getattr(handler, "turn_slot", None)
+        stepped_away = slot is not None and slot.step_away()
+        if handler is not None:
+            handler._emit(
+                {
+                    "type": "status",
+                    "status": "working",
+                    "message": "Waiting for another chat to finish setting up",
+                }
+            )
+        deadline = _time.monotonic() + _REGISTRY_WAIT_LIMIT_S
+        while True:
+            if tool_registry_lock.acquire(timeout=0.2):
+                if not stepped_away:
+                    break
+                # Never wait for the model while holding the lock: whoever has
+                # the model may be waiting for the lock.
+                tool_registry_lock.release()
+                if not slot.come_back(handler.cancelled):
+                    raise TurnStopped()
+                if tool_registry_lock.acquire(blocking=False):
+                    break
+                # Time spent in line for the model isn't time someone held
+                # the setup lock: the limit restarts from here.
+                deadline = _time.monotonic() + _REGISTRY_WAIT_LIMIT_S
+                stepped_away = slot.step_away()
+                continue
+            if handler is not None and handler.cancelled.is_set():
+                raise TurnStopped()
+            if _time.monotonic() > deadline:
+                raise TimeoutError(
+                    "Another chat has been setting up its agent for over "
+                    f"{_REGISTRY_WAIT_LIMIT_S:.0f}s, most likely waiting on an "
+                    "MCP server that does not answer. Check Settings -> MCP "
+                    "servers, then send the message again."
+                )
+    try:
+        yield
+    finally:
+        tool_registry_lock.release()
+
 
 # Chat models the Agent UI loaded. Only these may be unloaded to make room: a
 # model another app (or another GAIA process) loaded is never taken from under
@@ -581,7 +640,7 @@ async def _generate_session_title(
     """
     from contextlib import nullcontext
 
-    from gaia.daemon.broker_client import model_lease
+    from gaia.daemon.broker_client import lease_wait_limit, model_lease
     from gaia.llm.lemonade_client import (
         SIDE_SLOT,
         LemonadeClient,
@@ -610,7 +669,8 @@ async def _generate_session_title(
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
-        with lease:
+        # Give up rather than hold a default-pool thread behind a long queue.
+        with lease_wait_limit(30), lease:
             if local:
                 loaded = client.health_check().get("all_models_loaded", [])
                 if not any(
@@ -1969,6 +2029,34 @@ def _format_duration(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
+def _as_interactive_turn(run, cancel_event, sse_handler=None, on_wait_event=None):
+    """*run* as the user's turn: it leases the model ahead of background work,
+    a wait for the model shows on the turn's stream (or reaches
+    *on_wait_event* when it has none), and Stop ends the wait."""
+    from gaia.daemon.broker_client import interactive_turn, queue_status_event
+
+    # Each update also counts as progress, so a long queue never trips the
+    # turn's idle stop.
+    def _listen(event: dict) -> None:
+        sse_handler._emit(queue_status_event(event))
+
+    class _Stopped:
+        # Stop sets the handler's flag; teardown and the idle stop set the turn's.
+        def is_set(self) -> bool:
+            return cancel_event.is_set() or (
+                sse_handler is not None and sse_handler.cancelled.is_set()
+            )
+
+    def _run():
+        with interactive_turn(
+            on_wait_event=_listen if sse_handler is not None else on_wait_event,
+            cancel=_Stopped(),
+        ):
+            return run()
+
+    return _run
+
+
 def _turn_idle_message(seconds: int) -> str:
     """What the user is told when a turn is stopped for making no progress."""
     return (
@@ -2283,6 +2371,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
 
         from gaia.llm.lemonade_choice import is_users_server
         from gaia.llm.lemonade_client import (
+            _model_ids_match,
             cloud_model_provider,
             lemonade_auth_headers,
             resolve_ctx_size,
@@ -2299,11 +2388,10 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
-        expected_lower = model_id.lower()
         chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
         # A cloud model occupies no local slot: nothing to load, nothing to evict.
         if any(
-            (m.get("model_name") or "").lower() == expected_lower
+            _model_ids_match(m.get("model_name"), model_id)
             and m.get("recipe") == "cloud"
             for m in chat_models
         ) or cloud_model_provider(model_id, None):
@@ -2312,11 +2400,11 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
         required_ctx = resolve_ctx_size(model_id)
         chat_models = [m for m in chat_models if m.get("recipe") != "cloud"]
         active_is_expected = any(
-            (m.get("model_name") or "").lower() == expected_lower for m in chat_models
+            _model_ids_match(m.get("model_name"), model_id) for m in chat_models
         )
         active_ctx = 0
         for m in chat_models:
-            if (m.get("model_name") or "").lower() == expected_lower:
+            if _model_ids_match(m.get("model_name"), model_id):
                 active_ctx = m.get("recipe_options", {}).get("ctx_size") or 0
                 break
         # Reload conditions:
@@ -2386,7 +2474,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                     ]
                     _forget_models_not_loaded(resident_chat_models)
                     if any(
-                        (m.get("model_name") or "").lower() == expected_lower
+                        _model_ids_match(m.get("model_name"), model_id)
                         and (m.get("recipe_options", {}).get("ctx_size") or 0)
                         >= required_ctx
                         for m in resident_chat_models
@@ -2407,7 +2495,7 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
                     # chose. Another app's chosen window may be answering, so
                     # that copy stays. Other resident models stay.
                     for m in resident_chat_models:
-                        if (m.get("model_name") or "").lower() != expected_lower:
+                        if not _model_ids_match(m.get("model_name"), model_id):
                             continue
                         window = (m.get("recipe_options") or {}).get("ctx_size") or 0
                         # No window reported is the broken state #1030 needs
@@ -2441,6 +2529,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     except ModelInUseError as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
+    except LeaseWaitCancelled:
+        logger.info("Pre-flight model load stopped with the turn")
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
@@ -2589,7 +2679,8 @@ async def _get_chat_response(
             agent = cached_agent
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
-            agent._register_tools()
+            with writing_tool_registry():
+                agent._register_tools()
             _extend_cached_scope(agent, allowed)
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
@@ -2662,28 +2753,29 @@ async def _get_chat_response(
                 # in ``_index_rag_with_progress`` so the user sees progress
                 # events; forwarding the real list there would double-index
                 # (see the regression test in test_chat_helpers.py).
-                agent = registry.create_agent(
-                    agent_type,
-                    **_build_create_kwargs(
-                        custom_model=custom_model,
-                        model_id=model_id,
-                        device=device,
-                        min_context_size=device_ctx,
-                    ),
-                    **_session_agent_kwargs(
-                        rag_file_paths=rag_file_paths,
-                        library_paths=library_paths,
-                        allowed=allowed,
-                        session_id=session_id,
-                        dynamic_tools=dynamic_tools,
-                        memory_incognito=_memory_off(session, db),
-                    ),
-                    # Forwarded only here (not via _session_agent_kwargs, which
-                    # also feeds the strict ChatAgentConfig). Non-email factories
-                    # drop it via dataclasses.fields filtering. None = scan every
-                    # connected mailbox (#1596).
-                    mail_provider=_session_mail_provider(session),
-                )
+                with writing_tool_registry():
+                    agent = registry.create_agent(
+                        agent_type,
+                        **_build_create_kwargs(
+                            custom_model=custom_model,
+                            model_id=model_id,
+                            device=device,
+                            min_context_size=device_ctx,
+                        ),
+                        **_session_agent_kwargs(
+                            rag_file_paths=rag_file_paths,
+                            library_paths=library_paths,
+                            allowed=allowed,
+                            session_id=session_id,
+                            dynamic_tools=dynamic_tools,
+                            memory_incognito=_memory_off(session, db),
+                        ),
+                        # Forwarded only here (not via _session_agent_kwargs, which
+                        # also feeds the strict ChatAgentConfig). Non-email factories
+                        # drop it via dataclasses.fields filtering. None = scan every
+                        # connected mailbox (#1596).
+                        mail_provider=_session_mail_provider(session),
+                    )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
@@ -2755,7 +2847,16 @@ async def _get_chat_response(
 
     try:
         idle = _TurnIdleClock(_time.monotonic())
-        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        # A wait for the model is progress: the queue reports every few seconds.
+        queue_seen = {"at": 0.0}
+
+        def _queue_update(_event: dict) -> None:
+            queue_seen["at"] = _time.monotonic()
+
+        worker = asyncio.get_running_loop().run_in_executor(
+            None,
+            _as_interactive_turn(_do_chat, cancel_event, on_wait_event=_queue_update),
+        )
         idle_message = None
         try:
             while not worker.done():
@@ -2765,6 +2866,7 @@ async def _get_chat_response(
                 owned_wait = activity is not None and activity.tool_running
                 if activity is not None:
                     idle.progressed(activity.last_progress)
+                idle.progressed(queue_seen["at"])
                 if (
                     not worker.done()
                     and idle.idle_for(owned_wait, _time.monotonic())
@@ -2833,6 +2935,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     sse_handler = None
     producer = None
     cleanup_done = False
+    # When the turn was stopped and its thread got its grace period already.
+    stop_grace_spent = False
     from gaia.agents.base.agent import TurnCancel
 
     # Cooperative cancel signal for the producer's agent loop. Set when the
@@ -2855,14 +2959,24 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         if sse_handler is not None:
             session_permissions.for_session(session_id).detach(sse_handler)
         if producer is not None:
-            await asyncio.to_thread(producer.join, 5.0)
+            await asyncio.to_thread(
+                producer.join, 0.0 if stop_grace_spent else _PRODUCER_STOP_GRACE_SECONDS
+            )
             if producer.is_alive():
+                # Stuck where it can't see the Stop (a hung tool or MCP read):
+                # end the turn and free the model, but keep this chat busy
+                # until the thread exits, since it still holds the agent.
                 logger.warning(
-                    "Producer thread still running after stream ended; "
-                    "holding the session until it exits"
+                    "Session %s: the agent thread is still running %.0fs after "
+                    "the turn ended; freeing the model for other chats and "
+                    "holding this chat until the thread exits",
+                    session_id[:8],
+                    _PRODUCER_STOP_GRACE_SECONDS,
                 )
-                # The run (and so the session lock) must outlive the producer.
-                await asyncio.to_thread(producer.join)
+                slot = getattr(run, "slot", None)
+                if slot is not None:
+                    slot.close()
+                _stopping_sessions[session_id] = producer
 
     try:
         # Create SSE handler for streaming events
@@ -2871,6 +2985,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Expose the handler on the run so an external Stop can signal the
         # producer to bail even after every client has detached (#1580).
         run.handler = sse_handler
+        sse_handler.turn_slot = getattr(run, "slot", None)
         # Register so /api/chat/confirm-tool can find this handler.
         _active_sse_handlers[session_id] = sse_handler
 
@@ -2997,7 +3112,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
-                wait_for_warm_up()
+                wait_for_warm_up(handler=sse_handler)
+                if sse_handler.cancelled.is_set():
+                    return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
                 if cached_agent is not None:
@@ -3008,7 +3125,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent.streaming = True
 
                     # Re-register tools so _TOOL_REGISTRY points at this agent's self.
-                    agent._register_tools()
+                    with writing_tool_registry(sse_handler):
+                        agent._register_tools()
 
                     # Early-exit if consumer disconnected
                     if sse_handler.cancelled.is_set():
@@ -3083,7 +3201,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                     _stamp_chat_identity(config)
                     t_construct = _time.monotonic()
-                    agent = ChatAgent(config)
+                    with writing_tool_registry(sse_handler):
+                        agent = ChatAgent(config)
                     logger.info(
                         "chat: Invoking agent chat for session %s, model=%s took=%.3fs",
                         session_id[:8],
@@ -3220,28 +3339,29 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         # would be indexed twice on every cache miss, surfacing
                         # a noisy "Used tool index_documents" card for a
                         # 0-work hash-cache hit on casual chat turns.
-                        agent = registry.create_agent(
-                            agent_type,
-                            **_build_create_kwargs(
-                                custom_model=custom_model,
-                                model_id=model_id,
-                                streaming=True,
-                                device=device,
-                                min_context_size=device_ctx,
-                            ),
-                            **_session_agent_kwargs(
-                                rag_file_paths=[],
-                                library_paths=library_paths,
-                                allowed=allowed,
-                                session_id=session_id,
-                                dynamic_tools=dynamic_tools,
-                                memory_incognito=_memory_off(session, db),
-                            ),
-                            # See the non-streaming path: email-only kwarg,
-                            # filtered out by non-email factories. None = scan
-                            # every connected mailbox (#1596).
-                            mail_provider=_session_mail_provider(session),
-                        )
+                        with writing_tool_registry(sse_handler):
+                            agent = registry.create_agent(
+                                agent_type,
+                                **_build_create_kwargs(
+                                    custom_model=custom_model,
+                                    model_id=model_id,
+                                    streaming=True,
+                                    device=device,
+                                    min_context_size=device_ctx,
+                                ),
+                                **_session_agent_kwargs(
+                                    rag_file_paths=[],
+                                    library_paths=library_paths,
+                                    allowed=allowed,
+                                    session_id=session_id,
+                                    dynamic_tools=dynamic_tools,
+                                    memory_incognito=_memory_off(session, db),
+                                ),
+                                # See the non-streaming path: email-only kwarg,
+                                # filtered out by non-email factories. None = scan
+                                # every connected mailbox (#1596).
+                                mail_provider=_session_mail_provider(session),
+                            )
                         agent.console = sse_handler
                         logger.info(
                             "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
@@ -3299,6 +3419,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # Let the agent loop observe stream-timeout/disconnect so a hung
                 # turn is torn down instead of leaking this producer thread.
                 agent._cancel_event = cancel_event
+                # Another chat may change the loaded model while this turn
+                # waits on the user; check it again before continuing.
+                sse_handler.on_model_regained = lambda: _maybe_load_expected_model(
+                    _effective_model(agent, model_id), sse_handler
+                )
 
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
                 # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value
@@ -3332,6 +3457,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                 else:
                     result_holder["answer"] = str(result) if result else ""
+            except TurnStopped:
+                logger.info(
+                    "Session %s stopped before its agent was built", session_id[:8]
+                )
             except Exception as e:
                 logger.error("Agent error: %s", e, exc_info=True)
                 # Prefer the typed Lemonade error's user_message over the
@@ -3355,7 +3484,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # task that keeps making progress runs to the end.
         _idle = _TurnIdleClock(_time.monotonic())
         idle_message = None
-        producer = threading.Thread(target=_run_agent, daemon=True)
+        producer = threading.Thread(
+            target=_as_interactive_turn(_run_agent, cancel_event, sse_handler),
+            daemon=True,
+        )
         producer.start()
 
         # Yield SSE events from the handler's queue
@@ -3367,6 +3499,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
+        stopped_at = None
         last_event_at = _time.monotonic()
 
         def _blocked_policy_steps():
@@ -3630,6 +3763,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             except queue.Empty:
                 if not producer.is_alive():
                     break
+                if sse_handler.cancelled.is_set():
+                    # Stopped: give the agent a moment to wind down, no more.
+                    if stopped_at is None:
+                        stopped_at = _time.monotonic()
+                    elif _time.monotonic() - stopped_at > _PRODUCER_STOP_GRACE_SECONDS:
+                        stop_grace_spent = True
+                        break
                 idle_cycles += 1
                 # Send a padded keepalive every ~5s (25 cycles × 0.2s).
                 # The padding flushes Chromium's receive buffer so any events
@@ -3941,6 +4081,19 @@ def _queued_status_event(position: int, ordinal, waited_s: int = 0) -> dict:
     }
 
 
+# A turn waiting in line sends the stream loop's keepalive this often.
+_QUEUED_KEEPALIVE_SECONDS = 5.0
+_KEEPALIVE_FRAME = ": keepalive " + "x" * 490 + "\n\n"
+
+# Ends the "in line" status once a turn that stepped away for the user is back.
+_RESUMED_STATUS_EVENT = {
+    "type": "status",
+    "status": "working",
+    "phase": "resumed",
+    "message": "Continuing",
+}
+
+
 class _RunOutcome:
     """How a turn ended, read off the SSE events it emitted (#5221)."""
 
@@ -3998,7 +4151,7 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
-    from gaia.ui.turn_queue import TurnCancelled, ordinal, turn_queue
+    from gaia.ui.turn_queue import TurnCancelled, TurnSlot, ordinal, turn_queue
 
     session_id = request.session_id
     outcome = _RunOutcome()
@@ -4020,21 +4173,42 @@ async def _run_chat_lifecycle(
             if position:
                 _announce_place(position)
 
+    def _announce_resume() -> None:
+        _emit(_sse(_RESUMED_STATUS_EVENT))
+
+    # The producer thread hands this back while the turn waits on the user.
+    run.slot = TurnSlot(
+        turn_queue,
+        session_id,
+        asyncio.get_running_loop(),
+        on_position=_announce_place,
+        on_resume=_announce_resume,
+    )
+
+    async def _keep_alive_while_queued() -> None:
+        # The same comment frame the stream loop sends, so clients can tell
+        # a turn waiting in line from a dead connection.
+        while True:
+            await asyncio.sleep(_QUEUED_KEEPALIVE_SECONDS)
+            run.emit(_KEEPALIVE_FRAME)
+
     try:
+        keep_alive = asyncio.create_task(_keep_alive_while_queued())
         heartbeat = asyncio.create_task(_heartbeat())
         try:
-            await turn_queue.acquire(session_id, on_position=_announce_place)
+            await run.slot.acquire()
         except TurnCancelled:
             msg_id = db.add_message(session_id, "assistant", "Cancelled.")
             _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
             return
         finally:
+            keep_alive.cancel()
             heartbeat.cancel()
         try:
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
         finally:
-            turn_queue.release()
+            run.slot.close()
     finally:
         _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
@@ -4105,28 +4279,102 @@ async def _attach_chat_stream(session_id: str):
 # ── Document Indexing ────────────────────────────────────────────────────────
 
 
+# Indexing gets its own pools: a big PDF embeds for minutes, and on the
+# shared default executor a few of them starve the chat stream loop. Files
+# under _INDEX_SMALL_FILE_BYTES have a pool of their own, so a quick upload
+# never waits behind big documents.
+_INDEX_MAX_PARALLEL = 2
+_INDEX_SMALL_FILE_BYTES = 20 * 1024 * 1024
+_INDEX_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index"
+)
+_INDEX_SMALL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_INDEX_MAX_PARALLEL, thread_name_prefix="gaia-index-small"
+)
+_INDEX_TIMEOUT_ENV = "GAIA_INDEX_TIMEOUT"
+_INDEX_TIMEOUT_DEFAULT_S = 600.0
+
+
+def _index_timeout_from_env() -> float:
+    """Seconds indexing may go without progress (``GAIA_INDEX_TIMEOUT``, default 600).
+
+    Progress is a page extracted or a batch embedded, so a large document that
+    keeps moving is never stopped.
+
+    Raises:
+        ValueError: the variable is set to something other than a positive number.
+    """
+    raw = os.environ.get(_INDEX_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _INDEX_TIMEOUT_DEFAULT_S
+    remedy = (
+        "Set it to a positive number of seconds without progress (e.g. 1200), "
+        f"or unset it for the {_INDEX_TIMEOUT_DEFAULT_S:g} s default."
+    )
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{_INDEX_TIMEOUT_ENV}={raw!r} is not a number. {remedy}"
+        ) from e
+    if value <= 0:
+        raise ValueError(f"{_INDEX_TIMEOUT_ENV}={raw!r} must be positive. {remedy}")
+    return value
+
+
+# Read once at import so a bad value stops the Agent UI server at startup.
+_INDEX_TIMEOUT_S = _index_timeout_from_env()
+# How often a waiting index checks for progress.
+_INDEX_POLL_S = 0.5
+
+
+def _settled_quietly(future) -> None:
+    """Mark an abandoned index's outcome as seen, so asyncio doesn't warn about it."""
+    if not future.cancelled():
+        future.exception()
+
+
 async def _index_document(filepath: Path) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
-    Runs the synchronous RAG indexing in a thread pool executor
-    to avoid blocking the async event loop.
+    Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
+    files have their own, and the rest wait their turn). Cancelling the
+    awaiting task stops indexing at its next page or embedding batch, and so
+    does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
+    for a worker doesn't count.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails for any reason.
+        RuntimeError: If indexing fails or stops making progress.
+        asyncio.CancelledError: If the awaiting task was cancelled.
     """
+    from gaia.rag.sdk import IndexingStopped
+
+    stop = threading.Event()
+    # Monotonic time of the last page or batch; None until a worker starts.
+    progress = {"at": None}
+
+    def _step() -> None:
+        progress["at"] = _time.monotonic()
+        if stop.is_set():
+            raise IndexingStopped(filepath.name)
 
     def _do_index():
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
+        _step()
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(str(filepath))
+        result = rag.index_document(
+            str(filepath),
+            progress_callback=lambda _done, _total: _step(),
+            heartbeat=_step,
+        )
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
@@ -4147,9 +4395,29 @@ async def _index_document(filepath: Path) -> int:
         return chunks
 
     try:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _do_index)
-    except RuntimeError:
+        small = filepath.stat().st_size < _INDEX_SMALL_FILE_BYTES
+    except OSError:
+        small = False
+    pool = _INDEX_SMALL_EXECUTOR if small else _INDEX_EXECUTOR
+    future = asyncio.get_running_loop().run_in_executor(pool, _do_index)
+    future.add_done_callback(_settled_quietly)
+    try:
+        while True:
+            done, _ = await asyncio.wait({future}, timeout=_INDEX_POLL_S)
+            if done:
+                return future.result()
+            last = progress["at"]
+            if last is not None and _time.monotonic() - last > _INDEX_TIMEOUT_S:
+                stop.set()
+                raise RuntimeError(
+                    f"Indexing {filepath.name} made no progress for "
+                    f"{_INDEX_TIMEOUT_S:g} s and was stopped. Try it again; "
+                    f"if it stalls again, raise {_INDEX_TIMEOUT_ENV}."
+                )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
+    except (RuntimeError, IndexingStopped):
         raise
     except Exception as e:
         raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e

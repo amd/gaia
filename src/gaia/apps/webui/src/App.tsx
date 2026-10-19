@@ -14,6 +14,7 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
 import * as api from './services/api';
@@ -341,6 +342,22 @@ function App() {
         setCurrentSession(null);
         setMessages([]);
     }, [setCurrentSession, setMessages]);
+
+    // ── Desktop tray: its icon follows this window; its menu acts here ──
+    const openChatFromTray = useCallback((id: string) => {
+        const store = useChatStore.getState();
+        store.closeSettings();
+        if (id !== store.currentSessionId) {
+            void cleanupAbandonedDraft(store.currentSessionId);
+            setMessages([]);
+        }
+        setCurrentSession(id);
+    }, [setCurrentSession, setMessages]);
+    const newChatFromTray = useCallback(() => {
+        useChatStore.getState().closeSettings();
+        newChat();
+    }, [newChat]);
+    useTrayBridge({ openChat: openChatFromTray, newChat: newChatFromTray, refreshStatus: () => void checkSystemStatus() });
 
     const useSkill = useCallback((name: string) => {
         newChat();

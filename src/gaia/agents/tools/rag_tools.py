@@ -115,10 +115,16 @@ def _index_within_budget(
             jobs[path] = job
 
             def _run():
+                from gaia.daemon.broker_client import detached_from_turn
+
                 try:
-                    job.result = rag.index_document(
-                        path, progress_callback=job.progress, wait_callback=job.waiting
-                    )
+                    # Outlives the turn that started it: not its Stop, not its stream.
+                    with detached_from_turn():
+                        job.result = rag.index_document(
+                            path,
+                            progress_callback=job.progress,
+                            wait_callback=job.waiting,
+                        )
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:

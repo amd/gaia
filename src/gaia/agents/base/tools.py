@@ -118,6 +118,17 @@ def _infer_param_type(annotation: Any) -> str:
         return "unknown"
 
 
+def _array_items(annotation: Any) -> Dict[str, Any]:
+    """The ``items`` schema of a list annotation: ``List[str]`` -> string."""
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        non_none = [a for a in typing.get_args(annotation) if a is not types.NoneType]
+        return _array_items(non_none[0]) if len(non_none) == 1 else {}
+    args = [a for a in typing.get_args(annotation) if a is not Ellipsis]
+    element = _infer_param_type(args[0]) if len(args) == 1 else "unknown"
+    return {} if element == "unknown" else {"type": element}
+
+
 def _literal_choices(annotation: Any) -> Optional[list]:
     """The values of a ``Literal[...]`` (or ``Optional[Literal[...]]``), else None."""
     origin = typing.get_origin(annotation)
@@ -288,6 +299,8 @@ def tool(
                 "type": _infer_param_type(annotation),
                 "required": param.default == inspect.Parameter.empty,
             }
+            if param_info["type"] == "array":
+                param_info["items"] = _array_items(annotation)
             choices = _literal_choices(annotation)
             if choices:
                 # An enum lets the server's tool-call grammar rule out bad values.
