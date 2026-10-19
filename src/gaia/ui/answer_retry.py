@@ -127,73 +127,71 @@ def build_retry_messages(
     return [{"role": "system", "content": RETRY_SYSTEM_PROMPT}, *history, *rendered]
 
 
-def _is_loaded(base_url: str, headers: dict, model: str) -> bool:
-    import httpx
+def _is_loaded(client: Any, model: str) -> bool:
+    from gaia.llm.lemonade_client import LemonadeClientError
 
     try:
-        resp = httpx.get(f"{base_url}/health", headers=headers, timeout=5.0)
-        resp.raise_for_status()
-        loaded = resp.json().get("all_models_loaded", [])
-    except (httpx.HTTPError, ValueError) as exc:
+        loaded = client.health_check(timeout=5.0).get("all_models_loaded", [])
+    except LemonadeClientError as exc:
         raise RetryError(
             503,
-            f"Could not reach the model server at {base_url} to load {model}: "
-            f"{exc}. Check Settings → Model.",
+            f"Could not reach the model server at {client.base_url} to load "
+            f"{model}: {exc}. Check Settings → Model.",
         ) from exc
     return any((m.get("model_name") or "").lower() == model.lower() for m in loaded)
 
 
 def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Load *model* the way a chat turn would, then ask it. Blocking."""
-    import httpx
+    import requests
 
-    from gaia.llm.lemonade_client import (
-        lemonade_auth_headers,
-        resolve_lemonade_api_key,
-        resolve_lemonade_base_url,
-    )
+    from gaia.daemon.broker_client import model_lease
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
     from gaia.llm.lemonade_manager import LemonadeManager
     from gaia.ui._chat_helpers import _maybe_load_expected_model
 
-    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    client = LemonadeClient(base_url=LemonadeManager.get_base_url(), verbose=False)
 
     started = time.monotonic()
-    _maybe_load_expected_model(model)
-    # The pre-load logs a refusal instead of raising; asking anyway would let
-    # Lemonade load the model at its own, smaller window.
-    if not _is_loaded(base_url, headers, model):
-        raise RetryError(
-            503,
-            f"{model} could not be loaded, often because there is not enough "
-            "free memory. Close other apps and try again; gaia.log says why.",
-        )
-    loaded = time.monotonic()
-    try:
-        resp = httpx.post(
-            f"{base_url}/chat/completions",
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": RETRY_MAX_TOKENS,
-                "stream": False,
-            },
-            headers=headers,
-            timeout=900.0,
-        )
-    except httpx.HTTPError as exc:
-        raise RetryError(
-            503,
-            f"Could not reach the model server at {base_url} to ask {model}: "
-            f"{exc}. Check Settings → Model.",
-        ) from exc
-    finished = time.monotonic()
-    if resp.status_code != 200:
-        raise RetryError(
-            503,
-            f"{model} did not answer (HTTP {resp.status_code}): {resp.text[:300]}",
-        )
-    data = resp.json()
+    # One lease over load and ask, so no other process swaps the model out between them.
+    with model_lease(model, priority="interactive"):
+        _maybe_load_expected_model(model)
+        # The pre-load logs a refusal instead of raising; asking anyway would let
+        # Lemonade load the model at its own, smaller window.
+        if not _is_loaded(client, model):
+            raise RetryError(
+                503,
+                f"{model} could not be loaded, often because there is not enough "
+                "free memory. Close other apps and try again; gaia.log says why.",
+            )
+        loaded = time.monotonic()
+        try:
+            data = client.chat_completions(
+                model,
+                messages,
+                max_completion_tokens=RETRY_MAX_TOKENS,
+                stream=False,
+                timeout=900,
+                auto_download=False,
+            )
+        except (LemonadeClientError, requests.RequestException) as exc:
+            raise RetryError(
+                503,
+                f"{model} did not answer at {client.base_url}: {exc}. "
+                "Check Settings → Model.",
+            ) from exc
+        finished = time.monotonic()
+        try:
+            # Read under the lease, so the numbers are this request's, as on a chat turn.
+            server = client.get_stats()
+        except LemonadeClientError as exc:
+            logger.warning(
+                "Lemonade /stats unavailable after retrying with %s; the comparison "
+                "shows no speed for it: %s",
+                model,
+                exc,
+            )
+            server = {}
     content = (
         (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
     ).strip()
@@ -212,21 +210,7 @@ def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         # Zero reads as "not reported", as on a chat turn's stats.
         "input_tokens": usage.get("prompt_tokens") or 0,
         "output_tokens": usage.get("completion_tokens") or 0,
-        "tokens_per_second": 0,
-        "time_to_first_token": 0,
+        "tokens_per_second": round(server.get("tokens_per_second", 0), 1),
+        "time_to_first_token": round(server.get("time_to_first_token", 0), 3),
     }
-    # Same source as a chat turn's stats, so the two answers compare like for like.
-    try:
-        stats_resp = httpx.get(f"{base_url}/stats", headers=headers, timeout=5.0)
-        stats_resp.raise_for_status()
-        server = stats_resp.json()
-        stats["tokens_per_second"] = round(server.get("tokens_per_second", 0), 1)
-        stats["time_to_first_token"] = round(server.get("time_to_first_token", 0), 3)
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning(
-            "Lemonade /stats unavailable after retrying with %s; the comparison "
-            "shows no speed for it: %s",
-            model,
-            exc,
-        )
     return {"content": content, "stats": stats}
