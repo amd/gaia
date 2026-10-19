@@ -10,6 +10,8 @@
  */
 
 const CHECK_TIMEOUT_MS = 3000;
+// After the quit question fails, how long a second quit goes through without it.
+const QUIT_ANYWAY_MS = 60_000;
 
 /** Read JSON from the GAIA service; throws an error that says what failed. */
 async function backendJson(
@@ -137,22 +139,23 @@ async function confirmQuit({ getWork, showMessageBox, action = QUIT }) {
  *
  * @param {{app: Electron.App, updater: NodeJS.EventEmitter,
  *   shouldAsk: () => boolean, confirm: () => Promise<boolean>,
- *   onQuitting: () => void, onError: (err: Error) => void}} deps `onError` should
- *   tell the user that quitting again quits without asking.
+ *   onQuitting: () => void, onError: (err: Error) => void, now?: () => number}} deps
+ *   `onError` should tell the user that quitting again within QUIT_ANYWAY_MS
+ *   quits without asking.
  * @returns {{readonly confirmed: boolean, allow(): void}}
  */
-function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onError }) {
+function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onError, now = Date.now }) {
   let confirmed = false;
   let inFlight = false;
-  // If the question itself can't be shown, the next quit goes through, so a
-  // broken dialog can never trap the user in GAIA.
-  let questionFailed = false;
+  // If the question itself can't be shown, a quit soon after goes through, so
+  // a broken dialog can never trap the user in GAIA; a later quit asks again.
+  let quitAnywayUntil = 0;
   // The restart was already confirmed in the update dialog.
   updater.on("before-quit-for-update", () => {
     confirmed = true;
   });
   app.on("before-quit", (event) => {
-    if (!confirmed && !questionFailed && shouldAsk()) {
+    if (!confirmed && now() >= quitAnywayUntil && shouldAsk()) {
       event.preventDefault();
       if (inFlight) return;
       inFlight = true;
@@ -168,7 +171,7 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
         })
         .catch((err) => {
           inFlight = false;
-          questionFailed = true;
+          quitAnywayUntil = now() + QUIT_ANYWAY_MS;
           onError(err);
         });
       return;
@@ -226,6 +229,7 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
 }
 
 module.exports = {
+  QUIT_ANYWAY_MS,
   attachWindowGuards,
   backendJson,
   fetchWorkInProgress,

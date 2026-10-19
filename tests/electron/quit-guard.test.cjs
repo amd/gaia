@@ -15,6 +15,7 @@ const {
   attachWindowGuards,
   RESTART_FOR_UPDATE,
   CHECK_TIMEOUT_MS,
+  QUIT_ANYWAY_MS,
 } = require("../../src/gaia/apps/webui/services/quit-guard.cjs");
 
 const idle = { answers: [], indexing: [] };
@@ -140,7 +141,7 @@ describe("backendJson", () => {
 describe("installQuitGuard", () => {
   const { EventEmitter } = require("events");
 
-  function setup({ ask = true, confirm = async () => true } = {}) {
+  function setup({ ask = true, confirm = async () => true, now = () => 0 } = {}) {
     const app = new EventEmitter();
     const updater = new EventEmitter();
     const deps = {
@@ -150,6 +151,7 @@ describe("installQuitGuard", () => {
       confirm: jest.fn(confirm),
       onQuitting: jest.fn(),
       onError: jest.fn(),
+      now,
     };
     app.quit = jest.fn(() => app.emit("before-quit", quitEvent()));
     const guard = installQuitGuard(deps);
@@ -234,6 +236,39 @@ describe("installQuitGuard", () => {
     app.emit("before-quit", again);
     expect(again.preventDefault).not.toHaveBeenCalled();
     expect(deps.confirm).toHaveBeenCalledTimes(1);
+    expect(deps.onQuitting).toHaveBeenCalled();
+  });
+  test("the pass a failed question gives expires, so a much later quit asks again", async () => {
+    let t = 1_000;
+    let fail = true;
+    const { app, deps } = setup({
+      now: () => t,
+      confirm: async () => {
+        if (fail) throw new Error("dialog failed");
+        return false;
+      },
+    });
+    app.emit("before-quit", quitEvent());
+    await flush();
+    fail = false;
+    t += QUIT_ANYWAY_MS;
+    const later = quitEvent();
+    app.emit("before-quit", later);
+    expect(later.preventDefault).toHaveBeenCalled();
+    await flush();
+    expect(deps.confirm).toHaveBeenCalledTimes(2);
+    expect(deps.onQuitting).not.toHaveBeenCalled();
+  });
+
+  test("a quit just inside the pass still goes through", async () => {
+    let t = 1_000;
+    const { app, deps } = setup({ now: () => t, confirm: async () => { throw new Error("dialog failed"); } });
+    app.emit("before-quit", quitEvent());
+    await flush();
+    t += QUIT_ANYWAY_MS - 1;
+    const again = quitEvent();
+    app.emit("before-quit", again);
+    expect(again.preventDefault).not.toHaveBeenCalled();
     expect(deps.onQuitting).toHaveBeenCalled();
   });
 });

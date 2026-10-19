@@ -1351,7 +1351,7 @@ const quitGuard = installQuitGuard({
     dialog.showErrorBox(
       "GAIA",
       `GAIA couldn't ask whether to stop the running work: ${err.message}\n\n` +
-        "Quit again to quit anyway; any answer still being written will be lost."
+        "Quit again within a minute to quit anyway; any answer still being written will be lost."
     );
   },
 });
