@@ -870,8 +870,8 @@ full trace when it ends. A turn cut short by the TUI closing (stdin reaching
 end of file, or the output pipe breaking) ends with "This turn was interrupted
 before it finished: the TUI closed or the agent stopped." So does one the TUI
 had to kill, so a resumed session knows that turn never finished. A turn that
-failed while the TUI was open leaves no entry, as before. This archive contains tool output, including
-local file contents.
+failed while the TUI was open leaves no entry. This archive contains tool
+output, including local file contents.
 Delete the file to remove it. A host calling `conversation_history.clear()`
 erases both the visible history and its archived turns.
 

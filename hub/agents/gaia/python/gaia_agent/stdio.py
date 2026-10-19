@@ -1321,11 +1321,16 @@ def run_turn(
     from gaia.agents.base.history import SessionHistory
     from gaia.ui.sse_handler import SSEOutputHandler
 
-    if isinstance(getattr(agent, "conversation_history", None), SessionHistory):
-        agent.conversation_history.prepare(
-            agent, query, on_cut=lambda cut: _write(_history_cut_event(cut), out)
-        )
-    _begin_turn_record(agent, query)
+    try:
+        if isinstance(getattr(agent, "conversation_history", None), SessionHistory):
+            agent.conversation_history.prepare(
+                agent, query, on_cut=lambda cut: _write(_history_cut_event(cut), out)
+            )
+        _begin_turn_record(agent, query)
+    except Exception as exc:  # the turn never started; it still needs its end
+        logger.exception("Could not open the turn in the session history")
+        _write(_terminal_error(exc), out)
+        return
     host_gone = False
 
     handler = SSEOutputHandler()

@@ -186,3 +186,40 @@ def test_a_broken_history_never_sends_a_second_terminal_event(agent, monkeypatch
     assert [e["type"] for e in events if e["type"] in ("final", "error")] == [
         "error"
     ]
+
+
+def test_a_history_that_cannot_open_the_turn_still_ends_it(agent, monkeypatch):
+    agent.release.set()
+    monkeypatch.setattr(
+        agent.conversation_history,
+        "begin",
+        lambda messages: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
+    )
+    out = io.StringIO()
+    stdio.run_turn(agent, "hello", out)
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line]
+    assert [e["type"] for e in events if e["type"] in ("final", "error")] == [
+        "error"
+    ]
+    assert not agent.started.is_set()
+
+
+def test_the_note_after_a_cut_short_tool_call_keeps_roles_alternating():
+    from gaia.agents.base.history import TurnMessages
+
+    trace = TurnMessages()
+    trace.append({"role": "user", "content": "list my files"})
+    trace.append(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "ls"}}
+            ],
+        }
+    )
+    noted = stdio._with_note(trace.finish(""))
+
+    assert [m["role"] for m in noted] == ["user", "assistant", "tool", "assistant"]
+    assert noted[-1]["content"] == stdio.INTERRUPTED_NOTE
