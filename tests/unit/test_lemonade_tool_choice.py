@@ -40,7 +40,7 @@ def client(monkeypatch):
     """A client for a local model that never loads it or takes a broker lease."""
     client = LemonadeClient(verbose=False)
     monkeypatch.setattr(client, "_ensure_model_loaded", lambda *a, **k: None)
-    monkeypatch.setattr(client, "_model_slot_lease", lambda model: nullcontext())
+    monkeypatch.setattr(client, "_model_slot_lease", lambda model, **_kw: nullcontext())
     return client
 
 

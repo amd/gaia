@@ -3243,9 +3243,32 @@ model **evicts** the first. The daemon therefore runs a **model-slot broker**
 that hands out one lease at a time, so model loads queue instead of racing.
 
 When a daemon is running, `gaia` commands and the Agent UI backend attach to it
-automatically and take a lease around each model load — you may see a brief
-`⏳ switching model…` while another process finishes. Interactive chat turns
-take priority over background work (embedder warm-ups, autonomous briefs).
+automatically and take a lease around each model load and request. Interactive
+chat turns take priority over background work (memory extraction, embedder
+warm-ups, autonomous briefs).
+
+A request that has to wait is **queued, not failed**:
+
+- It waits for as long as the request ahead of it holds the slot. The holder
+  renews its lease every 15 seconds. One that stops renewing for a minute (it
+  exited) is dropped and the queue moves on. One that keeps renewing past the
+  time its own request is allowed (its request timeout, the two-minute retry
+  window, and 15 minutes for a model load) is wedged, and loses the slot too.
+- Background work (memory extraction, document indexing) that has waited ten
+  minutes goes ahead of newer chat turns, so it is never starved.
+- While an **Agent UI** turn waits, it shows `Waiting for the model — <who> is
+  using it` with its place in line and seconds waited, updated every two
+  seconds, and the wait never counts toward the turn's idle stop. A `gaia`
+  command prints `⏳` once. The gaia agent's `/query` stream, which the
+  terminal UI reads, carries the same wait as a `model_queue` status (see
+  `docs/spec/agent-ui-query-sse-contract.md` §4.4).
+- Pressing Stop in the Agent UI, cancelling a `/query` run, pressing Ctrl+C, or
+  closing the app takes the request out of the queue, so the slot never goes to a caller that has left.
+  Indexing a turn started keeps going after the turn ends.
+- To cap the wait, set `GAIA_MODEL_LEASE_WAIT_S` to a number of seconds. Past
+  it, the request fails with where it stood in line and who held the model.
+- If the daemon stops sending queue updates for 30 seconds, the request fails
+  and names the daemon as the cause.
 
 With **no daemon running, nothing changes**: there are no sidecars, nothing else
 holds the slot, and loads proceed directly. Attaching never starts a daemon.
