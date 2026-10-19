@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import signal
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from apscheduler.events import (
     EVENT_JOB_MAX_INSTANCES,
@@ -107,14 +107,35 @@ def _parse(schedule: Schedule, field: str) -> Optional[datetime]:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
+def _latest_fire(trigger: CronTrigger, until: datetime, inclusive: bool):
+    """The last fire time before *until* (or at it, if *inclusive*)."""
+    for span in (
+        timedelta(minutes=2),
+        timedelta(hours=2),
+        timedelta(days=2),
+        timedelta(days=32),
+        timedelta(days=367),
+    ):
+        latest = None
+        fire = trigger.get_next_fire_time(None, until - span)
+        while fire is not None and (fire < until or (inclusive and fire == until)):
+            latest = fire
+            fire = trigger.get_next_fire_time(fire, fire)
+        if latest is not None:
+            return latest
+    return None
+
+
 def _missed_runs(
     schedule: Schedule, until: datetime, *, including_until: bool
-) -> List[datetime]:
-    """Due times of *schedule* before *until* that nothing ran.
+) -> Tuple[List[datetime], bool]:
+    """Due times of *schedule* before *until* that nothing ran, and whether
+    the count stopped at the cap (it is then "at least" that many).
 
     Counted from the run the daemon last expected (``next_run``), and never
     from before the schedule was created, last ran, was last resumed, or
-    began counting misses.
+    began counting misses. Past the cap the list ends with the latest due
+    time, so ``last_missed`` is still right.
     """
     trigger = CronTrigger.from_crontab(schedule.cron)
     floor = max(
@@ -140,7 +161,8 @@ def _missed_runs(
         if fire > floor:
             missed.append(fire)
         fire = trigger.get_next_fire_time(fire, fire)
-    if len(missed) >= _MAX_MISSED_COUNTED:
+    capped = len(missed) >= _MAX_MISSED_COUNTED
+    if capped:
         log.warning(
             "schedule %r: stopped counting missed runs at %d; more came due "
             "before %s",
@@ -148,7 +170,10 @@ def _missed_runs(
             _MAX_MISSED_COUNTED,
             _utc(until),
         )
-    return missed
+        latest = _latest_fire(trigger, until, including_until)
+        if latest is not None and latest > missed[-1]:
+            missed.append(latest)
+    return missed, capped
 
 
 def _account(
@@ -169,16 +194,17 @@ def _account(
         if schedule.missed_since is None:
             # Saved before misses were counted: start counting from now.
             return MissedRuns([], next_run, since=_utc(until))
-        missed = _missed_runs(schedule, until, including_until=including_until)
+        missed, capped = _missed_runs(schedule, until, including_until=including_until)
         if missed:
             log.warning(
-                "schedule %r missed %d run(s), the latest due at %s: the PC "
+                "schedule %r missed %s%d run(s), the latest due at %s: the PC "
                 "was off or asleep, or the schedule daemon was not running",
                 name,
+                "at least " if capped else "",
                 len(missed),
                 _utc(missed[-1]),
             )
-        return MissedRuns([_utc(due) for due in missed], next_run)
+        return MissedRuns([_utc(due) for due in missed], next_run, at_least=capped)
 
     store.account_missed(name, decide)
 

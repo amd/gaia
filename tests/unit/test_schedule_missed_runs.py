@@ -181,3 +181,54 @@ def test_show_says_runs_were_missed(tmp_path, mocker, capsys):
     # In local time, as next_fire is.
     local = datetime.fromisoformat("2026-10-18T11:00:00+00:00").astimezone()
     assert f"latest due {local.isoformat()}" in out
+
+
+def test_past_the_count_cap_the_latest_due_time_is_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "_MAX_MISSED_COUNTED", 10)
+    now = datetime.now(timezone.utc)
+    store = TomlScheduleStore(tmp_path / "schedules.toml")
+    store.add(
+        Schedule(
+            name="minutely",
+            cron="* * * * *",
+            prompt="say hello",
+            created_at=_iso(now - timedelta(days=2)),
+            next_run=_iso(now - timedelta(days=1)),
+        )
+    )
+    daemon.build_scheduler(store)
+    brief = store.get("minutely")
+    latest = datetime.fromisoformat(brief.last_missed)
+    assert now - timedelta(minutes=1) < latest <= now
+    assert brief.missed_at_least is True
+
+
+def test_show_says_at_least_past_the_cap_and_prints_local_times(mocker, capsys):
+    store_cls = mocker.patch("gaia.schedule.store.TomlScheduleStore")
+    store_cls.return_value.get.return_value = Schedule(
+        name="brief",
+        cron=HOURLY,
+        prompt="say hello",
+        created_at="2026-10-01T07:00:00+00:00",
+        missed_count=100_000,
+        missed_at_least=True,
+        last_missed="2026-10-18T11:00:00+00:00",
+    )
+    _handle_schedule(build_parser().parse_args(["schedule", "show", "brief"]))
+    out = capsys.readouterr().out
+    assert "missed:     at least 100000 runs in all" in out
+    created = datetime.fromisoformat("2026-10-01T07:00:00+00:00").astimezone()
+    assert f"created_at: {created.isoformat()}" in out
+
+
+def test_show_prints_created_at_in_local_time(mocker, capsys):
+    store_cls = mocker.patch("gaia.schedule.store.TomlScheduleStore")
+    store_cls.return_value.get.return_value = Schedule(
+        name="brief",
+        cron=HOURLY,
+        prompt="say hello",
+        created_at="2026-10-01T07:00:00+00:00",
+    )
+    _handle_schedule(build_parser().parse_args(["schedule", "show", "brief"]))
+    created = datetime.fromisoformat("2026-10-01T07:00:00+00:00").astimezone()
+    assert f"created_at: {created.isoformat()}" in capsys.readouterr().out

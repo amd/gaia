@@ -1167,28 +1167,46 @@ class Scheduler:
 
                 if not self._running or task.status != "active":
                     break
-
-                now = _utcnow()
-                plan = self._plan(task, due, now)
-                claimed = self._following(task, now).isoformat()
-                if not self._db.claim_scheduled_run(task.id, task.next_run_at, claimed):
-                    # Another server sharing this database took this run.
-                    task.next_run_at = self._db.scheduled_task_next_run(task.id)
-                    logger.info(
-                        "Scheduled task '%s': run due %s was taken by another "
-                        "GAIA server",
+                try:
+                    await self._take_due_run(task, due)
+                except Exception:  # pylint: disable=broad-except
+                    # One bad pass must not stop the schedule until a restart.
+                    logger.exception(
+                        "Scheduled task '%s': could not handle its run due %s; "
+                        "trying again in %ds",
                         task.name,
                         due.isoformat(),
+                        WAKE_CHECK_SECONDS,
                     )
-                    continue
-                task.next_run_at = claimed
-                if plan.missed:
-                    self._record_missed(task, plan)
-                if plan.run_now:
-                    await self._execute_task(task)
+                    await asyncio.sleep(WAKE_CHECK_SECONDS)
         except asyncio.CancelledError:
             logger.debug("Timer cancelled for task '%s'", task.name)
             raise
+
+    async def _take_due_run(self, task: ScheduledTask, due: datetime) -> None:
+        """Claim the run due at *due*, record what was missed, and run it."""
+        now = _utcnow()
+        plan = self._plan(task, due, now)
+        claimed = self._following(task, now).isoformat()
+        if not self._db.claim_scheduled_run(task.id, task.next_run_at, claimed):
+            # Another server sharing this database took this run, or paused it.
+            stored = self._db.scheduled_task_timing(task.id)
+            logger.info(
+                "Scheduled task '%s': run due %s was taken by another GAIA "
+                "server, or the task is now %s",
+                task.name,
+                due.isoformat(),
+                stored["status"],
+            )
+            # A pause elsewhere stops this timer too.
+            task.status = stored["status"]
+            task.next_run_at = stored["next_run_at"]
+            return
+        task.next_run_at = claimed
+        if plan.missed:
+            self._record_missed(task, plan)
+        if plan.run_now:
+            await self._execute_task(task)
 
     @staticmethod
     def _config(task: ScheduledTask) -> Optional[ScheduleConfig]:
@@ -1252,38 +1270,54 @@ class Scheduler:
         if config is None or not _is_wall_clock(config):
             return self._plan_interval(task, due, now, floor, grace)
 
-        # Walk the clock-face due times that have passed.
-        counted = 0  # at or after the floor
-        first: Optional[datetime] = None
-        previous: Optional[datetime] = None
-        latest = due
-        walked = 0
-        at_least = False
+        # Walk the clock-face due times that have passed since the floor; the
+        # ones before it are never counted, so they are not walked either.
         moment = due
+        if floor is not None and floor > due:
+            moment = compute_next_run(config, after=floor - timedelta(microseconds=1))
+        counted = 0
+        first: Optional[datetime] = None
+        last_walked: Optional[datetime] = None
+        before_last: Optional[datetime] = None
+        latest: Optional[datetime] = None
+        previous: Optional[datetime] = None
+        at_least = False
         while moment <= now:
-            walked += 1
-            if floor is None or moment >= floor:
-                counted += 1
-                first = first or moment
-            if walked > 1:
-                previous = latest
-            latest = moment
-            if walked >= _MAX_MISSED_COUNTED:
+            counted += 1
+            first = first or moment
+            before_last, last_walked = last_walked, moment
+            if counted >= _MAX_MISSED_COUNTED:
                 at_least = True
-                previous, latest = self._latest_due(config, now)
                 break
             moment = compute_next_run(config, after=moment)
-        run_now = now - latest <= grace
-        latest_counted = floor is None or latest >= floor
         if at_least:
-            # The latest was found past the walked ones, so it is not in counted.
-            missed = counted + (0 if run_now else 1)
+            previous, latest = self._latest_due(config, now)
+            latest = max(latest or last_walked, last_walked)
+        elif last_walked is not None:
+            latest = last_walked
+        if latest is None:
+            # Nothing came due since the floor; an older due time may still run.
+            _, latest = self._latest_due(config, now)
+            return _DuePlan(
+                missed=0,
+                first_missed=None,
+                last_missed=None,
+                at_least=False,
+                run_now=latest is not None and now - latest <= grace,
+            )
+        run_now = now - latest <= grace
+        beyond_walk = latest != last_walked  # found by the lookback, not walked
+        missed = counted + (1 if beyond_walk else 0) - (1 if run_now else 0)
+        if not run_now:
+            last = latest
+        elif beyond_walk:
+            last = max(previous or last_walked, last_walked)
         else:
-            missed = counted - (1 if run_now and latest_counted else 0)
+            last = before_last
         return _DuePlan(
-            missed=max(0, missed),
+            missed=missed,
             first_missed=first if missed > 0 else None,
-            last_missed=(previous if run_now else latest) if missed > 0 else None,
+            last_missed=last if missed > 0 else None,
             at_least=at_least,
             run_now=run_now,
         )

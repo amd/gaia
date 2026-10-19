@@ -53,6 +53,8 @@ class Schedule:
     #: Runs that came due while nothing could run them, and the latest one.
     missed_count: int = 0
     last_missed: Optional[str] = None
+    #: ``missed_count`` is a lower bound: one stretch passed the count cap.
+    missed_at_least: bool = False
     #: When it was last resumed: runs due while it was paused are not missed.
     resumed_at: Optional[str] = None
     #: Since when missed runs are counted. Unset on a schedule saved before
@@ -91,6 +93,8 @@ class Schedule:
             d["missed_count"] = self.missed_count
         if self.last_missed:
             d["last_missed"] = self.last_missed
+        if self.missed_at_least:
+            d["missed_at_least"] = True
         if self.resumed_at:
             d["resumed_at"] = self.resumed_at
         if self.missed_since:
@@ -113,6 +117,7 @@ class Schedule:
             created_at=data.get("created_at", ""),
             missed_count=int(data.get("missed_count", 0)),
             last_missed=data.get("last_missed"),
+            missed_at_least=bool(data.get("missed_at_least", False)),
             resumed_at=data.get("resumed_at"),
             missed_since=data.get("missed_since"),
         )
@@ -125,6 +130,8 @@ class MissedRuns(NamedTuple):
     missed: List[str]
     next_run: Optional[str]
     since: Optional[str] = None
+    #: The count stopped at its cap: there were at least that many.
+    at_least: bool = False
 
 
 @runtime_checkable
@@ -279,6 +286,7 @@ class TomlScheduleStore:
             if outcome.missed:
                 schedule.missed_count += len(outcome.missed)
                 schedule.last_missed = outcome.missed[-1]
+                schedule.missed_at_least = schedule.missed_at_least or outcome.at_least
             schedule.next_run = outcome.next_run
             schedule.missed_since = schedule.missed_since or outcome.since
             self.save(schedules)

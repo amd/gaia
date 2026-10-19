@@ -273,3 +273,85 @@ async def test_an_interval_stretch_is_counted_exactly(db):
 
 async def test_the_missed_since_key_is_the_schedulers():
     assert scheduler_module.MISSED_SINCE_SETTING == MISSED_SINCE
+
+
+async def test_an_old_dense_window_task_first_seen_outside_its_window(db, monkeypatch):
+    """An every-minute 9-to-5 task an older build left 240 days back, met by
+    this build's first start in the evening: nothing before the first start
+    is blamed, and nothing crashes."""
+    monkeypatch.setattr(scheduler_module, "_MAX_MISSED_COUNTED", 50)
+    now = datetime(2026, 10, 19, 20, 0, tzinfo=timezone.utc)
+    config = ScheduleConfig(
+        interval_seconds=60, start_hour=9, end_hour=17, timezone="UTC"
+    )
+    sched = Scheduler(db=db, executor=_Recorder())
+    sched._missed_since = now - timedelta(minutes=1)  # this build's first start
+    due = now - timedelta(days=240)
+    task = scheduler_module.ScheduledTask(
+        task_id="t1",
+        name="w",
+        interval_seconds=60,
+        prompt="p",
+        created_at=(due - timedelta(days=1)).isoformat(),
+        next_run_at=due.isoformat(),
+        schedule_config=config.to_json(),
+    )
+    plan = sched._plan(task, due, now)
+    assert plan.missed == 0
+    assert plan.run_now is False
+
+
+async def test_a_bad_pass_is_logged_and_the_schedule_keeps_running(
+    db, monkeypatch, caplog
+):
+    monkeypatch.setattr(scheduler_module, "WAKE_CHECK_SECONDS", 0.05)
+    now = datetime.now(timezone.utc)
+    _row(db, name="tick", interval=3600, next_run_at=now - timedelta(seconds=1))
+    executor = _Recorder()
+    sched = Scheduler(db=db, executor=executor)
+    real_plan = Scheduler._plan
+    calls = []
+
+    def flaky_plan(self, *args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise AttributeError("'NoneType' object has no attribute 'astimezone'")
+        return real_plan(self, *args)
+
+    monkeypatch.setattr(Scheduler, "_plan", flaky_plan)
+    caplog.set_level("ERROR", logger=scheduler_module.logger.name)
+    await sched.start()
+    try:
+        for _ in range(100):
+            if executor.prompts:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await sched.shutdown()
+    assert "could not handle its run due" in caplog.text
+    assert executor.prompts == ["Summarize my inbox"]
+
+
+async def test_a_pause_on_one_server_is_not_undone_by_the_other(tmp_path):
+    path = str(tmp_path / "chat.db")
+    first, second = ChatDatabase(path), ChatDatabase(path)
+    first.set_setting(
+        MISSED_SINCE, (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    )
+    now = datetime.now(timezone.utc)
+    _row(first, name="t", interval=1, next_run_at=now + timedelta(seconds=0.5))
+    a, b = _Recorder(), _Recorder()
+    servers = [Scheduler(db=first, executor=a), Scheduler(db=second, executor=b)]
+    for server in servers:
+        await server.start()
+    try:
+        await servers[0].pause_task("t")  # the user pauses it in one window
+        await asyncio.sleep(2.0)
+    finally:
+        for server in servers:
+            await server.shutdown()
+        status = [r["status"] for r in first.list_scheduled_tasks()]
+        first.close()
+        second.close()
+    assert a.prompts == [] and b.prompts == []
+    assert status == ["paused"]
