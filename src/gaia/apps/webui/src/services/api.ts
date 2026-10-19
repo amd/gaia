@@ -5,6 +5,7 @@
 
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ContextUsage, RetryResult, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
+import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -1256,4 +1257,26 @@ export async function getScheduleResults(name: string, limit: number = 20): Prom
 
 export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
     return apiFetch('POST', '/schedules/parse', { input, timezone: browserTimeZone() });
+}
+
+// -- Undo a turn's file changes (#5225) --------------------------------------
+
+export async function listTurnChanges(sessionId: string): Promise<{ turns: TurnChanges[] }> {
+    return apiFetch('GET', `/sessions/${encodeURIComponent(sessionId)}/changes`);
+}
+
+export async function getTurnDiff(sessionId: string, turnId: string): Promise<{ turn_id: string; files: FileDiff[] }> {
+    return apiFetch('GET', `/sessions/${encodeURIComponent(sessionId)}/changes/${encodeURIComponent(turnId)}/diff`);
+}
+
+export async function undoTurn(sessionId: string, turnId: string, force = false): Promise<UndoResult> {
+    return apiFetch('POST', `/sessions/${encodeURIComponent(sessionId)}/changes/${encodeURIComponent(turnId)}/undo`, { force });
+}
+
+export async function getUndoSettings(): Promise<UndoSettings> {
+    return apiFetch('GET', '/settings/undo');
+}
+
+export async function updateUndoSettings(retentionDays: number, maxMb: number): Promise<UndoSettings> {
+    return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
 }

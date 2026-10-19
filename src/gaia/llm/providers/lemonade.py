@@ -632,6 +632,15 @@ class LemonadeProvider(LLMClient):
         """The Lemonade URL this client talks to now (see ``LemonadeClient``)."""
         return self._backend.current_base_url()
 
+    def wait_for_gaia_lemonade(
+        self,
+        model: Optional[str] = None,
+        *,
+        on_status: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """Wait for GAIA's own server to answer again (see ``LemonadeClient``)."""
+        return self._backend.wait_for_gaia_lemonade(model, on_status=on_status)
+
     def refresh_model_catalog(self, show_all: bool = True) -> None:
         """Read the Lemonade catalog once so ``cloud_model_provider`` can
         recognise a runtime-discovered provider right away.
