@@ -1,12 +1,12 @@
 ---
 name: "agent-hub-release"
-description: "Cut or wire a frozen-binary + npm sidecar release for a GAIA agent (the email-agent CI pipeline: freeze -> Agent Hub Worker /publish -> npm OIDC). Use when releasing or onboarding a sidecar agent under hub/agents/, or authoring a release_agent_<id>.yml. For the standard wheel/PyPI + Hub publish, defer to the author guide docs/guides/hub-publishing.mdx — this skill is the sidecar extension on top of it."
+description: "Cut or wire the frozen-binary + npm release of an agent GAIA itself ships (the email/flagship CI pipeline: freeze -> download-server Worker /publish -> npm OIDC). Use when releasing a sidecar agent under hub/agents/ or editing a release_agent_<id>.yml. Maintainer release tooling only — GAIA has no public agent catalog to publish into."
 ---
 
 # Releasing a GAIA Sidecar Agent (frozen binary + npm)
 
 How to ship a **sidecar agent** — a frozen, no-Python REST binary plus a thin npm
-client — to the GAIA Agent Hub and npm, via the tag-triggered CI release. The
+client — to GAIA's download server (`hub.amd-gaia.ai`) and npm, via the tag-triggered CI release. The
 **email agent is the reference**: `hub/agents/email/python/` +
 `hub/agents/email/npm/` + `.github/workflows/release_agent_email.yml`.
 
@@ -23,34 +23,23 @@ release is fixed by a new version, never an overwrite.
 > `agent-publish` environment + `GAIA_HUB_TOKEN` + hub vars are **maintainer
 > setup** (workflow header) — verify they exist before relying on them.
 
-## Relationship to the author guide (read first)
+## Scope
 
-[`docs/guides/hub-publishing.mdx`](../../../docs/guides/hub-publishing.mdx) is the
-**author-facing** guide for the standard distribution: a Python **wheel** published
-to the Hub + PyPI via `gaia agent publish` (or the no-token PR route). It owns the
-authoritative rules for the **manifest, versioning, immutability, and the two
-publish routes** — don't restate or contradict them here.
-
-This skill covers the **additional** channel an agent like email layers on top: a
-**frozen native binary + an `@amd-gaia/agent-<id>` npm client**, released through
-`release_agent_<id>.yml`. An agent can ship one or both channels. Where the two
-overlap (manifest, version rules), the guide is the source of truth.
-
-**Releasing an agent that has never shipped before?** Cutting the release is the
-*last* phase. An agent is not release-ready because its code runs — it needs a
-capability-truth audit, a real scorecard, the doc bundle, and a day-one usability
-check first. Use [`porting-agent-to-hub`](../porting-agent-to-hub/SKILL.md) for
-that flow, then come back here for the lane itself.
+This is maintainer release tooling, not a user-facing product: GAIA ships one
+agent (the flagship) through two apps, the TUI and the Agent UI, and there is no
+public agent catalog to publish into. The pipeline below is how the agents GAIA
+itself ships (the flagship, and the email sidecar) reach the download server
+(`hub.amd-gaia.ai`) and npm.
 
 ## Distribution model (the mental picture)
 
 ```
 freeze.py (PyInstaller, native per-OS, no cross-compile)
    └─ email-agent-<platform>[.exe]   ← one-file binary, boots a FastAPI REST sidecar
-        └─ POST /publish  →  Agent Hub Worker (workers/agent-hub/) ── R2 bucket "gaia-hub"
+        └─ POST /publish  →  download-server Worker (workers/agent-hub/) ── R2 bucket "gaia-hub"
              • stores each object IMMUTABLY under agents/<id>/<ver>/<file>
              • computes SHA-256 server-side
-             • rebuilds index.json (the catalog the website reads)
+             • rebuilds index.json (what `gaia init` and the daemon read)
         download = plain public GET at hub.amd-gaia.ai/agents/<id>/<ver>/<file>
    └─ @amd-gaia/agent-<id> (npm)  ← typed client + fetch CLI + sidecar lifecycle
         • binaries.lock.json maps platform → {filename, sha256, size}; the SHA-256
@@ -65,7 +54,7 @@ The manifest + README ride along inside the publish.
 ## What a sidecar agent adds (email = reference)
 
 On top of the normal agent package (manifest + code + README + `pyproject.toml`,
-per the guide), a sidecar agent adds:
+see the `gaia-build-agent` skill), a sidecar agent adds:
 
 | Path | Role |
 |------|------|
@@ -134,14 +123,14 @@ matching `CHANGELOG.md` entry too if the agent keeps one (recommended, not requi
 6. **Publish stage** (atomic): POST every binary to `/publish` → regenerate
    `binaries.lock.json` with the **real** hashes → **fetch-verify every published
    object** against the lock → `npm publish` via OIDC (provenance) → trigger
-   `deploy_website.yml` so the new catalog entry appears.
+   `deploy_website.yml` so the home page's download links pick up the new build.
 
 Monitor with `gh run watch`. `npm publish` skips if that exact version already
 exists; `/publish` is a verified 409 no-op for identical bytes.
 
 ## Onboarding a NEW sidecar agent (one-time)
 
-1. **Scaffold** the normal agent first (`gaia agent init`, per the guide), then add
+1. **Scaffold** the normal agent first (`gaia agent init`, see `gaia-build-agent`), then add
    `packaging/` and the `hub/agents/<id>/npm/` client. Mirror email.
 2. **Adapt the packaging scripts.** `freeze.py` (its `NAME = "email-agent"` constant)
    and `publish_to_r2.py` (the executable name + the `email-agent-` filename prefix it
@@ -168,7 +157,7 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 - **GitHub environment `agent-publish`** with **required reviewers**; restrict its
   deployment branches/tags to `main` **and** the `agent-pkg-*` tag pattern (a
   main-only rule blocks the tag-triggered gate).
-- **Secret `GAIA_HUB_TOKEN`** — Agent Hub Bearer token matching an entry in the
+- **Secret `GAIA_HUB_TOKEN`** — download-server (`hub.amd-gaia.ai`) Bearer token matching an entry in the
   Worker's `PUBLISH_TOKENS`, scoped to the agent's `author`. Define it as an
   **environment** secret on `agent-publish` (not a repo secret) so it's unreadable
   until the gate is approved. (The workflow maps it into the publish script's
@@ -180,7 +169,7 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
   uploads (but not GETs). **Required** — the release fails loudly if it is unset (no
   silent fallback to the custom domain).
 - **Railway `HUB_CATALOG_URL=https://hub.amd-gaia.ai`** so the website rebuild
-  reflects the new entry.
+  resolves the new download links.
 
 ## Invariants & gotchas
 
@@ -188,7 +177,7 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
   filename (it keys on the filename via `head()`, not a byte-compare). The publish
   script then re-fetches and hashes the stored object: **identical bytes → idempotent
   no-op**, a **hash mismatch → fail loudly**. Fix a bad release with a new version —
-  never an overwrite. (Same immutability the guide describes for `id@version`.)
+  never an overwrite.
 - **Publish only from main.** The job asserts the release commit is on `main`.
 - **`SCHEMA_VERSION` MAJOR is the compat gate.** Client and binary must agree on the
   wire-contract MAJOR or `startSidecar` throws `VersionMismatchError`. Bump the npm
@@ -205,9 +194,9 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 - **Fetch-verify is the real gate.** After `/publish`, CI re-fetches every object via
   the npm `fetch` CLI and checks bytes-hash-to-lock (bounded retry for Cloudflare
   edge propagation) before `npm publish`.
-- **Website is rebuilt, not patched.** Hub pages build from live `index.json`; the
-  publish job triggers `deploy_website.yml` on `main`. (A generic per-agent
-  auto-redeploy is still being wired — see the guide's Verify step.)
+- **Website is rebuilt, not patched.** The home page's download links are resolved
+  from the published manifests at build time; the publish job triggers
+  `deploy_website.yml` on `main`.
 - **Manual fallback:** `hub/agents/<id>/python/packaging/HUB-UPLOAD.md` documents the
   by-hand rclone path to the `gaia-hub` bucket — identical objects + lock as CI.
 - **Write the CHANGELOG entry, PR body, and your status reports** per [CLAUDE.md → How You
@@ -219,8 +208,6 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 
 - `.github/workflows/release_agent_email.yml` — the canonical release workflow (its
   header comments document the whole contract).
-- `docs/guides/hub-publishing.mdx` — the author guide (manifest, versioning, wheel +
-  PR publish routes). The overlap's source of truth.
 - `hub/agents/email/python/gaia-agent.yaml` — manifest reference.
 - `hub/agents/email/npm/{package.json,binaries.lock.json,README.md}` —
   client package reference.

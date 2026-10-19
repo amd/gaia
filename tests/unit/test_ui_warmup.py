@@ -403,3 +403,19 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
         f"  warm: {before[max(0, at - 60): at + 120]!r}\n"
         f"  turn: {after[max(0, at - 60): at + 120]!r}"
     )
+
+
+def test_a_turn_never_races_a_warm_up_that_overruns(monkeypatch):
+    import threading
+
+    from gaia.ui import warmup as warmup_mod
+
+    release = threading.Event()
+    warmer = warmup_mod.PrefixWarmer(lambda: release.wait(10) and None)
+    monkeypatch.setattr(warmup_mod, "_warmer", warmer)
+    try:
+        assert warmer.request("test")
+        with pytest.raises(TimeoutError, match="did not start"):
+            warmup_mod.wait_for_warm_up(timeout=0.3)
+    finally:
+        release.set()
