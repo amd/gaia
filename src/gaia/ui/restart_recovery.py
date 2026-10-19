@@ -25,7 +25,7 @@ import json
 import logging
 import sqlite3
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from .database import ChatDatabase
 from .process_owner import owner_is_gone
@@ -52,13 +52,24 @@ PARTIAL_SAVE_INTERVAL = 2.0
 SWEEP_INTERVAL = 30.0
 
 
+def tools_ran_notice(tools: List[str]) -> str:
+    """The line a cut-off reply carries about the tools it had started."""
+    names = ", ".join(dict.fromkeys(tools))
+    return f"Before it stopped, it had started these tools: {names}."
+
+
 class TurnJournal:
     """What one chat turn has shown the user so far, kept in the database.
 
     Fed every SSE frame the turn emits. ``chunk`` text accumulates and an
-    ``answer`` replaces it, which is what the user saw on screen. The last
-    error the turn showed is kept too, so a turn that ends on an error without
-    saving a reply is closed with that error rather than a generic notice.
+    ``answer`` replaces it, which is what the user saw on screen; each
+    ``tool_start`` is noted, since a cut-off turn may have changed things. The
+    last error the turn showed is kept too, so a turn that ends on an error
+    without saving a reply is closed with that error rather than a generic
+    notice.
+
+    It writes to this process's unfinished turn in the session (see
+    :meth:`ChatDatabase.begin_turn`); with none, it records nothing.
     """
 
     def __init__(
@@ -71,6 +82,9 @@ class TurnJournal:
     ):
         self._db = db
         self._session_id = session_id
+        self._question_id = db.own_turn(session_id)
+        self._tools: List[str] = []
+        self._saved_tools = 0
         self._clock = clock
         self._interval = PARTIAL_SAVE_INTERVAL if interval is None else interval
         self._text = ""
@@ -89,10 +103,13 @@ class TurnJournal:
                 continue
             if not isinstance(event, dict):
                 continue
+            kind = event.get("type")
+            if kind == "tool_start" and isinstance(event.get("tool"), str):
+                self._tools.append(event["tool"])
+                continue
             content = event.get("content")
             if not isinstance(content, str):
                 continue
-            kind = event.get("type")
             if kind == "chunk":
                 self._text += content
             elif kind == "answer":
@@ -115,22 +132,29 @@ class TurnJournal:
 
     def flush(self) -> None:
         self._saved_at = self._clock()
-        if self._text != self._saved:
+        if self._question_id is None:
+            return
+        if self._text != self._saved or len(self._tools) != self._saved_tools:
             # Saved cleaned, as a finished reply is, so leaked JSON never shows.
-            self._db.save_turn_partial(self._session_id, clean_reply_text(self._text))
+            self._db.save_turn_partial(
+                self._question_id, clean_reply_text(self._text), self._tools
+            )
             self._saved = self._text
+            self._saved_tools = len(self._tools)
 
     def close(self) -> None:
         """End the turn normally. If it saved no reply, keep what it showed:
         its final answer as is, or else its text and why it ended."""
         self.flush()
+        if self._question_id is None:
+            return
         if self.error:
             notice = self.error
         elif self._answered and self._text.strip():
             notice = ""
         else:
             notice = ENDED_WITHOUT_REPLY_NOTICE
-        self._db.close_turn(self._session_id, notice)
+        self._db.close_turn(self._question_id, notice, tools_notice=tools_ran_notice)
 
 
 def recover_interrupted_work(db: ChatDatabase) -> Dict[str, int]:
@@ -145,7 +169,13 @@ def recover_interrupted_work(db: ChatDatabase) -> Dict[str, int]:
     for row in db.turns_in_progress():
         if not owner_is_gone(row["owner"]):
             continue
-        if db.close_turn(row["session_id"], INTERRUPTED_TURN_NOTICE) is not None:
+        closed = db.close_turn(
+            row["question_id"],
+            INTERRUPTED_TURN_NOTICE,
+            owner=row["owner"],
+            tools_notice=tools_ran_notice,
+        )
+        if closed is not None:
             turns += 1
     documents = len(db.fail_unfinished_indexing(INTERRUPTED_INDEXING_ERROR))
     if turns or documents:

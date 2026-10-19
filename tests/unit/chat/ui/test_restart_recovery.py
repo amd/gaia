@@ -129,7 +129,7 @@ async def _wait_until(predicate, timeout=5.0):
 
 
 def _partial(db):
-    row = db._conn.execute("SELECT partial_content FROM turns_in_progress").fetchone()
+    row = db._conn.execute("SELECT partial_content FROM unfinished_turns").fetchone()
     return row[0] if row else ""
 
 
@@ -272,7 +272,7 @@ async def test_a_non_streamed_error_leaves_no_marker(runtime):
 async def test_a_turn_that_ends_on_an_error_keeps_that_error(runtime):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
-    db.begin_turn(sid, db.add_message(sid, "user", "hi"))
+    db.begin_turn(sid, "hi")
 
     async def fails_without_saving(*_args):
         yield 'data: {"type": "chunk", "content": "Let me check"}\n\n'
@@ -312,15 +312,12 @@ async def test_a_policy_block_saved_mid_turn_is_not_taken_for_the_reply(tmp_path
     db = ChatDatabase(str(tmp_path / "chat.db"))
     try:
         sid = db.create_session()["id"]
-        db.begin_turn(sid, db.add_message(sid, "user", "delete my files"))
+        question = db.begin_turn(sid, "delete my files")
+        # Saved mid-turn, not as the turn's reply.
         db.upsert_message(
-            sid,
-            None,
-            "assistant",
-            "Blocked: rm is restricted by policy.",
-            turn_placeholder=True,
+            sid, None, "assistant", "Blocked: rm is restricted by policy."
         )
-        db.save_turn_partial(sid, "I will try another way")
+        db.save_turn_partial(question, "I will try another way", [])
         with _new_server():
             assert recover_interrupted_work(db)["turns"] == 1
         contents = [m["content"] for m in db.get_messages(sid)]
@@ -360,7 +357,7 @@ async def test_app_start_runs_the_recovery(tmp_path):
     db_path = str(tmp_path / "chat.db")
     db = ChatDatabase(db_path)
     sid = db.create_session()["id"]
-    db.begin_turn(sid, db.add_message(sid, "user", "hello?"))
+    db.begin_turn(sid, "hello?")
     doc = db.add_document("a.pdf", str(tmp_path / "a.pdf"), "h")
     db.update_document_status(doc["id"], "indexing")
     db.close()
@@ -380,13 +377,13 @@ async def test_work_owned_by_a_live_server_is_left_alone(tmp_path):
     db = ChatDatabase(str(tmp_path / "chat.db"))
     try:
         sid = db.create_session()["id"]
-        db.begin_turn(sid, db.add_message(sid, "user", "hello?"))
+        db.begin_turn(sid, "hello?")
         doc = db.add_document("a.pdf", str(tmp_path / "a.pdf"), "h")
         db.update_document_status(doc["id"], "indexing")
         # Another live process (this test's parent) is running both.
         parent = psutil.Process(os.getppid())
-        live = f"{parent.pid}:{parent.create_time()}:other"
-        db._conn.execute("UPDATE turns_in_progress SET owner = ?", (live,))
+        live = f"{parent.pid}:{process_owner._started(parent.pid)}:other"
+        db._conn.execute("UPDATE unfinished_turns SET owner = ?", (live,))
         db._conn.execute("UPDATE documents SET indexing_owner = ?", (live,))
         db._conn.commit()
 
@@ -394,7 +391,7 @@ async def test_work_owned_by_a_live_server_is_left_alone(tmp_path):
 
         # Once that process has exited (its pid now names a newer process).
         gone = f"{parent.pid}:1.0:other"
-        db._conn.execute("UPDATE turns_in_progress SET owner = ?", (gone,))
+        db._conn.execute("UPDATE unfinished_turns SET owner = ?", (gone,))
         db._conn.execute("UPDATE documents SET indexing_owner = ?", (gone,))
         db._conn.commit()
         assert recover_interrupted_work(db) == {"turns": 1, "documents": 1}
@@ -406,7 +403,7 @@ async def test_this_servers_own_work_is_never_closed(tmp_path):
     db = ChatDatabase(str(tmp_path / "chat.db"))
     try:
         sid = db.create_session()["id"]
-        db.begin_turn(sid, db.add_message(sid, "user", "hello?"))
+        db.begin_turn(sid, "hello?")
         doc = db.add_document("a.pdf", str(tmp_path / "a.pdf"), "h")
         db.update_document_status(doc["id"], "indexing")
         assert recover_interrupted_work(db) == {"turns": 0, "documents": 0}
@@ -417,7 +414,7 @@ async def test_this_servers_own_work_is_never_closed(tmp_path):
 async def test_a_partial_save_that_fails_does_not_end_the_turn(runtime, caplog):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
-    db.begin_turn(sid, db.add_message(sid, "user", "hi"))
+    db.begin_turn(sid, "hi")
     journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
     caplog.set_level("WARNING", logger=restart_recovery.logger.name)
     with patch.object(db, "save_turn_partial", side_effect=sqlite3.OperationalError):
@@ -429,7 +426,7 @@ async def test_recovered_text_is_cleaned_like_a_finished_reply(tmp_path):
     db = ChatDatabase(str(tmp_path / "chat.db"))
     try:
         sid = db.create_session()["id"]
-        db.begin_turn(sid, db.add_message(sid, "user", "hi"))
+        db.begin_turn(sid, "hi")
         journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
         journal.observe(
             'data: {"type": "chunk", "content": '
@@ -447,7 +444,7 @@ async def test_recovered_text_is_cleaned_like_a_finished_reply(tmp_path):
 async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
-    db.begin_turn(sid, db.add_message(sid, "user", "hi"))
+    db.begin_turn(sid, "hi")
 
     async def raises(*_args):
         yield 'data: {"type": "chunk", "content": "Let me"}\n\n'
@@ -465,3 +462,171 @@ async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog)
         )
     assert "Could not close the finished turn" in caplog.text
     assert [t["session_id"] for t in db.turns_in_progress()] == [sid]
+
+
+def _as_server(name):
+    return patch.object(process_owner, "_TOKEN", name)
+
+
+def _chunk(text):
+    return f'data: {{"type": "chunk", "content": "{text}"}}\n\n'
+
+
+async def test_two_servers_in_one_chat_keep_their_own_turns(tmp_path):
+    """Each server's turn is its own row: A's text never lands in B's turn, and
+    A's ending never erases B's marker."""
+    path = str(tmp_path / "chat.db")
+    a, b = ChatDatabase(path), ChatDatabase(path)
+    try:
+        sid = a.create_session()["id"]
+        with _as_server("A"):
+            a.begin_turn(sid, "question to A")
+            journal_a = restart_recovery.TurnJournal(a, sid, interval=0.0)
+        with _as_server("B"):
+            b.begin_turn(sid, "question to B")
+            journal_b = restart_recovery.TurnJournal(b, sid, interval=0.0)
+            journal_b.observe(_chunk("B's partial answer"))
+        with _as_server("A"):
+            journal_a.observe(_chunk("A's partial answer"))
+            a.add_message(sid, "assistant", "A's answer", ends_turn=True)
+            journal_a.close()
+        # B's process dies; a third server recovers.
+        with _as_server("C"):
+            assert recover_interrupted_work(a)["turns"] == 1
+        contents = [m["content"] for m in a.get_messages(sid)]
+    finally:
+        a.close()
+        b.close()
+    assert contents == [
+        "question to A",
+        "question to B",
+        "A's answer",
+        f"B's partial answer\n\n{INTERRUPTED_TURN_NOTICE}",
+    ]
+
+
+async def test_another_servers_reply_does_not_end_this_turn(tmp_path):
+    """A later reply in the chat that is not this turn's leaves its marker."""
+    path = str(tmp_path / "chat.db")
+    db = ChatDatabase(path)
+    try:
+        sid = db.create_session()["id"]
+        with _as_server("B"):
+            db.begin_turn(sid, "question to B")
+        with _as_server("A"):
+            db.add_message(sid, "assistant", "someone else's reply", ends_turn=True)
+        with _as_server("C"):
+            assert recover_interrupted_work(db)["turns"] == 1
+        assert db.get_messages(sid)[-1]["content"] == INTERRUPTED_TURN_NOTICE
+    finally:
+        db.close()
+
+
+async def test_a_cut_off_reply_says_which_tools_it_had_started(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "tidy my downloads")
+        journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+        journal.observe('data: {"type": "tool_start", "tool": "move_file"}\n\n')
+        journal.observe(_chunk("Moving the PDFs"))
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert reply == (
+        "Moving the PDFs\n\n"
+        "Before it stopped, it had started these tools: move_file.\n\n"
+        f"{INTERRUPTED_TURN_NOTICE}"
+    )
+
+
+async def test_the_question_and_its_marker_are_saved_together(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        with patch("gaia.ui.database.current_owner", side_effect=RuntimeError):
+            with pytest.raises(RuntimeError):
+                db.begin_turn(sid, "hello?")
+        assert db.get_messages(sid) == []
+    finally:
+        db.close()
+
+
+async def test_the_running_server_sweeps_up_after_one_that_exited(tmp_path):
+    """A turn whose server was still shutting down at our start is closed by
+    the periodic sweep once that server is gone."""
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        with _as_server("old"):
+            db.begin_turn(sid, "hello?")
+        gone = asyncio.Event()
+
+        def owner_is_gone(_owner):
+            return gone.is_set()
+
+        with patch.object(restart_recovery, "owner_is_gone", owner_is_gone):
+            sweep = asyncio.create_task(
+                restart_recovery.sweep_interrupted_work(db, interval=0.01)
+            )
+            try:
+                await asyncio.sleep(0.05)
+                assert db.get_messages(sid)[-1]["role"] == "user"
+                gone.set()  # the old server exits
+                await _wait_until(lambda: db.turns_in_progress() == [])
+            finally:
+                sweep.cancel()
+                await asyncio.gather(sweep, return_exceptions=True)
+        assert db.get_messages(sid)[-1]["content"] == INTERRUPTED_TURN_NOTICE
+    finally:
+        db.close()
+
+
+async def test_a_scheduled_run_cut_off_by_a_restart_says_so(tmp_path):
+    from gaia.ui.scheduler import Scheduler
+
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    running = asyncio.Event()
+
+    async def never_finishes(_prompt):
+        running.set()
+        await asyncio.Event().wait()
+
+    sched = Scheduler(db=db, executor=never_finishes)
+    await sched.start()
+    try:
+        await sched.create_task("digest", "every 1h", "Summarize my inbox")
+        run = asyncio.create_task(sched._execute_task(sched._tasks["digest"]))
+        await asyncio.wait_for(running.wait(), 5)
+        run.cancel()  # shutdown mid-run
+        await asyncio.gather(run, return_exceptions=True)
+        sid = sched._tasks["digest"].session_id
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        messages = db.get_messages(sid)
+    finally:
+        await sched.shutdown()
+        db.close()
+    assert [m["role"] for m in messages][-2:] == ["user", "assistant"]
+    assert messages[-1]["content"] == INTERRUPTED_TURN_NOTICE
+
+
+async def test_a_clock_step_does_not_make_a_live_server_look_gone(monkeypatch):
+    """On Linux an owner is the boot id and start in ticks since boot, which an
+    NTP step cannot move, unlike create_time()."""
+    parent = os.getppid()
+    monkeypatch.setattr(process_owner, "_LINUX", True, raising=False)
+    monkeypatch.setattr(
+        process_owner,
+        "_linux_start",
+        lambda pid: "b00t/4242" if pid == parent else None,
+        raising=False,
+    )
+    real = psutil.Process.create_time
+    # The wall clock stepped an hour: create_time() moves with it on Linux.
+    monkeypatch.setattr(psutil.Process, "create_time", lambda self: real(self) + 3600)
+    assert not process_owner.owner_is_gone(f"{parent}:b00t/4242:other")
+    # A different process now holding that pid started at another tick.
+    assert process_owner.owner_is_gone(f"{parent}:b00t/9999:other")

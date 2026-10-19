@@ -3081,7 +3081,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 "assistant",
                 persisted_policy_block_content,
                 agent_steps=captured_steps if captured_steps else None,
-                turn_placeholder=True,
             )
             return persisted_policy_block_msg_id
 
@@ -3438,6 +3437,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
+                ends_turn=True,
             )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
@@ -3488,7 +3488,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 captured_steps if (keep_steps and captured_steps) else None
             )
             if sse_type == "error":
-                db.add_message(request.session_id, "assistant", content)
+                db.add_message(request.session_id, "assistant", content, ends_turn=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
                 msg_id = db.add_message(
@@ -3497,6 +3497,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     content,
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
+                    ends_turn=True,
                 )
                 done_event = _done_event(msg_id, content, turn_cancelled)
                 yield f"data: {json.dumps(done_event)}\n\n"
@@ -3506,7 +3507,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         await _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
-            db.add_message(request.session_id, "assistant", error_msg)
+            db.add_message(request.session_id, "assistant", error_msg, ends_turn=True)
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
         error_data = json.dumps({"type": "error", "content": error_msg})

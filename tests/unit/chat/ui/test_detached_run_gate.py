@@ -119,7 +119,7 @@ async def test_stream_failure_before_run_start_releases_slot(runtime):
     response = await chat.send_message(
         ChatRequest(session_id=sid, message="A", stream=True), http_request, db
     )
-    with patch.object(db, "add_message", side_effect=RuntimeError("write failed")):
+    with patch.object(db, "begin_turn", side_effect=RuntimeError("write failed")):
         with pytest.raises(RuntimeError, match="write failed"):
             await anext(response.body_iterator)
     # Generator cleanup must work even when an exception prevents Starlette

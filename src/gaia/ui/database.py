@@ -14,7 +14,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 
@@ -123,19 +123,22 @@ CREATE TABLE IF NOT EXISTS messages (
     tokens_completion INTEGER
 );
 
--- A chat turn that has started and not yet saved its reply. A row left here
--- when the server starts again belongs to a turn the last run never finished.
-CREATE TABLE IF NOT EXISTS turns_in_progress (
-    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-    user_message_id INTEGER NOT NULL,
+-- A chat turn that has started and not yet saved its reply, one row per
+-- question. Saving the reply deletes the row in the same transaction, so a row
+-- whose owner has exited belongs to a turn that process never finished.
+CREATE TABLE IF NOT EXISTS unfinished_turns (
+    question_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     -- The server process running the turn (process_owner.current_owner).
     owner TEXT NOT NULL,
     started_at TEXT NOT NULL,
     partial_content TEXT NOT NULL DEFAULT '',
-    -- A message the turn saved before its reply (a policy block notice).
-    placeholder_message_id INTEGER,
+    -- JSON list of the tools the turn had started, in order.
+    tools_run TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_unfinished_turns_owner
+    ON unfinished_turns(session_id, owner);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -582,8 +585,13 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        ends_turn: bool = False,
     ) -> int:
-        """Add a message to a session. Returns message ID."""
+        """Add a message to a session. Returns message ID.
+
+        ``ends_turn`` marks it as the reply of this process's running turn in
+        the session, whose unfinished-turn row is deleted with it.
+        """
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
@@ -615,6 +623,8 @@ class ChatDatabase:
                 (self._now(), session_id),
             )
             msg_id = cursor.lastrowid
+            if ends_turn:
+                self._end_own_turn(session_id)
 
         return msg_id or 0
 
@@ -630,7 +640,7 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
-        turn_placeholder: bool = False,
+        ends_turn: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -640,9 +650,8 @@ class ChatDatabase:
         ``delete_message`` + ``add_message``). A new id is minted rather than
         reusing ``msg_id`` to keep the delete-then-insert id semantics.
 
-        ``turn_placeholder`` marks the row as saved by the session's running
-        turn ahead of its reply (a policy block), so it is not taken for the
-        reply if the turn is cut off.
+        ``ends_turn`` marks it as the reply of this process's running turn,
+        as in :meth:`add_message`.
         """
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
@@ -681,12 +690,8 @@ class ChatDatabase:
                 (self._now(), session_id),
             )
             new_id = cursor.lastrowid
-            if turn_placeholder:
-                self._conn.execute(
-                    "UPDATE turns_in_progress SET placeholder_message_id = ? "
-                    "WHERE session_id = ?",
-                    (new_id, session_id),
-                )
+            if ends_turn:
+                self._end_own_turn(session_id)
 
         return new_id or 0
 
@@ -836,89 +841,136 @@ class ChatDatabase:
             ).fetchone()
             return int(row["cnt"])
 
-    # ── Turns in progress ───────────────────────────────────────────────
+    # ── Unfinished turns ────────────────────────────────────────────────
 
-    def begin_turn(self, session_id: str, user_message_id: int) -> None:
-        """Record that a reply to *user_message_id* has started."""
+    def begin_turn(self, session_id: str, question: str) -> int:
+        """Save the user's *question* and mark its reply as started, together.
+
+        The row is this process's: only this process saves into or closes it,
+        and another server closes it only once this process has exited.
+        Returns the question's message id.
+        """
         now = self._now()
         with self._transaction():
-            self._conn.execute(
-                """INSERT OR REPLACE INTO turns_in_progress
-                   (session_id, user_message_id, owner, started_at,
-                    partial_content, updated_at)
-                   VALUES (?, ?, ?, ?, '', ?)""",
-                (session_id, user_message_id, current_owner(), now, now),
+            cursor = self._conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at) "
+                "VALUES (?, 'user', ?, ?)",
+                (session_id, question, now),
             )
+            question_id = cursor.lastrowid
+            self._conn.execute(
+                """INSERT INTO unfinished_turns
+                   (question_id, session_id, owner, started_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (question_id, session_id, current_owner(), now, now),
+            )
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
+            )
+        return question_id
 
-    def save_turn_partial(self, session_id: str, content: str) -> None:
-        """Keep the reply streamed so far, so a crash does not lose it."""
+    def _end_own_turn(self, session_id: str) -> None:
+        # Inside the caller's transaction. A session runs one turn at a time
+        # per process, so this is the turn the reply belongs to.
+        self._conn.execute(
+            "DELETE FROM unfinished_turns WHERE session_id = ? AND owner = ?",
+            (session_id, current_owner()),
+        )
+
+    def own_turn(self, session_id: str) -> Optional[int]:
+        """The question id of this process's unfinished turn in the session."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT question_id FROM unfinished_turns "
+                "WHERE session_id = ? AND owner = ?",
+                (session_id, current_owner()),
+            ).fetchone()
+        return row["question_id"] if row else None
+
+    def save_turn_partial(
+        self, question_id: int, content: str, tools_run: List[str]
+    ) -> None:
+        """Keep the reply streamed so far, and the tools it started."""
         with self._transaction():
             self._conn.execute(
-                "UPDATE turns_in_progress SET partial_content = ?, updated_at = ? "
-                "WHERE session_id = ?",
-                (content, self._now(), session_id),
+                "UPDATE unfinished_turns SET partial_content = ?, tools_run = ?, "
+                "updated_at = ? WHERE question_id = ? AND owner = ?",
+                (
+                    content,
+                    json.dumps(tools_run),
+                    self._now(),
+                    question_id,
+                    current_owner(),
+                ),
             )
 
-    def discard_turn(self, session_id: str) -> None:
-        """Forget a turn whose outcome the caller has already reported."""
+    def discard_turn(self, question_id: int) -> None:
+        """Forget this process's turn, whose outcome the caller reported."""
         with self._transaction():
             self._conn.execute(
-                "DELETE FROM turns_in_progress WHERE session_id = ?", (session_id,)
+                "DELETE FROM unfinished_turns WHERE question_id = ? AND owner = ?",
+                (question_id, current_owner()),
             )
 
     def turns_in_progress(self) -> List[Dict[str, Any]]:
-        """Turns that have not been closed: ``session_id`` and ``owner``."""
+        """Unfinished turns: ``question_id``, ``session_id`` and ``owner``."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT session_id, owner FROM turns_in_progress"
+                "SELECT question_id, session_id, owner FROM unfinished_turns"
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def close_turn(self, session_id: str, notice: str) -> Optional[int]:
-        """End a turn, saving *notice* as its reply if it never saved one.
+    def close_turn(
+        self,
+        question_id: int,
+        notice: str,
+        owner: Optional[str] = None,
+        tools_notice: Optional[Callable[[List[str]], str]] = None,
+    ) -> Optional[int]:
+        """Save *notice* as the reply of an unfinished turn, and end it.
 
-        Whatever the turn had streamed is kept above the notice; an empty
-        notice keeps the streamed text alone. Returns the
-        id of the message written, or None when the turn already had a reply
-        (or its question was deleted) and nothing was written.
+        *owner* is the process the turn must belong to, this one by default,
+        so one server never closes another's live turn. Whatever the turn had
+        streamed is kept above the notice; an empty notice keeps it alone.
+        *tools_notice*, given the tools the turn had started, adds a line
+        saying they ran. Returns the id of the reply written, or None when
+        there was no such turn (it saved its own reply, or its question was
+        deleted).
         """
+        owner = owner or current_owner()
         with self._transaction():
             row = self._conn.execute(
-                "SELECT user_message_id, partial_content, placeholder_message_id "
-                "FROM turns_in_progress WHERE session_id = ?",
-                (session_id,),
+                "SELECT session_id, partial_content, tools_run FROM unfinished_turns "
+                "WHERE question_id = ? AND owner = ?",
+                (question_id, owner),
             ).fetchone()
             if row is None:
                 return None
             self._conn.execute(
-                "DELETE FROM turns_in_progress WHERE session_id = ?", (session_id,)
+                "DELETE FROM unfinished_turns WHERE question_id = ? AND owner = ?",
+                (question_id, owner),
             )
-            question = self._conn.execute(
-                "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
-                (row["user_message_id"], session_id),
-            ).fetchone()
-            replied = self._conn.execute(
-                "SELECT 1 FROM messages WHERE session_id = ? AND id > ? "
-                "AND role = 'assistant' AND id IS NOT ? LIMIT 1",
-                (session_id, row["user_message_id"], row["placeholder_message_id"]),
-            ).fetchone()
-            if question is None or replied is not None:
-                return None
-            partial = (row["partial_content"] or "").strip()
-            content = "\n\n".join(part for part in (partial, notice) if part)
+            tools = json.loads(row["tools_run"] or "[]")
+            parts = [
+                (row["partial_content"] or "").strip(),
+                tools_notice(tools) if tools and tools_notice else "",
+                notice,
+            ]
+            content = "\n\n".join(part for part in parts if part)
             if not content:
                 raise ValueError(
-                    f"close_turn for session {session_id[:8]} has neither "
+                    f"close_turn for question {question_id} has neither "
                     "streamed text nor a notice to save as its reply"
                 )
             now = self._now()
             cursor = self._conn.execute(
                 "INSERT INTO messages (session_id, role, content, created_at) "
                 "VALUES (?, 'assistant', ?, ?)",
-                (session_id, content, now),
+                (row["session_id"], content, now),
             )
             self._conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (now, row["session_id"]),
             )
             return cursor.lastrowid
 

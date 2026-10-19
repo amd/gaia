@@ -2062,15 +2062,17 @@ CREATE TABLE settings (
     value TEXT
 );
 
--- A chat turn that has started and not yet saved its reply. On startup, a row
--- left here becomes the reply "This answer was interrupted when GAIA closed."
-CREATE TABLE turns_in_progress (
-    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-    user_message_id INTEGER NOT NULL,
+-- A chat or scheduled turn that has started and not yet saved its reply, one
+-- row per question, written with the question. Saving the reply deletes it in
+-- the same transaction. A row whose owner has exited becomes the reply "This
+-- answer was interrupted when GAIA closed."
+CREATE TABLE unfinished_turns (
+    question_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     owner TEXT NOT NULL,                       -- server process running the turn
     started_at TEXT NOT NULL,
-    partial_content TEXT NOT NULL DEFAULT '',  -- reply streamed so far, saved every 2 s
-    placeholder_message_id INTEGER,            -- a policy-block notice saved mid-turn
+    partial_content TEXT NOT NULL DEFAULT '',  -- cleaned reply so far, saved every 2 s
+    tools_run TEXT NOT NULL DEFAULT '[]',      -- tools the turn had started
     updated_at TEXT
 );
 ```

@@ -172,10 +172,7 @@ async def send_message(
 
             async def _stream():
                 try:
-                    question_id = db.add_message(
-                        request.session_id, "user", request.message
-                    )
-                    db.begin_turn(request.session_id, question_id)
+                    db.begin_turn(request.session_id, request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
                     async for chunk in srv._stream_chat_response(
@@ -198,10 +195,7 @@ async def send_message(
             )
         else:
             try:
-                question_id = db.add_message(
-                    request.session_id, "user", request.message
-                )
-                db.begin_turn(request.session_id, question_id)
+                question_id = db.begin_turn(request.session_id, request.message)
                 model_messages = []
                 try:
                     response_text = await srv._get_chat_response(
@@ -220,20 +214,20 @@ async def send_message(
                         "assistant",
                         response_text,
                         model_messages=model_messages or None,
+                        ends_turn=True,
                     )
                 except Exception:
                     # The caller gets this error in the response itself.
-                    db.discard_turn(request.session_id)
+                    db.discard_turn(question_id)
                     raise
                 except asyncio.CancelledError:
                     # Shutdown or a dropped client: the reply is lost. Say so now;
                     # if the database has already closed, the next start does.
                     try:
-                        db.close_turn(request.session_id, CANCELLED_TURN_NOTICE)
+                        db.close_turn(question_id, CANCELLED_TURN_NOTICE)
                     except (RuntimeError, sqlite3.Error) as exc:
                         logger.warning("Could not close the cancelled turn: %s", exc)
                     raise
-                db.discard_turn(request.session_id)
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 

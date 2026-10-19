@@ -451,7 +451,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 |---------------|-----------------------|--------------------------|
 | You switch chats or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
 | You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
-| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, then "This answer was interrupted when GAIA closed. Send again to retry." | Stops. On the next start it shows as **Failed** with **Retry**; hover the badge for "Indexing was interrupted when GAIA closed" |
+| You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**; hover the badge for "Indexing was interrupted when GAIA closed" |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.
 
