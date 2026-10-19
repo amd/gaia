@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import platform
+import re
 import signal
 import socket
 import subprocess
@@ -52,14 +53,20 @@ from gaia.llm.lemonade_launcher import (
 from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
     HOSTED_REPLY_TIMEOUT_ENV,
+    LOAD_WAIT_ENV,
     ModelCallRetrier,
+    RetryNotice,
     RetryPolicy,
     RetryState,
+    StreamCancelledError,
     StreamStalledError,
     attach_retry_state,
     classify_exception,
+    current_cancel_check,
+    current_retry_listener,
     hosted_reply_timeout,
     retry_state_of,
+    sleep_unless_cancelled,
     tag_http_failure,
 )
 from gaia.llm.stream_watchdog import (
@@ -103,6 +110,16 @@ LEMONADE_API_VERSION = "v1"
 DEFAULT_LEMONADE_URL = (
     f"http://{DEFAULT_HOST}:{DEFAULT_PORT}/api/{LEMONADE_API_VERSION}"
 )
+
+#: How long a request waits for GAIA's own server to answer again once it has
+#: stopped answering, before it fails.
+GAIA_LEMONADE_RECONNECT_SECONDS = 60.0
+#: How often that wait asks the daemon for the server again.
+GAIA_LEMONADE_RECONNECT_POLL_SECONDS = 2.0
+#: What a front-end shows while it waits.
+RECONNECTING_MESSAGE = "Reconnecting to the model server…"
+#: Retry reasons that mean nothing answered at all (see ``classify_exception``).
+_CONNECT_FAILURES = frozenset({"connection error", "connect timeout"})
 
 
 def _embedded_lemonade_url() -> str:
@@ -535,6 +552,20 @@ def _slots_in_flags(flags: List[str]) -> Optional[int]:
         except ValueError:
             return None
     return None
+
+
+# Called with the model's name after this process loads a model.
+_MODEL_LOAD_LISTENERS: List[Callable[[str], None]] = []
+
+
+def add_model_load_listener(listener: Callable[[str], None]) -> None:
+    """Call *listener(model_name)* after every model this process loads.
+
+    How the Agent UI keeps count of the models it loaded itself, including
+    the ones its agents reload mid-turn.
+    """
+    if listener not in _MODEL_LOAD_LISTENERS:
+        _MODEL_LOAD_LISTENERS.append(listener)
 
 
 def profile_ctx_size(device: Optional[str]) -> int:
@@ -999,6 +1030,22 @@ def split_backend_spec(spec: str) -> Tuple[str, str]:
 # Increased to accommodate long-running coding and evaluation tasks
 DEFAULT_REQUEST_TIMEOUT = 900
 
+#: ``(connect, read)`` seconds for a status probe. ``/health`` answers in
+#: milliseconds; a server that accepted the connection and is silent this long
+#: is busy (usually loading a model for another app), not worth 900s of waiting.
+PROBE_TIMEOUT = (3.05, 5.0)
+#: ``/system-info`` enumerates devices, which can take seconds on a cold call.
+SYSTEM_INFO_TIMEOUT = (3.05, 15.0)
+#: ``/models``; with ``show_all`` it lists the whole catalog.
+CATALOG_TIMEOUT = (3.05, 30.0)
+#: Seconds between status probes while a busy server is waited for.
+_BUSY_POLL_SECONDS = 5.0
+#: Longest Stop goes unseen while a status probe made during a wait runs.
+_STOP_CHECK_SECONDS = 0.5
+#: ``/health`` per-model ``status`` of a model taking or leaving the LLM slot.
+#: A download holds no slot (and can take hours), so it is not one of them.
+_LOADING_STATES = frozenset({"loading", "evicting", "pending", "queued"})
+
 # Upstream's own per-request default (resources/defaults.json), and the ceiling
 # it uses for long validation legs. A wedged request must still end.
 _UPSTREAM_GLOBAL_TIMEOUT = 600
@@ -1182,6 +1229,9 @@ class LemonadeStatus:
     loaded_models: list = field(default_factory=list)
     health_data: dict = field(default_factory=dict)
     error: Optional[str] = None
+    #: Accepted the connection but did not answer the probe: up and busy (or
+    #: stuck), so neither ready nor down. ``running`` stays False.
+    busy: bool = False
 
 
 # Define available models
@@ -1502,6 +1552,67 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     if requested_thinking(model_id) is None:
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+# A gpt-oss control token (``<|channel|>``, ``<|message|>``, ``<|call|>`` ...).
+_HARMONY_TOKEN_RE = re.compile(r"<\|(?=[A-Za-z0-9_]{1,40}\|>)")
+
+
+def uses_harmony_format(model_id: Optional[str]) -> bool:
+    """Whether *model_id* is a gpt-oss model, which reads text in its channel format."""
+    return "gpt-oss" in (model_id or "").lower()
+
+
+def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*messages* with every gpt-oss control token in their text broken up.
+
+    A tool result holding ``<|channel|>final<|message|>`` (a file, a web page)
+    is read as real channel markup: the reply comes back empty, or llama.cpp
+    500s on output it cannot parse. ``< |`` reads the same and is plain text.
+    """
+
+    def defang(text: Any) -> Any:
+        return _HARMONY_TOKEN_RE.sub("< |", text) if isinstance(text, str) else text
+
+    out = []
+    for message in messages:
+        if not isinstance(message, dict):
+            out.append(message)
+            continue
+        fixed = dict(message)
+        for key in ("content", "reasoning_content"):
+            if key not in fixed:
+                continue
+            content = fixed[key]
+            if isinstance(content, list):
+                fixed[key] = [
+                    (
+                        {**part, "text": defang(part.get("text"))}
+                        if isinstance(part, dict) and "text" in part
+                        else part
+                    )
+                    for part in content
+                ]
+            else:
+                fixed[key] = defang(content)
+        # A file the model wrote comes back in its own call's arguments.
+        if isinstance(fixed.get("tool_calls"), list):
+            fixed["tool_calls"] = [
+                (
+                    {
+                        **call,
+                        "function": {
+                            **call["function"],
+                            "arguments": defang(call["function"].get("arguments")),
+                        },
+                    }
+                    if isinstance(call, dict) and isinstance(call.get("function"), dict)
+                    else call
+                )
+                for call in fixed["tool_calls"]
+            ]
+        out.append(fixed)
+    return out
 
 
 # Define agent profiles with their model requirements
@@ -1972,6 +2083,15 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class LemonadeUnresponsiveError(LemonadeClientError):
+    """Lemonade accepted the connection but sent no answer before the read
+    timeout: it is up and busy (often loading a model), or stuck — not down."""
+
+
+class GaiaLemonadeNotAnsweringError(LemonadeClientError):
+    """GAIA's own server is up but not answering yet; the daemon left it be."""
+
+
 class CloudModelUnavailableError(LemonadeClientError):
     """A cloud provider answered 404 for the requested model.
 
@@ -2139,10 +2259,27 @@ CONTEXT_OVERFLOW_PHRASES = (
     "exceeds the available context size",
     "got too long",
     "max length reached",
-    # llama.cpp, when active requests together outgrow a unified KV pool.
+)
+
+#: llama.cpp's words when a decode step found no free cell in the KV cache. It
+#: fails every request running at that moment, and with ``--kv-unified`` one
+#: request alone always fits (a full slot stops with ``finish_reason=length``),
+#: so this means requests running together outgrew the shared pool — not that
+#: any one conversation is too long. It clears once the other request ends.
+KV_CACHE_SHARED_PHRASES = (
     "context size has been exceeded",
     "failed to find free space in the kv cache",
 )
+
+
+def is_kv_cache_shared_error(error_text: str) -> bool:
+    """Whether *error_text* is the KV pool running out under concurrent
+    requests (:data:`KV_CACHE_SHARED_PHRASES`), not a context overflow."""
+    if not error_text:
+        return False
+    message = _extract_backend_error_message(error_text)
+    haystack = (message or error_text).lower()
+    return any(phrase in haystack for phrase in KV_CACHE_SHARED_PHRASES)
 
 
 def _extract_backend_error_message(error_text: str) -> Optional[str]:
@@ -2507,6 +2644,8 @@ class LemonadeClient:
     _retry_sleep: Optional[Callable[[float], None]] = None
     _retry_clock: Optional[Callable[[], float]] = None
     _retry_rng: Any = None
+    _reconnect_sleep: Optional[Callable[[float], None]] = None
+    _reconnect_clock: Optional[Callable[[], float]] = None
 
     #: True while this client is aimed at GAIA's own server, so it follows that
     #: server to whatever port and key the daemon last started it with.
@@ -2636,7 +2775,8 @@ class LemonadeClient:
 
         # Called as (model, state) around a load this client actually performs:
         # "downloading" or "loading" before it, "loaded" after it succeeds. A
-        # cold load is the longest silent wait a chat turn has.
+        # cold load is the longest silent wait a chat turn has. Also called
+        # with "reconnecting" while a request waits for GAIA's server to return.
         self.model_load_listener: Optional[Callable[[str, str], None]] = None
 
         # Set logging level based on verbosity
@@ -2806,6 +2946,15 @@ class LemonadeClient:
         except OSError:
             return True
 
+    def _gone_handoff(self) -> threading.local:
+        """Per-thread: the retrier handed this thread's failure to the
+        reconnect wait because GAIA's server was gone."""
+        # Lazy: tests build clients with ``__new__``, skipping ``__init__``.
+        state = self.__dict__.get("_gone_handoff_state")
+        if state is None:
+            state = self.__dict__.setdefault("_gone_handoff_state", threading.local())
+        return state
+
     def _recover_stopped_gaia_lemonade(self, error: Exception, model: str) -> bool:
         """Bring GAIA's server back after it stopped under a request.
 
@@ -2815,23 +2964,106 @@ class LemonadeClient:
             when *error* had another cause.
 
         Raises:
-            LemonadeClientError: It stopped and the daemon could not start it.
+            LemonadeClientError: It stopped and the daemon could not start it,
+                or it did not answer again within the reconnect wait.
         """
-        if not self.follows_gaia_lemonade or not self._gaia_lemonade_gone():
+        handoff = self._gone_handoff()
+        handed_off = getattr(handoff, "pending", False)
+        handoff.pending = False
+        if not self.follows_gaia_lemonade:
+            return False
+        # Handed off as gone, it is resent even if it is back by now: the
+        # retries that would have covered a quick restart were skipped.
+        if not handed_off and not self._gaia_lemonade_gone():
             return False
         self.log.warning(
             f"GAIA's Lemonade Server stopped during this request "
-            f"({type(error).__name__}); restarting it and retrying once."
+            f"({type(error).__name__}); waiting for it and retrying once."
         )
-        self._follow_gaia_lemonade(model)
-        if self._gaia_lemonade_gone():
-            self._start_gaia_lemonade()
-            self._replay_cloud_key(model)
-        self.log.info(f"GAIA's Lemonade Server is back at {self.base_url}")
+        listener = self.model_load_listener
+        self.wait_for_gaia_lemonade(
+            model,
+            on_status=(
+                (lambda _message: listener(model, "reconnecting")) if listener else None
+            ),
+        )
         return True
+
+    def wait_for_gaia_lemonade(
+        self,
+        model: Optional[str] = None,
+        *,
+        timeout: float = GAIA_LEMONADE_RECONNECT_SECONDS,
+        on_status: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """Wait, up to *timeout* seconds, for GAIA's own server to answer again.
+
+        Asks the daemon for the server it runs now, every
+        :data:`GAIA_LEMONADE_RECONNECT_POLL_SECONDS`, and follows it there. The
+        daemon starts one only when none is running and never stops one, so a
+        server another process is using is never restarted from here. A server
+        the user runs, or a remote ``LEMONADE_BASE_URL``, is never waited on.
+
+        Args:
+            model: The model the caller is about to use; a cloud model's kept
+                key is handed to a restarted server.
+            timeout: The bound on the wait.
+            on_status: Called once with :data:`RECONNECTING_MESSAGE` when the
+                wait begins, so a front-end can show it.
+
+        Returns:
+            True if this client now reaches the server after waiting for it or
+            following it to a new address; False when it is not GAIA's own
+            server, or that server answered where this client already pointed.
+
+        Raises:
+            LemonadeClientError: The daemon could not start the server, or it
+                did not answer within *timeout*; the message names what to do.
+        """
+        if not self.follows_gaia_lemonade:
+            return False
+        was = (self.base_url, self.api_key)
+        if self._gaia_lemonade_state() is not None:
+            self._follow_gaia_lemonade(model)
+        if not self._gaia_lemonade_gone():
+            return (self.base_url, self.api_key) != was
+        clock = self._reconnect_clock or time.monotonic
+        sleep = self._reconnect_sleep or time.sleep
+        deadline = clock() + timeout
+        self.log.warning(
+            f"GAIA's Lemonade Server at {self.base_url} is not answering; waiting "
+            f"up to {timeout:.0f}s for the GAIA daemon to bring it back."
+        )
+        if on_status is not None:
+            on_status(RECONNECTING_MESSAGE)
+        last: Optional[GaiaLemonadeNotAnsweringError] = None
+        while True:
+            try:
+                self._follow_gaia_lemonade(model)
+                if self._gaia_lemonade_gone():
+                    self._start_gaia_lemonade()
+                    self._replay_cloud_key(model)
+                if not self._gaia_lemonade_gone():
+                    self.log.info(f"GAIA's Lemonade Server is back at {self.base_url}")
+                    return True
+            except GaiaLemonadeNotAnsweringError as e:
+                last = e
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            sleep(min(GAIA_LEMONADE_RECONNECT_POLL_SECONDS, remaining))
+        from gaia.daemon.paths import log_path
+
+        reason = f" The daemon reports: {str(last).rstrip('.')}." if last else ""
+        raise LemonadeClientError(
+            f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
+            f"was not back within {timeout:.0f}s.{reason} Run `gaia daemon "
+            f"status`, and read the daemon log at {log_path()} for why it stopped."
+        ) from last
 
     def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
         """``call()``, sent once more if GAIA's server stopped under it."""
+        self._gone_handoff().pending = False
         try:
             return call()
         except (
@@ -2861,17 +3093,22 @@ class LemonadeClient:
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise
-        yield from start()
+        try:
+            yield from start()
+        finally:
+            # The resend bypasses _survive_*, so clear a hand-off it left set.
+            self._gone_handoff().pending = False
 
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
 
         Raises:
+            GaiaLemonadeNotAnsweringError: it is running but not answering yet.
             LemonadeClientError: the daemon could not start it. There is no
                 retry against a system install.
         """
         from gaia.daemon.client import ensure_lemonade
-        from gaia.daemon.errors import DaemonError
+        from gaia.daemon.errors import DaemonError, LemonadeNotAnsweringError
 
         self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
         try:
@@ -2880,6 +3117,8 @@ class LemonadeClient:
                 if self._gaia_daemon_dir
                 else ensure_lemonade()
             )
+        except LemonadeNotAnsweringError as e:
+            raise GaiaLemonadeNotAnsweringError(str(e)) from e
         except DaemonError as e:
             raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
@@ -2917,9 +3156,11 @@ class LemonadeClient:
             return
         state = self._gaia_lemonade_state()
         if state is None:
+            # base_url may be the default port and never GAIA's: a client built
+            # while no server was recorded has no other address to hold.
             self.log.warning(
-                f"GAIA's Lemonade Server at {self.base_url} has stopped; asking "
-                "the GAIA daemon for the server it runs now."
+                "No GAIA Lemonade Server is running (this client last used "
+                f"{self.base_url}); asking the GAIA daemon for the one it runs now."
             )
             self._start_gaia_lemonade()
             self.log.info(f"Now using GAIA's Lemonade Server at {self.base_url}")
@@ -3019,6 +3260,11 @@ class LemonadeClient:
         # never kill a server the user didn't ask to restart.
         try:
             health = self.health_check()
+        except LemonadeUnresponsiveError as e:
+            # Up and busy (often loading another app's model): taking the port
+            # over would kill it mid-load.
+            self.log.warning(f"Not restarting Lemonade on port {self.port}: {e}")
+            return
         except Exception as e:
             self.log.debug(f"No healthy server detected before launch: {e}")
             health = None
@@ -3638,13 +3884,23 @@ class LemonadeClient:
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
 
-    def _model_retrier(self) -> ModelCallRetrier:
+    def _model_retrier(
+        self, model: Optional[str] = None, gone_server_waits: bool = False
+    ) -> ModelCallRetrier:
         """The retry runner every completion path goes through.
 
         The policy is read per request (``GAIA_LLM_RETRY_*``), like the request
         budget. A missing-model error is never retried here: it has its own
         recovery (:meth:`_execute_with_auto_download`), which must see it at
         once rather than after a round of backoff.
+
+        Args:
+            model: The request's model. A local one waits out a model load the
+                server reports; a cloud one, which no local load blocks, does not.
+            gone_server_waits: The caller recovers a stopped GAIA server itself
+                (:meth:`_survive_gaia_lemonade_stop`), so a failed connection
+                to one, before any output, is handed to that bounded wait
+                instead of backed off here.
         """
 
         def classify(error: BaseException) -> Optional[str]:
@@ -3652,25 +3908,160 @@ class LemonadeClient:
                 return None
             return classify_exception(error)
 
+        def hand_off(_error: BaseException, reason: str) -> bool:
+            if not (
+                gone_server_waits
+                and reason in _CONNECT_FAILURES
+                and self.follows_gaia_lemonade
+                and self._gaia_lemonade_gone()
+            ):
+                return False
+            self._gone_handoff().pending = True
+            return True
+
         return ModelCallRetrier(
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
             clock=self._retry_clock or time.monotonic,
             rng=self._retry_rng,
+            server_loading=(
+                self._server_load_in_progress
+                if model
+                and not (self.cloud_model_provider(model) or is_cloud_model(model))
+                else None
+            ),
             log=self.log,
             classify=classify,
+            hand_off=hand_off,
         )
+
+    def _server_load_in_progress(self) -> Optional[str]:
+        """What the server says it is loading, for the retrier's load wait.
+
+        ``None`` when it reports no load, or cannot be reached at all (then the
+        ordinary retry policy applies). A server that accepts the probe and
+        does not answer it counts as busy loading.
+        """
+        try:
+            health = self._unless_stopped(self.health_check)
+        except LemonadeUnresponsiveError:
+            return "Lemonade is busy and not answering status checks"
+        except LemonadeClientError as e:
+            self.log.debug(f"No load-state probe at {self.base_url}: {e}")
+            return None
+        entries = health.get("all_models_loaded") if isinstance(health, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or entry.get("recipe") == CLOUD_RECIPE:
+                continue
+            # Only the LLM slot pool's churn can evict or queue a chat request.
+            if entry.get("type") != "llm":
+                continue
+            if str(entry.get("status") or "").lower() in _LOADING_STATES:
+                name = entry.get("model_name") or "a model"
+                return f"Lemonade is loading {name}"
+        return None
+
+    def _wait_while_busy(self, model: str) -> LemonadeStatus:
+        """Poll a server that is up but not answering until it answers.
+
+        Bounded by ``GAIA_LLM_LOAD_WAIT`` (see :class:`RetryPolicy`), said
+        through the retry notice (so a front-end shows it as waiting, not
+        hung), and ended by Stop within half a second, even while a probe is
+        blocked on the server. A probe gets the full ``PROBE_TIMEOUT``, so a
+        server that is slow to answer, not silent, ends the wait.
+
+        Raises:
+            LemonadeUnresponsiveError: It did not answer within that limit.
+            StreamCancelledError: Stop was pressed during the wait.
+        """
+        limit = RetryPolicy.from_env().load_wait
+        clock = self._retry_clock or time.monotonic
+        sleep = self._retry_sleep or time.sleep
+        is_cancelled = current_cancel_check()
+        listener = current_retry_listener()
+        reason = "Lemonade is busy and not answering status checks"
+        self.log.warning(f"{reason}; '{model}' waits for it, up to {limit:.0f}s.")
+        if listener is not None:
+            listener(
+                RetryNotice(
+                    reason=reason, delay=_BUSY_POLL_SECONDS, retry=0, max_retries=0
+                )
+            )
+        started = clock()
+        while True:
+            waited = clock() - started
+            if waited >= limit:
+                raise LemonadeUnresponsiveError(
+                    f"Lemonade at {self.base_url} has not answered for "
+                    f"{waited:.0f}s, so '{model}' was not loaded. It may be "
+                    "stuck: check the Lemonade server log, or set "
+                    f"{LOAD_WAIT_ENV} (seconds) to wait longer for a slow load."
+                )
+            if not sleep_unless_cancelled(
+                sleep, min(_BUSY_POLL_SECONDS, limit - waited), is_cancelled
+            ):
+                raise StreamCancelledError(
+                    f"Stopped while waiting for a busy Lemonade to load '{model}'."
+                )
+            status = self._unless_stopped(
+                lambda: self.get_status(include_catalog=False)
+            )
+            if not status.busy:
+                return status
+
+    def _unless_stopped(self, probe: Callable[[], Any]) -> Any:
+        """``probe()``, but Stop ends the wait for it within half a second.
+
+        A status probe can block for its whole read timeout on a server that
+        accepted and went quiet; it runs on a worker thread so Stop (see
+        :func:`gaia.llm.retry.model_retry_notices`) is not held up by it. The
+        abandoned probe finishes on its own and is discarded.
+
+        Raises:
+            StreamCancelledError: Stop was pressed while it ran.
+        """
+        is_cancelled = current_cancel_check()
+        if is_cancelled is None:
+            return probe()
+        outcome: Dict[str, Any] = {}
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                outcome["value"] = probe()
+            except BaseException as e:  # pylint: disable=broad-except
+                outcome["error"] = e  # re-raised on the caller's thread below
+            finally:
+                done.set()
+
+        threading.Thread(target=run, name="gaia-lemonade-probe", daemon=True).start()
+        while not done.wait(_STOP_CHECK_SECONDS):
+            if is_cancelled():
+                raise StreamCancelledError(
+                    "Stopped while waiting for Lemonade to answer a status check."
+                )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
 
     def _record_retries(self, state: RetryState) -> None:
         self.last_request_retries = state.retries
         self.total_request_retries += state.retries
 
-    def _call_with_retry(self, api_call: Callable[[], Any], what: str) -> Any:
+    def _call_with_retry(
+        self,
+        api_call: Callable[[], Any],
+        what: str,
+        model: Optional[str] = None,
+        gone_server_waits: bool = False,
+    ) -> Any:
         """``api_call()`` with transient failures retried (see
-        :class:`gaia.llm.retry.ModelCallRetrier`)."""
+        :class:`gaia.llm.retry.ModelCallRetrier` and :meth:`_model_retrier`)."""
         state = RetryState()
         try:
-            return self._model_retrier().call(api_call, what=what, state=state)
+            return self._model_retrier(model, gone_server_waits).call(
+                api_call, what=what, state=state
+            )
         finally:
             self._record_retries(state)
 
@@ -3922,6 +4313,8 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        if uses_harmony_format(model):
+            messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
             # llama.cpp-only fields; a cloud provider rejects the request (HTTP 400).
             kwargs.pop("repeat_penalty", None)
@@ -4095,10 +4488,15 @@ class LemonadeClient:
             # that isn't a verdict on the request) are retried with backoff;
             # a missing model goes to the auto-download recovery instead.
             def _request_with_retry():
-                return self._call_with_retry(_make_request, "Chat completion")
+                return self._call_with_retry(
+                    _make_request,
+                    "Chat completion",
+                    model=model,
+                    gone_server_waits=True,
+                )
 
             try:
-                return _request_with_retry()
+                result = _request_with_retry()
             except StreamStalledError as e:
                 state = retry_state_of(e)
                 message = e.describe(state.attempts if state else 1)
@@ -4114,6 +4512,7 @@ class LemonadeClient:
                 return self._execute_with_auto_download(
                     _request_with_retry, model, auto_download, error=e
                 )
+            return result
 
     def _stream_chat_completions_with_openai(
         self,
@@ -4468,7 +4867,7 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier().stream(
+            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
@@ -4639,19 +5038,29 @@ class LemonadeClient:
             return result
 
         def _request_with_retry():
-            return self._call_with_retry(_make_request, "Text completion")
+            return self._call_with_retry(_make_request, "Text completion", model=model)
 
-        # Execute with auto-download retry logic
-        try:
-            return _request_with_retry()
-        except (requests.exceptions.RequestException, LemonadeClientError) as e:
-            # Use helper to handle auto-download and retry (#2513: only
-            # when *e* is actually the missing-model condition).
-            return self._execute_with_auto_download(
-                _request_with_retry, model, auto_download, error=e
-            )
+        # Same lease as chat: a request beside another one on a unified KV
+        # pool can exhaust it and fail both.
+        with self._model_slot_lease(model):
+            try:
+                return _request_with_retry()
+            except (requests.exceptions.RequestException, LemonadeClientError) as e:
+                # Use helper to handle auto-download and retry (#2513: only
+                # when *e* is actually the missing-model condition).
+                return self._execute_with_auto_download(
+                    _request_with_retry, model, auto_download, error=e
+                )
 
     def _stream_completions_with_openai(
+        self, model: str, **kwargs
+    ) -> Generator[Dict[str, Any], None, None]:
+        """:meth:`_stream_completions_leased`, holding the model's lease for
+        the whole stream, as chat streaming does."""
+        with self._model_slot_lease(model):
+            yield from self._stream_completions_leased(model=model, **kwargs)
+
+    def _stream_completions_leased(
         self,
         model: str,
         prompt: str,
@@ -4720,7 +5129,7 @@ class LemonadeClient:
                         close()
 
             tokens_generated = 0
-            for chunk in self._model_retrier().stream(
+            for chunk in self._model_retrier(model).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming text completion",
@@ -4770,14 +5179,24 @@ class LemonadeClient:
         Returns:
             Dict with 'data' containing list of embedding vectors
         """
+        embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
+        # Memory and RAG embed first in a session: a restart of GAIA's server
+        # under them is waited out like a chat turn's.
+        return self._survive_gaia_lemonade_stop(
+            lambda: self._embeddings_once(input_texts, embedding_model, timeout),
+            embedding_model,
+        )
+
+    def _embeddings_once(
+        self, input_texts: Union[str, List[str]], embedding_model: str, timeout: int
+    ) -> Dict[str, Any]:
+        """One :meth:`embeddings` call, without the restart guard."""
         self._follow_gaia_lemonade()
         try:
             # Ensure input is a list
             if isinstance(input_texts, str):
                 input_texts = [input_texts]
 
-            # Use specified model or default
-            embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
             self._pin_llamacpp_backend(embedding_model)
 
             payload = {"model": embedding_model, "input": input_texts}
@@ -4789,7 +5208,7 @@ class LemonadeClient:
 
         except Exception as e:
             self.log.error(f"Error generating embeddings: {str(e)}")
-            raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
+            raise LemonadeClientError(f"Error generating embeddings: {str(e)}") from e
 
     def _pin_llamacpp_backend(self, model_name: str) -> None:
         """Load *model_name* once per process on its backend, saving the choice.
@@ -4950,7 +5369,9 @@ class LemonadeClient:
             self.log.error(f"Error listing SD models: {str(e)}")
             raise LemonadeClientError(f"Error listing SD models: {str(e)}")
 
-    def list_models(self, show_all: bool = False) -> Dict[str, Any]:
+    def list_models(
+        self, show_all: bool = False, timeout=CATALOG_TIMEOUT
+    ) -> Dict[str, Any]:
         """
         List available models from the server.
 
@@ -4976,7 +5397,7 @@ class LemonadeClient:
         url = f"{self.base_url}/models"
         if show_all:
             url += "?show_all=true"
-        catalog = self._send_request("get", url)
+        catalog = self._send_request("get", url, timeout=timeout)
         for entry in catalog.get("data", []):
             if entry.get("id"):
                 self._model_metadata.setdefault(entry["id"], {}).update(entry)
@@ -6036,18 +6457,25 @@ class LemonadeClient:
 
         expected_ctx = resolve_ctx_size(model=model, base_url=self.base_url)
 
-        # Best-effort pre-flight probe (#2053): skip a redundant /load when the
-        # model is already loaded at a sufficient ctx. A probe failure here is
-        # NOT fatal — fall through to the actual load below, whose failure DOES
-        # propagate. Only the status/ctx check is swallowed; never the load.
-        status: Optional["LemonadeStatus"] = None
+        # Pre-flight probe (#2053): skip a redundant /load when the model is
+        # already loaded at a sufficient ctx. An unanswered probe is "unknown",
+        # not "absent": fall through to the load, whose failure propagates and
+        # which a busy server answers once it is free.
+        status: Optional["LemonadeStatus"]
         try:
-            # Check current server state. ``status.loaded_models`` carries
-            # health entries enriched with ``id`` + ``recipe_options`` so we
-            # can read ctx_size.
-            status = self.get_status()
-        except Exception as e:  # pylint: disable=broad-except
-            self.log.debug(f"Could not pre-check model status: {e}")
+            status = self.get_status(include_catalog=False)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            status = LemonadeStatus(running=False, error=str(e))
+        if status.busy:
+            status = self._wait_while_busy(model)
+        if not status.running:
+            self.log.info(
+                f"Could not confirm '{model}' is loaded "
+                f"({status.error or 'no answer'}); sending the load request."
+            )
+            status = None
 
         # Best-effort floor-vs-ceiling conflict check (#2992): if the MODELS
         # registry requires more context than the model can actually train
@@ -6358,6 +6786,12 @@ class LemonadeClient:
         if manages_embedder_backend(model_name):
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
+        for listener in list(_MODEL_LOAD_LISTENERS):
+            try:
+                listener(model_name)
+            except Exception as e:  # pylint: disable=broad-except
+                # The model is loaded; a bookkeeping failure must not undo that.
+                self.log.warning(f"Model-load listener failed for {model_name}: {e}")
         return response
 
     def _load_model_leased(
@@ -6774,23 +7208,19 @@ class LemonadeClient:
 
         Args:
             timeout: Optional requests-style timeout — a scalar, or a
-                ``(connect, read)`` tuple. Omit it for the client default
-                (``DEFAULT_REQUEST_TIMEOUT``, sized for generation). "Is the
-                server even up?" callers should pass a short one: the scalar
-                default also governs the read, so a socket that ACCEPTS and
-                then never answers (a Lemonade mid-model-load) would block a
-                liveness probe for the full 15 minutes.
+                ``(connect, read)`` tuple. Defaults to ``PROBE_TIMEOUT``, so a
+                server that accepts and then never answers (mid-model-load)
+                fails the probe in seconds instead of blocking it.
 
         Returns:
             Dict containing the server status and loaded model
 
         Raises:
+            LemonadeUnresponsiveError: The server accepted but did not answer.
             LemonadeClientError: If the health check fails
         """
         url = f"{self.base_url}/health"
-        if timeout is None:
-            return self._send_request("get", url)
-        return self._send_request("get", url, timeout=timeout)
+        return self._send_request("get", url, timeout=timeout or PROBE_TIMEOUT)
 
     def get_stats(self) -> Dict[str, Any]:
         """
@@ -6816,7 +7246,7 @@ class LemonadeClient:
         return stats
 
     def get_system_info(
-        self, verbose: bool = False, timeout: int = DEFAULT_REQUEST_TIMEOUT
+        self, verbose: bool = False, timeout=SYSTEM_INFO_TIMEOUT
     ) -> Dict[str, Any]:
         """
         Get system hardware information and device enumeration.
@@ -6924,12 +7354,18 @@ class LemonadeClient:
                 print(f"⚠️  Context validation failed: {e}")
             return True, None  # Don't block on connection errors
 
-    def get_status(self) -> LemonadeStatus:
+    def get_status(self, include_catalog: bool = True) -> LemonadeStatus:
         """
         Get comprehensive Lemonade status.
 
+        Args:
+            include_catalog: Also read ``/models`` to give loaded entries their
+                catalog ``labels`` and ``recipe``. A residency check needs only
+                ``/health``, so it skips the second round trip.
+
         Returns:
-            LemonadeStatus with server status and loaded models
+            LemonadeStatus with server status and loaded models; ``busy`` when
+            the server accepted the probe but did not answer it in time.
         """
         status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
 
@@ -6970,9 +7406,11 @@ class LemonadeClient:
             # and ``model_name`` (health-style) so all known consumers parse
             # correctly.
             try:
-                catalog_by_id = {
-                    m.get("id"): m for m in self.list_models().get("data", [])
-                }
+                catalog_by_id = (
+                    {m.get("id"): m for m in self.list_models().get("data", [])}
+                    if include_catalog
+                    else {}
+                )
             except LemonadeClientError as exc:
                 # Loaded models still report; only their labels/recipe go blank.
                 self.log.warning(
@@ -7009,6 +7447,11 @@ class LemonadeClient:
             status.loaded_models = loaded_enriched
         except LemonadeAuthError:
             raise  # propagate auth errors; don't misreport as "server not running"
+        except LemonadeUnresponsiveError as e:
+            self.log.warning(str(e))
+            status.running = False
+            status.busy = True
+            status.error = str(e)
         except Exception as e:
             self.log.debug(f"Failed to get status: {e}")
             status.running = False
@@ -7202,6 +7645,8 @@ class LemonadeClient:
             health = self.health_check()
             if health.get("status") == "ok":
                 return True
+        except LemonadeUnresponsiveError:
+            return True  # up but busy; initialize() reports it as such
         except Exception as exc:
             get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
@@ -7392,6 +7837,11 @@ class LemonadeClient:
         # Check current status
         status = self.get_status()
 
+        if status.busy:
+            if not quiet:
+                print(f"⏳ {status.error}")
+            return status
+
         if status.running:
             if not quiet:
                 print("✅ Lemonade Server is running")
@@ -7552,12 +8002,22 @@ class LemonadeClient:
 
             return response.json()
 
+        except requests.exceptions.ReadTimeout as e:
+            if method.lower() != "get":
+                raise LemonadeClientError(f"Request failed: {str(e)}") from e
+            read = timeout[1] if isinstance(timeout, tuple) else timeout
+            raise LemonadeUnresponsiveError(
+                f"Request failed: {e}. Lemonade at {self.base_url} accepted the "
+                f"connection but did not answer within {read:g}s: it is busy (for "
+                "example loading a model) or stuck. If it persists, check the "
+                "Lemonade server log."
+            ) from e
         except requests.exceptions.RequestException as e:
-            raise LemonadeClientError(f"Request failed: {str(e)}")
-        except json.JSONDecodeError:
+            raise LemonadeClientError(f"Request failed: {str(e)}") from e
+        except json.JSONDecodeError as e:
             raise LemonadeClientError(
                 f"Failed to parse response as JSON: {response.text}"
-            )
+            ) from e
 
 
 def create_lemonade_client(
@@ -7653,6 +8113,8 @@ def create_lemonade_client(
             try:
                 client.health_check()
                 client.log.info("Lemonade server is already running")
+            except LemonadeUnresponsiveError as e:
+                client.log.warning(f"Lemonade server is running but busy: {e}")
             except LemonadeClientError:
                 # Server not running, start it
                 client.log.info(f"Starting Lemonade server at {client.base_url}")

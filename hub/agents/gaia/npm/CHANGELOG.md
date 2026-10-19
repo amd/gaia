@@ -12,6 +12,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the status probe; each turn records its server compute, its non-model time,
   and what filled the gaps between model calls. `GET /v1/gaia/debug/turns`
   returns the last records while recording is on (off the versioned contract).
+- **A turn cut short by closing the TUI is saved as interrupted.** The session
+  history got a turn only once it ended, so closing the TUI mid-turn saved it
+  as an ordinary "stopped" answer, or, if the TUI had to kill the agent, lost
+  the question entirely. The question is now saved when the turn starts, and a
+  turn the TUI's closing cut short ends with "This answer was interrupted when
+  GAIA closed." A resumed session (`GAIA_HISTORY_FILE`) sees it. Questions
+  queued before the close are saved as they ended.
+- **No more approval prompts for files that aren't there.** Naming a missing
+  file or folder outside the allowed paths opened a 10-minute approval prompt,
+  and only after it did the agent learn the file didn't exist; a retry asked
+  again. The tool now says the file wasn't found straight away, without asking,
+  and names an allowed or attached file with the same name. `analyze_data_file`
+  given a bare file name uses the attached file of that name instead of asking
+  about one in the working folder. Secret and protected paths are refused
+  exactly as before, whether or not they exist.
+- **Background memory upkeep no longer wipes the chat's cached prompt.**
+  Memory consolidation, reconciliation and skill distillation ran on the
+  model slot the conversation uses, so the next message re-read the whole
+  ~19K-token prompt (~45 s on Gemma-4-E4B). They now run on the side slot,
+  as memory extraction already did.
+- **Opening a session or switching its model no longer freezes the other
+  sessions.** The sidecar built a new session's agent, and ran a `/model`
+  switch (which builds a new client and checks its server), on its event
+  loop. Every other session's stream stopped for that long, heartbeats
+  included, so the TUI and the daemon relay saw an idle connection. That
+  setup now runs on a worker thread, and a request that goes away mid-setup
+  still releases its session.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

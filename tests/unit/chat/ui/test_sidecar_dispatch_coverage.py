@@ -101,6 +101,9 @@ def test_the_unknown_agent_message_does_not_contradict_itself():
     assert "gaia" not in listed, f"named as unknown and registered at once: {listed}"
     # Email still belongs there — its relay needs no registration.
     assert "email" in listed
+    # The flagship installs with `gaia init`, never `gaia hub install gaia`.
+    assert "`gaia init`" in detail
+    assert "gaia hub" not in detail
 
 
 def test_uninstalled_flagship_says_so_rather_than_failing_at_the_daemon():

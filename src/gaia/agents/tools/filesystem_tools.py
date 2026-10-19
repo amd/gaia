@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -97,6 +98,91 @@ def _path_in_roots(path: str, roots: list) -> bool:
     return any(candidate == root or root in candidate.parents for root in roots)
 
 
+_OPEN_LOCK_GUARD = threading.Lock()
+
+
+def _open_lock_for(agent) -> threading.Lock:
+    """The per-agent lock that serializes opening the file index.
+
+    Created on first use, so any object the filesystem tools are bound to
+    gets one, whether or not it ran ``register_filesystem_tools`` first.
+    """
+    lock = getattr(agent, "_fs_index_open_lock", None)
+    if lock is None:
+        with _OPEN_LOCK_GUARD:
+            lock = getattr(agent, "_fs_index_open_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                agent._fs_index_open_lock = lock
+    return lock
+
+
+def _take_rebuild_notice(agent, index) -> str:
+    """A one-time note that the index was rebuilt, for the next tool result."""
+    kept = getattr(index, "rebuilt_from", None)
+    if not kept or getattr(agent, "_fs_index_rebuild_reported", False):
+        return ""
+    agent._fs_index_rebuild_reported = True
+    return (
+        "Note: the file index was damaged and has been rebuilt empty, so "
+        f"bookmarks saved before may be gone. The damaged file was kept at "
+        f"{kept}.\n\n"
+    )
+
+
+class FileIndexUnavailableError(RuntimeError):
+    """The configured file index exists but can't be opened right now."""
+
+
+# SQLite primary result codes (the low byte of an extended code).
+_SQLITE_PERM, _SQLITE_BUSY, _SQLITE_LOCKED, _SQLITE_READONLY = 3, 5, 6, 8
+_SQLITE_CORRUPT, _SQLITE_CANTOPEN, _SQLITE_NOTADB = 11, 14, 26
+
+
+def _sqlite_kind(exc: BaseException) -> str:
+    """``busy``, ``corrupt``, ``access`` or ``other`` for an open failure."""
+    if isinstance(exc, OSError):
+        return "access"
+    code = getattr(exc, "sqlite_errorcode", None)  # Python 3.11+
+    if code is not None:
+        primary = code & 0xFF
+        if primary in (_SQLITE_BUSY, _SQLITE_LOCKED):
+            return "busy"
+        if primary in (_SQLITE_CORRUPT, _SQLITE_NOTADB):
+            return "corrupt"
+        if primary in (_SQLITE_CANTOPEN, _SQLITE_READONLY, _SQLITE_PERM):
+            return "access"
+        return "other"
+    text = str(exc).lower()
+    if "locked" in text or "busy" in text:
+        return "busy"
+    if "malformed" in text or "not a database" in text:
+        return "corrupt"
+    if "unable to open" in text or "readonly" in text or "permission" in text:
+        return "access"
+    return "other"
+
+
+def _index_unavailable_message(db_path: str, exc: BaseException) -> str:
+    """A bookmark-tool error whose advice matches why the index won't open."""
+    head = f"Error: the file index at {db_path} can't be opened ({exc}). "
+    tail = " Nothing was changed."
+    kind = _sqlite_kind(exc)
+    if kind == "busy":
+        return head + "Another GAIA process is using it: try again in a moment." + tail
+    if kind == "corrupt":
+        return (
+            head + f"The file is damaged. Close GAIA and delete {db_path} (and any "
+            "-wal / -shm file beside it) to rebuild it; saved bookmarks in it "
+            "will be lost." + tail
+        )
+    if kind == "access":
+        return (
+            head + "Check that you can read and write this file and its folder." + tail
+        )
+    return head + "See the GAIA log for details." + tail
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -112,6 +198,37 @@ class FileSystemToolsMixin:
     _fs_index = None  # Optional FileSystemIndexService instance
     _path_validator = None  # Optional PathValidator instance
     _bookmarks: dict = None  # Per-instance; initialized in register_filesystem_tools()
+
+    def _bookmark_index(self):
+        """The file index bookmarks live in, opening it if it failed earlier.
+
+        Returns None only for an agent with no index configured, which keeps
+        bookmarks in memory. An index that is configured but can't be opened
+        (locked by another process, say) raises, so bookmarks are never
+        silently diverted to memory and lost with the session.
+        """
+        if self._fs_index is not None:
+            return self._fs_index
+        config = getattr(self, "config", None)
+        if not getattr(config, "enable_filesystem", False):
+            return None
+        db_path = getattr(config, "filesystem_index_path", None)
+        if not db_path:
+            return None
+        import sqlite3
+
+        from gaia.filesystem.index import FileSystemIndexService
+
+        with _open_lock_for(self):
+            if self._fs_index is not None:
+                return self._fs_index
+            try:
+                self._fs_index = FileSystemIndexService(db_path=db_path)
+            except (sqlite3.Error, OSError) as exc:
+                raise FileIndexUnavailableError(
+                    _index_unavailable_message(db_path, exc)
+                ) from exc
+        return self._fs_index
 
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
@@ -1113,29 +1230,12 @@ class FileSystemToolsMixin:
                 logger.error(f"Error reading file: {e}")
                 return f"Error reading file: {e}"
 
-        @tool(atomic=True)
-        def bookmark(
-            action: str = "list",
-            path: str = None,
-            label: str = None,
-        ) -> str:
-            """Save, list, or remove bookmarks for frequently accessed files and directories.
-
-            Bookmarks persist across sessions in the file system index.
-            Use 'add' with a path and optional label to save a bookmark.
-            Use 'remove' with a path to delete a bookmark.
-            Use 'list' to see all saved bookmarks.
-
-            Args:
-                action: add, remove, or list (default: list)
-                path: File or directory path to bookmark (required for add/remove)
-                label: Human-friendly name for the bookmark (optional, for add)
-            """
+        def _bookmark_impl(action: str, path: str, label: str) -> str:
             try:
+                index = mixin._bookmark_index()
                 if action == "list":
-                    # Try index first, fall back to in-memory
-                    if mixin._fs_index:
-                        bookmarks = mixin._fs_index.list_bookmarks()
+                    if index:
+                        bookmarks = index.list_bookmarks()
                     else:
                         bookmarks = [
                             {
@@ -1170,12 +1270,10 @@ class FileSystemToolsMixin:
 
                     path_str = str(resolved)
 
-                    if mixin._fs_index:
+                    if index:
                         # Auto-categorize
                         category = "directory" if resolved.is_dir() else "file"
-                        mixin._fs_index.add_bookmark(
-                            path_str, label=label, category=category
-                        )
+                        index.add_bookmark(path_str, label=label, category=category)
                     else:
                         mixin._bookmarks[path_str] = {
                             "label": label or "",
@@ -1192,8 +1290,8 @@ class FileSystemToolsMixin:
                     resolved = mixin._validate_path(path)
                     path_str = str(resolved)
 
-                    if mixin._fs_index:
-                        removed = mixin._fs_index.remove_bookmark(path_str)
+                    if index:
+                        removed = index.remove_bookmark(path_str)
                     else:
                         removed = path_str in mixin._bookmarks
                         mixin._bookmarks.pop(path_str, None)
@@ -1206,11 +1304,34 @@ class FileSystemToolsMixin:
                 else:
                     return f"Error: Unknown action '{action}'. Use 'add', 'remove', or 'list'."
 
+            except FileIndexUnavailableError as e:
+                return str(e)
             except ValueError as e:
                 return str(e)
             except Exception as e:
                 logger.error(f"Error managing bookmarks: {e}")
                 return f"Error managing bookmarks: {e}"
+
+        @tool(atomic=True)
+        def bookmark(
+            action: str = "list",
+            path: str = None,
+            label: str = None,
+        ) -> str:
+            """Save, list, or remove bookmarks for frequently accessed files and directories.
+
+            Bookmarks persist across sessions in the file system index.
+            Use 'add' with a path and optional label to save a bookmark.
+            Use 'remove' with a path to delete a bookmark.
+            Use 'list' to see all saved bookmarks.
+
+            Args:
+                action: add, remove, or list (default: list)
+                path: File or directory path to bookmark (required for add/remove)
+                label: Human-friendly name for the bookmark (optional, for add)
+            """
+            result = _bookmark_impl(action, path, label)
+            return _take_rebuild_notice(mixin, mixin._fs_index) + result
 
         # --- Helper functions (not tools, not decorated) ---
 

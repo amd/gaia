@@ -472,10 +472,10 @@ export function DocumentLibrary() {
     };
 
     return (
-        <div className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document Library">
+        <div className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document library">
             <div className="modal-panel doc-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Document Library</h3>
+                    <h3>Document library</h3>
                     <button className="btn-icon" onClick={() => setShowDocLibrary(false)} aria-label="Close document library">
                         <X size={18} />
                     </button>
@@ -524,7 +524,7 @@ export function DocumentLibrary() {
                             title="Browse files on this computer"
                         >
                             <Search size={14} />
-                            Browse Files
+                            Browse files
                         </button>
                     </form>
 

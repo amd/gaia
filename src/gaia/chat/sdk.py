@@ -26,6 +26,10 @@ from gaia.utils import perf_trace
 _SIDE_CALLS = threading.local()
 
 
+class LLMCallCancelled(Exception):
+    """The caller cancelled a model call; nothing it produced is returned."""
+
+
 @dataclass
 class AgentConfig:
     """Configuration for AgentSDK."""
@@ -468,6 +472,7 @@ class AgentSDK:
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
+        cancel: Optional[threading.Event] = None,
         **kwargs,
     ) -> AgentResponse:
         """
@@ -476,11 +481,21 @@ class AgentSDK:
         Args:
             messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
+            cancel: When given, the reply is streamed and the call is abandoned
+                as soon as the event is set — the connection is closed so the
+                server stops generating, and ``LLMCallCancelled`` is raised.
             **kwargs: Additional arguments for LLM generation
 
         Returns:
             AgentResponse with the complete response
+
+        Raises:
+            LLMCallCancelled: *cancel* was set before the reply finished.
         """
+        if cancel is not None:
+            return self._send_messages_cancellable(
+                messages, system_prompt, tools, cancel, **kwargs
+            )
         try:
             messages = self._prepare_messages_for_llm(messages)
 
@@ -557,6 +572,45 @@ class AgentSDK:
         except Exception as e:
             self.log.error(f"Error in send_messages: {e}")
             raise
+
+    def _send_messages_cancellable(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: Optional[str],
+        tools: Optional[List[Dict]],
+        cancel: threading.Event,
+        **kwargs,
+    ) -> AgentResponse:
+        """``send_messages`` over a stream, checking *cancel* between chunks."""
+        if cancel.is_set():
+            raise LLMCallCancelled("model call cancelled before it started")
+        parts: List[str] = []
+        final: Optional[AgentResponse] = None
+        stream = self.send_messages_stream(
+            messages, system_prompt=system_prompt, tools=tools, **kwargs
+        )
+        try:
+            for chunk in stream:
+                if cancel.is_set():
+                    raise LLMCallCancelled("model call cancelled mid-reply")
+                if chunk.is_complete:
+                    final = chunk
+                else:
+                    parts.append(chunk.text)
+        finally:
+            # Closing the generator closes the HTTP stream, which is what
+            # makes the server stop generating and free the model.
+            stream.close()
+        if final is None:
+            raise RuntimeError("model stream ended without a final chunk")
+        return AgentResponse(
+            text="".join(parts) + final.text,
+            stats=final.stats,
+            usage=self.llm_client.get_last_usage(),
+            is_complete=True,
+            finish_reason=final.finish_reason,
+            reasoning=final.reasoning,
+        )
 
     def send_messages_stream(
         self,
@@ -1635,10 +1689,3 @@ def quick_chat_with_memory(
         responses.append(response.text)
 
     return responses
-
-
-# Backwards-compatible aliases
-ChatSDK = AgentSDK
-ChatConfig = AgentConfig
-ChatResponse = AgentResponse
-ChatSession = AgentSession
