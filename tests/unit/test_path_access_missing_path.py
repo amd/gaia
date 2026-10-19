@@ -347,6 +347,28 @@ class TestTools:
         assert result.get("status") != "error", result
         assert prompt.asked == []
 
+    def test_a_bare_name_means_the_attachment_even_over_an_in_scope_cwd_file(
+        self, layout, monkeypatch
+    ):
+        """Attachment-first is intended: a same-named working-folder file loses."""
+        workdir = layout.scope / "work"
+        workdir.mkdir()
+        (workdir / "data.csv").write_text("region,sales\nNorth,1\n", encoding="utf-8")
+        attached_dir = layout.scope / "attached"
+        attached_dir.mkdir()
+        attached = attached_dir / "data.csv"
+        attached.write_text("region,sales\nWest,74\nEast,12\n", encoding="utf-8")
+        monkeypatch.chdir(workdir)
+        validator, prompt = _validator(layout)
+        tools = _search_tools(validator, indexed=[attached])
+
+        result = tools["analyze_data_file"]("data.csv")
+
+        assert result.get("status") != "error", result
+        assert os.path.samefile(result["file_path"], attached), result
+        assert result["row_count"] == 2, result
+        assert prompt.asked == []
+
     def test_analyze_data_file_still_asks_for_an_explicit_outside_path(self, layout):
         """Only a bare name is matched to an attachment; a full path is asked."""
         attached = layout.scope / "report.csv"
