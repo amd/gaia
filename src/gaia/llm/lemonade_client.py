@@ -2825,7 +2825,11 @@ class LemonadeClient:
     def _gone_handoff(self) -> threading.local:
         """Per-thread: the retrier handed this thread's failure to the
         reconnect wait because GAIA's server was gone."""
-        return self.__dict__.setdefault("_gone_handoff_state", threading.local())
+        # Lazy: tests build clients with ``__new__``, skipping ``__init__``.
+        state = self.__dict__.get("_gone_handoff_state")
+        if state is None:
+            state = self.__dict__.setdefault("_gone_handoff_state", threading.local())
+        return state
 
     def _recover_stopped_gaia_lemonade(self, error: Exception, model: str) -> bool:
         """Bring GAIA's server back after it stopped under a request.
@@ -2965,7 +2969,11 @@ class LemonadeClient:
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise
-        yield from start()
+        try:
+            yield from start()
+        finally:
+            # The resend bypasses _survive_*, so clear a hand-off it left set.
+            self._gone_handoff().pending = False
 
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.

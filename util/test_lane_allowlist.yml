@@ -37,7 +37,7 @@ files:
   tests/integration/test_lemonade_predownload_checks.py: Proves the real /models, /system-info and /health shapes the unit test mocks; needs a live Lemonade Server.
   tests/integration/test_gateway_lemonade.py: Proves Lemonade accepts the gateway's cloud-provider registration and discovery calls, not just that GAIA sent them; needs a live Lemonade Server 11.8.0+, skips otherwise.
   tests/test_lemonade_health.py: Reads context_size from the real health endpoint; needs a live Lemonade Server.
-  tests/integration/test_lemonade_restart_live.py: Kills, hangs and idle-stops a real lemond on an isolated home for ~8 min, and its job-object case needs Windows, which the offline-integration lane is not; run it, or util/lemonade_restart_harness.py, by hand.
+  tests/integration/test_lemonade_restart_live.py: Kills, hangs and idle-stops a real lemond on an isolated home for ~7 min, and its job-object case needs Windows, which the offline-integration lane is not; run it, or util/lemonade_restart_harness.py, by hand.
   tests/mcp/test_email_mcp_stdio_parity.py: Both the REST and MCP-stdio surfaces triage with the local LLM; needs a live Lemonade Server with the email model.
   tests/integration/eval/test_bench_e2e.py: Runs one toybox task through a real harness and a real model; needs GAIA_BENCH_E2E=1, a live Lemonade Server, and the Claude CLI login for the Claude Code leg.
 

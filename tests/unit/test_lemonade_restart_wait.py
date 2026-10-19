@@ -837,6 +837,29 @@ class TestTheHandOff:
             )
         ]
 
+    def test_a_failed_stream_resend_leaves_no_hand_off_behind(self):
+        """The resend bypasses the per-call reset, so a hand-off it set must
+        not linger for the next call on this thread."""
+        client = lc.LemonadeClient.__new__(lc.LemonadeClient)
+        client._recover_stopped_gaia_lemonade = lambda error, model: True
+
+        def _refused_before_output():
+            raise requests.exceptions.ConnectionError("refused")
+            yield  # pragma: no cover
+
+        def _handed_off_then_refused():
+            client._gone_handoff().pending = True
+            raise requests.exceptions.ConnectionError("refused again")
+            yield  # pragma: no cover
+
+        with pytest.raises(requests.exceptions.ConnectionError, match="again"):
+            list(
+                client._stream_surviving_gaia_lemonade_stop(
+                    _refused_before_output(), _handed_off_then_refused, MODEL
+                )
+            )
+        assert client._gone_handoff().pending is False
+
 
 class TestEmbeddingsRideARestart:
     """Memory and RAG embed first in a session; a restart under them is waited
