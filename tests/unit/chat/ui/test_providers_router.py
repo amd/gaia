@@ -619,6 +619,81 @@ def test_local_models_are_downloaded_chat_models_plus_the_default(client, lemona
     assert by_id["Qwen3-4B-GGUF"]["rank"] is None
 
 
+# Lemonade lists the built-in 120B; the 20B is a custom model it does not list
+# until a pull registers it.
+_GPT_OSS = [
+    {"id": "gpt-oss-120b-mxfp-GGUF", "downloaded": False, "labels": ["reasoning"]},
+]
+_STRIX_128 = {
+    "Physical Memory": "128 GB",
+    "devices": {"amd_gpu": [{"available": True, "integrated": True, "vram_gb": 96.0}]},
+    "model_storage": {"free_bytes": 900e9},
+}
+_GPU_24 = {
+    "Physical Memory": "64 GB",
+    "devices": {"amd_gpu": [{"available": True, "integrated": False, "vram_gb": 24.0}]},
+    "model_storage": {"free_bytes": 900e9},
+}
+
+
+@pytest.mark.parametrize(
+    "info,offered",
+    [
+        (_STRIX_128, {"user.ggml-gpt-oss-20b-MXFP4-GGUF", "gpt-oss-120b-mxfp-GGUF"}),
+        (_GPU_24, {"user.ggml-gpt-oss-20b-MXFP4-GGUF"}),
+        # Memory unknown: nothing that might not fit is offered.
+        ({"devices": {}}, set()),
+    ],
+)
+def test_gpt_oss_is_offered_for_download_only_where_it_fits(
+    client, lemonade, info, offered
+):
+    lemonade.models = _CATALOG + _GPT_OSS
+    lemonade.answers[("GET", "system-info")] = (200, info)
+    models = client.get("/api/providers/local/models").json()["models"]
+    shown = {m["id"] for m in models if "gpt-oss" in m["id"]}
+    assert shown == offered
+    assert all(not m["downloaded"] for m in models if m["id"] in offered)
+
+
+def test_registered_gpt_oss_is_listed_once_under_lemonades_id(client, lemonade):
+    lemonade.models = [
+        {"id": "ggml-gpt-oss-20b-MXFP4-GGUF", "downloaded": False, "labels": []}
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert [i for i in ids if "oss-20b" in i] == ["ggml-gpt-oss-20b-MXFP4-GGUF"]
+
+
+def test_a_builtin_this_lemonade_does_not_list_is_not_offered(client, lemonade):
+    lemonade.models = []
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert ids == ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]
+
+
+def test_unregistered_gpt_oss_carries_its_size_and_recipe(client, lemonade):
+    lemonade.models = []
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    (row,) = client.get("/api/providers/local/models").json()["models"]
+    assert row["id"] == "user.ggml-gpt-oss-20b-MXFP4-GGUF"
+    assert (row["recipe"], row["size_gb"], row["fits"]) == ("llamacpp", 12.1, True)
+    assert row["state"] == "not_downloaded"
+
+
+def test_active_does_not_size_optional_models(client, lemonade):
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    client.get("/api/providers/active")
+    assert "system-info" not in lemonade.paths()
+
+
+def test_downloaded_gpt_oss_lists_even_when_memory_is_unknown(client, lemonade):
+    lemonade.models = [{**_GPT_OSS[0], "downloaded": True}]
+    lemonade.answers[("GET", "system-info")] = (200, {"devices": {}})
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "gpt-oss-120b-mxfp-GGUF" in ids
+
+
 def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
     lemonade.models = [
         {"id": "gemma4-it-e2b-FLM", "downloaded": True, "labels": ["chat", "audio"]},

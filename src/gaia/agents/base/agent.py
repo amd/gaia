@@ -6833,6 +6833,8 @@ Do NOT wrap conversational replies in JSON.
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools
         no_calls = {"tool_choice": "none"} if tools else {}
+        # The same effort as the loop: a change rewrites the prompt's start.
+        no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
@@ -7856,6 +7858,11 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _reasoning_request_kwargs(self) -> Dict[str, Any]:
+        """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
+        chosen = getattr(self, "reasoning_effort_kwargs", None)
+        return chosen() if chosen is not None else {}
+
     def _history_for_request(self) -> List[Dict[str, Any]]:
         """``conversation_history``, with earlier requests' reasoning stripped.
 
@@ -8631,6 +8638,10 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        # A level the model chose for the last request must not carry into this one.
+        reset_effort = getattr(self, "reset_reasoning_effort", None)
+        if reset_effort is not None:
+            reset_effort()
         # Only a console with a Stop button can cancel a client backoff wait.
         console = getattr(self, "console", None)
         stoppable = getattr(console, "cancelled", None) is not None
@@ -9486,6 +9497,7 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._reasoning_request_kwargs(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -9736,6 +9748,7 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._reasoning_request_kwargs(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -10112,6 +10125,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._reasoning_request_kwargs(),
                     )
 
                     for chunk_response in stream_gen:
@@ -10156,6 +10170,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._reasoning_request_kwargs(),
                     )
                     plan_response = chat_response.text
                     plan_reasoning = _response_reasoning(chat_response)

@@ -377,6 +377,12 @@ LARGE_DEFAULT_MODEL_NAME = "Qwen3.6-35B-A3B-GGUF"
 # than decode speed.
 FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 
+# gpt-oss always reasons; its template grades how much. "medium" is the
+# template's own default.
+GPT_OSS_REASONING_EFFORT = "medium"
+GPT_OSS_20B_MODEL_NAME = "user.ggml-gpt-oss-20b-MXFP4-GGUF"
+REASONING_EFFORTS = ("low", "medium", "high")
+
 
 def resolve_default_chat_model() -> str:
     """The chat model an agent uses when nobody passed one.
@@ -1343,6 +1349,9 @@ class ModelRequirement:
     # mode is GAIA's choice rather than the chat template's default. None sends
     # nothing, for models whose template has no such switch.
     thinking: Optional[bool] = None
+    # Sent as ``chat_template_kwargs.reasoning_effort`` (``low``/``medium``/
+    # ``high``) for templates that grade reasoning instead of switching it.
+    reasoning_effort: Optional[str] = None
 
     @property
     def scales_with_memory(self) -> bool:
@@ -1467,6 +1476,62 @@ MODELS = {
         # 20 KiB/token: 1.3 GB at 64K, 2.7 GB at 128K, 5.4 GB at 256K.
         max_ctx_size=262144,
         kv_bytes_per_token=20480,
+    ),
+    # --- gpt-oss: Lemonade built-ins on llama.cpp, pulled by name ---
+    # Alternate layers attend over a 128-token sliding window, so only the
+    # full-attention half grows with context: 8 KV heads x 64 dims x K+V x f16
+    # = 2 KiB per full layer per token. 20B: 12 of 24 layers, 24 KiB/token,
+    # 1.6 GB at 64K, 3.2 GB at its native 128K.
+    # Registered by file, not as Lemonade's built-in gpt-oss-20b-mxfp4-GGUF:
+    # that entry names the whole repo, and Lemonade (v2026.40.0) launches the
+    # repo's EAGLE3 draft head as the model, which fails to start.
+    "gpt-oss-20b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=GPT_OSS_20B_MODEL_NAME,
+        display_name="gpt-oss 20B",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        checkpoint="ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-MXFP4.gguf",
+        recipe="llamacpp",
+        reasoning=True,
+        reasoning_effort=GPT_OSS_REASONING_EFFORT,
+        size_gb=12.1,
+        max_ctx_size=131072,
+        kv_bytes_per_token=24576,
+    ),
+    "gpt-oss-20b-q4": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gpt-oss-20b-GGUF",
+        display_name="gpt-oss 20B Q4_K_M",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        reasoning_effort=GPT_OSS_REASONING_EFFORT,
+        size_gb=11.6,
+        max_ctx_size=131072,
+        kv_bytes_per_token=24576,
+    ),
+    # 120B: 18 of 36 layers, 36 KiB/token, 2.4 GB at 64K, 4.8 GB at 128K.
+    "gpt-oss-120b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gpt-oss-120b-mxfp-GGUF",
+        display_name="gpt-oss 120B",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        reasoning_effort=GPT_OSS_REASONING_EFFORT,
+        size_gb=63.4,
+        max_ctx_size=131072,
+        kv_bytes_per_token=36864,
+    ),
+    "gpt-oss-120b-q4": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gpt-oss-120b-GGUF",
+        display_name="gpt-oss 120B Q4_K_M",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        reasoning_effort=GPT_OSS_REASONING_EFFORT,
+        size_gb=62.8,
+        max_ctx_size=131072,
+        kv_bytes_per_token=36864,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -1647,6 +1712,20 @@ MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
             "presence_penalty": 1.0,
         },
     ),
+    # https://github.com/openai/gpt-oss "Recommended Sampling Parameters":
+    # temperature=1.0, top_p=1.0. It always reasons; effort is graded instead.
+    **{
+        model_id: CardSampling(
+            thinks_by_default=True,
+            thinking={"temperature": 1.0, "top_p": 1.0, "min_p": 0.0},
+        )
+        for model_id in (
+            GPT_OSS_20B_MODEL_NAME,
+            "gpt-oss-20b-GGUF",
+            "gpt-oss-120b-mxfp-GGUF",
+            "gpt-oss-120b-GGUF",
+        )
+    },
     # The MTP build is the same weights plus a speculative-decoding head.
     "Qwen3.6-35B-A3B-GGUF": _QWEN3_6_35B_A3B,
     "Qwen3.6-35B-A3B-MTP-GGUF": _QWEN3_6_35B_A3B,
@@ -1713,9 +1792,39 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     """
     if not isinstance(model_id, str) or cloud_model_provider(model_id):
         return {}
+    mr = find_model_requirement(model_id)
+    if mr is not None and mr.reasoning_effort:
+        # Reasoning cannot be switched off here; "low" is the least there is.
+        return {"chat_template_kwargs": {"reasoning_effort": "low"}}
     if requested_thinking(model_id) is None:
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def requested_reasoning_effort(
+    model_id: Optional[str], chat_template_kwargs: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """The ``reasoning_effort`` a request to a local *model_id* sends, or None.
+
+    The caller's value when it set one, else ``GAIA_REASONING_EFFORT``, else
+    the model's registered effort. None for models that do not grade reasoning.
+    """
+    mr = find_model_requirement(model_id)
+    if mr is None or not mr.reasoning_effort:
+        return None
+    explicit = (chat_template_kwargs or {}).get("reasoning_effort")
+    if explicit is not None:
+        effort = explicit.strip().lower() if isinstance(explicit, str) else explicit
+    else:
+        effort = os.environ.get("GAIA_REASONING_EFFORT", "").strip().lower() or (
+            mr.reasoning_effort
+        )
+    if effort not in REASONING_EFFORTS:
+        raise LemonadeClientError(
+            f"reasoning_effort {effort!r} is not one of {', '.join(REASONING_EFFORTS)}; "
+            "fix GAIA_REASONING_EFFORT or the request's chat_template_kwargs."
+        )
+    return effort
 
 
 # A gpt-oss control token (``<|channel|>``, ``<|message|>``, ``<|call|>`` ...).
@@ -1860,6 +1969,23 @@ def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
 
 #: Largest-first default chat models; the last is the floor every machine gets.
 DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
+
+#: Supported chat models the pickers offer for download beside the defaults,
+#: on machines they fit. Never picked as a default.
+OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
+
+
+def optional_chat_models_that_fit(capacity: Any) -> List[str]:
+    """``OPTIONAL_CHAT_MODELS`` that fit *capacity*, KV cache at their floor included."""
+    from gaia.llm.model_fit import check_fit, kv_cache_gb
+
+    out = []
+    for model_id in OPTIONAL_CHAT_MODELS:
+        mr = find_model_requirement(model_id)
+        kv = kv_cache_gb(mr.kv_bytes_per_token, mr.min_ctx_size)
+        if check_fit(mr.size_gb, capacity, kv).fits:
+            out.append(model_id)
+    return out
 
 
 def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
@@ -4503,6 +4629,13 @@ class LemonadeClient:
             if thinking is not None:
                 template_kwargs = dict(kwargs.get("chat_template_kwargs") or {})
                 template_kwargs["enable_thinking"] = thinking
+                kwargs["chat_template_kwargs"] = template_kwargs
+            effort = requested_reasoning_effort(
+                model, kwargs.get("chat_template_kwargs")
+            )
+            if effort is not None:
+                template_kwargs = dict(kwargs.get("chat_template_kwargs") or {})
+                template_kwargs["reasoning_effort"] = effort
                 kwargs["chat_template_kwargs"] = template_kwargs
 
         if tool_choice is not None:

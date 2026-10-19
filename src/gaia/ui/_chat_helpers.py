@@ -654,6 +654,7 @@ async def _generate_session_title(
         LemonadeClientError,
         _model_ids_match,
         cloud_model_provider,
+        find_model_requirement,
         no_thinking_kwargs,
     )
 
@@ -672,6 +673,9 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
+        mr = find_model_requirement(model_id)
+        # It reasons even at "low"; leave room for the title after that.
+        max_tokens = 96 if mr is not None and mr.reasoning_effort else 24
         local = not cloud_model_provider(model_id)
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
@@ -689,7 +693,7 @@ async def _generate_session_title(
             return client.chat_completions(
                 model_id,
                 [{"role": "user", "content": prompt}],
-                max_tokens=24,
+                max_tokens=max_tokens,
                 # Low temperature: titles should be deterministic-ish
                 # for the same conversation.
                 temperature=0.3,
