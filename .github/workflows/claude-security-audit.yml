@@ -34,20 +34,19 @@
 
 name: Claude Security Audit
 
+run-name: ${{ inputs.rotation_night && format('Claude Security Audit — rotation night {0}', inputs.rotation_night) || 'Claude Security Audit' }}
+
 on:
-  schedule:
-    # 09:13 UTC nightly = 02:13 PDT / 01:13 PST. Security findings age worst, so this
-    # runs every night rather than weekly. GitHub cron is UTC-only with no DST handling,
-    # so one fixed hour cannot be the same local time year-round; the 1h winter drift is
-    # accepted. The off-the-hour minute avoids the ":00" fleet-wide queue.
-    #
-    # Deliberately ~1.4h BEFORE claude-nightly-audit.yml's nightly 10:37 UTC slot — the two
-    # proactive Claude runs must not stack on the shared subscription rate limit, and this
-    # one goes first because it is the shorter job (deterministic semgrep + a single
-    # Claude sweep, vs. four serialized lenses + synthesis).
-    - cron: "13 9 * * *"
+  # No cron of its own: claude-audit-rotation.yml dispatches this every third night
+  # (one proactive audit a night, 10:13 UTC = 03:13 PDT / 02:13 PST). Running every
+  # audit every night spent the Claude weekly cap mid-week.
   workflow_dispatch:
     inputs:
+      rotation_night:
+        # Set only by claude-audit-rotation.yml. Marks this run (via run-name) as a
+        # rotation night, the only runs scripts/audit/audit_history.py counts as history.
+        description: "Internal: set by claude-audit-rotation.yml. Leave empty."
+        default: ""
       target_ref:
         description: "Git ref to audit (for backtesting a known-vuln commit)"
         default: ""
@@ -67,7 +66,7 @@ jobs:
   # Deterministic layer — maintained security rules, native SARIF.
   # ---------------------------------------------------------------------------
   # ---------------------------------------------------------------------------
-  # Cost guard for the nightly cadence. The Claude layer below is 3 lenses x 45
+  # Cost guard. The Claude layer below is 3 lenses x 150
   # turns + synthesis (~$4-6 of subscription-equivalent usage per lens at the
   # ceiling); running that unconditionally every night would burn the shared
   # subscription pool re-reading an unchanged tree. Mirrors the skip-if-empty
@@ -77,12 +76,18 @@ jobs:
   # its rulesets update independently of this repo, so it still has something to
   # say on a night with zero commits. Only the reasoning layer skips.
   #
-  # A workflow_dispatch NEVER skips: dispatch means someone explicitly wants a
-  # run (usually backtesting target_ref against a known-vuln commit).
+  # A hand dispatch NEVER skips: it means someone explicitly wants a run (usually
+  # backtesting target_ref against a known-vuln commit). Only rotation turns skip.
   # ---------------------------------------------------------------------------
   preflight:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reads this workflow's own run history to find the last successful night.
+      actions: read
+      # Reads merged PR titles/bodies for the recent-changes context.
+      pull-requests: read
     outputs:
       skip: ${{ steps.scope.outputs.skip }}
       lenses: ${{ steps.lenses.outputs.lenses }}
@@ -107,19 +112,85 @@ jobs:
       - name: Skip the Claude layer on a night with no commits
         id: scope
         env:
-          IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_ROTATION: ${{ github.event.inputs.rotation_night != '' }}
         run: |
           set -euo pipefail
           skip=false
-          if [ "$IS_DISPATCH" != "true" ]; then
-            count=$(git log --since="1 day ago" --oneline | wc -l | tr -d ' ')
-            echo "Commits in the last day: $count"
-            [ "$count" = "0" ] && skip=true
+          # The last successful rotation run: its commit opens the recent-changes window,
+          # and its date decides skip-if-empty (not a fixed window — a turn lost to the
+          # usage limit must not let the next quiet turn skip).
+          python3 scripts/audit/audit_history.py window \
+            --repo "${{ github.repository }}" --workflow claude-security-audit.yml \
+            > "$RUNNER_TEMP/scope.txt"
+          cat "$RUNNER_TEMP/scope.txt"
+          echo "base_sha=$(sed -n 's/^base_sha=//p' "$RUNNER_TEMP/scope.txt")" >> "$GITHUB_OUTPUT"
+          if [ "$IS_ROTATION" = "true" ]; then
+            since=$(sed -n 's/^since=//p' "$RUNNER_TEMP/scope.txt")
+            if [ -n "$since" ]; then
+              count=$(git log --since="$since" --oneline | wc -l | tr -d ' ')
+              echo "Commits since $since: $count"
+              [ "$count" = "0" ] && skip=true
+            fi
           else
-            echo "workflow_dispatch — never skipping."
+            echo "Dispatched by hand — never skipping."
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
           echo "Resolved: skip=$skip"
+
+      # What merged since the last successful run, so the lenses look at new code first.
+      # See scripts/audit/recent_changes.py.
+      - name: Collect recent changes on main
+        if: steps.scope.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ steps.scope.outputs.base_sha }}
+        run: |
+          python3 scripts/audit/recent_changes.py --repo "${{ github.repository }}" \
+            --base-sha "$BASE_SHA" --fallback-days 3 --max-bytes 30000 \
+            --out recent-changes.md --paths-out changed-paths.txt \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload the recent-changes context
+        if: steps.scope.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: recent-changes
+          path: |
+            recent-changes.md
+            changed-paths.txt
+          if-no-files-found: error
+
+      # One cheap probe before any lens: on the usage limit the run stops here, once,
+      # with the account and reset time in the summary. See scripts/audit/require_claude.py.
+      - name: Show which Claude account this run uses
+        if: steps.scope.outputs.skip != 'true'
+        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
+      - name: Probe the Claude account
+        id: probe
+        if: steps.scope.outputs.skip != 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        with:
+          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-merge-queue,github-actions"
+          prompt: |
+            Reply with exactly the word: ok
+          claude_args: |
+            --max-turns 1
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read
+      - name: Stop here if Claude cannot answer
+        if: steps.scope.outputs.skip != 'true'
+        env:
+          CLAUDE_CONCLUSION: ${{ steps.probe.outputs.conclusion }}
+          CLAUDE_LOG: ${{ steps.probe.outputs.execution_file }}
+          ACCOUNT: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }}
+        run: |
+          python3 scripts/audit/require_claude.py --conclusion "${CLAUDE_CONCLUSION:-}" \
+            --log "${CLAUDE_LOG:-}" --account "$ACCOUNT" \
+            --what "Tonight's security audit" --summary "$GITHUB_STEP_SUMMARY"
 
   semgrep:
     if: github.repository == 'amd/gaia'
@@ -139,9 +210,13 @@ jobs:
           python -m pip install --quiet semgrep
           # continue-on-error semantics: a rule-parse hiccup must not sink the SARIF
           # upload of everything that did scan.
+          # Every shipped language, not just Python: the Go TUI, the TypeScript/Electron
+          # Agent UI, the installer scripts, and the workflows themselves (expression
+          # injection into `run:` is this repo's most-used untrusted-input path).
           semgrep scan --sarif --output semgrep.sarif \
             --config p/python --config p/security-audit --config p/secrets \
-            src hub || true
+            --config p/typescript --config p/golang --config p/github-actions \
+            src hub tui installer scripts util .github/workflows || true
       - name: Upload semgrep SARIF to code scanning
         uses: github/codeql-action/upload-sarif@v4
         with:
@@ -175,6 +250,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.target_ref || github.ref }}
 
+      - name: Download the recent-changes context
+        uses: actions/download-artifact@v8
+        with:
+          name: recent-changes
+          path: .
+
       - name: Build the deterministic worklist
         run: |
           set -euo pipefail
@@ -191,6 +272,18 @@ jobs:
             echo ""
             echo "## PathValidator / allowlist / trust gates (check for asymmetric enforcement)"
             grep -rnE "is_path_allowed|validate_write|validate_read|allowed_paths|trust_native|ensure_trust_ack|requires_trust_ack" src hub --include=*.py || true
+            echo ""
+            echo "## Electron / web UI sinks (renderer trust, IPC, HTML injection, external URLs)"
+            grep -rnE "nodeIntegration|contextIsolation|webSecurity|ipcMain\.(handle|on)|shell\.openExternal|dangerouslySetInnerHTML|innerHTML *=|\beval\(" src/gaia/apps src/gaia/electron --include=*.ts --include=*.tsx --include=*.js --include=*.cjs --include=*.mjs || true
+            echo ""
+            echo "## Go TUI process / file sinks"
+            grep -rnE "exec\.Command|os\.(WriteFile|RemoveAll|Rename)" tui --include=*.go --exclude=*_test.go || true
+            echo ""
+            echo "## Installer scripts that download and run code"
+            grep -rnE "Invoke-Expression|\biex\b|Invoke-WebRequest|curl .*\| *(ba)?sh|Start-Process" installer scripts --include=*.ps1 --include=*.sh || true
+            echo ""
+            echo "## Workflows: untrusted event fields expanded into run:, and privileged triggers"
+            grep -rnE "pull_request_target|workflow_run|github\.event\.(issue|comment|pull_request|review)[a-z_.]*\.(title|body|head_ref|label)" .github/workflows || true
           } > security-worklist.txt
           echo "worklist lines: $(wc -l < security-worklist.txt)"
 
@@ -230,9 +323,19 @@ jobs:
             ## First actions
             1. Read `CLAUDE.md` (esp. "No Silent Fallbacks" and "Issue Response Guidelines" →
                never discuss vulnerability details publicly).
+               Scope is every shipped language: Python (`src/`, `hub/`), the Go TUI (`tui/`),
+               the TypeScript/Electron Agent UI (`src/gaia/apps/`, `src/gaia/electron/`), the
+               installer scripts, and `.github/workflows/` (untrusted event fields expanded
+               into `run:`, privileged triggers, over-broad `permissions:`).
             2. Read `security-worklist.txt` — a deterministic list of suppressions, sinks, and
                gate call-sites. Investigate every item relevant to your lens; do not sample.
-            3. Investigate with Grep/Glob/Read/Bash (READ-ONLY — never edit, install, or run repo code).
+            3. Read `recent-changes.md` — what merged since this audit last ran. New and
+               changed code is where new vulnerabilities are; start there and at the
+               callers and siblings of what changed.
+            4. Read the "Security" section of `scripts/audit/missed_bug_classes.md` — the
+               vulnerability shapes recent fixes had that no audit caught — and its
+               "Don't report" list.
+            5. Investigate with Grep/Glob/Read/Bash (READ-ONLY — never edit, install, or run repo code).
 
             ## Your lens
             - **sink-taint**: trace ATTACKER-CONTROLLED input into a dangerous sink (archive
@@ -432,12 +535,14 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # No `|| echo 0`: a findings file that will not parse must fail this step, not
+          # report zero high-severity findings.
           high=$(python -c "import json,glob; n=0
           for f in glob.glob('findings-*.json'):
               for x in json.load(open(f)).get('findings',[]):
                   v=x.get('cvss_vector','')
                   n+=1 if ('VI:H' in v or 'VC:H' in v or 'VA:H' in v) else 0
-          print(n)" 2>/dev/null || echo 0)
+          print(n)")
           if [ "${high:-0}" -gt 0 ]; then
             echo "::warning title=Security audit::$high high-impact finding(s) — review the private code-scanning alerts. cc @kovtcharov-amd ($RUN_URL)"
           fi

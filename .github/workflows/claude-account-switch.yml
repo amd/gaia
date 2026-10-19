@@ -19,9 +19,9 @@ on:
   # ~1000 times a week, so it dispatches this file instead (request-account-switch).
   workflow_run:
     workflows:
-      - "Claude Nightly Audit"
+      - "Claude Code Audit"
       - "Claude Security Audit"
-      - "Claude Weekly Doc Walkthrough"
+      - "Claude Doc Walkthrough"
       - "Claude Auth Canary"
     types: [completed]
   workflow_dispatch:

@@ -864,7 +864,7 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 **Read the matching skill before starting related work.** Every skill under
 `.claude/skills/<name>/SKILL.md` is auto-discovered by its `description` and invoked with
 the `Skill` tool — run `ls .claude/skills/` to see the current set. They cover releases,
-testing, hub-agent integration, eval scorecards, the weekly audit workflow,
+testing, hub-agent integration, eval scorecards, the proactive audit rotation,
 LemonadeClient changes, GitHub responses, and presentations.
 
 This list is deliberately not enumerated here — a hand-maintained copy drifts the moment

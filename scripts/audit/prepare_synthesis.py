@@ -305,10 +305,30 @@ def fetch_backlog(repo: str, label: str, limit: int) -> dict[str, Any]:
             "number,body",
         ]
     )
+    # Closed as a duplicate: its keys must keep pointing at the open canonical, or
+    # the next run re-files the defect the moment a human consolidates it.
+    closed = _gh_json(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--label",
+            label,
+            "--state",
+            "closed",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,body,stateReason,comments",
+        ]
+    )
     return {
         "open_issues": open_issues,
         "filed": labelled,
         "suppressed": suppressed,
+        "closed_duplicates": [i for i in closed if i.get("stateReason") == "DUPLICATE"],
     }
 
 
@@ -334,6 +354,58 @@ def extract_keys(issues: list[dict[str, Any]]) -> dict[str, list[int]]:
             if number not in bucket:
                 bucket.append(number)
     return dict(keys)
+
+
+#: How a duplicate's canonical is named: GitHub's own "Duplicate of #N" wording,
+#: which `gh issue close --duplicate-of` and the triage comments both use.
+DUPLICATE_OF_RE = re.compile(r"duplicate of #(\d+)", re.IGNORECASE)
+
+
+def redirect_duplicates(
+    closed_duplicates: list[dict[str, Any]], open_numbers: set[int]
+) -> list[dict[str, Any]]:
+    """Re-home each closed duplicate's audit markers onto its open canonical.
+
+    Returns pseudo-issues ``{"number": canonical, "body": duplicate's body}`` to
+    feed through :func:`extract_keys` alongside the open filed issues. Without this
+    a duplicate's keys vanish from dedup the moment it is closed, so the next run
+    re-files exactly what the triager just consolidated.
+
+    The latest "Duplicate of #N" wins (a re-pointed duplicate). A duplicate whose
+    canonical cannot be named, or is no longer open, is not redirected: the defect
+    then goes through the normal backlog search instead of being silenced against
+    an issue nobody will see.
+    """
+    redirected = []
+    for issue in closed_duplicates:
+        texts = [c.get("body") or "" for c in reversed(issue.get("comments") or [])]
+        texts.append(issue.get("body") or "")
+        canonical = None
+        for text in texts:
+            matches = DUPLICATE_OF_RE.findall(text)
+            if matches:
+                canonical = int(matches[-1])
+                break
+        if canonical is None or canonical not in open_numbers:
+            continue
+        if canonical == issue["number"]:
+            continue
+        redirected.append({"number": canonical, "body": issue.get("body") or ""})
+    return redirected
+
+
+def marker_text_by_issue(issues: list[dict[str, Any]]) -> dict[int, str]:
+    """Every audit key an issue carries, as matchable text, keyed by issue number.
+
+    Titles alone miss same-location duplicates: two judges describe one broken
+    section in different words ("drops 5 of its pages" vs "hides eight shipped
+    guides"), but both keys name `docs/guides/index.mdx`.
+    """
+    text: dict[int, list[str]] = defaultdict(list)
+    for issue in issues:
+        for match in KEY_MARKER_RE.finditer(issue.get("body") or ""):
+            text[issue["number"]].append(match.group(1))
+    return {number: " ".join(keys) for number, keys in text.items()}
 
 
 # ----------------------------------------------------------------------
@@ -395,6 +467,7 @@ def find_backlog_candidates(
     *,
     threshold: float = MATCH_THRESHOLD,
     max_candidates: int = MAX_CANDIDATES,
+    marker_text: dict[int, str] | None = None,
 ) -> tuple[dict[str, float], float]:
     """Attach the most similar open issues to each cluster, in place.
 
@@ -403,15 +476,24 @@ def find_backlog_candidates(
     is visible to the synthesis step and gets a comment instead of a 15th
     duplicate.
 
+    *marker_text* adds each issue's own audit keys to its title. Title-only
+    matching let same-location duplicates through: on the real backlog #3832
+    scored 0.15 against #3471 (same guide, same section) and #3457 scored 0.05
+    against #3195; with the keys both rank first above the threshold.
+
     Returns the term weights built from the backlog so sibling detection can
     score against the same large, stable corpus.
     """
+    marker_text = marker_text or {}
     searchable = [
         issue
         for issue in open_issues
         if not RECEIPT_TITLE_RE.match(issue.get("title") or "")
     ]
-    issue_tokens = [tokenize(issue.get("title") or "") for issue in searchable]
+    issue_tokens = [
+        tokenize(f"{issue.get('title') or ''} {marker_text.get(issue['number'], '')}")
+        for issue in searchable
+    ]
     idf, unseen = _idf(issue_tokens)
 
     for cluster in clusters:
@@ -834,12 +916,18 @@ def main(argv: list[str] | None = None) -> int:
             f"Raise --limit above the open-issue count."
         )
 
+    open_numbers = {issue["number"] for issue in backlog["open_issues"]}
+    tracked = backlog["filed"] + redirect_duplicates(
+        backlog["closed_duplicates"], open_numbers
+    )
     classify(
         clusters,
-        extract_keys(backlog["filed"]),
+        extract_keys(tracked),
         extract_keys(backlog["suppressed"]),
     )
-    idf, unseen = find_backlog_candidates(clusters, backlog["open_issues"])
+    idf, unseen = find_backlog_candidates(
+        clusters, backlog["open_issues"], marker_text=marker_text_by_issue(tracked)
+    )
     find_sibling_clusters(clusters, idf, unseen)
 
     counts = {

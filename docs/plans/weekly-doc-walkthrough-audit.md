@@ -51,6 +51,13 @@ scheme, `bug` → auto-fix promotion, `audit-wontfix` permanent suppression — 
 
 ## Cadence & runtime
 
+> **Cadence update (October 2026):** every third night, dispatched by
+> `claude-audit-rotation.yml` at 10:13 UTC, walking **ten** guides a turn: ones a recent
+> merge changed first, then the least recently walked (`scripts/audit/audit_history.py
+> rotate`). A full weekly pass ran 7–9 hours serially into the US workday on the shared
+> Strix Point pool and spent ~$190 of the weekly Claude budget in one day. Per-guide
+> timeout is 50 minutes. The paragraph below is the original design.
+
 Weekly, Monday 12:00 UTC. The static siblings went nightly; this one stays weekly on
 purpose because it drives a real Lemonade instance on the self-hosted Windows/STX box for
 hours, so it is hardware-bound rather than token-bound and a nightly cadence would
