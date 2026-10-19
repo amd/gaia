@@ -451,6 +451,41 @@ def test_warm_up_is_reported_as_getting_ready_not_answering(
     assert jobs == []
 
 
+def test_restart_waits_for_a_warm_up_that_has_not_loaded_a_model_yet(
+    client, lemonade, jobs, monkeypatch
+):
+    """The warm-up's first load lists nothing yet; a forced reload would race it."""
+    monkeypatch.setattr(warmup, "warm_up_status", lambda: {"state": warmup.WARMING})
+    lemonade.loaded = []
+    status = client.get("/api/providers/local/status").json()
+    assert (status["state"], status["busy"], status["busy_reason"]) == (
+        "warming",
+        True,
+        "warm_up",
+    )
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 409
+    assert "getting the model ready" in resp.json()["detail"]
+    assert jobs == []
+
+
+def test_restart_with_nothing_loaded_and_no_warm_up_goes_ahead(
+    client, lemonade, jobs, monkeypatch
+):
+    monkeypatch.setattr(warmup, "warm_up_status", lambda: {"state": warmup.READY})
+    lemonade.loaded = []
+    status = client.get("/api/providers/local/status").json()
+    assert (status["state"], status["busy"], status["busy_reason"]) == (
+        "idle",
+        False,
+        None,
+    )
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 202
+    _join_restart()
+    assert jobs == [(DEFAULT_MODEL_NAME, True)]
+
+
 def test_users_server_reloads_after_confirm_once_the_warm_up_ends(
     client, lemonade, jobs, monkeypatch
 ):
@@ -491,6 +526,48 @@ def test_restart_failure_is_shown_in_status(client, lemonade, monkeypatch):
     assert not providers._restart_lock.locked()
     body = client.get("/api/providers/local/status").json()
     assert "out of memory" in body["restart_error"]
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_a_server_that_does_not_start_is_a_restart_error(
+    client, lemonade, monkeypatch, started
+):
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    monkeypatch.setattr(
+        LemonadeManager, "ensure_ready", classmethod(lambda cls, **k: started)
+    )
+    monkeypatch.setattr(providers, "_restart_error", None)
+    # pylint: disable=protected-access
+    assert providers._restart_lock.acquire(blocking=False)
+    providers._restart_job(DEFAULT_MODEL_NAME, False)
+    assert not providers._restart_lock.locked()
+    if started:
+        assert providers._restart_error is None
+    else:
+        assert "did not start" in providers._restart_error
+        assert "gaia.log" in providers._restart_error
+        lemonade.down = True
+        body = client.get("/api/providers/local/status").json()
+        assert "did not start" in body["restart_error"]
+
+
+def test_a_cloud_model_size_change_is_refused_before_anything_is_saved(
+    client, lemonade
+):
+    lemonade.models.append(
+        {"id": "fireworks.glm", "recipe": "cloud", "labels": ["chat"]}
+    )
+    _write_config({"context_sizes": {LARGE_DEFAULT_MODEL_NAME: 131072}})
+    before = config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8")
+    for ctx in (None, 65536):
+        resp = client.put(
+            "/api/providers/local/context",
+            json={"model": "fireworks.glm", "ctx_size": ctx},
+        )
+        assert resp.status_code == 422
+        assert "provider's context size" in resp.json()["detail"]
+    assert config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8") == before
 
 
 def test_a_cloud_entry_is_never_the_local_model(client, lemonade):

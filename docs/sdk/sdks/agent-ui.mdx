@@ -2168,7 +2168,8 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     already), `busy` (a reply is running), `warm_up` (GAIA is preparing a new
     chat), `restarting`, or `not_gaias_server` (GAIA never reloads a model on a
     server it doesn't run); in the last four cases the size applies on the next
-    load. **422** for a size not offered on this PC. A saved size that stops
+    load. **422** for a size not offered on this PC, or for a cloud model
+    (nothing is saved then). A saved size that stops
     fitting, or that can't be checked because this PC's memory can't be read,
     is refused at load with how to fix it; `GAIA_CTX_SIZE` still overrides it.
   </Accordion>
@@ -2188,8 +2189,10 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     (or the active one) at its context size. Returns **202**; progress shows in
     `/local/status`. On a server GAIA doesn't run, it never starts the server and
     reloads only with `{"confirm": true}`; without it the **409** explains what
-    the reload would interrupt. Also **409** while a restart runs or while the
-    model is answering; **422** for a cloud model.
+    the reload would interrupt. Also **409** while a restart runs, while the
+    model is answering, or while GAIA prepares a new chat (even before that
+    first load lists a model); **422** for a cloud model. A server that fails
+    to start is reported in `restart_error`.
   </Accordion>
 
   <Accordion title="POST /api/providers/select">

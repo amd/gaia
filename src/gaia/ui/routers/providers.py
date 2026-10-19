@@ -854,16 +854,18 @@ def _loaded_ctx(health: Dict[str, Any], model_id: str) -> Optional[int]:
     return ctx if isinstance(ctx, int) and ctx > 0 else None
 
 
+_CLOUD_CONTEXT_DETAIL = (
+    "Cloud models run at their provider's context size; there is nothing to choose."
+)
+
+
 def _context_view(model_id: str) -> Dict[str, Any]:
     from gaia.config import GaiaConfigError
     from gaia.llm.context_choice import context_range, saved_context_size
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     if provider_of(model_id) != LOCAL:
-        raise HTTPException(
-            status_code=422,
-            detail="Cloud models run at their provider's context size; there is nothing to choose.",
-        )
+        raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
         loaded_ctx = _loaded_ctx(_read_health(), model_id)
@@ -919,6 +921,8 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
+    if provider_of(model_id) != LOCAL:
+        raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
         save_context_size(model_id, body.ctx_size, capacity)
@@ -935,7 +939,7 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
             entry = _chat_entry(_read_health())
         except ProviderError as e:
             _raise(e)
-        busy_reason = _busy_reason(entry, _warming_up()) if entry else None
+        busy_reason = _busy_reason(entry, _warming_up())
         if view["loaded_ctx"] == (view["chosen"] or view["automatic"]):
             # Already loaded at that size: a reload would only stall chat.
             reload = {"started": False, "reason": "already_loaded"}
@@ -1033,12 +1037,12 @@ def _warming_up() -> bool:
     return warmup.warm_up_status().get("state") == warmup.WARMING
 
 
-def _busy_reason(entry: Dict[str, Any], warming: bool) -> Optional[str]:
+def _busy_reason(entry: Optional[Dict[str, Any]], warming: bool) -> Optional[str]:
     """``warm_up`` while GAIA primes a new chat, ``request`` while it answers one."""
-    # The warm-up keeps the model busy too; say which, since no chat is running then.
+    # The warm-up's first load lists no model yet, so it counts with or without one.
     if warming:
         return "warm_up"
-    return "request" if entry.get("is_busy") else None
+    return "request" if entry and entry.get("is_busy") else None
 
 
 #: ``all_models_loaded[].status`` values for a model that cannot answer yet.
@@ -1097,6 +1101,8 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     warming = warmup.warm_up_status().get("state") == warmup.WARMING
     if entry is None:
         view["state"] = "warming" if warming else "idle"
+        view["busy"] = warming
+        view["busy_reason"] = _busy_reason(None, warming)
     else:
         name = str(entry.get("model_name") or "")
         # "in_use" is a loaded model answering a request, not one still loading.
@@ -1138,8 +1144,11 @@ def _restart_job(model_id: str, server_up: bool) -> None:
         if server_up:
             # pylint: disable=protected-access
             LemonadeClient(verbose=False)._ensure_model_loaded(model_id, force=True)
-        else:
-            LemonadeManager.ensure_ready(quiet=True, model=model_id)
+        elif not LemonadeManager.ensure_ready(quiet=True, model=model_id):
+            raise RuntimeError(
+                "the model server did not start; see ~/.gaia/gaia.log for "
+                "why, then press Restart again"
+            )
     except Exception as e:  # noqa: BLE001 - surfaced in /local/status and the log
         logger.error("Restarting the local model %s failed: %s", model_id, e)
         _restart_error = f"Restarting {display_name(model_id)} failed: {e}"
@@ -1181,7 +1190,7 @@ def restart_local(
     try:
         health = _read_health()
         entry = _chat_entry(health)
-        busy_reason = _busy_reason(entry, _warming_up()) if entry else None
+        busy_reason = _busy_reason(entry, _warming_up())
         if busy_reason is not None:
             raise HTTPException(status_code=409, detail=_BUSY_DETAIL[busy_reason])
         model_id = str(entry.get("model_name")) if entry else active["model"]
