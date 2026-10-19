@@ -1176,7 +1176,6 @@ class WebClient:
 
         # Resolve save path
         save_dir = Path(save_dir).expanduser().resolve()
-        save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir / filename
 
         # Verify path is still within save_dir (prevent traversal). Compare
@@ -1213,6 +1212,9 @@ class WebClient:
             except BaseException:
                 response.close()
                 raise
+
+        # Created only after the screen, so a refused download leaves no folder.
+        save_dir.mkdir(parents=True, exist_ok=True)
 
         # Stream to a sibling .part file and rename into place, so an
         # interrupted download never leaves a truncated file under the real

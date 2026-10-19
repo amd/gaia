@@ -31,6 +31,12 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.daemon.scheduler import store
+from gaia.daemon.scheduler.lease import (
+    DEFAULT_HEARTBEAT_SECONDS,
+    DEFAULT_STALE_AFTER_SECONDS,
+    Heartbeat,
+    StaleLeases,
+)
 from gaia.daemon.scheduler.models import STATUS_FAILED, STATUS_PENDING
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
@@ -45,6 +51,10 @@ JobExecutor = Callable[[Dict[str, Any], Any], None]
 # lock from a concurrent writer (a second driver during the migration window,
 # or a status-route job_counts() read) waits instead of raising SQLITE_BUSY.
 _BUSY_TIMEOUT_MS = 5000
+
+# How long a ``firing`` lease may go without a heartbeat before it is a
+# recovery candidate (see :mod:`gaia.daemon.scheduler.lease`).
+DEFAULT_STALE_FIRING_SECONDS = DEFAULT_STALE_AFTER_SECONDS
 
 
 class _ClockDB(DatabaseMixin):
@@ -66,9 +76,20 @@ class DaemonClock:
         executors: Dict[str, JobExecutor],
         *,
         poll_seconds: float = 30.0,
+        stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
+        heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
+        if stale_firing_seconds <= 0:
+            raise ValueError(
+                f"stale_firing_seconds must be > 0, got {stale_firing_seconds}"
+            )
+        if not 0 < heartbeat_seconds < stale_firing_seconds:
+            raise ValueError(
+                f"heartbeat_seconds must be > 0 and below stale_firing_seconds "
+                f"({stale_firing_seconds}), got {heartbeat_seconds}"
+            )
         if db_path == ":memory:":
             raise ValueError(
                 "DaemonClock needs a file-backed SQLite path — an in-memory DB "
@@ -78,6 +99,9 @@ class DaemonClock:
         self._db_path = db_path
         self._executors = dict(executors)
         self._poll_seconds = poll_seconds
+        self._stale_firing_seconds = stale_firing_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+        self._stale_leases = StaleLeases(confirm_after=2 * heartbeat_seconds)
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._schema_ready = False
@@ -112,6 +136,12 @@ class DaemonClock:
 
         The atomic ``claim_job`` guard makes each job fire exactly once even
         when a legacy driver polls the same store during the transition window.
+        Each pass first recovers leases that have gone
+        ``stale_firing_seconds`` without a heartbeat and stayed unrenewed for
+        two more heartbeat intervals of this clock's passes; a one-shot job
+        failed that way is reported in ``failed``, and a re-queued recurring
+        job fires in this same pass. Only the holder of a claim can record its
+        outcome.
         """
         db = self._open_db()
         try:
@@ -120,12 +150,56 @@ class DaemonClock:
             db.close_db()
             self._last_poll_at = time.time()
 
+    def _recover_abandoned(self, db, now: float) -> List[str]:
+        candidates = store.find_stale_firing(
+            db, now=now, stale_after=self._stale_firing_seconds
+        )
+        failed: List[str] = []
+        for job in self._stale_leases.confirm(candidates, now):
+            outcome = store.recover_claim(db, job, now=now)
+            if outcome == "requeued":
+                log.warning(
+                    "daemon clock: job %s stopped renewing its lease "
+                    "while firing; re-queued it",
+                    job["job_id"],
+                )
+            elif outcome == "failed":
+                log.error(
+                    "daemon clock: one-shot job %s stopped renewing its lease "
+                    "while firing; marked it failed instead of running it twice",
+                    job["job_id"],
+                )
+                failed.append(job["job_id"])
+        return failed
+
+    def _renew(self, job_id: str, claim_id: str) -> bool:
+        # Own connection: sqlite3 connections are not shared across threads.
+        db = self._open_db()
+        try:
+            return store.renew_claim(
+                db, job_id=job_id, claim_id=claim_id, now=time.time()
+            )
+        finally:
+            db.close_db()
+
+    @staticmethod
+    def _record(recorded: bool, job: Dict[str, Any], outcome: str) -> None:
+        if not recorded:
+            log.warning(
+                "daemon clock: %s job %s %s, but another driver had already "
+                "claimed it again; that driver's outcome stands",
+                job["kind"],
+                job["job_id"],
+                outcome,
+            )
+
     def _fire_due_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
-        failed: List[str] = []
+        failed = self._recover_abandoned(db, now if now is not None else time.time())
         for job in store.fetch_due(db, now=now):
             job_id = job["job_id"]
-            if not store.claim_job(db, job_id=job_id):
+            claim_id = store.claim_job(db, job_id=job_id, now=now)
+            if claim_id is None:
                 continue  # another driver won the claim
             executor = self._executors.get(job["kind"])
             if executor is None:
@@ -134,15 +208,24 @@ class DaemonClock:
                     f"(source {job['source']!r}) — the job cannot fire in the "
                     "daemon process"
                 )
-                store.mark_failed(db, job_id=job_id, error=msg)
+                store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=msg)
                 log.error("daemon clock: job %s failed: %s", job_id, msg)
                 failed.append(job_id)
                 continue
             try:
-                executor(job, db)
+                with Heartbeat(
+                    lambda j=job_id, c=claim_id: self._renew(j, c),
+                    self._heartbeat_seconds,
+                    job_id,
+                ):
+                    executor(job, db)
             except Exception as exc:
                 emsg = f"{type(exc).__name__}: {exc}"
-                store.mark_failed(db, job_id=job_id, error=emsg)
+                self._record(
+                    store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=emsg),
+                    job,
+                    "failed",
+                )
                 log.exception(
                     "daemon clock: %s job %s (source %s) failed to fire: %s",
                     job["kind"],
@@ -152,7 +235,9 @@ class DaemonClock:
                 )
                 failed.append(job_id)
                 continue
-            store.mark_fired(db, job_id=job_id)
+            self._record(
+                store.mark_fired(db, job_id=job_id, claim_id=claim_id), job, "fired"
+            )
             log.info(
                 "daemon clock: %s job %s (source %s) fired",
                 job["kind"],
@@ -242,4 +327,4 @@ class DaemonClock:
                 return
 
 
-__all__ = ["DaemonClock", "JobExecutor"]
+__all__ = ["DEFAULT_STALE_FIRING_SECONDS", "DaemonClock", "JobExecutor"]

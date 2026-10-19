@@ -46,9 +46,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Set up Python
         uses: actions/setup-python@v7
         with:

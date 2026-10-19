@@ -113,7 +113,7 @@ def client(monkeypatch):
         lambda url, data, *a, **k: sent.append(data) or {"status": "success"},
     )
     monkeypatch.setattr(
-        c, "get_status", lambda: lc.LemonadeStatus(running=True, loaded_models=[])
+        c, "get_status", lambda **_: lc.LemonadeStatus(running=True, loaded_models=[])
     )
     monkeypatch.setattr(c, "get_model_max_context_window", lambda *a, **k: None)
     monkeypatch.setattr(
