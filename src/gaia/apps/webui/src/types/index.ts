@@ -740,6 +740,12 @@ export interface AgentStep {
     active?: boolean;
     /** Plan steps (for type='plan'). */
     planSteps?: string[];
+    /** One plain line per plan step, parallel to planSteps (for type='plan'). */
+    planNarrations?: string[];
+    /** Zero-based index of the plan step being executed (for type='plan'). */
+    currentStep?: number;
+    /** What the tool call does, in plain words (for type='tool'). */
+    narration?: string;
     /** Timestamp when this step started. */
     timestamp: number;
     /** Structured command output (for run_shell_command). */
@@ -803,7 +809,11 @@ export interface StreamEvent {
     summary?: string;
     success?: boolean;
     steps?: string[];
+    /** One plain line per plan step, parallel to `steps` (for plan events). */
+    step_narrations?: string[];
     current_step?: number;
+    /** What a tool call does, in plain words (for tool_start and tool_args). */
+    narration?: string;
     title?: string;
     detail?: string;
     args?: Record<string, unknown>;

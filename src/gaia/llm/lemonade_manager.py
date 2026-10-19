@@ -355,6 +355,25 @@ class LemonadeManager:
         return bool(ensure_lemonade().get("started"))
 
     @classmethod
+    def _wait_for_gaia_lemonade(cls, quiet: bool) -> bool:
+        """Wait, bounded, for GAIA's server that is running but not answering yet.
+
+        Returns:
+            True once it answers; False after printing why it did not.
+        """
+        client = LemonadeClient(keep_alive=True, verbose=not quiet)
+        on_status = None if quiet else (lambda msg: print(msg, file=sys.stderr))
+        try:
+            # False means "not GAIA's server" too; callers check gaia_runs_lemonade first.
+            client.wait_for_gaia_lemonade(on_status=on_status)
+        except LemonadeClientError as e:
+            cls._log.error("%s", e)
+            if not quiet:
+                print(f"❌ {e}", file=sys.stderr)
+            return False
+        return True
+
+    @classmethod
     def print_server_error(cls, min_context_size: int = DEFAULT_CONTEXT_SIZE):
         """Print informative error when Lemonade server is not running.
 
@@ -902,10 +921,16 @@ class LemonadeManager:
 
                 pinned = base_url is not None or host is not None or port is not None
                 if gaia_runs_lemonade(client.base_url if pinned else None):
-                    from gaia.daemon.errors import DaemonError
+                    from gaia.daemon.errors import (
+                        DaemonError,
+                        LemonadeNotAnsweringError,
+                    )
 
                     try:
                         cls.start_embedded_if_stopped()
+                    except LemonadeNotAnsweringError:
+                        if not cls._wait_for_gaia_lemonade(quiet):
+                            return False
                     except DaemonError as e:
                         cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
                         if not quiet:

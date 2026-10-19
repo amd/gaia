@@ -59,8 +59,6 @@
 
 .email-pre-scan__section-title {
     flex: 1;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
 }
 
 .email-pre-scan__section-count {

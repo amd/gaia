@@ -81,11 +81,9 @@
     flex-shrink: 0;
     padding: 5px 14px;
     border-radius: var(--radius-md);
-    font-size: 11px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-family: var(--font-sans);
     transition: all var(--duration) var(--ease);
 }
 
@@ -112,9 +110,9 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     opacity: 0.7;
 }
 
