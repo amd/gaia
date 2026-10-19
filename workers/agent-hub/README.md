@@ -308,8 +308,10 @@ checked into the repo:
 5. **(Optional) Bind the route** by uncommenting the `routes` line in
    `wrangler.toml` to serve the API under `hub.amd-gaia.ai/*`.
 
-`MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be
-overridden per environment without a secret.
+`MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps the size of an artifact
+sent through the Worker, and `MAX_REFERENCED_ARTIFACT_BYTES` (default 5 GiB, R2's
+single-part upload limit) caps one published by reference (see below). Both can
+be overridden per environment without a secret.
 
 ### Publishing origins (one Worker, two doors)
 

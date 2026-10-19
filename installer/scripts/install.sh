@@ -13,10 +13,11 @@ GAIA_VENV="$GAIA_HOME/venv"
 GAIA_BIN="$GAIA_HOME/bin"
 PYTHON_VERSION="3.12"
 
-# The Agent Hub is the canonical channel for the terminal hub binary:
+# The Agent Hub is the canonical channel for the GAIA Terminal UI binary:
 # release_components.yml publishes all six platform builds there.
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL%/}"
+# The published component id keeps its legacy name; published paths are immutable.
 TERMINAL_HUB_ID="terminal-hub"
 FLAGSHIP_AGENT_ID="gaia"
 
@@ -388,11 +389,11 @@ download_and_verify() {
 
 # A missing terminal hub fails the install — it is the advertised entry point.
 install_tui() {
-    print_step "Installing the GAIA terminal hub"
+    print_step "Installing the GAIA Terminal UI"
 
     platform=""
     if ! platform="$(terminal_hub_platform)"; then
-        print_error "No terminal hub build for $(uname -s)/$(uname -m)."
+        print_error "No GAIA Terminal UI build for $(uname -s)/$(uname -m)."
         echo "Published targets: linux-x64, linux-arm64, darwin-x64, darwin-arm64,"
         echo "win-x64, win-arm64. See $GAIA_HUB_BASE_URL/index.json"
         exit 1
@@ -411,7 +412,7 @@ install_tui() {
 
     manifest_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/manifest.json"
     if ! fetch_file "$manifest_url" "$tmp/manifest.json"; then
-        print_error "Could not fetch the terminal hub manifest."
+        print_error "Could not fetch the GAIA Terminal UI manifest."
         echo "  URL:  $manifest_url"
         echo "  Fix:  check your network, then retry. If the component is not yet"
         echo "        published for this release, build from source:"
@@ -424,7 +425,7 @@ install_tui() {
     # filename, and the Worker-computed SHA-256.
     resolved=""
     if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
-        print_error "Could not resolve the terminal hub build for $platform."
+        print_error "Could not resolve the GAIA Terminal UI build for $platform."
         echo "  Reported above by the manifest reader."
         echo "  Fix:  if your platform is genuinely unpublished, build from source:"
         echo "          git clone https://github.com/amd/gaia && cd gaia/tui && make build"
@@ -436,15 +437,15 @@ install_tui() {
     want="${resolved##* }"
 
     binary_url="$GAIA_HUB_BASE_URL/agents/$TERMINAL_HUB_ID/$version/$filename"
-    print_step "Downloading terminal hub $version for $platform"
+    print_step "Downloading GAIA Terminal UI $version for $platform"
     # Never `gaia`: tui/internal/daemon/client.go resolves `gaia` on PATH to
     # start the Python-owned daemon, so a Go binary by that name finds itself.
     if ! download_and_verify "$binary_url" "$tmp/$filename" "$want" \
-            "$GAIA_BIN/gaia-tui" "terminal hub"; then
+            "$GAIA_BIN/gaia-tui" "GAIA Terminal UI"; then
         echo "  Look: $manifest_url lists what is published for $version."
         exit 1
     fi
-    print_success "Terminal hub $version installed to $GAIA_BIN/gaia-tui"
+    print_success "GAIA Terminal UI $version installed to $GAIA_BIN/gaia-tui"
 }
 
 # The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
@@ -464,7 +465,7 @@ install_flagship_agent() {
     platform=""
     if ! platform="$(terminal_hub_platform)"; then
         print_warning "No flagship agent build for $(uname -s)/$(uname -m) — skipping."
-        echo "  The terminal hub still works; the GAIA agent will show as unavailable."
+        echo "  The GAIA Terminal UI still works; the GAIA agent will show as unavailable."
         return 0
     fi
     filename="gaia-agent-${platform}"
@@ -510,7 +511,7 @@ install_flagship_agent() {
         exit 1
     elif [ "$_rc" -ne 0 ]; then
         print_warning "The GAIA agent did not install — skipping."
-        echo "  The terminal hub still works; re-run this installer to retry."
+        echo "  The GAIA Terminal UI still works; re-run this installer to retry."
         return 0
     fi
     # Read by show_next_steps: every path above this line leaves the machine
@@ -616,7 +617,7 @@ show_next_steps() {
         printf '  3. Talk to the agent: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     (it opens the GAIA agent; type %s/agents%s to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
     else
-        printf '  3. Open the terminal hub: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '  3. Open the GAIA Terminal UI: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     %sThe GAIA agent was skipped — see the warning above — so this\n' "$COLOR_YELLOW"
         printf '     opens the agent list, not a chat. Re-run this installer to retry.%s\n' "$COLOR_RESET"
     fi

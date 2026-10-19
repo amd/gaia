@@ -30,8 +30,7 @@
 #
 # Tag namespace: `agent-pkg-email-*` (NOT `v*`). This is the established Agent
 # Hub package-share namespace (see build_agent_package.yml) and deliberately
-# does NOT fire publish.yml (v* only) or the paused publish_agents.yml (no tag
-# trigger). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
+# does NOT fire publish.yml (v* only). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
 #
 # Maintainer setup (one-time):
 #   Environment:

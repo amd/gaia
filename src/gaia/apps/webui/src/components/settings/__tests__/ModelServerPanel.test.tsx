@@ -50,6 +50,19 @@ describe('ModelServerPanel', () => {
         expect(screen.getByText(/embeddinggemma-300m-GGUF · Vulkan/)).toBeInTheDocument();
     });
 
+    it('says why the embedding model runs on the CPU with ROCm, and only then', async () => {
+        const note = 'Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue.';
+        mockedApi.getModelServer.mockResolvedValue(info({ embedding_note: note }));
+        const { unmount } = render(<ModelServerPanel />);
+        expect(await screen.findByText(note)).toBeInTheDocument();
+        unmount();
+
+        mockedApi.getModelServer.mockResolvedValue(info());
+        render(<ModelServerPanel />);
+        await screen.findByText("GAIA's own Lemonade v2026.41.1");
+        expect(screen.queryByText(/known GPU driver issue/)).not.toBeInTheDocument();
+    });
+
     it('offers only the backends Lemonade reports for this machine', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
         render(<ModelServerPanel />);
@@ -145,10 +158,10 @@ describe('ModelServerPanel', () => {
 
     it('reloads the chat model at its current context window', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
-        mockedApi.loadModel.mockResolvedValue({ status: 'loading', model: 'Qwen3.6-35B-A3B-GGUF', ctx_size: 65536 });
+        mockedApi.loadModelAskingFirst.mockResolvedValue(true);
         render(<ModelServerPanel />);
 
         fireEvent.click(await screen.findByRole('button', { name: 'Reload chat model now' }));
-        await waitFor(() => expect(mockedApi.loadModel).toHaveBeenCalledWith('Qwen3.6-35B-A3B-GGUF', 65536));
+        await waitFor(() => expect(mockedApi.loadModelAskingFirst).toHaveBeenCalledWith('Qwen3.6-35B-A3B-GGUF', 65536));
     });
 });

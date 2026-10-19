@@ -144,7 +144,7 @@ describe('ChatView live status', () => {
         expect(useChatStore.getState().liveStatus).toBeNull();
     });
 
-    it('drops the phase once a tool starts', async () => {
+    it('says a tool is running once it starts, not that the model is thinking', async () => {
         await driveSend();
         act(() => {
             capturedCallbacks!.onAgentEvent({
@@ -152,6 +152,7 @@ describe('ChatView live status', () => {
             } as unknown as StreamEvent);
             capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'write_file' } as unknown as StreamEvent);
         });
-        expect(useChatStore.getState().liveStatus).toBeNull();
+        expect(useChatStore.getState().liveStatus).toBe('Running write_file');
+        await liveLine('Running write_file');
     });
 });
