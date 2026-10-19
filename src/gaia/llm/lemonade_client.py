@@ -5795,10 +5795,14 @@ class LemonadeClient:
                     raise cancelled() from None
                 if not received_complete:
                     raise
-            except (AttributeError, OSError, ValueError):
+            except (AttributeError, OSError, ValueError) as e:
                 # What a read raises once the watcher closed the response.
                 if stopped.is_set():
                     raise cancelled() from None
+                if isinstance(e, OSError):
+                    message = f"Failed to install {model_name}: connection lost ({e})"
+                    self.log.error(message)
+                    raise LemonadeClientError(message) from e
                 raise
             if stopped.is_set():
                 raise cancelled()
@@ -8150,6 +8154,8 @@ def create_lemonade_client(
             # means "don't wait on a busy server", not "no time to load".
             load_timeout = max(RetryPolicy.from_env().load_wait, _MIN_LOAD_SECONDS)
             client.load_model(model_name, timeout=load_timeout)
+        except ModelDownloadCancelledError:
+            raise
         except LemonadeClientError as e:
             # Re-raised as is: callers branch on its type (auth, memory, disk).
             client.log.error(f"Failed to load {model_name}: {e}")

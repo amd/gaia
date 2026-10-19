@@ -116,3 +116,96 @@ def test_fail_fast_load_wait_still_loads(monkeypatch):
     with listing, pull, cloud, patch.object(lc.LemonadeClient, "load_model") as load:
         lc.create_lemonade_client(model=MODEL, auto_load=True, verbose=False)
     assert load.call_args.kwargs["timeout"] >= 60
+
+
+def test_stop_is_not_logged_as_a_load_failure(caplog):
+    """A deliberate Stop is a cancellation, not an error in the log."""
+    events = iter([{"event": "progress", "percent": p} for p in range(0, 100, 10)])
+    listing, _pull, cloud = _patches([])
+    with (
+        listing,
+        cloud,
+        patch.object(lc.LemonadeClient, "pull_model_stream", return_value=events),
+        patch.object(lc.LemonadeClient, "load_model") as load,
+        retry.model_retry_notices(lambda _n: None, is_cancelled=lambda: True),
+        caplog.at_level("ERROR"),
+    ):
+        with pytest.raises(lc.ModelDownloadCancelledError):
+            lc.create_lemonade_client(model=MODEL, auto_load=True, verbose=False)
+    load.assert_not_called()
+    assert not [r for r in caplog.records if "Failed to load" in r.getMessage()]
+
+
+def test_a_real_load_failure_is_still_logged(caplog):
+    listing, pull, cloud = _patches([], available=[MODEL])
+    with (
+        listing,
+        pull,
+        cloud,
+        patch.object(
+            lc.LemonadeClient,
+            "load_model",
+            side_effect=lc.InsufficientMemoryError("not enough memory"),
+        ),
+        caplog.at_level("ERROR"),
+    ):
+        with pytest.raises(lc.InsufficientMemoryError):
+            lc.create_lemonade_client(model=MODEL, auto_load=True, verbose=False)
+    assert [r for r in caplog.records if "Failed to load" in r.getMessage()]
+
+
+class _DroppingResponse:
+    """A /pull reply whose stream dies mid-read with ``error``."""
+
+    status_code = 200
+
+    def __init__(self, error):
+        self.error = error
+        self.closed = False
+
+    def iter_lines(self):
+        yield b"event: progress"
+        yield b'data: {"percent": 5}'
+        raise self.error
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError("reset by peer"), TimeoutError("timed out"), OSError(5)],
+)
+def test_a_socket_error_mid_download_names_the_fix(error):
+    """A raw socket error that urllib3 did not wrap still reaches the caller
+    as a LemonadeClientError carrying the download guidance."""
+    reply = _DroppingResponse(error)
+    with (
+        patch.object(lc.LemonadeClient, "list_models", return_value={"data": []}),
+        patch.object(lc.LemonadeClient, "_is_cloud_model", return_value=False),
+        patch.object(lc.requests, "post", return_value=reply),
+        patch.object(lc.LemonadeClient, "load_model") as load,
+    ):
+        with pytest.raises(lc.LemonadeClientError, match="could not download it") as e:
+            lc.create_lemonade_client(model=MODEL, auto_load=True, verbose=False)
+    assert not isinstance(e.value, lc.ModelDownloadCancelledError)
+    load.assert_not_called()
+    assert reply.closed
+
+
+def test_a_socket_error_from_pull_model_stream_is_a_client_error():
+    reply = _DroppingResponse(ConnectionResetError("reset by peer"))
+    client = lc.LemonadeClient(verbose=False)
+    with patch.object(lc.requests, "post", return_value=reply):
+        with pytest.raises(lc.LemonadeClientError, match="connection lost") as e:
+            list(client.pull_model_stream(MODEL))
+    assert isinstance(e.value.__cause__, ConnectionResetError)
+
+
+def test_a_programming_error_mid_download_is_not_disguised():
+    """Only socket errors are wrapped; a bug still surfaces as itself."""
+    reply = _DroppingResponse(ValueError("bad state"))
+    client = lc.LemonadeClient(verbose=False)
+    with patch.object(lc.requests, "post", return_value=reply):
+        with pytest.raises(ValueError, match="bad state"):
+            list(client.pull_model_stream(MODEL))
