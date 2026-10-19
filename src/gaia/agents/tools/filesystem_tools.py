@@ -97,6 +97,10 @@ def _path_in_roots(path: str, roots: list) -> bool:
     return any(candidate == root or root in candidate.parents for root in roots)
 
 
+class FileIndexUnavailableError(RuntimeError):
+    """The configured file index exists but can't be opened right now."""
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -112,6 +116,37 @@ class FileSystemToolsMixin:
     _fs_index = None  # Optional FileSystemIndexService instance
     _path_validator = None  # Optional PathValidator instance
     _bookmarks: dict = None  # Per-instance; initialized in register_filesystem_tools()
+
+    def _bookmark_index(self):
+        """The file index bookmarks live in, opening it if it failed earlier.
+
+        Returns None only for an agent with no index configured, which keeps
+        bookmarks in memory. An index that is configured but can't be opened
+        (locked by another process, say) raises, so bookmarks are never
+        silently diverted to memory and lost with the session.
+        """
+        if self._fs_index is not None:
+            return self._fs_index
+        config = getattr(self, "config", None)
+        if not getattr(config, "enable_filesystem", False):
+            return None
+        db_path = getattr(config, "filesystem_index_path", None)
+        if not db_path:
+            return None
+        import sqlite3
+
+        from gaia.filesystem.index import FileSystemIndexService
+
+        try:
+            self._fs_index = FileSystemIndexService(db_path=db_path)
+        except (sqlite3.Error, OSError) as exc:
+            raise FileIndexUnavailableError(
+                f"Error: the file index at {db_path} can't be opened ({exc}), so "
+                "bookmarks can't be read or saved right now. Nothing was "
+                "changed. Another GAIA process may be using it: try again in "
+                "a moment."
+            ) from exc
+        return self._fs_index
 
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
@@ -1132,10 +1167,10 @@ class FileSystemToolsMixin:
                 label: Human-friendly name for the bookmark (optional, for add)
             """
             try:
+                index = mixin._bookmark_index()
                 if action == "list":
-                    # Try index first, fall back to in-memory
-                    if mixin._fs_index:
-                        bookmarks = mixin._fs_index.list_bookmarks()
+                    if index:
+                        bookmarks = index.list_bookmarks()
                     else:
                         bookmarks = [
                             {
@@ -1170,12 +1205,10 @@ class FileSystemToolsMixin:
 
                     path_str = str(resolved)
 
-                    if mixin._fs_index:
+                    if index:
                         # Auto-categorize
                         category = "directory" if resolved.is_dir() else "file"
-                        mixin._fs_index.add_bookmark(
-                            path_str, label=label, category=category
-                        )
+                        index.add_bookmark(path_str, label=label, category=category)
                     else:
                         mixin._bookmarks[path_str] = {
                             "label": label or "",
@@ -1192,8 +1225,8 @@ class FileSystemToolsMixin:
                     resolved = mixin._validate_path(path)
                     path_str = str(resolved)
 
-                    if mixin._fs_index:
-                        removed = mixin._fs_index.remove_bookmark(path_str)
+                    if index:
+                        removed = index.remove_bookmark(path_str)
                     else:
                         removed = path_str in mixin._bookmarks
                         mixin._bookmarks.pop(path_str, None)
@@ -1206,6 +1239,8 @@ class FileSystemToolsMixin:
                 else:
                     return f"Error: Unknown action '{action}'. Use 'add', 'remove', or 'list'."
 
+            except FileIndexUnavailableError as e:
+                return str(e)
             except ValueError as e:
                 return str(e)
             except Exception as e:

@@ -76,6 +76,46 @@ def test_operational_error_on_open_keeps_the_index(
     assert _bookmarks(index_with_bookmark) == ["keep me"]
 
 
+@pytest.mark.parametrize("prefix", ["PRAGMA journal_mode", "PRAGMA integrity_check"])
+def test_a_lock_error_closes_the_connection_before_raising(
+    monkeypatch, index_with_bookmark, prefix
+):
+    closed = []
+    real_close = FileSystemIndexService.close_db
+
+    def close_db(self):
+        closed.append(True)
+        real_close(self)
+
+    _fail_first(monkeypatch, prefix, sqlite3.OperationalError("database is locked"))
+    monkeypatch.setattr(FileSystemIndexService, "close_db", close_db)
+
+    with pytest.raises(sqlite3.OperationalError):
+        FileSystemIndexService(db_path=str(index_with_bookmark))
+
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sqlite3.ProgrammingError("closed database"),
+        sqlite3.InternalError("internal"),
+    ],
+    ids=["programming", "internal"],
+)
+def test_a_non_corruption_database_error_keeps_the_index(
+    monkeypatch, index_with_bookmark, error
+):
+    _fail_first(monkeypatch, "PRAGMA integrity_check", error)
+
+    with pytest.raises(type(error)):
+        FileSystemIndexService(db_path=str(index_with_bookmark))
+
+    monkeypatch.undo()
+    assert _bookmarks(index_with_bookmark) == ["keep me"]
+
+
 @pytest.mark.parametrize("message", ["database is locked", "disk I/O error"])
 def test_operational_error_in_integrity_check_keeps_the_index(
     monkeypatch, index_with_bookmark, message
@@ -118,6 +158,8 @@ def test_malformed_integrity_result_is_still_rebuilt(monkeypatch, index_with_boo
 
 
 def test_a_real_exclusive_lock_raises_and_keeps_the_index(index_with_bookmark):
+    # Proves a real lock reaches the raise path. It reproduces the old deletion
+    # only on POSIX: on Windows the open handle made the unlink fail anyway.
     holder = sqlite3.connect(str(index_with_bookmark))
     holder.execute("PRAGMA journal_mode=DELETE")
     holder.execute("PRAGMA locking_mode=EXCLUSIVE")

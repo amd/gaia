@@ -12,6 +12,7 @@ coexistence, and transaction atomicity.
 """
 
 import datetime
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -145,18 +146,37 @@ class TestCheckIntegrity:
 
         service.close_db()
 
-    def test_integrity_check_exception_triggers_rebuild(self, tmp_path):
-        """When the PRAGMA itself raises, the database is rebuilt."""
+    def test_integrity_check_corruption_error_triggers_rebuild(self, tmp_path):
+        """When the PRAGMA reports a malformed database, it is rebuilt."""
         db_path = str(tmp_path / "exc_test.db")
         service = FileSystemIndexService(db_path=db_path)
 
-        with patch.object(service, "query", side_effect=RuntimeError("disk I/O error")):
+        malformed = sqlite3.DatabaseError("database disk image is malformed")
+        with patch.object(service, "query", side_effect=malformed):
             result = service._check_integrity()
 
         assert result is False
         assert service.table_exists("files")
 
         service.close_db()
+
+    def test_integrity_check_io_error_raises_and_keeps_the_file(self, tmp_path):
+        """A disk I/O error is not corruption: raise, close, keep the file."""
+        db_path = tmp_path / "exc_test.db"
+        service = FileSystemIndexService(db_path=str(db_path))
+        service.add_bookmark(str(tmp_path), label="keep me")
+
+        io_error = sqlite3.OperationalError("disk I/O error")
+        with patch.object(service, "query", side_effect=io_error):
+            with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+                service._check_integrity()
+
+        assert service._db is None
+        reopened = FileSystemIndexService(db_path=str(db_path))
+        try:
+            assert [b["label"] for b in reopened.list_bookmarks()] == ["keep me"]
+        finally:
+            reopened.close_db()
 
 
 class TestScratchpadIntegrity:

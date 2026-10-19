@@ -138,6 +138,30 @@ CREATE INDEX IF NOT EXISTS idx_bookmarks_path ON bookmarks(path);
 """
 
 
+_SQLITE_CORRUPT = 11
+_SQLITE_NOTADB = 26
+
+
+def _is_corruption(exc: sqlite3.DatabaseError) -> bool:
+    """True only for "malformed" / "not a database", never a lock or I/O error."""
+    code = getattr(exc, "sqlite_errorcode", None)  # Python 3.11+
+    if code is not None:
+        primary = code & 0xFF  # extended codes carry the primary in the low byte
+        return primary in (_SQLITE_CORRUPT, _SQLITE_NOTADB)
+    # Before 3.11, corruption is a bare DatabaseError, never one of these.
+    return not isinstance(
+        exc,
+        (
+            sqlite3.OperationalError,
+            sqlite3.IntegrityError,
+            sqlite3.ProgrammingError,
+            sqlite3.InternalError,
+            sqlite3.NotSupportedError,
+            sqlite3.DataError,
+        ),
+    )
+
+
 class FileSystemIndexService(DatabaseMixin):
     """
     SQLite-backed persistent file system index.
@@ -171,11 +195,11 @@ class FileSystemIndexService(DatabaseMixin):
         # A file that is not a database fails here; rebuild rather than raise.
         try:
             self._db.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.OperationalError:
-            # Locked, or an AV/backup tool holding the file: not corruption.
-            self.close_db()
-            raise
         except sqlite3.DatabaseError as exc:
+            if not _is_corruption(exc):
+                # Locked, or an AV/backup tool holding the file.
+                self.close_db()
+                raise
             logger.warning(
                 "PRAGMA journal_mode=WAL failed on %s (%s); rebuilding DB",
                 resolved_path,
@@ -243,18 +267,18 @@ class FileSystemIndexService(DatabaseMixin):
             True if the database is healthy, False if it was rebuilt.
 
         Raises:
-            sqlite3.OperationalError: the file is locked or unreadable. That is
-                not corruption, so the file is left alone.
+            sqlite3.DatabaseError: any error other than corruption (the file is
+                locked or unreadable, say). The file is left alone.
         """
         try:
             result = self.query("PRAGMA integrity_check", one=True)
             if result and result.get("integrity_check") == "ok":
                 return True
-        except sqlite3.OperationalError:
-            # Locked or I/O failure — deleting would destroy a healthy index.
-            self.close_db()
-            raise
         except sqlite3.DatabaseError as exc:
+            if not _is_corruption(exc):
+                # Locked or I/O failure — deleting would destroy a healthy index.
+                self.close_db()
+                raise
             logger.error("Integrity check failed: %s", exc)
 
         logger.warning("Database corruption detected, rebuilding...")
