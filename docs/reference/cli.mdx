@@ -1392,6 +1392,14 @@ the bridge refuses any request whose `Origin` is not loopback (`localhost`,
 clients, n8n — are unaffected. To allow a browser app on another origin, list
 it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
+##### Concurrent requests and limits
+
+Each request runs on its own thread, so `/health` and `/status` answer while a
+`/llm` or `/chat` call waits on a busy model. Calls to the same tool take turns:
+`/chat` shares one conversation. A client that stops sending its request for
+30 s gets **408**. A request body over 1 MiB gets **413**; raise the limit with
+`GAIA_MCP_MAX_BODY_BYTES` (bytes).
+
 ##### Authentication
 
 The bridge is **unauthenticated by default**. Anything that can reach the port

@@ -14,6 +14,7 @@ import os
 import secrets
 import sys
 import threading
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 from urllib.parse import urlparse
@@ -66,6 +67,29 @@ MCP_PROTOCOL_VERSION = "2025-11-25"
 # reads only, never the tool call, which can wait minutes on a busy Lemonade.
 REQUEST_READ_TIMEOUT_SECONDS = 30
 
+# Largest request body the bridge reads; tool arguments are small JSON.
+DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+MAX_BODY_BYTES_ENV_VAR = "GAIA_MCP_MAX_BODY_BYTES"
+
+
+def resolve_max_body_bytes():
+    """The body-size limit: ``$GAIA_MCP_MAX_BODY_BYTES``, else 1 MiB."""
+    raw = os.environ.get(MAX_BODY_BYTES_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_MAX_BODY_BYTES
+    try:
+        limit = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{MAX_BODY_BYTES_ENV_VAR} must be a whole number of bytes; got "
+            f"{raw!r}. Fix or unset it."
+        ) from e
+    if limit <= 0:
+        raise ValueError(
+            f"{MAX_BODY_BYTES_ENV_VAR} must be greater than 0; got {limit}."
+        )
+    return limit
+
 
 class GAIAMCPBridge:
     """HTTP-native MCP Bridge for GAIA - no WebSockets needed!"""
@@ -88,7 +112,7 @@ class GAIAMCPBridge:
         self.chat_sdk = None  # Lazy initialized in _execute_chat
         self.verbose = verbose
         # Requests run on their own threads. The provider keeps per-call state on
-        # the instance, so queries take turns (Lemonade serializes them anyway).
+        # the instance, so queries take turns; local models run one at a time anyway.
         self._llm_lock = threading.Lock()
         # One AgentSDK holds one conversation, so chats take turns writing it.
         self._chat_lock = threading.Lock()
@@ -206,10 +230,60 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     # Socket timeout: a client that stops sending mid-request is dropped instead
     # of holding its handler thread forever.
     timeout = REQUEST_READ_TIMEOUT_SECONDS
+    max_body_bytes = DEFAULT_MAX_BODY_BYTES
 
-    def __init__(self, *args, bridge: GAIAMCPBridge = None, **kwargs):
+    def __init__(
+        self, *args, bridge: GAIAMCPBridge = None, max_body_bytes=None, **kwargs
+    ):
         self.bridge = bridge or GAIAMCPBridge()
+        if max_body_bytes is not None:
+            self.max_body_bytes = max_body_bytes
         super().__init__(*args, **kwargs)
+
+    def parse_request(self):
+        """Answer 408 when a client stops sending partway through its headers."""
+        try:
+            return super().parse_request()
+        except TimeoutError:
+            self.close_connection = True
+            self.send_error(
+                HTTPStatus.REQUEST_TIMEOUT,
+                f"Request headers not received within {self.timeout}s",
+            )
+            return False
+
+    def _content_length(self):
+        """The declared body size, or None after replying 400/413."""
+        raw = self.headers.get("Content-Length", 0)
+        try:
+            length = int(raw)
+        except (TypeError, ValueError):
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self.send_json(400, {"error": f"Invalid Content-Length header: {raw!r}"})
+            return None
+        if length > self.max_body_bytes:
+            logger.warning(
+                "Rejected oversized MCP request: %s %s (Content-Length %d > %d)",
+                self.command,
+                self.path,
+                length,
+                self.max_body_bytes,
+            )
+            self.close_connection = True
+            self.send_json(
+                413,
+                {
+                    "error": (
+                        f"Request body of {length} bytes exceeds the bridge's "
+                        f"{self.max_body_bytes}-byte limit. Send a smaller "
+                        f"request, or raise {MAX_BODY_BYTES_ENV_VAR}."
+                    )
+                },
+            )
+            return None
+        return length
 
     def log_request_details(self, method, path, body=None):
         """Log incoming request details if verbose mode is enabled."""
@@ -287,16 +361,31 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         return True
 
     def _drain_request_body(self):
-        """Consume any pending request body so the client can read our reply."""
+        """Consume any pending request body so the client can read our reply.
+
+        An oversized or stalled body is left unread and the connection closed
+        after the reply, so a rejected request never holds its thread.
+        """
+        self.close_connection = True
         try:
             length = int(self.headers.get("Content-Length", 0))
         except (TypeError, ValueError):
             return
-        while length > 0:
-            chunk = self.rfile.read(min(length, 65536))
-            if not chunk:
-                break
-            length -= len(chunk)
+        if length > self.max_body_bytes:
+            return
+        try:
+            while length > 0:
+                chunk = self.rfile.read(min(length, 65536))
+                if not chunk:
+                    break
+                length -= len(chunk)
+        except TimeoutError:
+            logger.warning(
+                "Rejected MCP request's body not received within %ss: %s %s",
+                self.timeout,
+                self.command,
+                self.path,
+            )
 
     def _reject_unauthenticated(self, path):
         """Send 401/403 for a credential-less request. True when rejected."""
@@ -393,7 +482,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if self._reject_unauthenticated(parsed.path):
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
+        content_length = self._content_length()
+        if content_length is None:
+            return
         ctype = self.headers.get("content-type", "")
 
         if ctype.startswith("application/json") and content_length > 0:
@@ -569,14 +660,18 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
+    def log_error(self, format, *args):
+        """Always log errors (timeouts, malformed requests), verbose or not."""
+        client_addr = self.client_address[0] if self.client_address else "unknown"
+        logger.warning("MCP bridge HTTP error from %s: %s", client_addr, format % args)
+
     def log_message(self, format, *args):
         """Override to control standard HTTP logging."""
         # In verbose mode, skip the built-in HTTP logging since we have custom logging
         if VERBOSE:
             # We already log detailed info in log_request_details and send_json
             pass
-        # Skip health checks. args[0] is the request line, or an int or exception
-        # when the stdlib logs an error such as a read timeout.
+        # Skip health checks; errors arrive through log_error instead.
         elif "/health" not in str(args[0] if args else ""):
             super().log_message(format, *args)
 
@@ -616,9 +711,12 @@ def create_server(bridge, bind_host, port):
     A tool call can sit behind another app's request on a shared Lemonade for
     minutes, so ``/health`` and ``/status`` must not queue behind it.
     """
+    max_body_bytes = resolve_max_body_bytes()
 
     def handler(*args, **kwargs):
-        return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
+        return MCPHTTPHandler(
+            *args, bridge=bridge, max_body_bytes=max_body_bytes, **kwargs
+        )
 
     server = ThreadingHTTPServer((bind_host, port), handler)
     server.daemon_threads = True

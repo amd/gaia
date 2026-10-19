@@ -152,7 +152,7 @@ def test_status_answers_while_an_llm_call_is_busy(slow_bridge):
     assert body["status"] == "healthy"
 
 
-def test_health_answers_while_a_client_stalls_mid_body(slow_bridge):
+def test_health_answers_while_another_client_holds_a_request_open(slow_bridge):
     base, _marker = slow_bridge
     port = int(base.rsplit(":", 1)[1])
     with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
@@ -188,47 +188,207 @@ def _serve():
         thread.join(timeout=5)
 
 
+class _RecordingLogger:
+    """Stands in for the bridge's logger and keeps every warning it gets."""
+
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, msg, *args):
+        self.warnings.append(msg % args if args else msg)
+
+    def info(self, *_args, **_kwargs):
+        pass
+
+    debug = info
+    error = warning
+
+
+def _port(base):
+    return int(base.rsplit(":", 1)[1])
+
+
+def _raw_exchange(base, data, timeout=5):
+    """Send raw bytes, then return everything the bridge replies before closing."""
+    with socket.create_connection(("127.0.0.1", _port(base)), timeout=timeout) as s:
+        s.sendall(data)
+        chunks = []
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+
+
+_STALLED_BODY = (
+    b"POST /llm HTTP/1.1\r\nHost: x\r\n"
+    b"Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{"
+)
+
+
 def test_a_stalled_body_is_answered_408_and_released(serve, monkeypatch):
     monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
     base = serve(GAIAMCPBridge(port=0))
-    port = int(base.rsplit(":", 1)[1])
 
-    with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
-        stalled.sendall(
-            b"POST /llm HTTP/1.1\r\nHost: x\r\n"
-            b"Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{"
-        )
-        reply = stalled.recv(4096)
+    reply = _raw_exchange(base, _STALLED_BODY)
 
     assert reply.startswith(b"HTTP/1.0 408")
 
 
-def test_a_stalled_request_line_is_dropped_without_a_traceback(
-    serve, monkeypatch, capsys
-):
+def test_a_rejected_request_with_a_stalled_body_still_gets_its_401(serve, monkeypatch):
+    monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
+    log = _RecordingLogger()
+    monkeypatch.setattr(mcp_bridge, "logger", log)
+    base = serve(GAIAMCPBridge(port=0, auth_token="secret"))
+
+    reply = _raw_exchange(base, _STALLED_BODY)
+
+    assert reply.startswith(b"HTTP/1.0 401")
+    assert any("not received within" in w for w in log.warnings), log.warnings
+
+
+def test_stalled_headers_are_answered_408(serve, monkeypatch):
     monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
     base = serve(GAIAMCPBridge(port=0))
-    port = int(base.rsplit(":", 1)[1])
 
-    with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
-        stalled.sendall(b"POST /llm HTTP/1.1\r\nHost: x\r\n")
-        assert stalled.recv(4096) == b""
+    reply = _raw_exchange(base, b"POST /llm HTTP/1.1\r\nHost: x\r\n")
 
-    _get(f"{base}/health", timeout=2)  # the handler thread has finished logging
+    assert reply.startswith(b"HTTP/1.0 408")
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_a_dropped_idle_connection_is_logged(serve, monkeypatch, capsys, verbose):
+    monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
+    log = _RecordingLogger()
+    monkeypatch.setattr(mcp_bridge, "logger", log)
+    # Patched first so teardown restores the value the bridge overwrites.
+    monkeypatch.setattr(mcp_bridge, "VERBOSE", verbose)
+    base = serve(GAIAMCPBridge(port=0, verbose=verbose))
+
+    assert _raw_exchange(base, b"") == b""
+    _get(f"{base}/health", timeout=2)  # the dropped handler has finished logging
+
+    assert any("timed out" in w for w in log.warnings), log.warnings
     assert "Traceback" not in capsys.readouterr().err
 
 
-def test_handler_socket_reads_are_bounded():
-    assert MCPHTTPHandler.timeout is not None
-    assert 0 < MCPHTTPHandler.timeout <= 120
+def test_an_oversized_body_is_refused_413_before_it_is_read(serve, monkeypatch):
+    monkeypatch.setenv(mcp_bridge.MAX_BODY_BYTES_ENV_VAR, "1000")
+    base = serve(GAIAMCPBridge(port=0))
+
+    # Only the headers are sent; a bridge that tried to read the body would
+    # wait for it and never answer.
+    reply = _raw_exchange(
+        base,
+        b"POST /llm HTTP/1.1\r\nHost: x\r\n"
+        b"Content-Type: application/json\r\nContent-Length: 1001\r\n\r\n",
+        timeout=3,
+    )
+
+    assert reply.startswith(b"HTTP/1.0 413")
+    assert mcp_bridge.MAX_BODY_BYTES_ENV_VAR.encode() in reply
 
 
-def test_handler_threads_do_not_block_shutdown():
+def test_the_default_body_limit_is_one_mebibyte(serve, monkeypatch):
+    monkeypatch.delenv(mcp_bridge.MAX_BODY_BYTES_ENV_VAR, raising=False)
+    base = serve(GAIAMCPBridge(port=0))
+    header = b"POST /llm HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+
+    reply = _raw_exchange(base, header + b"Content-Length: 1048577\r\n\r\n", 3)
+
+    assert reply.startswith(b"HTTP/1.0 413")
+
+
+@pytest.mark.parametrize("value", ["lots", "0", "-5"])
+def test_a_bad_body_limit_fails_at_startup(monkeypatch, value):
+    monkeypatch.setenv(mcp_bridge.MAX_BODY_BYTES_ENV_VAR, value)
+
+    with pytest.raises(ValueError, match=mcp_bridge.MAX_BODY_BYTES_ENV_VAR):
+        mcp_bridge.create_server(GAIAMCPBridge(port=0), "127.0.0.1", 0)
+
+
+@pytest.mark.parametrize("length", [b"-1", b"abc"])
+def test_an_invalid_content_length_is_answered_400(serve, length):
+    base = serve(GAIAMCPBridge(port=0))
+
+    reply = _raw_exchange(
+        base,
+        b"POST /llm HTTP/1.1\r\nHost: x\r\n"
+        b"Content-Type: application/json\r\nContent-Length: " + length + b"\r\n\r\n",
+    )
+
+    assert reply.startswith(b"HTTP/1.0 400")
+
+
+def test_a_tool_call_longer_than_the_read_timeout_succeeds(serve, monkeypatch):
+    monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
+
+    class _SlowLLM:
+        def generate(self, prompt, **_kwargs):
+            time.sleep(1.5)
+            return f"echo: {prompt}"
+
+    monkeypatch.setattr(mcp_bridge, "create_client", lambda *_a, **_k: _SlowLLM())
+    base = serve(GAIAMCPBridge(port=0))
+
+    status, body = _post_json(f"{base}/llm", {"query": "hi"}, 10)
+
+    assert status == 200
+    assert body["result"] == "echo: hi"
+
+
+def test_each_connection_gets_the_30_second_read_timeout(serve, monkeypatch):
+    seen = []
+    real_do_get = MCPHTTPHandler.do_GET
+
+    def _recording_do_get(self):
+        seen.append(self.connection.gettimeout())
+        real_do_get(self)
+
+    monkeypatch.setattr(MCPHTTPHandler, "do_GET", _recording_do_get)
+    base = serve(GAIAMCPBridge(port=0))
+
+    _get(f"{base}/health", timeout=2)
+
+    assert seen == [30]
+
+
+def test_shutdown_does_not_wait_for_an_in_flight_tool_call(monkeypatch):
+    release = threading.Event()
+    entered = threading.Event()
+
+    class _BlockedLLM:
+        def generate(self, **_kwargs):
+            entered.set()
+            release.wait(10)
+            return "late"
+
+    monkeypatch.setattr(mcp_bridge, "create_client", lambda *_a, **_k: _BlockedLLM())
     httpd = mcp_bridge.create_server(GAIAMCPBridge(port=0), "127.0.0.1", 0)
+    serving = threading.Thread(target=httpd.serve_forever, daemon=True)
+    serving.start()
+    base = f"http://127.0.0.1:{httpd.server_port}"
+
+    def _call():
+        try:
+            _post_json(f"{base}/llm", {"query": "hi"}, 15)
+        except OSError:
+            pass  # The server goes away mid-call.
+
+    caller = threading.Thread(target=_call, daemon=True)
+    caller.start()
     try:
-        assert httpd.daemon_threads is True
-    finally:
+        assert entered.wait(5), "the /llm call never reached the LLM"
+        started = time.monotonic()
+        httpd.shutdown()
         httpd.server_close()
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        serving.join(timeout=5)
+        caller.join(timeout=5)
+
+    assert elapsed < 2, f"server_close waited {elapsed:.1f}s for the tool call"
 
 
 class _CountingChatSDK:
