@@ -2106,6 +2106,49 @@ def _turn_inference_stats(
     return stats or None
 
 
+#: Lemonade ``device`` substrings, in the order the footer names them.
+_DEVICE_NAMES = (("npu", "NPU"), ("gpu", "GPU"), ("cpu", "CPU"))
+
+
+def _turn_location(model_id: str) -> InferenceLocation:
+    """Where a turn with *model_id* was answered; needs no Lemonade."""
+    provider_kwargs = _eval_provider_kwargs()
+    if provider_kwargs.get("use_claude"):
+        return resolve_inference_location(
+            provider_kwargs["claude_model"], use_claude=True
+        )
+    return resolve_inference_location(
+        model_id, cloud_provider_lookup=_ui_cloud_provider
+    )
+
+
+def _cloud_place(loc: InferenceLocation) -> Optional[str]:
+    """A cloud turn's place, e.g. "via Fireworks AI"; None for a local one."""
+    return f"via {loc.display}" if loc.remote else None
+
+
+async def _local_place(model_id: str, client, base_url: str, headers: dict) -> str:
+    """Where a local turn ran: the device Lemonade reports for the model.
+
+    "on your GPU", or "on this PC" when Lemonade names no device for it.
+    """
+    from .routers.system import _norm_model_id
+
+    device = ""
+    resp = await client.get(f"{base_url}/health", headers=headers)
+    if resp.status_code == 200:
+        wanted = _norm_model_id(model_id)
+        for entry in resp.json().get("all_models_loaded") or []:
+            if (
+                isinstance(entry, dict)
+                and _norm_model_id(entry.get("model_name")) == wanted
+            ):
+                device = str(entry.get("device") or "").lower()
+                break
+    chips = [name for key, name in _DEVICE_NAMES if key in device]
+    return f"on your {' and '.join(chips)}" if chips else "on this PC"
+
+
 def _done_event(
     msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
 ) -> dict:
@@ -3700,6 +3743,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # cases where Lemonade is on a non-default port and the env var
             # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
+            # Named before any Lemonade call: a cloud turn may run with it stopped.
+            turn_location = _turn_location(model_id)
+            turn_place = _cloud_place(turn_location)
             try:
                 import httpx
 
@@ -3737,6 +3783,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             stats_resp.status_code,
                             base_url,
                         )
+                    if not turn_location.remote:
+                        turn_place = await _local_place(
+                            model_id, stats_client, base_url, _auth
+                        )
             except Exception as exc:  # pylint: disable=broad-except
                 # Don't fail the user's response if stats fetching breaks; log
                 # at debug so eval-time gaps are diagnosable without spamming
@@ -3747,6 +3797,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            if turn_place:
+                inference_stats = {**(inference_stats or {}), "place": turn_place}
 
             msg_id = db.upsert_message(
                 request.session_id,

@@ -39,7 +39,13 @@ from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
 from gaia.ui import scripted_user
-from gaia.ui.event_narration import DEBUG_CHANNEL, derive_narration, format_count
+from gaia.ui.event_narration import (
+    DEBUG_CHANNEL,
+    derive_narration,
+    format_count,
+    grant_phrase,
+    tool_phrase,
+)
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -1700,7 +1706,10 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": f"Full access is ON — ran '{tool_name}' without asking.",
+                    "message": (
+                        "Full access is on, so GAIA didn't ask first. "
+                        f"{derive_narration(tool_name, tool_args)}"
+                    ),
                 }
             )
             return True
@@ -1712,7 +1721,10 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "info",
-                    "message": f"Accept edits is on — ran '{tool_name}' in the workspace without asking.",
+                    "message": (
+                        "Accept edits is on, so GAIA didn't ask first. "
+                        f"{derive_narration(tool_name, tool_args)}"
+                    ),
                 }
             )
             return True
@@ -1760,6 +1772,8 @@ class SSEOutputHandler(OutputHandler):
         request: Dict[str, Any] = {
             "type": "permission_request",
             "tool": tool_name,
+            # The tool in plain words, for the question; ``tool`` stays the id.
+            "tool_label": tool_phrase(tool_name),
             "args": tool_args,
             "confirm_id": confirm_id,
         }
@@ -1770,6 +1784,10 @@ class SSEOutputHandler(OutputHandler):
         scope = grant_scope(tool_name, tool_args)
         if scope is not None:
             request["always_scope"] = scope.label
+            # ``always_scope`` is matched as-is by the MCP control; this is its wording.
+            always_label = grant_phrase(tool_name, scope.subject)
+            if always_label:
+                request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label
         # is earned by the command, not by the tool's worst case.
         risk = call_risk(tool_name, tool_args)

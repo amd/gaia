@@ -514,6 +514,8 @@ class InferenceStatsResponse(BaseModel):
     output_tokens: int = 0
     # The agent's own step count for the turn, not the number of activity rows.
     steps: Optional[int] = None
+    # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
+    place: Optional[str] = None
 
 
 class MessageResponse(BaseModel):

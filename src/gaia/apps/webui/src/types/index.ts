@@ -243,6 +243,8 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
+    /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
+    place?: string | null;
 }
 
 export interface Message {
@@ -690,6 +692,10 @@ export interface StreamEvent {
     confirm_id?: string;
     /** What "always allow" would grant for this call; absent means it is not offered. */
     always_scope?: string;
+    /** `always_scope` in plain words, e.g. "editing notes.txt" (for permission_request events). */
+    always_label?: string;
+    /** The tool in plain words, e.g. "writing file" (for permission_request events). */
+    tool_label?: string;
     /** What the call does: read, write, execute, or destructive (for permission_request events). */
     risk?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
