@@ -14,6 +14,8 @@ interface ComposerProps {
     streaming?: boolean;
     /** Stop was pressed and the run is winding down. */
     stopping?: boolean;
+    /** While streaming, Enter still submits: the message is queued for the next turn. */
+    queueWhileStreaming?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
     attachments: UseAttachments;
@@ -29,15 +31,15 @@ interface ComposerProps {
 const MAX_INPUT_HEIGHT = 240;
 
 export function Composer({
-    value, onChange, onSubmit, onStop, streaming = false, stopping = false, disabledReason, attachments,
+    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
     placeholder = 'Ask GAIA anything', autoFocus, inputRef, leftControls, rightControls,
 }: ComposerProps) {
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
     const textareaRef = inputRef ?? ownRef;
     const fileRef = useRef<HTMLInputElement>(null);
     const disabled = !!disabledReason;
-    const canSend = !disabled && !streaming && !attachments.uploading
-        && (value.trim().length > 0 || attachments.hasUploaded);
+    const hasContent = value.trim().length > 0 || attachments.hasUploaded;
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent;
 
     const shownPlaceholder = disabledReason || placeholder;
 
@@ -144,6 +146,18 @@ export function Composer({
                 </div>
                 <div className="composer-row-right">
                     {rightControls}
+                    {streaming && queueWhileStreaming && hasContent && (
+                        <button
+                            type="button"
+                            className="composer-send"
+                            onClick={onSubmit}
+                            disabled={!canSend}
+                            aria-label="Queue message"
+                            title="Queue it to send when this reply ends (Enter)"
+                        >
+                            <ArrowUp size={16} />
+                        </button>
+                    )}
                     {streaming ? (
                         <button
                             type="button"

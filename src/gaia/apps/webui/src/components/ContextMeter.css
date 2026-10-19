@@ -1,0 +1,158 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.context-meter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+button.context-meter:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.context-meter.is-empty {
+    color: var(--text-muted);
+    cursor: default;
+}
+
+.context-meter-bar {
+    position: relative;
+    width: 40px;
+    height: 5px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-full);
+}
+
+.context-meter-bar > span {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--text-secondary);
+    border-radius: inherit;
+    transition: width var(--duration-fast) var(--ease);
+}
+
+.context-meter.is-warning {
+    color: var(--accent-yellow);
+}
+
+.context-meter.is-warning .context-meter-bar > span {
+    background: var(--accent-yellow);
+}
+
+.context-meter-panel {
+    width: 260px;
+    max-width: calc(100vw - 32px);
+    padding: 12px;
+    font-size: 13px;
+}
+
+.context-meter-head {
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+}
+
+.context-meter-head strong {
+    color: var(--text-primary);
+}
+
+.context-meter-stack {
+    display: flex;
+    height: 8px;
+    overflow: hidden;
+    margin-bottom: 10px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-full);
+}
+
+.part-system { background: var(--text-muted); }
+.part-tools { background: var(--accent-purple); }
+.part-documents { background: var(--accent-blue); }
+.part-history { background: var(--accent-green); }
+.part-query { background: var(--accent); }
+
+.context-meter-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+}
+
+.context-meter-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.context-meter-row dt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+}
+
+.context-meter-row dd {
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.context-meter-row.is-quiet dt,
+.context-meter-row.is-quiet dd {
+    color: var(--text-muted);
+}
+
+.swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.context-meter-note {
+    margin: 10px 0 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.context-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 6px;
+    padding: 8px 10px;
+    background: var(--accent-yellow-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.context-warning svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--accent-yellow);
+}
+
+/* Keeps its width; the model chip beside it is the one that truncates. */
+.composer-row .context-meter-wrap {
+    flex-shrink: 0;
+    min-width: auto;
+}
+
+@media (max-width: 480px) {
+    .context-meter .context-meter-bar {
+        display: none;
+    }
+}

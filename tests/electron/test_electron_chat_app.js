@@ -959,7 +959,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain('aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}');
+      expect(sidebarContent).toContain("? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`");
+      expect(sidebarContent).toContain(': `Delete ${session.title}`}');
       expect(sidebarContent).toContain('<nav className="sb-list" aria-label="Recent chats">');
     });
 
@@ -1101,10 +1102,12 @@ describe('Chat App Integration', () => {
       chatContent = fs.readFileSync(chatPath, 'utf8');
     });
 
-    it('should prompt differently on an empty chat than on a reply', () => {
+    it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expect(chatContent).toContain(
-        "placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
+        "messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
       );
+      expect(chatContent).toContain('placeholder={isStreaming');
+      expect(chatContent).toContain("? 'Queue your next message'");
     });
 
     it('should use the shared Composer for input', () => {

@@ -61,6 +61,7 @@ from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 
+from . import followups
 from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
@@ -1670,6 +1671,26 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
+def model_turns(agent, db, session_id: str) -> list:
+    """The session's completed turns as *agent*'s model would be shown them."""
+    from gaia.agents.base.history import text_tool_history, transcript_turns
+
+    turns = transcript_turns(db.get_context_messages(session_id))
+    if (
+        hasattr(agent, "_uses_native_tool_calls")
+        and not agent._uses_native_tool_calls()
+    ):
+        turns = text_tool_history(turns)
+    return turns
+
+
+def cached_session_agent(session_id: str):
+    """The agent that answered this session last, or None when none is cached."""
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        return entry["agent"] if entry is not None else None
+
+
 def _restore_model_history(
     agent, db, session_id: str, query: str, sse_handler=None
 ) -> None:
@@ -1680,18 +1701,12 @@ def _restore_model_history(
     """
     from gaia.agents.base.history import (
         CutReporter,
+        context_usage,
         history_budget,
         select_history,
-        text_tool_history,
-        transcript_turns,
     )
 
-    turns = transcript_turns(db.get_context_messages(session_id))
-    if (
-        hasattr(agent, "_uses_native_tool_calls")
-        and not agent._uses_native_tool_calls()
-    ):
-        turns = text_tool_history(turns)
+    turns = model_turns(agent, db, session_id)
 
     def on_cut(cut):
         sse_handler._emit(
@@ -1704,6 +1719,10 @@ def _restore_model_history(
             }
         )
 
+    if sse_handler is not None:
+        sse_handler._emit(
+            {"type": "context_usage", **context_usage(agent, turns, query)}
+        )
     agent.conversation_history = select_history(
         turns,
         history_budget(agent, query),
@@ -3112,6 +3131,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None}
+        inbox_holder: dict = {}
         turn_box: dict = {}
 
         def _run_agent():
@@ -3418,6 +3438,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
+                def _followup_taken(text):
+                    db.add_message(session_id, "user", text)
+                    sse_handler._emit({"type": "followup_taken", "text": text})
+
+                inbox_holder["agent"] = agent
+                inbox_holder["inbox"] = followups.open_inbox(
+                    session_id, agent, _followup_taken
+                )
+
                 _restore_model_history(
                     agent, db, session_id, request.message, sse_handler
                 )
@@ -3483,6 +3512,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 else:
                     result_holder["error"] = str(e)
             finally:
+                if "inbox" in inbox_holder:
+                    untaken = followups.close_inbox(
+                        session_id, inbox_holder["agent"], inbox_holder["inbox"]
+                    )
+                    if untaken:
+                        sse_handler._emit(
+                            {"type": "followup_returned", "texts": untaken}
+                        )
                 warning = recording.close()
                 if warning:
                     sse_handler._emit(

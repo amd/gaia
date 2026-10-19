@@ -46,6 +46,7 @@ export interface ApiSchemas {
   FileStatusRequest: FileStatusRequest;
   FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
+  FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
@@ -76,6 +77,8 @@ export interface ApiSchemas {
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
   RestartRequest: RestartRequest;
+  RetryChoiceRequest: RetryChoiceRequest;
+  RetryWithRequest: RetryWithRequest;
   RunningAnswer: RunningAnswer;
   RunningIndexJob: RunningIndexJob;
   ScheduleListResponse: ScheduleListResponse;
@@ -521,6 +524,10 @@ export interface FileUploadResponse {
   size: number;
   url: string;
 }
+export interface FollowUpRequest {
+  session_id: string;
+  text: string;
+}
 /**
  * Body for ``POST /v1/connections/{provider}`` (#1292).
  *
@@ -603,8 +610,11 @@ export interface InferenceCommitItem {
  */
 export interface InferenceStatsResponse {
   input_tokens?: number;
+  model?: string | null;
   output_tokens?: number;
   place?: string | null;
+  retried?: boolean | null;
+  seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -866,6 +876,16 @@ export interface PreflightReport {
  */
 export interface RestartRequest {
   confirm?: boolean;
+}
+export interface RetryChoiceRequest {
+  keep: "original" | "retry";
+  message_id: number;
+  session_id: string;
+}
+export interface RetryWithRequest {
+  message_id: number;
+  model: string;
+  session_id: string;
 }
 /**
  * A chat whose answer is still being written.

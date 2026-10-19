@@ -63,6 +63,7 @@ beforeEach(() => {
     mocked.listAgents.mockResolvedValue({ agents: [], total: 0 });
     mocked.listSessions.mockResolvedValue({ sessions: [], total: 0 });
     mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mocked.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mocked.getTunnelStatus.mockResolvedValue({ active: false } as never);
     mocked.createSession.mockResolvedValue(session({ id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia' }));
     mocked.getMessages.mockResolvedValue({ messages: [] } as never);

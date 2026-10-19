@@ -8,6 +8,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { Session } from '../../types';
+import * as messageQueue from '../../utils/messageQueue';
 
 vi.mock('../../services/api');
 
@@ -38,7 +39,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: SESSIONS, currentSessionId: null, runningSessionIds: [], pendingDeleteIds: [],
         sidebarOpen: true, sidebarCollapsed: false, settingsSection: null,
-        showMemoryDashboard: false, showSchedules: false,
+        showMemoryDashboard: false, showSchedules: false, messageQueues: {},
     });
 });
 
@@ -99,6 +100,36 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions' }));
         await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
+    });
+
+    it('shows a chat still holding messages to send, and flags one that failed', () => {
+        useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'bad', 'failed'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByText('2 to send')).toBeInTheDocument();
+        expect(screen.getByText('1 not sent')).toBeInTheDocument();
+    });
+
+    it("says a delete takes the chat's unsent messages with it, and does", async () => {
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'failed'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
+        expect(screen.getByText('Delete 2 unsent?')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 2 unsent messages' }));
+        await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
+        await waitFor(() => expect(useChatStore.getState().messageQueues.c).toBeUndefined());
+    });
+
+    it('keeps the unsent messages when the delete fails', async () => {
+        mockedApi.deleteSession.mockRejectedValue(new Error('Database is locked'));
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'keep me', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions and its 1 unsent message' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked');
+        expect(useChatStore.getState().messageQueues.c.map((m) => m.text)).toEqual(['keep me']);
     });
 
     it('keeps the chat and says why when delete fails', async () => {
