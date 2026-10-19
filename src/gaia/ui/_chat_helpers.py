@@ -53,6 +53,7 @@ from gaia.ui.turn_changes import TurnRecording
 
 from . import followups
 from . import permissions as session_permissions
+from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -2571,6 +2572,9 @@ async def _get_chat_response(
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            return refusal
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -2759,6 +2763,13 @@ async def _get_chat_response(
                 # The non-streaming response has no channel for a notice.
                 logger.error(warning)
 
+        # Without counts the turn is still recorded, as one of unknown cost.
+        counts = (
+            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            if isinstance(result, dict)
+            else {}
+        )
+        spending.record_turn(db, model_id, counts)
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -2995,6 +3006,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        # Stop before a cloud turn once this month's spending reached the limit.
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
+            msg_id = db.add_message(session_id, "assistant", refusal)
+            yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
+            yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
+            return
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
@@ -3919,6 +3938,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
+            spending.record_turn(db, model_id, inference_stats)
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat

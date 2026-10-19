@@ -77,6 +77,10 @@ beforeEach(() => {
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     mockedApi.getOnboardingPreflight.mockRejectedValue(new Error('no probe'));
     mockedApi.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mockedApi.getCloudPrices.mockResolvedValue({ provider: 'fireworks', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' });
+    mockedApi.getSpending.mockResolvedValue({
+        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
+    });
     mockedApi.startSetup.mockResolvedValue(READY);
     mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: false });
     mockedApi.getSetupPlan.mockRejectedValue(new Error('not checked'));
@@ -157,9 +161,18 @@ describe('SetupScreen', () => {
         expect(screen.getByText('Connect Fireworks AI')).toBeInTheDocument();
         expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
 
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [{
+                model: 'fireworks.m1', name: 'm1', rank: 1, note: 'best overall',
+                price: { input_per_million: 0.3, cached_input_per_million: 0.006, output_per_million: 1.2, source: 'Fireworks AI list price' },
+            }],
+        });
         finish(READY);
         const key = await screen.findByLabelText('API key');
         expect(key).toHaveAttribute('type', 'password');
+        // Prices show before the key is entered (#5258).
+        expect(await screen.findByText('$0.30 in · $1.20 out per 1M tokens')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Start chatting' })).not.toBeInTheDocument();
 
         fireEvent.change(key, { target: { value: 'fw-key' } });

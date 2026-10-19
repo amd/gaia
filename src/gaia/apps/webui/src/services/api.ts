@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -104,6 +104,7 @@ export async function apiFetch<T>(
     path: string,
     body?: unknown,
     extraHeaders?: Record<string, string>,
+    signal?: AbortSignal,
 ): Promise<T> {
     const url = `${API_BASE}${path}`;
     const t = log.api.time();
@@ -119,6 +120,7 @@ export async function apiFetch<T>(
         // Content-Type cannot be accidentally overridden for body requests.
         headers: { ...UI_HEADER, ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
     };
 
     let res: Response;
@@ -167,8 +169,8 @@ export async function apiFetch<T>(
 
 // -- System --------------------------------------------------------------------
 
-export async function getSystemStatus(): Promise<SystemStatus> {
-    return apiFetch<SystemStatus>('GET', '/system/status');
+export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
+    return apiFetch<SystemStatus>('GET', '/system/status', undefined, undefined, signal);
 }
 
 /** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
@@ -326,6 +328,26 @@ export async function listProviderModels(provider: string): Promise<{ provider: 
 
 export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
+}
+
+// -- Cloud prices and spending (#5258) ------------------------------------------
+
+export async function getCloudPrices(provider: string): Promise<CloudPriceList> {
+    return apiFetch('GET', `/spending/prices/${encodeURIComponent(provider)}`);
+}
+
+export async function getSpending(): Promise<SpendingReport> {
+    return apiFetch('GET', '/spending');
+}
+
+/** Set the monthly limit for cloud chats; null removes it. */
+export async function setSpendingLimit(limitUsd: number | null): Promise<SpendingReport> {
+    return apiFetch('PUT', '/spending/limit', { limit_usd: limitUsd });
+}
+
+/** Let cloud chats go on past the limit until the month ends. */
+export async function allowSpendingThisMonth(): Promise<SpendingReport> {
+    return apiFetch('POST', '/spending/allow-month');
 }
 
 // -- Skills ----------------------------------------------------------------------
@@ -597,6 +619,8 @@ export async function deleteMessagesFrom(sessionId: string, messageId: number): 
 }
 
 // -- Chat (Streaming with Agent Events) ----------------------------------------
+
+export * from './chatTurnApi';
 
 /**
  * Callbacks for agent streaming events.
@@ -1013,13 +1037,6 @@ export async function respondToInput(
 ): Promise<{ status: string; request_id: string }> {
     return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
 }
-
-/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
-export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
-    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
-}
-
-export * from './chatTurn';
 
 // -- Documents -----------------------------------------------------------------
 

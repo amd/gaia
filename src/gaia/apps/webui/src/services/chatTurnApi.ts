@@ -1,10 +1,15 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** API client for a chat's running turn: follow-ups, context, performance and Retry with…. */
+/** Controls for a chat's running or latest turn; re-exported from `api`. */
 
 import type { ChatPerformance, ContextUsageResult, RetryChoice, RetryResult } from '../types';
 import { apiFetch } from './api';
+
+/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
+export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
+    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
+}
 
 /** Rejects when the running turn could not take the message. */
 export async function sendFollowUp(sessionId: string, text: string): Promise<{ delivered: boolean }> {

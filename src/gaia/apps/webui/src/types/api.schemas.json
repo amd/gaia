@@ -2107,6 +2107,24 @@
     "title": "KnowledgeUpdate",
     "type": "object"
   },
+  "LimitRequest": {
+    "description": "``limit_usd`` None removes the limit.",
+    "properties": {
+      "limit_usd": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Limit Usd"
+      }
+    },
+    "title": "LimitRequest",
+    "type": "object"
+  },
   "LoadModelRequest": {
     "properties": {
       "ctx_size": {

@@ -10,7 +10,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const fetchMock = () => fetch as ReturnType<typeof vi.fn>;
 
-describe('chat-turn calls reached through the API client', () => {
+describe('chat-turn calls re-exported from the API client', () => {
     beforeEach(() => vi.stubGlobal('fetch', vi.fn()));
     afterEach(() => {
         vi.unstubAllGlobals();
