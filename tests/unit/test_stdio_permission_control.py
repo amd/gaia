@@ -237,7 +237,8 @@ class TestFullAccessMode:
             for e in events_of(events, "status")
             if "Full access" in str(e.get("message"))
         ]
-        assert warnings and "run_shell_command" in warnings[0]["message"]
+        assert warnings and "Running command: pwd" in warnings[0]["message"]
+        assert "run_shell_command" not in warnings[0]["message"]
 
     def test_off_restores_prompting_immediately(self):
         state = PermissionState(full_access=True)

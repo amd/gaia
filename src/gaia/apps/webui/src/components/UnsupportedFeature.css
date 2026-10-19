@@ -102,7 +102,7 @@
     font-size: 12.5px;
     line-height: 1.5;
     color: var(--text-primary);
-    animation: toast-slide-in 0.25s var(--ease);
+    animation: toast-slide-in var(--duration) var(--ease);
 }
 
 .upload-error-toast svg {
