@@ -6,7 +6,7 @@
 #   terminal-hub  (type: component, Go)         — the `gaia tui` binary, 6 targets
 #   agent-ui      (type: app, TypeScript)       — the Electron desktop installers
 #
-# Same pattern as release_agent_email.yml / release_agent_chat.yml: CI never
+# Same pattern as release_agent_email.yml / release_agent_gaia.yml: CI never
 # talks to R2 directly, it POSTs to the Worker's /publish endpoint, which
 # computes the SHA-256 server-side and stores each object immutably at
 # agents/<id>/<version>/<filename>. Re-running a published version is a no-op
