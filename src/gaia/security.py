@@ -940,12 +940,16 @@ class PathValidator:
                 return f"'{path}' is too broad a grant: it contains '{root}'"
         return ""
 
-    def unaskable_reason(self, path: str) -> str:
-        """Why *path* stays refused whatever the user answers, or "".
+    def grant_refusal_reason(self, path: str) -> str:
+        """Why no approval may grant *path*, or "" when asking could grant it.
 
-        Lets a caller refuse such a path before asking the user to approve it.
+        Args:
+            path: The path a caller is about to ask the user about.
+
+        Returns:
+            The reason *path* stays refused whatever the user answers, else "".
         """
-        return self._unaskable_reason(Path(_real_path(path)).resolve())
+        return self._unaskable_reason(Path(_real_path(path)))
 
     def _can_prompt(self) -> bool:
         """True when a blocking ``input()`` would actually reach the requester."""

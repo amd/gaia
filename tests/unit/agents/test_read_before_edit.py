@@ -503,7 +503,9 @@ class TestRefusedBeforeConfirmation:
         agent.path_validator = PathValidator()
         args = {"file_path": str(tmp_path / "new.txt"), "content": "x"}
 
-        with patch.object(agent.path_validator, "unaskable_reason", return_value=""):
+        with patch.object(
+            agent.path_validator, "grant_refusal_reason", return_value=""
+        ):
             assert agent._policy_refusal("write_file", args) is None
 
 

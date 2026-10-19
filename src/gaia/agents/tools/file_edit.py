@@ -185,7 +185,7 @@ def read_first_preflight(
                 str(target), prompt_user=False
             ):
                 # No answer could grant it, so refuse before the approval prompt.
-                if validator.unaskable_reason(str(target)):
+                if validator.grant_refusal_reason(str(target)):
                     reason = validator.access_denied_message(str(target))
                     validator.audit_write("write", str(target), 0, "denied", reason)
                     return {"status": "error", "error": reason}
