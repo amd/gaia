@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
@@ -56,6 +56,8 @@ beforeEach(() => {
 
 async function renderTable() {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
     const cell = await screen.findByText('Prefers dark mode', { selector: '.mem-content-cell *, .mem-content-cell' });
     return cell.closest('tr')!;
 }

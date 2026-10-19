@@ -6,9 +6,16 @@ Per-provider access-token cache with double-checked locking and refresh.
 Critical invariants (T-5b, plan amendments A6, A7):
 
 - One ``asyncio.Lock`` per ``(provider, account_email)`` cache slot. The
-  refresh path uses **explicit ``async with lock:`` (context-manager form)**
-  so the lock is released on exception. Manual ``acquire``/``release``
-  pairs are forbidden — they deadlock if a refresh raises.
+  refresh path acquires it with the same bounded wait as the connection
+  lock and releases it in a ``finally``, so a refresh that raises never
+  leaves it held.
+
+- The daemon, the Agent UI and the CLI each refresh in their own process,
+  so a refresh also holds the per-provider connection lock
+  (``_refresh_lock``, shared with connect and disconnect) and re-reads the
+  stored connection after taking it. Without it two processes refresh with
+  the same refresh token, and the loser's ``invalid_grant`` deleted the
+  connection the winner had just rotated.
 
 - 60-second expiry buffer: a token whose ``expires_at`` is within the
   next 60 seconds is treated as already expired (AC4).
@@ -37,6 +44,7 @@ from typing import Optional, Tuple
 
 import httpx
 
+from gaia.connectors import _refresh_lock
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -48,6 +56,7 @@ from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
     load_connection,
+    peek_connection,
     save_connection,
 )
 
@@ -58,6 +67,10 @@ logger = logging.getLogger(__name__)
 # this many seconds of expiring. Prevents a tool from receiving a token
 # that expires mid-API-call.
 _EXPIRY_BUFFER_SECONDS = 60
+
+# An overall cap on the token POST (httpx's timeout is per phase), so a peer
+# holding the connection lock always finishes inside its 15 s wait.
+_TOKEN_POST_DEADLINE_SECONDS = 10.0
 
 
 @dataclass
@@ -95,7 +108,7 @@ async def get_or_refresh(
     second check inside the locked block prevents N+1 refreshes when 10
     callers race.
     """
-    provider = get_provider(provider_id)
+    get_provider(provider_id)  # an unknown or unconfigured provider fails now
 
     key = _cache_key(provider_id, account_email)
     entry = _cache.get(key)
@@ -105,98 +118,131 @@ async def get_or_refresh(
     if not _is_expired(entry):
         return entry.access_token  # type: ignore[return-value]
 
-    async with entry.lock:
+    # One wait budget for the slot lock and the file lock together, so the
+    # wait plus the token POST stays inside get_or_refresh_sync's 30 s.
+    deadline = time.monotonic() + _refresh_lock.LOCK_TIMEOUT_SECONDS
+    try:
+        await asyncio.wait_for(entry.lock.acquire(), _refresh_lock.LOCK_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise _refresh_lock.timeout_error(provider_id) from exc
+    try:
         # Re-check inside the lock — a peer task may have refreshed
         # while we were waiting.
         if not _is_expired(entry):
             return entry.access_token  # type: ignore[return-value]
 
-        # The store raises AuthRequiredError(REAUTH_REQUIRED / TENANT_MISMATCH)
-        # directly when the client_id_hash / tenant tripwire fires; we let
-        # that propagate without interpretation. ``None`` means the user
-        # never connected. ``current_tenant`` (A18) is the LIVE provider's
-        # resolved tenant — ``getattr`` because non-Microsoft providers
-        # (Google) have no ``.tenant`` attribute at all.
-        stored = load_connection(
-            provider_id,
-            current_client_id_hash=provider.client_id_hash,
-            current_tenant=getattr(provider, "tenant", None),
-            account_email=account_email,
+        remaining = max(0.0, deadline - time.monotonic())
+        async with _refresh_lock.held(provider_id, timeout=remaining):
+            return await _refresh_locked(provider_id, account_email, entry)
+    finally:
+        entry.lock.release()
+
+
+async def _refresh_locked(
+    provider_id: str, account_email: str, entry: _AccessTokenCache
+) -> str:
+    """Refresh ``entry``; the caller holds its slot lock and the refresh lock."""
+    # Resolved again under the lock: a forwarded import that ran while we
+    # waited replaced the client, and the old client hash would trip the
+    # store's mismatch check and clear the connection it just saved.
+    provider = get_provider(provider_id)
+    # The store raises AuthRequiredError(REAUTH_REQUIRED / TENANT_MISMATCH)
+    # directly when the client_id_hash / tenant tripwire fires; we let
+    # that propagate without interpretation. ``None`` means the user
+    # never connected. ``current_tenant`` (A18) is the LIVE provider's
+    # resolved tenant — ``getattr`` because non-Microsoft providers
+    # (Google) have no ``.tenant`` attribute at all.
+    stored = await _refresh_lock.run_to_completion(
+        load_connection,
+        provider_id,
+        current_client_id_hash=provider.client_id_hash,
+        current_tenant=getattr(provider, "tenant", None),
+        account_email=account_email,
+    )
+    if stored is None:
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.NOT_CONNECTED, provider=provider_id
         )
-        if stored is None:
-            raise AuthRequiredError(
-                AuthRequiredError.Reason.NOT_CONNECTED, provider=provider_id
-            )
 
-        try:
-            new_access, new_refresh, expires_in = await _refresh_token(
-                provider, stored["refresh_token"]
+    try:
+        new_access, new_refresh, expires_in = await _refresh_token(
+            provider, stored["refresh_token"]
+        )
+    except ConnectorsError as e:
+        if isinstance(
+            e, ConnectionRevokedError
+        ) and not await _refresh_lock.run_to_completion(
+            _delete_if_unchanged, provider_id, account_email, stored["refresh_token"]
+        ):
+            raise _replaced_error(provider_id) from e
+        # A5: enrich with split-related guidance ONLY for a genuine
+        # OAuth-protocol rejection — ConnectionRevokedError (400
+        # invalid_grant) or the generic-400/non-200 bare ConnectorsError
+        # branch — on a LEGACY blob (no recorded tenant: "we don't know"
+        # is the only case where the split is a plausible cause, not a
+        # confirmed one). ConfigurationError and AuthRequiredError are
+        # ALSO ConnectorsError subclasses but must propagate unchanged —
+        # they name a different, already-precise cause (missing secret /
+        # rejected client) that split-language would only muddy.
+        # httpx.* exceptions are not ConnectorsError at all and are
+        # never caught here — they propagate raw (no try/except wraps
+        # the token POST itself).
+        if (
+            not isinstance(e, (ConfigurationError, AuthRequiredError))
+            and stored.get("tenant") is None
+            and provider_id in ("microsoft", "microsoft_work")
+        ):
+            other = "microsoft_work" if provider_id == "microsoft" else "microsoft"
+            account_kind = "work/school" if provider_id == "microsoft" else "personal"
+            enriched = (
+                f"{e} This looks like it could be the Microsoft connector "
+                f"split (#2628): if this account is a {account_kind} "
+                f"account, reconnect via the {other!r} connector instead."
             )
-        except ConnectorsError as e:
-            # A5: enrich with split-related guidance ONLY for a genuine
-            # OAuth-protocol rejection — ConnectionRevokedError (400
-            # invalid_grant) or the generic-400/non-200 bare ConnectorsError
-            # branch — on a LEGACY blob (no recorded tenant: "we don't know"
-            # is the only case where the split is a plausible cause, not a
-            # confirmed one). ConfigurationError and AuthRequiredError are
-            # ALSO ConnectorsError subclasses but must propagate unchanged —
-            # they name a different, already-precise cause (missing secret /
-            # rejected client) that split-language would only muddy.
-            # httpx.* exceptions are not ConnectorsError at all and are
-            # never caught here — they propagate raw (no try/except wraps
-            # the token POST itself).
-            if (
-                not isinstance(e, (ConfigurationError, AuthRequiredError))
-                and stored.get("tenant") is None
-                and provider_id in ("microsoft", "microsoft_work")
-            ):
-                other = "microsoft_work" if provider_id == "microsoft" else "microsoft"
-                account_kind = (
-                    "work/school" if provider_id == "microsoft" else "personal"
-                )
-                enriched = (
-                    f"{e} This looks like it could be the Microsoft connector "
-                    f"split (#2628): if this account is a {account_kind} "
-                    f"account, reconnect via the {other!r} connector instead."
-                )
-                if isinstance(e, ConnectionRevokedError):
-                    raise ConnectionRevokedError(provider_id, message=enriched) from e
-                raise ConnectorsError(enriched) from e
-            raise
+            if isinstance(e, ConnectionRevokedError):
+                raise ConnectionRevokedError(provider_id, message=enriched) from e
+            raise ConnectorsError(enriched) from e
+        raise
 
-        # Refresh-token rotation: if the provider returned a new refresh
-        # token, persist it before exposing the access token to callers.
-        # A4: prefer the RECORDED tenant — it is a historical fact about
-        # which authority minted THIS refresh token, and Microsoft rotates
-        # the token on every refresh, so dropping it here loses the
-        # diagnostic within one daemon tick. A legacy blob (no recorded
-        # tenant) has no such fact to preserve, and a successful refresh IS
-        # proof the live provider's tenant just minted the token we are
-        # about to persist — record it then, upgrading the blob out of
-        # "legacy" exactly once, on proof, rather than leaving it legacy
-        # forever (which would keep re-triggering the A5 split-language
-        # guess on every future unrelated failure).
-        if new_refresh and new_refresh != stored["refresh_token"]:
-            save_connection(
-                provider=provider_id,
-                account_email=stored.get("account_email", DEFAULT_ACCOUNT),
-                refresh_token=new_refresh,
-                scopes=stored.get("scopes", []),
-                client_id_hash=provider.client_id_hash,
-                connected_at=stored.get("connected_at"),
-                tenant=stored.get("tenant") or getattr(provider, "tenant", None),
-                # Carry the derived account kind across rotation — it comes from
-                # the connect-time id_token, which a refresh does not re-issue.
-                account_type=stored.get("account_type"),
-                # #2591 review: a forwarded connection must stay marked
-                # forwarded across rotation, or the next disconnect would
-                # revoke the host app's own grant.
-                forwarded=bool(stored.get("forwarded")),
-            )
+    # Refresh-token rotation: if the provider returned a new refresh
+    # token, persist it before exposing the access token to callers.
+    # A4: prefer the RECORDED tenant — it is a historical fact about
+    # which authority minted THIS refresh token, and Microsoft rotates
+    # the token on every refresh, so dropping it here loses the
+    # diagnostic within one daemon tick. A legacy blob (no recorded
+    # tenant) has no such fact to preserve, and a successful refresh IS
+    # proof the live provider's tenant just minted the token we are
+    # about to persist — record it then, upgrading the blob out of
+    # "legacy" exactly once, on proof, rather than leaving it legacy
+    # forever (which would keep re-triggering the A5 split-language
+    # guess on every future unrelated failure).
+    if new_refresh and new_refresh != stored["refresh_token"]:
+        # A reconnect or disconnect during the POST must not be overwritten.
+        if not await _refresh_lock.run_to_completion(
+            _save_if_still_holds,
+            provider_id,
+            account_email,
+            stored["refresh_token"],
+            provider=provider_id,
+            account_email=stored.get("account_email", DEFAULT_ACCOUNT),
+            refresh_token=new_refresh,
+            scopes=stored.get("scopes", []),
+            client_id_hash=provider.client_id_hash,
+            connected_at=stored.get("connected_at"),
+            tenant=stored.get("tenant") or getattr(provider, "tenant", None),
+            # Carry the derived account kind across rotation — it comes from
+            # the connect-time id_token, which a refresh does not re-issue.
+            account_type=stored.get("account_type"),
+            # #2591 review: a forwarded connection must stay marked
+            # forwarded across rotation, or the next disconnect would
+            # revoke the host app's own grant.
+            forwarded=bool(stored.get("forwarded")),
+        ):
+            raise _replaced_error(provider_id)
 
-        entry.access_token = new_access
-        entry.expires_at = time.monotonic() + expires_in
-        return entry.access_token
+    entry.access_token = new_access
+    entry.expires_at = time.monotonic() + expires_in
+    return entry.access_token
 
 
 async def get_token_with_expiry(
@@ -236,8 +282,17 @@ async def _refresh_token(
     """
     body = provider.refresh_request_body(refresh_token)
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(provider.token_url, data=body)
+    async def _post():
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await client.post(provider.token_url, data=body)
+
+    try:
+        response = await asyncio.wait_for(_post(), _TOKEN_POST_DEADLINE_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise httpx.TimeoutException(
+            f"Token endpoint for {provider.provider_id} did not answer within "
+            f"{_TOKEN_POST_DEADLINE_SECONDS:.0f}s. Check your connection and retry."
+        ) from exc
 
     if response.status_code == 400:
         try:
@@ -245,9 +300,8 @@ async def _refresh_token(
         except Exception:
             payload = {}
         if payload.get("error") == "invalid_grant":
-            # Clear the stored entry — the refresh token is no longer
-            # accepted.
-            delete_connection(provider.provider_id)
+            # The caller clears the stored entry (only if it still holds this
+            # refresh token — see _delete_if_unchanged).
             raise ConnectionRevokedError(provider.provider_id)
         # Other 400s — actionable but not invalid_grant.
         raise ConnectorsError(
@@ -318,6 +372,44 @@ async def _refresh_token(
 
     new_refresh = payload.get("refresh_token")
     return access, new_refresh, int(expires_in)
+
+
+def _save_if_still_holds(
+    slot_provider: str, slot_account: str, sent_refresh_token: str, **save_kwargs
+) -> bool:
+    """Save a rotated token only if the stored one is still the token sent.
+
+    The compare and the write run in one call under the connection lock, so a
+    reconnect or disconnect can't land between them.
+    """
+    current = peek_connection(slot_provider, account_email=slot_account)
+    if current is None or current.get("refresh_token") != sent_refresh_token:
+        return False
+    save_connection(**save_kwargs)
+    return True
+
+
+def _delete_if_unchanged(
+    provider_id: str, account_email: str, sent_refresh_token: str
+) -> bool:
+    """Delete the connection only if it still holds the rejected refresh token.
+
+    ``None`` from the store can mean a torn read of a chunked blob that a
+    reconnect is writing, so it is never taken as permission to delete.
+    """
+    current = peek_connection(provider_id, account_email=account_email)
+    if current is None or current.get("refresh_token") != sent_refresh_token:
+        return False
+    delete_connection(provider_id, account_email=account_email)
+    return True
+
+
+def _replaced_error(provider_id: str) -> ConnectorsError:
+    return ConnectorsError(
+        f"The {provider_id} connection was replaced (reconnected, disconnected, "
+        "or refreshed by another GAIA process) while this refresh was in "
+        "flight; the stored connection was left as is. Retry the request."
+    )
 
 
 def get_or_refresh_sync(

@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
 from gaia.ui.run_manager import run_manager
+from gaia.ui.turn_queue import turn_queue
 
 logger = logging.getLogger(__name__)
 
@@ -309,12 +310,11 @@ class AgentLoop:
 
         # ── Session gate ─────────────────────────────────────────────────
         # The tick drives the session's cached agent, so it takes the same
-        # session lock + chat semaphore a user turn does. Poll, never queue on
+        # session lock + turn-queue slot a user turn does. Poll, never queue on
         # the lock: a queued waiter would stall the user's next message.
         session_lock = self._app_state.session_locks.setdefault(
             session_id, asyncio.Lock()
         )
-        chat_semaphore = self._app_state.chat_semaphore
         # A followup is enqueued while its own turn still holds the session.
         grace = (
             _FOLLOWUP_GRACE_SECONDS if trigger.source == "user_message_followup" else 0
@@ -323,7 +323,7 @@ class AgentLoop:
         while (
             session_lock.locked()
             or run_manager.is_running(session_id)
-            or chat_semaphore.locked()
+            or turn_queue.locked()
         ):
             if time.monotonic() >= deadline:
                 logger.debug(
@@ -333,13 +333,13 @@ class AgentLoop:
             await asyncio.sleep(0.1)
         # No await between the busy check and these acquires, so neither blocks.
         await session_lock.acquire()
-        await chat_semaphore.acquire()
+        await turn_queue.acquire(f"agent-loop:{session_id}")
         try:
             # Only a tick that reaches here spends hourly budget.
             self._calls_this_hour += 1
             return await self._execute_tick(session_id, session, goals)
         finally:
-            chat_semaphore.release()
+            turn_queue.release()
             session_lock.release()
 
     async def _get_active_session(self) -> Optional[str]:
