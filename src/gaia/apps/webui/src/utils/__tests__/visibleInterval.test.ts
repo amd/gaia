@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setVisibleInterval } from '../visibleInterval';
+import { runWhileVisible, setVisibleInterval } from '../visibleInterval';
 
 let state: DocumentVisibilityState = 'visible';
 
@@ -39,5 +39,40 @@ describe('setVisibleInterval', () => {
         vi.advanceTimersByTime(5000);
         show('visible');
         expect(fn).toHaveBeenCalledTimes(3);
+    });
+});
+
+describe('runWhileVisible', () => {
+    it('stops the poll while hidden and restarts it once when shown again', () => {
+        const stopPoll = vi.fn();
+        const start = vi.fn(() => stopPoll);
+        const end = runWhileVisible(start);
+        expect(start).toHaveBeenCalledTimes(1);
+
+        show('hidden');
+        expect(stopPoll).toHaveBeenCalledTimes(1);
+        show('hidden');
+        expect(stopPoll).toHaveBeenCalledTimes(1);
+
+        show('visible');
+        show('visible');
+        expect(start).toHaveBeenCalledTimes(2);
+
+        end();
+        expect(stopPoll).toHaveBeenCalledTimes(2);
+        show('hidden');
+        show('visible');
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(stopPoll).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not start a poll for a window that opens hidden', () => {
+        state = 'hidden';
+        const start = vi.fn(() => vi.fn());
+        const end = runWhileVisible(start);
+        expect(start).not.toHaveBeenCalled();
+        end();
+        show('visible');
+        expect(start).not.toHaveBeenCalled();
     });
 });

@@ -18,3 +18,26 @@ export function setVisibleInterval(fn: () => void, ms: number): () => void {
         document.removeEventListener('visibilitychange', onShow);
     };
 }
+
+/**
+ * Run a self-scheduling poll only while the window is shown: `start` when it
+ * appears, its returned stop when it hides. Returns the function that ends it.
+ */
+export function runWhileVisible(start: () => () => void): () => void {
+    const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    let stop: (() => void) | null = hidden() ? null : start();
+    const onChange = () => {
+        if (hidden()) {
+            stop?.();
+            stop = null;
+        } else if (!stop) {
+            stop = start();
+        }
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => {
+        document.removeEventListener('visibilitychange', onChange);
+        stop?.();
+        stop = null;
+    };
+}
