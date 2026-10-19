@@ -602,6 +602,12 @@ export interface AgentStep {
     active?: boolean;
     /** Plan steps (for type='plan'). */
     planSteps?: string[];
+    /** One plain line per plan step, parallel to planSteps (for type='plan'). */
+    planNarrations?: string[];
+    /** Zero-based index of the plan step being executed (for type='plan'). */
+    currentStep?: number;
+    /** What the tool call does, in plain words (for type='tool'). */
+    narration?: string;
     /** Timestamp when this step started. */
     timestamp: number;
     /** Structured command output (for run_shell_command). */
@@ -658,7 +664,11 @@ export interface StreamEvent {
     summary?: string;
     success?: boolean;
     steps?: string[];
+    /** One plain line per plan step, parallel to `steps` (for plan events). */
+    step_narrations?: string[];
     current_step?: number;
+    /** What a tool call does, in plain words (for tool_start and tool_args). */
+    narration?: string;
     title?: string;
     detail?: string;
     args?: Record<string, unknown>;
@@ -895,6 +905,37 @@ export interface ProviderModel {
     rank: number | null;
     note: string | null;
     evidence: string | null;
+    /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
+    price?: ModelPrice | null;
+}
+
+/** USD per million tokens, from GAIA's one rate card. */
+export interface ModelPrice {
+    input_per_million: number;
+    cached_input_per_million: number;
+    output_per_million: number;
+    source: string;
+}
+
+/** GET /api/spending/prices/{provider}: prices before connecting. */
+export interface CloudPriceList {
+    provider: string;
+    models: Array<{ model: string; name: string; rank: number | null; note: string | null; price: ModelPrice | null }>;
+    source: string | null;
+    note: string | null;
+}
+
+/** GET /api/spending: this month's cloud chats at list price, and the limit. */
+export interface SpendingReport {
+    month: string;
+    total_usd: number;
+    turns: number;
+    /** Turns on a model with no known price, counted apart rather than as $0. */
+    unpriced_turns: number;
+    limit_usd: number | null;
+    state: 'no_limit' | 'ok' | 'near' | 'reached' | 'allowed_over';
+    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number }>;
+    price_source: string;
 }
 
 export interface ConnectProviderBody {

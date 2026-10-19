@@ -71,6 +71,7 @@ from gaia.agents.base.memory_store import (
     MAX_CONTENT_LENGTH,
     MAX_EXTRACTION_TURN_LENGTH,
     VALID_CATEGORIES,
+    MemoryContentError,
     content_stems,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
@@ -84,7 +85,6 @@ from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
-    SIDE_SLOT,
     backend_crash_remedy,
 )
 
@@ -1911,8 +1911,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                         outcome["response"] = self.chat.send_messages(
                             messages=[{"role": "user", "content": prompt}],
                             system_prompt="You are a memory extraction engine. Return valid JSON only.",
-                            # Off the conversation's slot, so its cache survives.
-                            id_slot=SIDE_SLOT,
                             temperature=0.1,
                             max_tokens=EXTRACTION_MAX_TOKENS,
                             # Streamed, so a user turn can stop it mid-reply.
@@ -3819,10 +3817,6 @@ class MemoryMixin(ProceduralMemoryMixin):
         if self._looks_like_credential(content):
             logger.info("[MemoryMixin] not storing a lesson that carries a credential")
             return
-        # One lesson per operation: `pytest -q` and `pytest tests/` differ only
-        # in argument text, and two rows would split confidence between them.
-        for stale in existing:
-            self._forget_lesson(stale["id"])
         kid = self._memory_store.store(
             category="note",
             content=content,
@@ -3832,6 +3826,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             confidence=LESSON_INITIAL_CONFIDENCE,
             metadata={"operation": operation, "fix": call},
         )
+        # One lesson per operation: `pytest -q` and `pytest tests/` differ only
+        # in argument text, and two rows would split confidence between them.
+        # Forgotten only after the store succeeds, so a refused lesson keeps the old one.
+        for stale in existing:
+            if stale["id"] != kid:
+                self._forget_lesson(stale["id"])
         lesson = {"id": kid, "content": content}
         self._confirmed_lessons_set().add(kid)
         for bucket in ("_session_lessons", "_turn_lessons"):
@@ -4389,17 +4389,29 @@ class MemoryMixin(ProceduralMemoryMixin):
             sens = sensitive.lower() == "true" if sensitive else False
 
             was_truncated = len(fact) > MAX_CONTENT_LENGTH
-            knowledge_id = mixin._memory_store.store(
-                category=category,
-                content=fact[:MAX_CONTENT_LENGTH],
-                domain=domain or None,
-                due_at=due_at or None,
-                source="tool",
-                context=ctx,
-                sensitive=sens,
-                entity=entity or None,
-                confidence=0.7,  # Explicit remember() calls are high-confidence
-            )
+            try:
+                # The full fact: the store checks it for markup, then truncates.
+                knowledge_id = mixin._memory_store.store(
+                    category=category,
+                    content=fact,
+                    domain=domain or None,
+                    due_at=due_at or None,
+                    source="tool",
+                    context=ctx,
+                    sensitive=sens,
+                    entity=entity or None,
+                    confidence=0.7,  # Explicit remember() calls are high-confidence
+                )
+            except MemoryContentError as e:
+                return {
+                    "status": "error",
+                    "stored": 0,
+                    "unrun_tool_calls": e.unrun_tool_calls,
+                    "message": (
+                        f"Not stored: {e} Use one remember call per fact, and "
+                        "tell the user only what was actually stored."
+                    ),
+                }
             mixin._embed_and_index(
                 knowledge_id, fact[:MAX_CONTENT_LENGTH], "remembered fact"
             )
@@ -4409,6 +4421,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
             return {
                 "status": "stored",
+                "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
@@ -4632,7 +4645,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                             "keep secrets in memory."
                         ),
                     }
-                kwargs["content"] = content[:MAX_CONTENT_LENGTH]
+                # Untruncated: the store checks it for markup, then truncates.
+                kwargs["content"] = content
             if category:
                 if category not in EXTRACTABLE_CATEGORIES:
                     return {
@@ -4683,7 +4697,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Re-embed if content changed
                 if content:
                     mixin._embed_and_index(
-                        knowledge_id, kwargs["content"], "edited memory", replace=True
+                        knowledge_id,
+                        content[:MAX_CONTENT_LENGTH],
+                        "edited memory",
+                        replace=True,
                     )
                 mixin._refresh_if_shown(knowledge_id)
 

@@ -154,6 +154,96 @@ CONSOLIDATION_MIN_TURNS: int = 5
 #: callers before reaching store() so the database stays compact.
 MAX_CONTENT_LENGTH: int = 2000
 
+# Chat-template special tokens: Gemma ``<|tool_call>``/``<channel|>``/``<|"|>``,
+# Harmony/ChatML ``<|channel|>``/``<|im_end|>``, DeepSeek ``<｜…｜>``. No one
+# types these; in memory text they mean raw model output leaked into a write.
+_MODEL_SENTINEL = re.compile(
+    r"<\|[^\s<>]{1,40}>|<[A-Za-z_][\w-]{0,39}\|>|<｜[^\s<>]{0,40}>?"
+)
+_MODEL_TOOL_CALL_OPENER = re.compile(r"<\|tool_call>|<｜tool[▁_]call[▁_]begin")
+
+
+def _without_code_spans(text: str) -> str:
+    """*text* with closed fenced and inline code blanked, in linear time.
+
+    An unclosed fence or backtick is ordinary text, so it cannot hide markup.
+    """
+    parts: List[str] = []
+    unclosed: set = set()
+    i = start = 0
+    n = len(text)
+    next_newline = -1
+    while i < n:
+        ch = text[i]
+        if ch not in "`~":
+            i += 1
+            continue
+        fence = ch * 3
+        if text.startswith(fence, i):
+            end = -1 if fence in unclosed else text.find(fence, i + 3)
+            if end == -1:
+                # No later closer, so no later opener of this kind can close.
+                unclosed.add(fence)
+                i += 3
+                continue
+            parts.append(text[start:i] + " ")
+            i = start = end + 3
+            continue
+        if ch == "~":
+            i += 1
+            continue
+        if next_newline < i:
+            next_newline = text.find("\n", i)
+            if next_newline == -1:
+                next_newline = n
+        # Each search stops at the next backtick or newline, so scans are disjoint.
+        end = text.find("`", i + 1, next_newline)
+        if end > i + 1:
+            parts.append(text[start:i] + " ")
+            i = start = end + 1
+        else:
+            i += 1
+    parts.append(text[start:])
+    return "".join(parts)
+
+
+class MemoryContentError(ValueError):
+    """Memory text carries the model's own tool-call markup or reasoning.
+
+    Attributes:
+        markers: The distinct special tokens found (at most five).
+        unrun_tool_calls: Tool calls embedded in the text that never ran.
+    """
+
+    def __init__(self, markers: List[str], unrun_tool_calls: int):
+        self.markers = markers
+        self.unrun_tool_calls = unrun_tool_calls
+        calls = (
+            f", and {unrun_tool_calls} more tool call(s) inside it never ran"
+            if unrun_tool_calls
+            else ""
+        )
+        super().__init__(
+            "memory content contains the model's own tool-call markup or "
+            f"reasoning ({', '.join(markers)}), not the user's words{calls}. "
+            "Nothing was stored. Store each fact separately, as plain text."
+        )
+
+
+def check_memory_content(content: str) -> None:
+    """Raise if *content* carries model-internal markup; code spans are exempt.
+
+    Raises:
+        MemoryContentError: A chat-template special token is outside code.
+    """
+    prose = _without_code_spans(content)
+    found = _MODEL_SENTINEL.findall(prose)
+    if not found:
+        return
+    markers = list(dict.fromkeys(found))[:5]
+    raise MemoryContentError(markers, len(_MODEL_TOOL_CALL_OPENER.findall(prose)))
+
+
 #: Maximum conversation turn length (chars) stored / injected into prompts.
 MAX_TURN_LENGTH: int = 4000
 MAX_EXTRACTION_TURN_LENGTH: int = 256000
@@ -1107,6 +1197,20 @@ class MemoryStore:
     # Knowledge — Store (with dedup)
     # ==================================================================
 
+    @staticmethod
+    def _refuse_model_markup(content: str, where: str) -> None:
+        """The one write-side check every knowledge write goes through."""
+        try:
+            check_memory_content(content)
+        except MemoryContentError as e:
+            logger.warning(
+                "[MemoryStore] %s refused model markup %s (%d unrun call(s))",
+                where,
+                e.markers,
+                e.unrun_tool_calls,
+            )
+            raise
+
     def store(
         self,
         category: str,
@@ -1142,6 +1246,8 @@ class MemoryStore:
             ValueError: If the category is privileged without
                 ``allow_privileged``, content is empty, or due_at is not valid
                 ISO 8601.
+            MemoryContentError: Content carries the model's own tool-call
+                markup or reasoning tokens.
         """
         _validate_category(category, allow_privileged=allow_privileged, where="store")
 
@@ -1149,6 +1255,9 @@ class MemoryStore:
         # and polluting search results with no-op entries.
         if not content or not content.strip():
             raise ValueError("MemoryStore.store(): content must be non-empty")
+
+        # Before truncation, so markup past the cap cannot slip through.
+        self._refuse_model_markup(content, where="store")
 
         # Truncate very long content to prevent context overflow when injected
         # into the system prompt. MAX_CONTENT_LENGTH chars ≈ 500 tokens — enough for any fact.
@@ -1737,6 +1846,7 @@ class MemoryStore:
         Raises:
             ValueError: Same category rules as :meth:`store`, plus a
                 self-supersede or a malformed timestamp.
+            MemoryContentError: Same content rule as :meth:`store`.
         """
         if category is not None:
             _validate_category(
@@ -1784,6 +1894,7 @@ class MemoryStore:
         if content is not None:
             if not content.strip():
                 raise ValueError("update(): content must be non-empty")
+            self._refuse_model_markup(content, where="update")
             if len(content) > MAX_CONTENT_LENGTH:
                 content = content[:MAX_CONTENT_LENGTH]
             sets.append("content = ?")
@@ -4411,6 +4522,7 @@ class MemoryStore:
                 raise ValueError(
                     f"{where}: item[{idx}].content must be a non-empty string"
                 )
+            check_memory_content(content)
             category = item.get("category", "fact")
             if category not in VALID_CATEGORIES:
                 raise ValueError(
