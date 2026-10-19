@@ -771,17 +771,6 @@ Running a sidecar agent starts its sidecar automatically on first use;
 `gaia daemon start-agent <id>` is an optional pre-flight to launch and
 health-check it early.
 
-##### Automated PyPI publishing (CI)
-
-`.github/workflows/publish_agents.yml` builds every production agent wheel and
-publishes it to PyPI on a version tag (`v*`). Its matrix is derived from the
-`agents` extra in `setup.py` (via `util/list_agent_packages.py`), so adding an
-agent there is all it takes to start publishing it. The workflow uploads with
-[`pypa/gh-action-pypi-publish`](https://github.com/pypa/gh-action-pypi-publish)
-using the `PYPI_API_TOKEN` secret and `skip-existing: true`, so an unchanged
-agent version is a no-op rather than an error — PyPI enforces version
-immutability natively.
-
 #### Sharing: `export`, `import`
 
 Export every custom agent installed under `~/.gaia/agents/` into a single `.zip` bundle, and import a bundle produced on another machine.

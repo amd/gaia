@@ -1626,10 +1626,3 @@ def quick_chat_with_memory(
         responses.append(response.text)
 
     return responses
-
-
-# Backwards-compatible aliases
-ChatSDK = AgentSDK
-ChatConfig = AgentConfig
-ChatResponse = AgentResponse
-ChatSession = AgentSession
