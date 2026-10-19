@@ -626,7 +626,7 @@ class ClaudeProvider(LLMClient):
 
         anthropic_tools, name_map = self._to_anthropic_tools(tools)
         replayed, prefix_digest = self._replay_thinking(
-            system, anthropic_tools, cleaned
+            model, system, anthropic_tools, cleaned
         )
         params: Dict[str, Any] = {
             "model": model,
@@ -673,7 +673,11 @@ class ClaudeProvider(LLMClient):
     # https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
 
     def _replay_thinking(
-        self, system: Optional[str], tools: Optional[List[dict]], cleaned: List[dict]
+        self,
+        model: str,
+        system: Optional[str],
+        tools: Optional[List[dict]],
+        cleaned: List[dict],
     ) -> Tuple[List[dict], str]:
         """Restore the newest unbroken run of assistant turns' original blocks.
 
@@ -685,8 +689,16 @@ class ClaudeProvider(LLMClient):
         Any assistant turn whose thinking can't be restored (a final answer, a
         cut-off stream, an edited turn) ends the run: every older turn goes back
         without its thinking, so the kept blocks never have a gap.
+
+        A turn that isn't restored enters the digest as GAIA rebuilt it, which
+        can differ from Claude's original, so later turns' thinking is dropped
+        too. That only loses the optimisation; it never sends a stale block.
         """
-        digest = hashlib.sha256(_canonical({"system": system, "tools": tools}))
+        # The model is in the digest: thinking signed by one model never goes
+        # to another.
+        digest = hashlib.sha256(
+            _canonical({"model": model, "system": system, "tools": tools})
+        )
         out: List[dict] = []
         assistant_turns: List[Tuple[int, Optional[bool]]] = []
         for message in cleaned:

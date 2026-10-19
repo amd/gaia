@@ -1916,6 +1916,39 @@ def test_a_changed_tool_set_does_not_send_stale_thinking(fake_anthropic):
     assert not any(b["type"] == "thinking" for b in turn["content"])
 
 
+def test_a_switched_model_does_not_send_another_models_thinking(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    first_model = provider._client.messages.create.call_args.kwargs["model"]
+    other = "claude-haiku-5-5" if first_model != "claude-haiku-5-5" else "claude-opus-5"
+
+    provider._client.messages.create.return_value = _response([_text_block("Summary.")])
+    provider.chat(history, tools=OPENAI_TOOLS, model=other)
+    call = provider._client.messages.create.call_args.kwargs
+
+    assert call["model"] == other
+    (turn,) = _assistant_turns(call)
+    assert not any(b["type"] == "thinking" for b in turn["content"])
+
+
+@pytest.mark.parametrize("same", ["explicit", "ignored_non_claude"])
+def test_the_same_resolved_model_still_sends_thinking(fake_anthropic, same):
+    """Naming the model, or passing a non-Claude id that resolves to it, is
+    not a model switch."""
+    provider = _provider(fake_anthropic)
+    history = _first_call(provider, _tool_turn_response(_PLAN), stream=False)
+    first_model = provider._client.messages.create.call_args.kwargs["model"]
+    model = first_model if same == "explicit" else "Gemma-4-E4B-it-GGUF"
+
+    provider._client.messages.create.return_value = _response([_text_block("Summary.")])
+    provider.chat(history, tools=OPENAI_TOOLS, model=model)
+    call = provider._client.messages.create.call_args.kwargs
+
+    assert call["model"] == first_model
+    (turn,) = _assistant_turns(call)
+    assert turn["content"][0] == _thinking_dict(_PLAN)
+
+
 def test_thinking_survives_a_multi_step_loop(fake_anthropic):
     """Each turn's prefix includes the earlier turns' re-sent thinking; a
     consistent record keeps all of them valid on call 3."""
