@@ -94,6 +94,9 @@ env:
   # (a category subset would silently downgrade the published sample basis).
   IS_FULL: ${{ (inputs.categories || '') == '' }}
   BACKEND_URL: http://127.0.0.1:4200
+  # The checkout is outside this runner's home, so without this every
+  # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   FIXTURE_PORT: '8765'
   GAIA_HUB_URL: http://127.0.0.1:8765/fixture_hub
   GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'

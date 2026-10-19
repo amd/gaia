@@ -154,6 +154,9 @@ env:
   # Only a dispatch can enforce; every other run reports.
   ENFORCE: ${{ github.event.inputs.enforce || 'false' }}
   BACKEND_URL: http://127.0.0.1:4200
+  # The checkout is outside this runner's home, so without this every
+  # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
   # Fixture server port — the corpus hardcodes http://127.0.0.1:8765
   # (tests/fixtures/gaia/README.md; never 4001/4200/8141/13305).
