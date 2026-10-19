@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -1604,19 +1605,19 @@ def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
 
     from tests.fixtures.wheel_builder import build_chat_shaped_fixture_wheel
 
-    real_run = installer.subprocess.run
+    real_popen = installer.subprocess.Popen
     uv_calls = []
     pip_calls = []
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_popen(cmd, *args, **kwargs):
         if cmd[0] == "uv" or (cmd[0] == sys.executable and cmd[1:3] == ["-m", "uv"]):
             uv_calls.append(cmd)
             raise FileNotFoundError(f"simulated missing uv: {cmd[0]}")
         if cmd[0] == sys.executable and cmd[1:3] == ["-m", "pip"]:
             pip_calls.append(cmd)
-        return real_run(cmd, *args, **kwargs)
+        return real_popen(cmd, *args, **kwargs)
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
 
     agent_id = "uvfallbacktestagent"
     module_name = f"{agent_id}_pkg"
@@ -1646,10 +1647,10 @@ def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
     actionable InstallError naming what was tried -- never silently no-op.
     """
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_popen(cmd, *args, **kwargs):
         raise FileNotFoundError(f"simulated missing frontend: {cmd[0]}")
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
 
     with pytest.raises(InstallError, match="every pip frontend failed"):
         installer._default_run_pip(["--target", "/nonexistent", "some-package"])
@@ -1888,3 +1889,102 @@ def test_a_failed_binary_FIRST_install_is_still_cleared(tmp_path, monkeypatch):
 
     assert read_sentinel("demo", tmp_path) is None
     assert not (tmp_path / "demo").exists()
+
+
+# ---------------------------------------------------------------------------
+# A pip run that never finishes releases the install slot
+# ---------------------------------------------------------------------------
+
+
+def test_hung_pip_fails_the_install_and_frees_the_slot(tmp_path, monkeypatch):
+    """uv waits on another session's cache lock with no limit; the install must not."""
+    import sys
+
+    hang = [sys.executable, "-c", "import time; time.sleep(60)"]
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [hang])
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.delenv(installer.PIP_TIMEOUT_ENV, raising=False)
+    manifest = _manifest()
+
+    def attempt():
+        return install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            install_root=tmp_path,
+            active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+        )
+
+    with pytest.raises(InstallError, match="stuck"):
+        attempt()
+    assert not installer.is_installing("demo")
+    assert installer.get_install_status("demo")["status"] == "failed"
+    assert read_sentinel("demo", tmp_path) is None
+
+    # A retry gets the same honest error, not "already in progress".
+    with pytest.raises(InstallError, match="stuck") as retry:
+        attempt()
+    assert not isinstance(retry.value, InstallInProgressError)
+
+
+def test_a_failed_update_never_nests_the_backup_in_a_half_deleted_dir(
+    tmp_path, monkeypatch
+):
+    """A pip child that outlived its kill can hold a file, so the failed
+    install's directory survives deletion. Moving the backup onto it put the
+    previous version at demo/demo."""
+    install_dir = installer.agent_install_dir("demo", tmp_path)
+    (install_dir / "site-packages").mkdir(parents=True)
+    (install_dir / "site-packages" / "held.pyd").write_bytes(b"in use")
+    backup = installer._backup_dir("demo", tmp_path)
+    backup.mkdir(parents=True)
+    (backup / "gaia-agent.yaml").write_text("version: 1\n")
+
+    def held_rmtree(path, ignore_errors=False, **_kwargs):
+        # What a file locked by a live process does to rmtree.
+        if not ignore_errors:
+            raise PermissionError(13, "in use by another process", str(path))
+
+    monkeypatch.setattr(installer.shutil, "rmtree", held_rmtree)
+    with pytest.raises(InstallError, match="Could not remove the failed install"):
+        installer._restore_backup_if_present("demo", tmp_path)
+    assert not (install_dir / "demo").exists()
+    assert (backup / "gaia-agent.yaml").exists()
+
+
+def test_a_failed_rollback_keeps_the_reason_the_install_failed(tmp_path, monkeypatch):
+    manifest = _manifest()
+
+    def attempt(run_pip):
+        return install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=run_pip,
+            install_root=tmp_path,
+            active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+        )
+
+    attempt(lambda args: None)  # a working version to update from
+
+    def lock_conflict(args):
+        raise InstallError("uv could not get the package cache: another install")
+
+    real_rmtree = installer.shutil.rmtree
+    held = installer.agent_install_dir("demo", tmp_path)
+
+    def held_rmtree(path, ignore_errors=False, **kwargs):
+        if Path(path) != held:
+            return real_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+        if not ignore_errors:
+            raise PermissionError(13, "in use by another process", str(path))
+
+    monkeypatch.setattr(installer.shutil, "rmtree", held_rmtree)
+    with pytest.raises(InstallError) as excinfo:
+        attempt(lock_conflict)
+    message = str(excinfo.value)
+    assert "another install" in message
+    assert "Could not remove the failed install" in message
+    assert "could not get the package cache" in str(excinfo.value.__cause__)
