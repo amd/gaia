@@ -151,6 +151,9 @@ class ModelSlotBroker:
         self._loaded_model: Optional[str] = None
         self._waiters: List[_Waiter] = []
         self._seq = 0
+        # When a lease was last queued, granted, released or reclaimed; None
+        # until the first. Lets the daemon tell how long the slot sat unused.
+        self._last_activity: Optional[float] = None
 
     # -- public API -----------------------------------------------------------
 
@@ -243,6 +246,7 @@ class ModelSlotBroker:
                 self._active.holder,
             )
             self._active = None
+            self._last_activity = self._now()
             self._cv.notify_all()
 
     def snapshot(self) -> dict:
@@ -261,6 +265,11 @@ class ModelSlotBroker:
                     else None
                 ),
                 "loaded_model": self._loaded_model,
+                "last_activity_s_ago": (
+                    None
+                    if self._last_activity is None
+                    else max(0.0, self._now() - self._last_activity)
+                ),
                 "waiting": [
                     {
                         "model": w.model,
@@ -282,6 +291,7 @@ class ModelSlotBroker:
             granted_at=self._now(),
         )
         self._active = lease
+        self._last_activity = lease.granted_at
         switching = self._loaded_model is not None and self._loaded_model != lease.model
         self._loaded_model = lease.model
         self._waiters.remove(waiter)
@@ -340,4 +350,5 @@ class ModelSlotBroker:
                 self._ttl,
             )
             self._active = None
+            self._last_activity = self._now()
             self._cv.notify_all()

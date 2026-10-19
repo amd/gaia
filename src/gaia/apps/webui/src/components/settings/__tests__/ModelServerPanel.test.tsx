@@ -171,10 +171,10 @@ describe('ModelServerPanel', () => {
 
     it('reloads the chat model at its current context window', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
-        mockedApi.loadModel.mockResolvedValue({ status: 'loading', model: 'Qwen3.6-35B-A3B-GGUF', ctx_size: 65536 });
+        mockedApi.loadModelAskingFirst.mockResolvedValue(true);
         render(<ModelServerPanel />);
 
         fireEvent.click(await screen.findByRole('button', { name: 'Reload chat model now' }));
-        await waitFor(() => expect(mockedApi.loadModel).toHaveBeenCalledWith('Qwen3.6-35B-A3B-GGUF', 65536));
+        await waitFor(() => expect(mockedApi.loadModelAskingFirst).toHaveBeenCalledWith('Qwen3.6-35B-A3B-GGUF', 65536));
     });
 });

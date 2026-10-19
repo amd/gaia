@@ -36,7 +36,7 @@
 
 .tunnel-status .status-dot.starting {
     background: var(--accent-yellow);
-    animation: pulse-dot 1.2s ease-in-out infinite;
+    animation: pulse-dot var(--duration-pulse) var(--ease-in-out) infinite;
 }
 
 .tunnel-status .status-dot.error {
@@ -54,7 +54,7 @@
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 @keyframes pulse-dot {
@@ -122,7 +122,7 @@
     border: 3px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 /* URL display row */

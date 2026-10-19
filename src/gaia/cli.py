@@ -5757,7 +5757,10 @@ Let me know your answer!
     # Handle install command
     if args.action == "install":
         if args.lemonade:
-            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.installer.lemonade_installer import (
+                LemonadeInstaller,
+                discard_download,
+            )
             from gaia.version import LEMONADE_VERSION
 
             installer = LemonadeInstaller()
@@ -5798,6 +5801,11 @@ Let me know your answer!
                     installer_path = installer.download_installer()
                     print("Installing...")
                 result = installer.install(installer_path, silent=args.silent)
+                # A failed install keeps the file: its retry hint names it.
+                if installer_path is not None and result.success:
+                    discard_download(installer_path)
+                elif installer_path is not None:
+                    print(f"   The downloaded installer is kept at {installer_path}")
 
                 if result.success:
                     # Verify installation
@@ -7169,7 +7177,7 @@ def _handle_memory_status():
                     "(re-embeds up to 100 per start),"
                 )
                 print(
-                    "      or use Rebuild Embeddings in the Memory Dashboard (gaia chat --ui)"
+                    "      or use Rebuild Embeddings on the Memory page's Advanced tab (gaia chat --ui)"
                 )
 
         # Conversations section
@@ -9448,6 +9456,8 @@ def _print_embedded_status(manager):
     print(f"Installed: {'yes' if status.installed else 'no'} ({manager.dist_dir})")
     if status.running:
         print(f"Running:   yes on {status.base_url} (pid {status.pid})")
+        if status.busy:
+            print("           busy loading or swapping a model; requests wait for it")
     elif status.unresponsive_pid:
         print(
             f"Running:   process {status.unresponsive_pid} is up on port "
