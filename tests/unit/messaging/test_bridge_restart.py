@@ -25,6 +25,23 @@ class SilentDeathProc(FakeProc):
         self.terminated = True
 
 
+class SlowExitProc(FakeProc):
+    """Like a real process, its output closes before wait() returns."""
+
+    def wait(self, timeout=None):
+        time.sleep(0.3)
+        return 0
+
+
+class FlushOnExitProc(SlowExitProc):
+    """Flushes an answer for the stopped turn while it is being shut down."""
+
+    def terminate(self):
+        self.terminated = True
+        self.stdout.emit({"type": "final", "answer": "stale"})
+        self.stdout.eof()
+
+
 def _channel(spawn, clock, seen, **kwargs):
     ch = AgentChannel(
         on_event=lambda event, turn: seen.append((event, turn)),
@@ -84,9 +101,10 @@ def test_closing_while_a_replacement_starts_stops_the_replacement():
     assert _wait_for(lambda: procs[1].terminated), "the new child was left running"
 
 
-def test_a_replaced_child_resets_the_conversation_and_says_so():
+@pytest.mark.parametrize("proc_cls", [FakeProc, SlowExitProc])
+def test_a_replaced_child_resets_the_conversation_and_says_so(proc_cls):
     clock, seen, procs = FakeClock(), [], []
-    ch = _channel(_spawner(procs), clock, seen)
+    ch = _channel(_spawner(procs, proc_cls), clock, seen)
     try:
         ch.submit(Turn(text="earlier", sender="U2"))
         assert _wait_for(lambda: procs[0].stdin.lines)
@@ -109,6 +127,25 @@ def test_a_replaced_child_resets_the_conversation_and_says_so():
         [answer] = _texts(seen, "later", "final")
         assert answer["answer"].startswith(bridge.RESTART_NOTICE)
         assert answer["answer"].endswith("answer")
+    finally:
+        ch.close()
+
+
+@pytest.mark.parametrize("proc_cls", [SlowExitProc, FlushOnExitProc])
+def test_the_old_childs_exit_never_replaces_the_restart_message(proc_cls):
+    clock, seen, procs = FakeClock(), [], []
+    ch = _channel(_spawner(procs, proc_cls), clock, seen)
+    try:
+        ch.submit(Turn(text="stuck"))
+        assert _wait_for(lambda: procs[0].stdin.lines)
+        _wedge(clock, procs[0])
+        assert _wait_for(lambda: len(procs) == 2)
+        assert _wait_for(lambda: _texts(seen, "stuck"))
+        time.sleep(0.4)
+        [told] = _texts(seen, "stuck")
+        assert told["type"] == "error"
+        assert "restarted" in told["detail"]
+        assert "crashed" not in told["detail"]
     finally:
         ch.close()
 

@@ -273,6 +273,8 @@ class AgentChannel:
         # agent, which costs ~42s to build before it answers anything.
         self._spawn = spawn or self._default_spawn
         self._proc: Any = None
+        #: A child being shut down for a restart; its reader must not end the turn.
+        self._retiring: Any = None
         self._queue: "queue.Queue[Optional[Turn]]" = queue.Queue()
         self._active: Optional[_TurnState] = None
         # Guards _active and _proc together, so an event is always matched to
@@ -537,7 +539,9 @@ class AgentChannel:
             "Agent child did not end a stopped turn within %.0fs; shutting it down",
             self._cancel_grace,
         )
-        self._stop_child(self._proc)
+        with self._active_lock:
+            self._retiring = self._proc
+        self._stop_child(self._retiring)
         if self._closing.is_set():
             return
         if not self._restart_budget_left():
@@ -609,15 +613,15 @@ class AgentChannel:
                 # Matched to its turn under the lock the child swap takes, so
                 # a replaced child's late line never reaches the next turn.
                 with self._active_lock:
-                    if proc is not self._proc:
+                    if proc is not self._proc or proc is self._retiring:
                         return
                     state = self._active
                 self._handle_line(line, state)
         except (OSError, ValueError) as e:
             log.debug("Agent stdout closed: %s", e)
         with self._active_lock:
-            if proc is not self._proc:
-                return  # replaced; the new child's reader owns the turn now
+            if proc is not self._proc or proc is self._retiring:
+                return  # replaced; the restart path ends the turn
         # The stream ended. If a turn was still running, it will never get its
         # terminal event from the child, so synthesize one — a turn that just
         # goes quiet is the failure mode the daemon relay exists to prevent.
