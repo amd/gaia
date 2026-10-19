@@ -878,7 +878,14 @@ The flagship TUI persists these traces in private SQLite files under
 `~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
 starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
 explicitly resume the same transcript, or pass `--history-file` to the stdio
-agent. This archive contains tool output, including local file contents.
+agent. A turn is written to the archive when it starts, marked as the running
+process's, and replaced by its full trace when it ends. A turn cut short by the
+TUI closing (stdin reaching end of file, or the output pipe breaking) ends with
+"This answer was interrupted when GAIA closed." So does one the TUI had to
+kill, so a resumed session knows that turn never finished. A process sharing
+the file leaves out another live process's running turn. A turn that failed
+while the TUI was open leaves no entry. This archive contains tool output,
+including local file contents.
 Delete the file to remove it. A host calling `conversation_history.clear()`
 erases both the visible history and its archived turns.
 
@@ -891,8 +898,9 @@ that receives a `HistoryCut(turns, tokens)` when more turns are hidden than
 before. `select_history()` alone compares with the view minus the newest turn;
 pass a `CutReporter` (as `SessionHistory.prepare()` does) to compare with the
 last reported view, so a switch to a smaller model is reported too. The TUI and
-Agent UI use it to tell the user. The terminal event is sent only after the completed trace is committed;
-a storage failure is reported as an error rather than a successful saved turn.
+Agent UI use it to tell the user. The terminal event is sent only after the
+completed trace is committed; a storage failure is reported as an error rather
+than a successful saved turn.
 
 
 <Accordion title="How process_query() Works Internally">

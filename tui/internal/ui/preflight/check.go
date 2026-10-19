@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	gaiaLemonade "github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -342,11 +343,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 	row.Disposition = status.DispositionHalt
 	row.Line = "not installed"
 	row.Detail = fmt.Sprintf("The background service has no agent registered as %q.", cfg.AgentID)
-	row.Remedy = Remedy{
-		Action:  "Install it from the hub, then re-check.",
-		Command: "gaia hub install " + cfg.AgentID,
-		Where:   daemonLog(),
-	}
+	row.Remedy = unregisteredAgentRemedy(cfg.AgentID)
 	return row.commit(rep)
 }
 
@@ -496,9 +493,9 @@ func restartSidecarRemedy(agentID string) Remedy {
 	}
 }
 
-// timedOut reports whether a call was given up on rather than refused. The
-// daemon client reports a deadline as text on its own error type rather than
-// wrapping context.DeadlineExceeded, so both forms are checked.
+// timedOut reports whether a call was given up on rather than refused. A
+// transport timeout (net/http's header wait, a dial timeout) is not
+// context.DeadlineExceeded, so its text is checked as well.
 func timedOut(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -1360,7 +1357,7 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 				cfg.AgentName, detailSuffix(detail)),
 			remedy: Remedy{
 				Action:  "Update the agent if you want this verified before launch.",
-				Command: "gaia hub install " + cfg.AgentID,
+				Command: catalog.UpdateCommand(cfg.AgentID),
 				Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 			},
 			trace: trace(outcome),

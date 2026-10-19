@@ -1,18 +1,17 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Extraction must not launder the answer's claims into stored facts.
+"""Extraction stores what the user said about themselves, nothing else (#5027).
 
-Post-turn extraction used to see only the user's text and the final answer, so
-whatever the answer asserted became a "fact" replayed into later sessions. In a
-benchmark sweep it stored "run_shell_command is limited to read-only
-operations; rm is blocked" (false once permissions changed) and "parse_deleted
-now accepts z" (the answer's own claim).
+Post-turn extraction used to accept memories grounded in a tool result, so a
+weather lookup filled memory with weather trivia and a PDF summary became five
+"facts" replayed in later chats as if the user had said them. It also stored
+the answer's own claims ("parse_deleted now accepts z").
 
-Extraction now sees this turn's tool record, and every op must say it is
-grounded in the user's message or a tool result. Code enforces the part it can:
-an op grounded in nothing else is dropped, and so is one citing a tool when no
-tool succeeded this turn.
+Now an op must be grounded in the user's message, tool output never reaches
+the extraction prompt, and an op whose words come from the answer or a tool
+result rather than the user's message is dropped even when the model labels
+it "user". These run against a real ``MemoryStore``; only the model is stubbed.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import MemoryMixin, _copied_from_material
 from gaia.agents.base.memory_store import MemoryStore
 
 
@@ -76,150 +75,221 @@ def store(tmp_path):
     db.close()
 
 
-USER_TEXT = "Please fix the timestamp parser so it accepts a lowercase z suffix"
-
-
-def _extracted(store: MemoryStore) -> List[Dict]:
+def _extracted(store: MemoryStore) -> List[str]:
     rows = store._conn.execute(
-        "SELECT category, content FROM knowledge WHERE source = 'llm_extract' "
-        "ORDER BY content"
+        "SELECT content FROM knowledge WHERE source = 'llm_extract' ORDER BY content"
     ).fetchall()
-    return [{"category": c, "content": t} for c, t in rows]
+    return [r[0] for r in rows]
 
 
-class TestToolRecordReachesExtraction:
-    def test_the_prompt_carries_each_call_and_its_outcome(self, store):
+def _user_op(content: str, category: str = "fact") -> Dict:
+    return {"op": "add", "category": category, "content": content, "grounded": "user"}
+
+
+WEATHER = {
+    "status": "success",
+    "forecast": "Toronto: 12°C, light rain, winds 20 km/h from the northwest, "
+    "humidity 81%, high of 14°C this afternoon",
+}
+
+
+class TestToolOutputNeverReachesThePrompt:
+    def test_the_prompt_has_no_tool_output(self, store):
         host = _Host(store, [])
-        host.queued_calls = [
-            ("read_file", {"file_path": "toybox/dates.py"}, {"status": "success"}),
-            (
-                "run_shell_command",
-                {"command": "rm -rf build"},
-                {
-                    "status": "error",
-                    "error": "Command 'rm' is not in the allowed list",
-                    "executed": False,
-                },
-            ),
-            (
-                "run_shell_command",
-                {"command": "pytest -q"},
-                {"status": "error", "error": "1 failed, 4 passed"},
-            ),
-        ]
+        host.queued_calls = [("get_weather", {"city": "Toronto"}, WEATHER)]
 
-        host.process_query(USER_TEXT)
+        host.process_query("What's the weather like in Toronto this afternoon?")
 
         prompt = host.prompts[0]
-        assert "Tool record (what the tools returned this turn):" in prompt
-        assert '- read_file {"file_path": "toybox/dates.py"} -> ok:' in prompt
-        assert (
-            '- run_shell_command {"command": "rm -rf build"} -> refused, did not '
-            "run: Command 'rm' is not in the allowed list"
-        ) in prompt
-        assert (
-            '- run_shell_command {"command": "pytest -q"} -> failed: 1 failed, 4 passed'
-        ) in prompt
+        assert "light rain" not in prompt
+        assert "Tool record" not in prompt
+        assert '"grounded" must be "user"' in prompt
 
-    def test_a_new_turn_starts_with_an_empty_record(self, store):
-        host = _Host(store, [])
-        host.queued_calls = [("read_file", {"file_path": "a"}, {"status": "success"})]
-        host.process_query(USER_TEXT)
+    def test_the_prompt_says_document_content_is_not_about_the_user(self):
+        from gaia.agents.base.memory import _EXTRACTION_PROMPT
 
-        host.queued_calls = []
-        host.process_query(USER_TEXT)
-
-        assert "(no tools ran this turn)" in host.prompts[1]
-        assert "read_file" not in host.prompts[1].split("Tool record")[1]
+        assert "Never store the content of a document" in _EXTRACTION_PROMPT
+        assert "where the user is working, the current" in _EXTRACTION_PROMPT
+        assert "Never store a refused call or a permission limit" in _EXTRACTION_PROMPT
 
 
-class TestOnlyGroundedKnowledgeIsStored:
-    OPS = [
-        {
-            "op": "add",
-            "category": "fact",
-            "content": "parse_deleted now accepts a lowercase z",
-            "grounded": "answer",
-        },
-        {
-            "op": "add",
-            "category": "fact",
-            "content": "run_shell_command cannot run rm",
-        },
-        {
-            "op": "add",
-            "category": "preference",
-            "content": "User wants regression tests with every parser fix",
-            "grounded": "user",
-        },
-        {
-            "op": "add",
-            "category": "fact",
-            "content": "toybox tests run with pytest from the repo root",
-            "grounded": "tool",
-        },
-    ]
+class TestOnlyWhatTheUserSaidIsStored:
+    def test_a_weather_lookup_stores_no_weather(self, store):
+        """The UX-review repro: one weather chat filled memory with trivia."""
+        host = _Host(
+            store,
+            [
+                _user_op("Toronto has light rain and winds from the northwest"),
+                _user_op("The high in Toronto today is 14°C with 81% humidity"),
+                {**_user_op("Weather is 12°C in Toronto"), "grounded": "tool"},
+            ],
+        )
+        host.queued_calls = [("get_weather", {"city": "Toronto"}, WEATHER)]
+        host.answer = (
+            "It's 12°C in Toronto with light rain, northwest winds at 20 km/h, "
+            "81% humidity, and a high of 14°C this afternoon."
+        )
 
-    def test_with_a_successful_tool_call(self, store):
-        host = _Host(store, self.OPS)
+        host.process_query("What's the weather like in Toronto this afternoon?")
+
+        assert _extracted(store) == []
+
+    def test_a_pdf_summary_stores_none_of_the_document(self, store):
+        host = _Host(
+            store,
+            [
+                _user_op("Quarterly revenue grew 18% driven by datacenter GPUs"),
+                _user_op("Operating margin improved to 24% on lower inventory costs"),
+            ],
+        )
         host.queued_calls = [
             (
-                "run_shell_command",
-                {"command": "pytest -q"},
-                {"status": "success", "stdout": "5 passed"},
+                "query_documents",
+                {"query": "summary"},
+                {
+                    "chunks": [
+                        "Revenue grew 18% year over year, driven by datacenter "
+                        "GPUs. Operating margin improved to 24% as inventory "
+                        "costs fell."
+                    ]
+                },
+            )
+        ]
+        host.answer = (
+            "The report says quarterly revenue grew 18%, driven by datacenter "
+            "GPUs, and operating margin improved to 24% on lower inventory costs."
+        )
+
+        host.process_query("Can you summarize the quarterly report I just indexed?")
+
+        assert _extracted(store) == []
+
+    def test_first_person_text_in_a_tool_result_is_not_the_user(self, store):
+        """A file that says "I live in Berlin" is the file, not the user."""
+        host = _Host(store, [_user_op("User lives in Berlin and commutes by tram")])
+        host.queued_calls = [
+            (
+                "read_file",
+                {"file_path": "notes/travel.md"},
+                "I live in Berlin and commute by tram every morning.",
             )
         ]
 
-        host.process_query(USER_TEXT)
+        host.process_query("Read notes/travel.md and tell me what it is about")
 
-        assert _extracted(store) == [
-            {
-                "category": "preference",
-                "content": "User wants regression tests with every parser fix",
-            },
-            {
-                "category": "fact",
-                "content": "toybox tests run with pytest from the repo root",
-            },
-        ]
+        assert _extracted(store) == []
 
-    def test_a_tool_claim_needs_a_tool_that_succeeded(self, store):
-        host = _Host(store, self.OPS)
+    def test_what_the_user_says_about_themselves_is_kept(self, store):
+        host = _Host(
+            store,
+            [
+                _user_op("User's favourite colour is teal", "preference"),
+                _user_op("The forecast shows light rain and northwest winds"),
+            ],
+        )
+        host.queued_calls = [("get_weather", {"city": "Toronto"}, WEATHER)]
+        host.answer = "Noted — teal. Toronto has light rain and northwest winds."
+
+        host.process_query(
+            "Please remember my favourite colour is teal, and check the Toronto weather"
+        )
+
+        assert _extracted(store) == ["User's favourite colour is teal"]
+
+    def test_an_inference_from_the_users_words_is_kept(self, store):
+        """New words that come from nowhere the turn read are the model's
+        reading of the user, not copied material."""
+        host = _Host(store, [_user_op("User follows a vegetarian diet")])
+        host.answer = "Here are three quick dinners without meat."
+
+        host.process_query("I don't eat meat, what can I cook tonight?")
+
+        assert _extracted(store) == ["User follows a vegetarian diet"]
+
+    def test_a_tool_grounded_op_is_dropped_even_after_a_successful_call(self, store):
+        host = _Host(
+            store,
+            [
+                {
+                    "op": "add",
+                    "category": "fact",
+                    "content": "toybox tests run with pytest from the repo root",
+                    "grounded": "tool",
+                },
+                {
+                    "op": "add",
+                    "category": "fact",
+                    "content": "parse_deleted now accepts a lowercase z",
+                    "grounded": "answer",
+                },
+            ],
+        )
         host.queued_calls = [
-            (
-                "run_shell_command",
-                {"command": "rm -rf build"},
-                {"status": "error", "error": "not allowed", "executed": False},
-            )
+            ("run_shell_command", {"command": "pytest -q"}, {"status": "success"})
         ]
 
-        host.process_query(USER_TEXT)
+        host.process_query("Please fix the timestamp parser for a lowercase z")
 
-        assert _extracted(store) == [
-            {
-                "category": "preference",
-                "content": "User wants regression tests with every parser fix",
-            }
-        ]
+        assert _extracted(store) == []
 
     def test_an_ungrounded_delete_leaves_the_memory_alone(self, store):
         kid = store.store(
             category="fact", content="The staging server is db-2", context="global"
         )
         host = _Host(
-            store, [{"op": "delete", "knowledge_id": kid, "reason": "answer says so"}]
+            store,
+            [
+                {
+                    "op": "delete",
+                    "knowledge_id": kid,
+                    "reason": "answer says so",
+                    "grounded": "tool",
+                }
+            ],
         )
 
-        host.process_query(USER_TEXT)
+        host.process_query("Please fix the timestamp parser for a lowercase z")
 
         assert store.get_item(kid) is not None
 
 
-def test_the_prompt_forbids_session_narration_and_refusals():
-    from gaia.agents.base.memory import _EXTRACTION_PROMPT
-
-    assert "where the user is working, the current" in _EXTRACTION_PROMPT
-    assert "Never store a refused call or a permission limit" in _EXTRACTION_PROMPT
+class TestCopiedFromMaterial:
+    @pytest.mark.parametrize(
+        "content, user, material, copied",
+        [
+            # The user's own words, paraphrased.
+            (
+                "User works night shifts as a nurse",
+                "I'm a nurse working nights shifts",
+                "",
+                False,
+            ),
+            # Restates the answer, not the user.
+            (
+                "Toronto has light rain and northwest winds",
+                "weather in Toronto?",
+                "light rain, northwest winds",
+                True,
+            ),
+            # One borrowed word is not enough to call it copied.
+            (
+                "User is planning a trip to Lisbon",
+                "I'm off to Lisbon next month",
+                "Lisbon trip ideas",
+                False,
+            ),
+            # The answer rephrased the user; the fact still rests on their words.
+            (
+                "User is relocating to Berlin in November to start a new position at Siemens",
+                "I am moving to Berlin next month for a new job at Siemens",
+                "Congratulations on relocating to Berlin! Starting a new position "
+                "at Siemens in November",
+                False,
+            ),
+        ],
+    )
+    def test_cases(self, content, user, material, copied):
+        assert _copied_from_material(content, user, material) is copied
 
 
 class TestGroundingGoesDarkLoudly:
@@ -232,72 +302,46 @@ class TestGroundingGoesDarkLoudly:
         {"op": "add", "category": "fact", "content": "alpha"},
         {"op": "add", "category": "fact", "content": "beta", "grounded": "vibes"},
     ]
+    USER_TEXT = "Please remember that I prefer tabs over spaces in Python"
 
     def test_every_write_dropped_for_grounding_warns(self, store, caplog):
         host = _Host(store, self.UNLABELLED)
 
         with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
-            host.process_query(USER_TEXT)
+            host.process_query(self.USER_TEXT)
 
         assert _extracted(store) == []
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-        assert any("extraction stored nothing" in m for m in warnings), warnings
         assert any("all 2 proposed writes" in m for m in warnings), warnings
-
-    def test_a_turn_with_nothing_to_store_stays_quiet(self, store, caplog):
-        host = _Host(store, [{"op": "noop"}])
-
-        with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
-            host.process_query(USER_TEXT)
-
-        assert not any(
-            "extraction stored nothing" in r.getMessage() for r in caplog.records
-        )
 
     def test_one_good_write_among_unlabelled_ones_stays_quiet(self, store, caplog):
         host = _Host(
-            store,
-            self.UNLABELLED
-            + [
-                {
-                    "op": "add",
-                    "category": "preference",
-                    "content": "User prefers tabs",
-                    "grounded": "user",
-                }
-            ],
+            store, self.UNLABELLED + [_user_op("User prefers tabs", "preference")]
         )
 
         with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
-            host.process_query(USER_TEXT)
+            host.process_query(self.USER_TEXT)
 
-        assert _extracted(store) == [
-            {"category": "preference", "content": "User prefers tabs"}
-        ]
+        assert _extracted(store) == ["User prefers tabs"]
         assert not any(
             "extraction stored nothing" in r.getMessage() for r in caplog.records
         )
 
 
 class TestToolRecordStaysBounded:
-    def test_older_calls_are_dropped_and_counted(self, store):
+    def test_only_the_newest_calls_are_kept(self, store):
         from gaia.agents.base.memory import EXTRACTION_TOOL_RECORD_MAX_CALLS as CAP
 
         host = _Host(store, [])
-        extra = 5
         host.queued_calls = [
             ("read_file", {"file_path": f"f{i}.py"}, {"status": "success"})
-            for i in range(CAP + extra)
+            for i in range(CAP + 5)
         ]
 
-        host.process_query(USER_TEXT)
+        host.process_query("Please read every file in the project folder")
 
-        record = host.prompts[0].split("Tool record")[1]
-        assert f"({extra} earlier calls omitted)" in record
-        assert record.count("- read_file ") == CAP
-        # The oldest are the ones dropped; the newest survive.
-        assert "f0.py" not in record
-        assert f"f{CAP + extra - 1}.py" in record
+        assert len(host._turn_tool_record) == CAP
+        assert "f5.py" in host._turn_tool_record[0]["text"]
 
     def test_a_huge_result_is_truncated_without_splitting_all_of_it(self, store):
         from gaia.agents.base.memory import (
@@ -308,11 +352,11 @@ class TestToolRecordStaysBounded:
         huge = "word " * 400_000  # ~2 MB
         host.queued_calls = [("read_file", {"file_path": "big.py"}, huge)]
 
-        host.process_query(USER_TEXT)
+        host.process_query("Please read big.py and summarize it for me")
 
-        entry = host._turn_tool_record[0]
-        assert len(entry["detail"]) <= DETAIL
-        assert entry["detail"].startswith("word word")
+        text = host._turn_tool_record[0]["text"]
+        assert len(text) <= 2 * DETAIL + 1
+        assert "word word" in text
 
 
 def test_bookkeeping_failure_never_replaces_the_tool_result(store, monkeypatch):
@@ -325,4 +369,49 @@ def test_bookkeeping_failure_never_replaces_the_tool_result(store, monkeypatch):
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bookkeeping exploded")),
     )
 
-    host.process_query(USER_TEXT)  # must not raise
+    host.process_query("Please read a.py and summarize it for me")  # must not raise
+
+
+def test_consolidation_keeps_the_users_facts_not_the_documents(store):
+    """Old sessions are distilled later; the answer's document summary in them
+    is not the user either."""
+    from datetime import datetime, timedelta
+
+    turns = [
+        ("user", "I'm the finance lead, summarize the quarterly report I indexed"),
+        (
+            "assistant",
+            "Quarterly revenue grew 18%, driven by datacenter GPUs, and operating "
+            "margin improved to 24% on lower inventory costs.",
+        ),
+    ] * 3
+    for role, text in turns:
+        store.store_turn("s-old", role, text)
+    old = (datetime.now().astimezone() - timedelta(days=30)).isoformat()
+    with store._lock:
+        store._conn.execute("UPDATE conversations SET timestamp = ?", (old,))
+        store._conn.commit()
+    host = _Host(
+        store,
+        {
+            "summary": "The user asked for a summary of the quarterly report.",
+            "knowledge": [
+                {"category": "fact", "content": "User is the finance lead"},
+                {
+                    "category": "fact",
+                    "content": "Quarterly revenue grew 18% driven by datacenter GPUs",
+                },
+            ],
+        },
+    )
+
+    host.consolidate_old_sessions()
+
+    facts = [
+        r[0]
+        for r in store._conn.execute(
+            "SELECT content FROM knowledge WHERE source = 'consolidation' "
+            "AND category = 'fact'"
+        )
+    ]
+    assert facts == ["User is the finance lead"]

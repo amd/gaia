@@ -30,6 +30,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
+from gaia.agents.base.file_snapshots import note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -4275,7 +4276,7 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
             Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
             'cd <dir> && b'. One approval covers the line; every part is
@@ -4380,6 +4381,8 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
+                # Only the read-only tier is known not to write files.
+                may_write = bool(error) or bypass
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:
@@ -4395,11 +4398,18 @@ class ShellToolsMixin:
                             ),
                             "has_errors": True,
                         }
+                    note_untracked("shell", command)
                     return self._run_approved_once(
                         command, cwd, steps, timeout, timeout_class, waited
                     )
 
                 granted = skill_granted_binaries(self)
+                # A skill-granted CLI is allowed without a prompt, not read-only.
+                may_write = may_write or any(
+                    _is_granted_segment(seg, granted)
+                    for st in steps
+                    for seg in st.segments
+                )
 
                 # A `cd` step moves the steps after it, so each step's directory
                 # — and what its arguments resolve against — is settled here,
@@ -4446,6 +4456,9 @@ class ShellToolsMixin:
                         "cancelled": True,
                         "cwd": cwd,
                     }
+
+                if may_write:
+                    note_untracked("shell", command)
 
                 start_time = time.monotonic()
                 deadline = start_time + timeout

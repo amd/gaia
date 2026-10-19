@@ -32,7 +32,7 @@ from gaia.agents.base.skill_synthesis import (
     load_synthesis_config,
     reconcile_and_store,
 )
-from gaia.llm.lemonade_client import no_thinking_kwargs
+from gaia.llm.lemonade_client import SIDE_SLOT, no_thinking_kwargs
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -502,8 +502,14 @@ class ProceduralMemoryMixin:
     # ==================================================================
 
     def _side_request_kwargs(self) -> Dict[str, Any]:
-        """Thinking off for this agent's model on a short JSON side call."""
-        return no_thinking_kwargs(getattr(self.chat, "effective_model", None))
+        """Kwargs for a short JSON side call: thinking off, on the side slot.
+
+        Off the conversation's slot, so its prompt cache survives the call.
+        """
+        return {
+            **no_thinking_kwargs(getattr(self.chat, "effective_model", None)),
+            "id_slot": SIDE_SLOT,
+        }
 
     def start_skill_synthesis(
         self, *, force: bool = False

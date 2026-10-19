@@ -500,11 +500,17 @@ class GatewayManager:
         detail = ""
         error_type = ""
         try:
-            body = response.json().get("error", {})
-            detail = body.get("message", "")
-            error_type = body.get("type", "")
+            parsed = response.json()
         except ValueError:
+            parsed = None
             detail = response.text.strip()[:400]
+        # Lemonade's 401 says {"error": "<text>"}; its other errors nest an object.
+        body = parsed.get("error", {}) if isinstance(parsed, dict) else parsed
+        if isinstance(body, dict):
+            detail = str(body.get("message", ""))
+            error_type = str(body.get("type", ""))
+        elif isinstance(body, str):
+            detail = body.strip()[:400]
 
         if response.status_code == 409 and error_type == "auth_conflict":
             return GatewayError(
