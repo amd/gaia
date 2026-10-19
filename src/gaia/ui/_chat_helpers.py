@@ -403,9 +403,11 @@ async def _generate_session_title(
     import httpx  # pylint: disable=import-outside-toplevel
 
     from gaia.llm.lemonade_client import (
+        defang_harmony_tokens,
         find_model_requirement,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
+        uses_harmony_format,
     )
 
     prompt = (
@@ -416,9 +418,12 @@ async def _generate_session_title(
         f"Assistant: {(assistant_msg or '')[:200]}\n"
         "Title:"
     )
+    messages = [{"role": "user", "content": prompt}]
+    if uses_harmony_format(model_id):
+        messages = defang_harmony_tokens(messages)
     body = {
         "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "max_tokens": 24,
         # Low temperature: titles should be deterministic-ish
         # for the same conversation.
