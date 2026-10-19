@@ -266,27 +266,28 @@ canonical choices list):
 
 <Note>
 A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/memory
-embedder, and the flagship [GAIA agent](/guides/gaia) itself from the Agent Hub. It does
+embedder, and the flagship [GAIA agent](/guides/gaia) itself, installed from GAIA's download server if it is missing. It does
 **not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
 fetches and verifies both binaries with no Python required.
 
-If the Agent Hub cannot be reached, `gaia init` still finishes the other steps, then
-reports the setup incomplete and exits `1`, naming the hub URL and the error. Fix the
-network or proxy, then run `gaia hub install gaia`.
+If the download server cannot be reached, `gaia init` still finishes the other steps, then
+reports the setup incomplete and exits `1`, naming the URL and the error. Fix the
+network or proxy, then run `gaia init` again. `gaia init` does not upgrade an agent that
+is already installed.
 </Note>
 
 <Note>
 `gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
-the same flagship agent from the Agent Hub as a bare `gaia init`, and fails the same way
-when the hub can't be reached.
+the same flagship agent as a bare `gaia init`, and fails the same way
+when the download server can't be reached.
 </Note>
 
 <Note>
 Only the `gaia` and `npu` profiles install an agent. The other model profiles set up
 models only; when no agent is installed yet, they say so and name the fix,
-`gaia hub install gaia`.
+`gaia init`.
 </Note>
 
 <Note>
@@ -565,7 +566,7 @@ Author, version, validate, and share GAIA agents.
 
 #### Developer workflow: `init`, `version`, `test`
 
-Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`).
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`). `init` and `version` are hidden from `gaia agent -h` but still work.
 
 ```bash
 gaia agent init <name> [--language python|cpp] [--output DIR] [--layout flat|hub] [--force]
@@ -677,52 +678,7 @@ gaia agent status chat --json | jq -e --arg v healthy '.health == $v'
 
 #### Distribution: `pack`, `publish`, `login`
 
-Build a distributable wheel from a Python agent package, then dual-publish it to the Agent Hub (R2, the source for the Hub UI) **and** PyPI (the source for `pip install`).
-
-```bash
-gaia agent login [--hub-token TOKEN | --hub] [--pypi-token TOKEN | --pypi]
-gaia agent pack [PATH] [--output DIR]
-gaia agent publish [PATH] [--output DIR] [--hub-url URL] [--skip-r2] [--skip-pypi]
-```
-
-**`pack`** runs `python -m build --wheel` against the package's `pyproject.toml`, writing `gaia_agent_<id>-<version>-py3-none-any.whl` to `dist/` and printing its SHA-256. Python agents only — native (C++) agents ship a CMake-built binary, not a wheel.
-
-**`publish`** packs the wheel and uploads it to both targets. R2 receives a multipart POST (`gaia-agent.yaml` + wheel) authenticated with a Bearer token; PyPI receives a `twine upload` authenticated with an API token. Both enforce version immutability — bump the version with `gaia agent version` before re-publishing.
-
-**`login`** stores publisher tokens in your OS keyring. Tokens may also be supplied via the `GAIA_HUB_TOKEN` and `PYPI_TOKEN` environment variables (useful in CI), which take precedence over the keyring.
-
-| Option | Applies to | Description |
-|--------|------------|-------------|
-| `PATH` | `pack`, `publish` | Agent package directory (positional, default: current dir) |
-| `--output, -o` | `pack`, `publish` | Output directory for the wheel (default: `<package>/dist`) |
-| `--hub-url` | `publish` | R2 Worker origin (default: `GAIA_HUB_URL` or `https://hub.amd-gaia.ai`) |
-| `--skip-r2` | `publish` | Publish to PyPI only |
-| `--skip-pypi` | `publish` | Publish to R2 only |
-| `--hub-token` / `--hub` | `login` | Store the R2 Hub token (pass a value, or `--hub` to be prompted) |
-| `--pypi-token` / `--pypi` | `login` | Store the PyPI token (pass a value, or `--pypi` to be prompted) |
-
-The packaging toolchain (`build`, `twine`) ships in the `publish` extra:
-
-```bash
-pip install "amd-gaia[publish]"
-```
-
-**Examples:**
-
-<CodeGroup>
-```bash Build a wheel
-gaia agent pack hub/agents/email/python/
-```
-
-```bash Store tokens, then dual-publish
-gaia agent login --hub --pypi          # prompts for each token
-gaia agent publish hub/agents/email/python/
-```
-
-```bash Publish to PyPI only
-gaia agent publish --skip-r2
-```
-</CodeGroup>
+`gaia agent pack`, `gaia agent publish` and `gaia agent login` are maintainer release commands. They are hidden from `gaia -h` and not documented here.
 
 ##### Installing a published agent
 
@@ -744,19 +700,18 @@ uv pip install "gaia-agent-hello-world @ git+https://github.com/amd/gaia.git#sub
 ```
 </Note>
 
-The **Hub (R2)** path downloads the published, SHA-verified artifact into
-`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Use the Agent UI's
-discover/install panel when browsing the Hub, or install headlessly with:
+The download-server path fetches the published, SHA-verified artifact into
+`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Install headlessly with:
 
 ```bash
-gaia agent list                            # installed + available hub agents
+gaia agent list                            # installed + available to install
 gaia agent install <id>                    # latest published version
 gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what the hub offers (with an `[installed]` marker) so
-you know which id to pass. This is the supported way to provision a sidecar
+`gaia agent list` shows what is available to install (with an `[installed]`
+marker) so you know which id to pass. This is the supported way to provision a sidecar
 agent on a machine with no UI.
 
 <Note>
@@ -2436,7 +2391,7 @@ Skills are discovered from three roots, highest precedence first:
 | `import <source>` | Copy a skill folder, `.zip`, or URL into `~/.gaia/skills/` |
 | `export <name>` | Export a skill to a `.zip` bundle |
 | `migrate <source>` | Convert an OpenClaw or Hermes skill to GAIA format |
-| `search [query]` | Search the Agent Hub's skills lane |
+| `search [query]` | Search GAIA's skill catalog |
 | `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
 | `remove <name>` | Delete an installed skill and drop its lock entry |
 | `promote <name>` | Trust a **captured** skill's code after a clean audit — until then its `tools.py` stays inert |
@@ -3359,7 +3314,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
 | `POST /daemon/v1/agents/{id}/stop` | tree-kill + verify the pid is gone |
-| `GET /daemon/v1/catalog` | Agent Hub catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
+| `GET /daemon/v1/catalog` | Download-server catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
 | `POST /daemon/v1/agents/{id}/install` | 202, queue an install (`{"version": "...", "trusted": true}`, both optional; `version` defaults to the newest version this core meets; `trusted` defaults to **false** → 403 for a non-verified agent; 409 when the version needs a newer core) |
 | `GET /daemon/v1/agents/{id}/install-status` | poll `queued\|running\|completed\|failed` + `error` |
 | `DELETE /daemon/v1/agents/{id}` | stop the sidecar, verify, then remove the install dir |
@@ -3369,57 +3324,30 @@ contract; every route needs `Authorization: Bearer <token>` from
 
 ### Hub Command
 
-Browse, install and uninstall agents from the [GAIA Agent Hub](https://hub.amd-gaia.ai).
-`gaia hub` is a thin client over the daemon's install routes, so the CLI, the
-Agent UI and the TUI share **one** installer, one SHA-256 check and one install
-lock — installing from two places at once is a clean 409, never a corrupt
-download. The daemon is started automatically if it is not already running.
-
-Agents install into `~/.gaia/agents/<id>/` (binary + `gaia-agent.yaml` +
-`.installed` sentinel). Every artifact is verified against the SHA-256 in the
-hub manifest before it is written; a mismatch fails the install and leaves
-nothing behind — there is no "use it anyway" path.
+`gaia hub` is hidden from `gaia -h` but still works. Use it for scripted installs of
+extra agents such as `email` from GAIA's download server (`https://hub.amd-gaia.ai`).
+The flagship GAIA agent comes from `gaia init`, not from here.
 
 ```bash
-gaia hub list                      # catalog + which agents are installed
+gaia hub list                      # what is available + what is installed
 gaia hub list --installed          # only what is installed (works offline)
-gaia hub list --refresh            # bypass the 5-minute catalog cache
 gaia hub install email --trust     # required: email is a non-verified agent
-gaia hub install email --version 0.5.0 --trust
 gaia hub uninstall email           # stops the sidecar first, then removes the dir
 ```
 
-| Action | Options | Description |
-|--------|---------|-------------|
-| `list` | `--installed`, `--refresh` | Print id, latest version, installed version (`↑` when an update is available), download size and name. Warns when the hub was unreachable and the cached catalog was used. `--installed` is answered from the local `.installed` sentinels and needs no network. |
-| `install <id>` | `--version`, `--trust` | Download + verify + install, printing each phase. Exit 1 on any failure, with the reason. `--trust` is required for any agent outside the `verified` security tier. |
-| `uninstall <id>` | — | Stop the agent's sidecar, verify its pid is gone, then remove `~/.gaia/agents/<id>/`. |
+Agents install into `~/.gaia/agents/<id>/`. Every artifact is checked against its
+SHA-256 before it is written; a mismatch fails the install and leaves nothing behind.
+Install and uninstall stop a running sidecar first, and two installs of the same agent
+never race (the second gets a clean "already in progress" error). Requires the daemon
+extras (`pip install "amd-gaia[api]"`).
 
-**Notes**
-
-- Install and uninstall both stop a running sidecar first — the install
-  directory *is* the sidecar's binary cache — and keep it stopped for the whole
-  operation, so nothing can respawn it mid-download. If the process survives the
-  tree-kill, the command aborts loudly and nothing is mutated.
-- Install and uninstall of the same agent are serialized: the second caller gets
-  a clean "already in progress" error instead of racing the first.
-- The catalog only lists agents this GAIA build can actually supervise; anything
-  else is reported as hidden rather than silently dropped.
-- **Trust gate.** Any agent outside the `verified` security tier runs
-  third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`, with the remedy named in the error. A manifest that omits
-  `security_tier` counts as `experimental` and is gated the same way. Nothing
-  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
-  this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[api]"`), same as `gaia daemon`.
+Any agent outside the `verified` security tier runs third-party code on your machine,
+so the daemon refuses it with **HTTP 403** until you pass `--trust`. The error shows
+the agent's publisher and security tier and names the `--trust` re-run.
 
 <Note>
-`gaia agent install <id>` does the same install **in-process**; `gaia hub
-install <id>` routes it through the daemon, which additionally stops the
-agent's running sidecar first and holds it stopped for the download. Prefer
-`gaia hub` when the daemon supervises that agent (today: `email`); `gaia agent`
-is the right call on a machine with no daemon extras installed. See the note
-under [Agent Command](#agent-command).
+`gaia agent install <id>` does the same install **in-process**, without the daemon.
+Prefer `gaia hub` when the daemon supervises the agent (today: `email`).
 </Note>
 
 ---
@@ -3463,35 +3391,8 @@ Options accepted by every `gaia tui` command:
 | `--trace[=<path>]` | off | Record every agent event to a JSONL file — see [TUI Event Trace](#tui-event-trace) |
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
-not browse or manage the Agent Hub catalog. Installing or removing a hub
-sidecar agent (`email`) is the Python CLI's job:
-
-```bash
-gaia hub list                 # what the Agent Hub offers, and what you have
-gaia hub install email --trust
-gaia hub uninstall email
-```
-
-An agent outside the `verified` security tier runs third-party code on your
-machine, so `gaia hub install` refuses it with **HTTP 403** from the daemon
-until you pass `--trust` — there is no bypass, and nothing retries on your
-behalf:
-
-```console
-$ gaia hub install email
-
-Refusing to install "email" without --trust.
-
-  Agent       email
-  Version     0.5.0
-  Publisher   AMD
-  Security    experimental (not verified by AMD)
-  Download    31.1 MB
-  Access      none declared
-
-If you trust the publisher, re-run:
-  gaia hub install email --trust
-```
+not install agents. Installing the email sidecar is the Python CLI's job
+(`gaia hub install email --trust`, see [Hub Command](#hub-command)).
 
 #### `run --query` is a real one-shot
 

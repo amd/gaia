@@ -1949,7 +1949,8 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
         self.assertNotEqual(rc, 0)
         mock_install.assert_not_called()
         out = mock_stdout.getvalue()
-        self.assertIn("gaia hub install gaia", out)
+        self.assertIn("not installed yet -- run: gaia init --profile npu", out)
+        self.assertNotIn("gaia hub", out)
         self.assertNotIn(_SOURCE_INSTALL_MARKER, out)
 
     def test_skips_install_when_flagship_agent_already_available(self):
@@ -2073,7 +2074,8 @@ class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
 
         self.assertEqual(rc, 1)
         self.assertIn("does not list the 'gaia' agent", errors)
-        self.assertIn("gaia hub install gaia", errors)
+        self.assertIn("run `gaia init` again", errors)
+        self.assertNotIn("gaia hub", errors)
         self.assertIn("incomplete", out)
 
     def test_unreachable_catalog_fails_with_an_actionable_error(self):
@@ -2086,9 +2088,10 @@ class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
         )
 
         self.assertEqual(rc, 1)
-        self.assertIn(f"the Agent Hub at {DEFAULT_HUB_URL}", errors)
+        self.assertIn(f"download server at {DEFAULT_HUB_URL}", errors)
         self.assertIn("hub unreachable", errors)
-        self.assertIn("gaia hub install gaia", errors)
+        self.assertIn("run `gaia init` again", errors)
+        self.assertNotIn("gaia hub", errors)
         self.assertIn("incomplete", out)
         self.assertNotIn("initialization complete", out)
         # The remaining steps still ran; only the agent is missing.
@@ -2585,14 +2588,20 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
         return complete, mock_stdout.getvalue()
 
     def test_flagship_profiles_without_the_agent_are_incomplete(self):
-        for profile in ("gaia", "npu"):
+        # The npu remedy keeps its profile: a bare `gaia init` would pull the
+        # default profile's GGUF models onto an NPU machine.
+        for profile, remedy in (
+            ("gaia", "run: gaia init"),
+            ("npu", "run: gaia init --profile npu"),
+        ):
             for rich in (True, False):
                 with self.subTest(profile=profile, rich=rich):
                     cmd = self._make_cmd(profile, agent_available=False)
                     complete, out = self._render(cmd, rich)
                     self.assertFalse(complete)
                     self.assertIn("GAIA initialization incomplete", out)
-                    self.assertIn("gaia hub install gaia", out)
+                    self.assertIn(remedy, out)
+                    self.assertNotIn("gaia hub", out)
                     self.assertNotIn(_SOURCE_INSTALL_MARKER, out)
 
     def test_flagship_profiles_with_the_agent_report_complete(self):
@@ -2604,7 +2613,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                     self.assertTrue(complete)
                     self.assertIn("GAIA initialization complete!", out)
                     self.assertIn("gaia-tui", out)
-                    self.assertNotIn("gaia hub install", out)
+                    self.assertNotIn("not installed yet", out)
 
     def test_npu_profile_leads_with_the_flagship_not_the_chat_wheels(self):
         """`gaia chat --device npu` needs wheels init cannot install; the
@@ -2622,7 +2631,8 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
         cmd._no_hub_build_for_machine = True
         complete, out = self._render(cmd, rich=False)
         self.assertTrue(complete)
-        self.assertIn("the Agent Hub has no build for this machine", out)
+        self.assertIn("it has no build for this machine yet", out)
+        self.assertNotIn("Agent Hub", out)
 
     def test_profiles_without_an_agent_say_so_plainly(self):
         """A profile that installs no agent completes, but names the gap and
@@ -2635,7 +2645,8 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                     self.assertTrue(complete)
                     self.assertIn("no chat agent installed", out)
                     self.assertIn("No chat agent is installed", out)
-                    self.assertIn("gaia hub install gaia", out)
+                    self.assertIn("Install the GAIA agent with: gaia init", out)
+                    self.assertNotIn("gaia hub", out)
                     self.assertNotIn(_SOURCE_INSTALL_MARKER, out)
 
     def test_profiles_without_an_agent_are_quiet_once_it_is_installed(self):
@@ -2666,12 +2677,13 @@ class TestAgentInstallNote(unittest.TestCase):
         ):
             self.assertIsNone(cmd._agent_install_note())
 
-    def test_nothing_installed_names_the_hub_command(self):
+    def test_nothing_installed_names_gaia_init(self):
         from gaia.installer.init_command import InitCommand
 
         for profile, expected in (
-            ("npu", "GAIA agent not installed yet -- run: gaia hub install gaia"),
-            ("chat", "the 'chat' profile sets up models only"),
+            ("gaia", "GAIA agent not installed yet -- run: gaia init"),
+            ("npu", "GAIA agent not installed yet -- run: gaia init --profile npu"),
+            ("chat", "Install the GAIA agent with: gaia init"),
         ):
             with self.subTest(profile=profile):
                 cmd = InitCommand(profile=profile, yes=True)
@@ -2684,7 +2696,7 @@ class TestAgentInstallNote(unittest.TestCase):
                 ):
                     note = cmd._agent_install_note()
                 self.assertIn(expected, note)
-                self.assertIn("gaia hub install gaia", note)
+                self.assertNotIn("gaia hub", note)
 
 
 if __name__ == "__main__":

@@ -71,7 +71,9 @@ def is_embedding_model_id(model_id: str) -> bool:
 _TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
 
 
-def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> str:
+def hub_unreachable_message(
+    agent_id: str, hub_url: str, exc: BaseException, retry: str = "gaia init"
+) -> str:
     """One self-contained line: what failed, what to do, and where to look.
 
     One line because the Agent UI setup wizard shows the last error line as
@@ -89,9 +91,9 @@ def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> 
     else:
         remedy = "Check your internet connection, proxy settings, or GAIA_HUB_URL."
     return (
-        f"Could not install the '{agent_id}' agent: the Agent Hub at {hub_url} "
-        f"could not be reached ({cause}). {remedy} Then run "
-        f"`gaia hub install {agent_id}`. Log: {log_manager.log_file}; help: "
+        f"Could not install the '{agent_id}' agent: its download server at "
+        f"{hub_url} could not be reached ({cause}). {remedy} Then run "
+        f"`{retry}` again. Log: {log_manager.log_file}; help: "
         f"{_TROUBLESHOOTING_URL}"
     )
 
@@ -105,7 +107,7 @@ def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> 
 HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
 # The agent the Agent UI and gaia-tui talk to. Profiles that don't install it
-# say so in their completion message and name `gaia hub install gaia`.
+# say so in their completion message and name `gaia init`, which installs it.
 FLAGSHIP_AGENT_ID = "gaia"
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
@@ -2316,19 +2318,36 @@ class InitCommand:
         """Whether this profile installs the flagship agent itself."""
         return INIT_PROFILES[self.profile].get("agent") == FLAGSHIP_AGENT_ID
 
+    def _flagship_install_command(self) -> str:
+        """The init run that installs the flagship and keeps this profile's models.
+
+        A bare `gaia init` would switch an `npu` machine to the default
+        profile's models, so a profile that installs the flagship names itself.
+        """
+        if (
+            self.profile == DEFAULT_INIT_PROFILE
+            or not self._profile_installs_flagship()
+        ):
+            return "gaia init"
+        return f"gaia init --profile {self.profile}"
+
     def _agent_install_note(self) -> Optional[str]:
         """What to tell the user when no chat agent is installed, else None.
 
-        Every profile gets the same supported remedy, `gaia hub install gaia`:
-        the Agent UI and gaia-tui list no agent without the flagship (#2972).
+        Every profile gets the same supported remedy, `gaia init`, which
+        installs the flagship when it is missing: the Agent UI and gaia-tui list
+        no agent without it (#2972).
         """
         if self._is_hub_agent_available(FLAGSHIP_AGENT_ID):
             return None
         if self._profile_installs_flagship():
-            return "GAIA agent not installed yet -- run: gaia hub install gaia"
+            return (
+                "GAIA agent not installed yet -- run: "
+                f"{self._flagship_install_command()}"
+            )
         return (
             f"No chat agent is installed: the '{self.profile}' profile sets up "
-            "models only. Install the GAIA agent with: gaia hub install gaia"
+            "models only. Install the GAIA agent with: gaia init"
         )
 
     def _ensure_hub_agent_installed(self) -> None:
@@ -2372,20 +2391,24 @@ class InitCommand:
             catalog_result = hub_catalog.load_index()
         except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
             log.debug("Agent Hub catalog fetch failed", exc_info=True)
-            self._print_error(hub_unreachable_message(agent_id, hub_url, exc))
+            self._print_error(
+                hub_unreachable_message(
+                    agent_id, hub_url, exc, retry=self._flagship_install_command()
+                )
+            )
             return
 
         if not any(agent.get("id") == agent_id for agent in catalog_result.agents):
             self._print_error(
-                f"The Agent Hub at {hub_url} does not list the '{agent_id}' "
-                f"agent, so it was not installed. Check GAIA_HUB_URL, then run "
-                f"`gaia hub install {agent_id}`."
+                f"The download server at {hub_url} does not list the "
+                f"'{agent_id}' agent, so it was not installed. Check GAIA_HUB_URL, "
+                f"then run `{self._flagship_install_command()}` again."
             )
             return
 
         from gaia.hub import installer as hub_installer
 
-        self._print(f"   Installing '{agent_id}' from the Agent Hub...")
+        self._print(f"   Installing the '{agent_id}' agent...")
         # Curated first-run profile agent: a hardcoded INIT_PROFILES id, not user
         # input, so GAIA's own curation is the trust decision. Pass the trust
         # opt-in explicitly — every non-verified agent now needs it, and the
@@ -2408,14 +2431,15 @@ class InitCommand:
             # was attempted and failed must stay loud.
             self._no_hub_build_for_machine = True
             self._print_warning(
-                f"'{agent_id}' has no Agent Hub build for this machine: {exc}"
+                f"The '{agent_id}' agent has no build for this machine: {exc}"
             )
             self._print_warning(
-                f"Everything else is set up. Install it with "
-                f"`gaia hub install {agent_id}` once a build is available."
+                f"Everything else is set up. Run "
+                f"`{self._flagship_install_command()}` again once a build is "
+                f"available."
             )
             return
-        self._print_success(f"Installed '{agent_id}' from the Agent Hub")
+        self._print_success(f"Installed the '{agent_id}' agent")
 
         # No AgentRegistry exists in this process to hot-register into (we
         # deliberately don't construct one just for this), so mirror the
@@ -2485,8 +2509,8 @@ class InitCommand:
         Returns False when the headline says setup is incomplete, which
         ``run()`` turns into a non-zero exit.
         """
-        # The flagship is a hub BINARY, so the remedy names the hub, never a
-        # pip install from a git checkout.
+        # The flagship is a downloaded BINARY, so the remedy is `gaia init`,
+        # never a pip install from a git checkout.
         agent_note = self._agent_install_note()
         has_tui = self._tui_installed()
         tui_install_note = (
@@ -2503,7 +2527,7 @@ class InitCommand:
         elif agent_missing and installs_flagship:
             headline = (
                 f"GAIA initialization complete, except the '{FLAGSHIP_AGENT_ID}' "
-                "agent: the Agent Hub has no build for this machine"
+                "agent: it has no build for this machine yet"
             )
         elif agent_missing:
             headline = "GAIA initialization complete - no chat agent installed"

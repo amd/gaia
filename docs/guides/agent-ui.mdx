@@ -291,6 +291,58 @@ and where that model runs.
 Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
 `file` agents stay readable but can't be continued; start a new chat instead.
 
+## The tray icon
+
+The desktop app keeps an icon in the system tray (the menu bar on macOS). Its
+badge shows what GAIA is doing, by shape as well as colour:
+
+| Badge | Meaning |
+|---|---|
+| None | Idle |
+| Open ring | Writing an answer |
+| Hourglass | Waiting for the model: loading it, downloading it, or retrying it |
+| Solid dot | A chat needs you: an approval or an answer to a question |
+| Triangle | Something is wrong: GAIA's service or the model server isn't running |
+
+Hover for a tooltip such as *GAIA — answering in 'Trip plan'*. On Linux, where
+most trays show no tooltip, the first line of the menu says the same thing.
+On Windows, the taskbar button also shows a dot when a chat needs you or a
+notification is unread.
+
+The menu:
+
+- **Status line**, for example `Gemma-4-E4B-it on GPU · idle`.
+- **Needs you**: each chat waiting on you. Click one to open it.
+- **New chat** and up to five **Recent** chats.
+- **Show GAIA**.
+- **Free memory…** unloads the chat model to give its memory back, after
+  asking. Your next message loads it again. It is greyed out, with the reason,
+  while an answer is running in this window, when no model is loaded, or when
+  the model runs in the cloud. If an answer elsewhere or a document index still
+  needs the model, it says so instead of asking.
+- **Settings…** and **Quit GAIA**.
+
+The first time you close the window, GAIA says once that it is still running
+in the tray. If you quit, or choose **Restart now** for an update, while an
+answer is being written or a document is indexing, GAIA asks first and says
+that the answer will be lost; when idle it doesn't ask. Keeping GAIA running
+puts an update off until you next quit.
+
+**Settings → General → Desktop app** has three switches, each applied as soon
+as you flip it:
+
+- **Keep running when the window closes**: close hides the window instead of
+  quitting.
+- **Start GAIA when you sign in.** On Windows this is the startup entry the
+  installer adds, so it starts on; once you turn it off, an update or reinstall
+  doesn't turn it back on. It also follows Task Manager → Startup apps. On Linux
+  this writes `gaia-agent-ui.desktop` to `$XDG_CONFIG_HOME/autostart` (usually
+  `~/.config/autostart`). If the system refuses, or macOS waits for your
+  approval in System Settings → Login Items, the switch stays off and says why.
+- **Start in the tray**: every launch opens without the window. Takes effect
+  from the next launch. On Windows a launch at sign-in always starts in the
+  tray.
+
 ## Models and where they run
 
 Open **Settings → Model** (or the model chip in the message box):
@@ -423,8 +475,8 @@ much they use now.
 
 ## Settings
 
-One window with General (appearance: Light, Dark, Match system; colors;
-shortcuts),
+One window with General (appearance: Light, Dark, Match system; colors; the
+[desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, context size, custom model ID, beta options, MCP servers,
@@ -635,6 +687,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
     - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+    - Two large documents index at a time and the rest wait their turn; small files (under 20 MB) have their own two slots, so they never wait behind big ones. A document that keeps making progress indexes to the end however long it takes. One that makes no progress for 10 minutes stops with an error that says so; to allow longer stalls, set `GAIA_INDEX_TIMEOUT` (seconds without progress) before GAIA starts, e.g. `export GAIA_INDEX_TIMEOUT=1200`
   </Accordion>
 
   <Accordion title="Access denied: path must be within one of ...">

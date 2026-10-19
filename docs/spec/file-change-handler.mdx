@@ -22,7 +22,7 @@ FileChangeHandler provides a reusable file system watcher for GAIA agents. It mo
 - Callback-based architecture
 - File extension filtering
 - Pattern-based ignore rules
-- Debouncing to prevent duplicate events
+- Reports a file once it has finished being written, so a burst of events is one callback
 - Integration with watchdog library
 
 ---
@@ -42,10 +42,11 @@ FileChangeHandler provides a reusable file system watcher for GAIA agents. It mo
    - Filename pattern matching
    - Ignore patterns (e.g., temp files, hidden files)
 
-3. **Debouncing**
-   - Prevent duplicate events
-   - Configurable debounce time
-   - Handle rapid successive changes
+3. **Settling**
+   - Report a created or modified file once it has had no events, and no size or
+     mtime change, for the configured window
+   - Coalesce rapid successive changes into one callback
+   - Run callbacks on a dispatch thread, off the observer thread
 
 4. **Callback System**
    - `on_created(event)` callback
@@ -101,7 +102,7 @@ class FileChangeHandler(FileSystemEventHandler):
     Generic file system watcher with callback support.
 
     Monitors directories for file changes and triggers callbacks.
-    Includes debouncing to prevent duplicate event processing.
+    Reports a created or modified file once it settles, off the observer thread.
 
     Usage:
         def process_new_file(event):
@@ -124,7 +125,8 @@ class FileChangeHandler(FileSystemEventHandler):
         on_deleted: Callback for file deletion events
         extensions: Set of file extensions to monitor (e.g., {'.pdf', '.txt'})
         ignore_patterns: Patterns to ignore (e.g., {'.*', '~*'})
-        debounce_seconds: Minimum time between events for same file
+        debounce_seconds: How long a created or modified file must go with no
+            events, and no change in size or mtime, before it is reported
     """
 
     SUPPORTED_EXTENSIONS: Set[str] = {'.pdf', '.png', '.jpg', '.jpeg', '.txt', '.md', '.docx'}
@@ -148,7 +150,8 @@ class FileChangeHandler(FileSystemEventHandler):
             on_deleted: Callback when file is deleted
             extensions: File extensions to monitor (default: all common types)
             ignore_patterns: Patterns to ignore (default: temp/hidden files)
-            debounce_seconds: Min time between events for same file (default: 1.0)
+            debounce_seconds: Quiet window before a created or modified file is
+                reported (default: 1.0)
         """
         super().__init__()
         self._on_created = on_created
@@ -157,48 +160,25 @@ class FileChangeHandler(FileSystemEventHandler):
         self._extensions = extensions or self.SUPPORTED_EXTENSIONS
         self._ignore_patterns = ignore_patterns or self.DEFAULT_IGNORE_PATTERNS
         self._debounce_seconds = debounce_seconds
-        self._last_events: Dict[str, float] = {}  # path → timestamp
+        # path -> [kind, due time, (size, mtime_ns)], drained by a dispatch
+        # thread so callbacks never run on the observer's thread.
+        self._pending: Dict[str, list] = {}
 
     def on_created(self, event: FileSystemEvent) -> None:
-        """Handle file creation event."""
+        """Queue a created file; it is reported once it settles."""
         if not event.is_directory and self._should_process(event):
-            if self._is_debounced(event.src_path):
-                logger.debug(f"Debounced: {event.src_path}")
-                return
-
-            logger.info(f"File created: {event.src_path}")
-            if self._on_created:
-                try:
-                    self._on_created(event)
-                except Exception as e:
-                    logger.error(f"Error in on_created callback: {e}", exc_info=True)
+            self._schedule_settle("created", event.src_path)
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        """Handle file modification event."""
+        """Queue a modified file; a burst of saves becomes one report."""
         if not event.is_directory and self._should_process(event):
-            if self._is_debounced(event.src_path):
-                logger.debug(f"Debounced: {event.src_path}")
-                return
-
-            logger.info(f"File modified: {event.src_path}")
-            if self._on_modified:
-                try:
-                    self._on_modified(event)
-                except Exception as e:
-                    logger.error(f"Error in on_modified callback: {e}", exc_info=True)
+            self._schedule_settle("modified", event.src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
-        """Handle file deletion event."""
+        """Report a deletion in order, cancelling a pending report."""
         if not event.is_directory and self._should_process(event):
-            logger.info(f"File deleted: {event.src_path}")
-            if self._on_deleted:
-                try:
-                    self._on_deleted(event)
-                except Exception as e:
-                    logger.error(f"Error in on_deleted callback: {e}", exc_info=True)
-
-            # Clean up debounce tracking
-            self._last_events.pop(event.src_path, None)
+            self._pending.pop(event.src_path, None)
+            self._schedule_now("deleted", event.src_path)
 
     def _should_process(self, event: FileSystemEvent) -> bool:
         """Check if file should be processed based on filters."""
@@ -215,16 +195,8 @@ class FileChangeHandler(FileSystemEventHandler):
 
         return True
 
-    def _is_debounced(self, file_path: str) -> bool:
-        """Check if event should be debounced."""
-        current_time = time.time()
-        last_time = self._last_events.get(file_path, 0)
-
-        if current_time - last_time < self._debounce_seconds:
-            return True
-
-        self._last_events[file_path] = current_time
-        return False
+    # _schedule_settle / _schedule_now / the dispatch thread: see
+    # "Settling Implementation" below.
 ```
 
 ---
@@ -324,32 +296,22 @@ def test_ignore_patterns():
     assert len(processed_files) == 1
     assert "file.txt" in processed_files[0]
 
-def test_debouncing():
-    """Test event debouncing."""
-    call_count = 0
+def test_a_burst_of_events_is_reported_once_after_it_settles(tmp_path):
+    """Rapid events on one file give one callback, after the quiet window."""
+    seen = []
+    target = tmp_path / "test.txt"
+    target.write_text("done")
+    handler = FileChangeHandler(on_created=seen.append, debounce_seconds=0.5)
 
-    def on_create(event):
-        nonlocal call_count
-        call_count += 1
-
-    handler = FileChangeHandler(
-        on_created=on_create,
-        debounce_seconds=0.5
-    )
-
-    # Rapid events on same file
-    event = FileCreatedEvent("test.txt")
+    event = FileCreatedEvent(str(target))
     handler.on_created(event)
-    handler.on_created(event)  # Should be debounced
-    handler.on_created(event)  # Should be debounced
+    handler.on_created(event)  # coalesced with the first
+    handler.on_created(event)  # coalesced with the first
+    assert seen == []  # not reported until it has been quiet for 0.5 s
 
-    assert call_count == 1
-
-    # Wait for debounce period
-    time.sleep(0.6)
-    handler.on_created(event)  # Should process
-
-    assert call_count == 2
+    assert handler.wait_idle(5)
+    assert seen == [str(target)]
+    handler.close()
 
 def test_real_file_watching(tmp_path):
     """Test with real file system changes."""
@@ -508,24 +470,25 @@ class FileChangeHandler(FileSystemEventHandler):
             self._on_created(event)  # ✅ Calls callback
 ```
 
-### Debouncing Implementation
+### Settling Implementation
 
-```python
-def __init__(self, ..., debounce_seconds=1.0):
-    self._debounce_seconds = debounce_seconds
-    self._last_events = {}  # path → timestamp
+A created or modified path is held in `_pending` with a due time
+`debounce_seconds` after its latest event and its `(size, mtime_ns)` at that
+event. A dispatch thread, never the observer's, wakes at the earliest due time
+and stats each due path outside the lock:
 
-def _is_debounced(self, file_path: str) -> bool:
-    """Check if event should be debounced."""
-    current_time = time.time()
-    last_time = self._last_events.get(file_path, 0)
+- unchanged since its last event: the callback runs;
+- changed (still being written): it waits another full window;
+- gone: it is dropped, since its delete event reports it.
 
-    if current_time - last_time < self._debounce_seconds:
-        return True  # Skip this event
-
-    self._last_events[file_path] = current_time
-    return False  # Process this event
-```
+Deletes and moves are dispatched in arrival order and cancel a pending report
+for their path. A callback that raises is logged with its traceback; one that
+hits `PermissionError` (the writer still holds the file exclusively) is
+retried after 1, 2 and 4 windows, then given up on with an error. A file that
+never pauses (a log written constantly) is not reported until it does.
+`wait_idle()` blocks until everything queued has been dispatched, and
+`close()` stops the dispatcher, dropping (and logging) what it had not yet
+reported.
 
 ### Extension Filtering
 
@@ -614,12 +577,12 @@ Add new section after Tool Mixins:
 - [ ] Implement `on_modified()`
 - [ ] Implement `on_deleted()`
 - [ ] Implement `_should_process()`
-- [ ] Implement `_is_debounced()`
+- [ ] Implement settling (dispatch thread, size/mtime check)
 
 ### Step 3: Add Features
 - [ ] Extension filtering
 - [ ] Ignore patterns
-- [ ] Debouncing
+- [ ] Settling
 - [ ] Error handling in callbacks
 - [ ] Logging
 
@@ -628,7 +591,7 @@ Add new section after Tool Mixins:
 - [ ] Test imports
 - [ ] Test callbacks
 - [ ] Test filtering
-- [ ] Test debouncing
+- [ ] Test settling (a file written in pieces is reported once, complete)
 - [ ] Test with real Observer
 - [ ] Test error handling
 
