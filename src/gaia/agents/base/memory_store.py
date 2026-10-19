@@ -4522,6 +4522,7 @@ class MemoryStore:
                 raise ValueError(
                     f"{where}: item[{idx}].content must be a non-empty string"
                 )
+            check_memory_content(content)
             category = item.get("category", "fact")
             if category not in VALID_CATEGORIES:
                 raise ValueError(
