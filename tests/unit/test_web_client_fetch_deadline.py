@@ -32,10 +32,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 - http.server naming
         if self.path == "/slow-headers":
-            self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            self.wfile.write(b"HTTP/1.1 200 OK\r\nX-Pad: ")
             try:
                 while not self.server.stopping.is_set():
-                    self.wfile.write(b"X-Pad: x\r\n")
+                    self.wfile.write(b"x")
                     self.wfile.flush()
                     time.sleep(TRICKLE_INTERVAL)
             except OSError:
@@ -167,12 +167,170 @@ def test_a_timer_firing_after_the_fetch_ends_leaves_the_next_request_alone():
     with client_mod._Deadline(60, "http://example.test", "fetch") as deadline:
         pass
     next_request = FakeSocket()
-    with client_mod._HEADER_READS_LOCK:
-        client_mod._HEADER_READS[_threading.get_ident()] = next_request
+    with client_mod._SOCKETS_LOCK:
+        client_mod._THREAD_SOCKETS[_threading.get_ident()] = next_request
     try:
         deadline._fire()
     finally:
-        with client_mod._HEADER_READS_LOCK:
-            client_mod._HEADER_READS.pop(_threading.get_ident(), None)
+        with client_mod._SOCKETS_LOCK:
+            client_mod._THREAD_SOCKETS.pop(_threading.get_ident(), None)
     assert next_request.shut is False
     assert not deadline.fired.is_set()
+
+
+def test_a_timer_that_runs_late_still_reports_the_deadline(server, monkeypatch):
+    """On a loaded machine the read timeout, cut to the time left, can fail a
+    moment before the timer thread runs; that is still the deadline."""
+    from gaia.web import client as client_mod
+
+    on_time = client_mod._Deadline._fire
+
+    def late(self):
+        time.sleep(0.3)
+        on_time(self)
+
+    monkeypatch.setattr(client_mod._Deadline, "_fire", late)
+    box, _ = _bounded(lambda: _client(fetch_deadline=1).get(server + "/silent"))
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+
+
+def test_a_deadline_that_passes_during_dns_still_bounds_the_body(server, monkeypatch):
+    """No socket existed when the timer fired; the reads after it must stop."""
+    from gaia.web import client as client_mod
+
+    resolve = client_mod.PinnedIPAdapter._resolve_first_ip
+
+    def slow_dns(self, host, port):
+        time.sleep(1.3)
+        return resolve(self, host, port)
+
+    monkeypatch.setattr(client_mod.PinnedIPAdapter, "_resolve_first_ip", slow_dns)
+    box, elapsed = _bounded(lambda: _client(fetch_deadline=1).get(server + "/slow"))
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+    assert elapsed < 8
+
+
+class _TrickledHeaders(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):  # noqa: N802 - http.server naming
+        # One header line, a byte at a time: http.client's 100-header cap never
+        # ends it, and its 64 KB line cap would take an hour.
+        self.wfile.write(b"HTTP/1.1 200 OK\r\nX-Pad: ")
+        try:
+            while not self.server.stopping.is_set():
+                self.wfile.write(b"x")
+                self.wfile.flush()
+                time.sleep(TRICKLE_INTERVAL)
+        except OSError:
+            pass
+
+
+def test_a_proxy_that_trickles_headers_stops_at_the_deadline(server):
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), _TrickledHeaders)
+    proxy.stopping = threading.Event()
+    proxy.daemon_threads = True
+    threading.Thread(target=proxy.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{proxy.server_address[1]}"
+    try:
+        box, elapsed = _bounded(
+            lambda: _client(fetch_deadline=1).get(
+                server + "/fast", proxies={"http": url}
+            )
+        )
+    finally:
+        proxy.stopping.set()
+        proxy.shutdown()
+        proxy.server_close()
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+    assert elapsed < 8
+
+
+@pytest.fixture
+def trickled_tls(monkeypatch):
+    """Accepts TLS, then sends its handshake a byte at a time."""
+    import socket
+
+    monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    listener.settimeout(0.5)
+    stop = threading.Event()
+
+    def handle(conn):
+        try:
+            conn.recv(4096)  # ClientHello
+            conn.sendall(b"\x16\x03\x03\x40\x00")  # a 16 KB handshake record
+            while not stop.is_set():
+                conn.sendall(b"\x00")
+                time.sleep(TRICKLE_INTERVAL)
+        except OSError:
+            pass
+
+    def serve():
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                continue
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+    threading.Thread(target=serve, daemon=True).start()
+    yield f"https://127.0.0.1:{listener.getsockname()[1]}/"
+    stop.set()
+    listener.close()
+
+
+def test_a_trickled_tls_handshake_stops_at_the_deadline(trickled_tls):
+    box, elapsed = _bounded(lambda: _client(fetch_deadline=1).get(trickled_tls))
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+    assert elapsed < 8
+
+
+class _Compressed(BaseHTTPRequestHandler):
+    """A gzip body that inflates far past the size cap, with no charset."""
+
+    body = b""
+
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):  # noqa: N802 - http.server naming
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self.wfile.write(self.body)
+        except OSError:
+            pass
+
+
+def test_the_read_order_puts_the_body_through_the_capped_read(monkeypatch):
+    """A test pins the read order: the body goes through the bounded read
+    before charset detection looks at it (real detection, nothing mocked)."""
+    import tracemalloc
+    import zlib
+
+    monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
+    packer = zlib.compressobj(9, zlib.DEFLATED, 31)
+    block = b"a" * (1 << 20)
+    _Compressed.body = b"".join(packer.compress(block) for _ in range(40))
+    _Compressed.body += packer.flush()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Compressed)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    client = WebClient(timeout=10, rate_limit=0.001, max_response_size=1 << 20)
+    tracemalloc.start()
+    try:
+        with pytest.raises(ValueError, match="exceeds max size"):
+            client.get(f"http://127.0.0.1:{httpd.server_address[1]}/")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        httpd.shutdown()
+        httpd.server_close()
+    assert peak < 16 * (1 << 20)

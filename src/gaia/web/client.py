@@ -16,7 +16,6 @@ import re
 import socket
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
@@ -72,36 +71,66 @@ def _abort_stream(response: requests.Response) -> None:
     response.close()
 
 
-# Thread id -> the socket that thread is reading response headers from, so a
-# deadline can unblock a server that trickles its headers.
-_HEADER_READS: Dict[int, socket.socket] = {}
-_HEADER_READS_LOCK = threading.Lock()
+# Thread id -> the socket that thread is connecting, handshaking or reading
+# headers on, and thread id -> the deadline it is fetching under, so a deadline
+# can unblock a server that trickles its TLS handshake or its headers.
+_THREAD_SOCKETS: Dict[int, socket.socket] = {}
+_THREAD_DEADLINES: Dict[int, "_Deadline"] = {}
+_SOCKETS_LOCK = threading.Lock()
+
+#: A read whose timeout was cut to the time left can fail a few ms before the
+#: timer thread runs (or before Windows' clock ticks over); that close to the
+#: deadline, the failure is the deadline.
+_DEADLINE_SLACK_SECONDS = 0.25
 
 
-@contextmanager
-def _header_read(sock):
-    """Register ``sock`` as this thread's header read for its duration."""
+def _track_socket(sock) -> None:
+    """Register ``sock`` for this thread; abort it at once if the thread's
+    deadline has already passed (it fired while DNS or connect blocked)."""
     thread_id = threading.get_ident()
-    with _HEADER_READS_LOCK:
-        _HEADER_READS[thread_id] = sock
-    try:
-        yield
-    finally:
-        with _HEADER_READS_LOCK:
-            _HEADER_READS.pop(thread_id, None)
+    with _SOCKETS_LOCK:
+        _THREAD_SOCKETS[thread_id] = sock
+        deadline = _THREAD_DEADLINES.get(thread_id)
+        if deadline is not None and deadline.fired.is_set():
+            _shutdown_socket(sock)
+
+
+def _untrack_socket(sock) -> None:
+    thread_id = threading.get_ident()
+    with _SOCKETS_LOCK:
+        if _THREAD_SOCKETS.get(thread_id) is sock:
+            del _THREAD_SOCKETS[thread_id]
 
 
 class _TrackedHTTPConnection(HTTPConnection):
+    def _new_conn(self):
+        sock = super()._new_conn()
+        _track_socket(sock)
+        return sock
+
     def getresponse(self, *args, **kwargs):
-        with _header_read(self.sock):
+        sock = self.sock
+        _track_socket(sock)
+        try:
             return super().getresponse(*args, **kwargs)
+        finally:
+            _untrack_socket(sock)
 
 
 class _TrackedHTTPSConnection(HTTPSConnection):
+    # Both inherited from urllib3's HTTPConnection; pylint misses them here.
+    def _new_conn(self):
+        sock = super()._new_conn()  # pylint: disable=no-member
+        _track_socket(sock)
+        return sock
+
     def getresponse(self, *args, **kwargs):
-        with _header_read(self.sock):
-            # Inherited from urllib3's HTTPConnection; pylint misses it here.
+        sock = self.sock
+        _track_socket(sock)
+        try:
             return super().getresponse(*args, **kwargs)  # pylint: disable=no-member
+        finally:
+            _untrack_socket(sock)
 
 
 class _TrackedHTTPConnectionPool(HTTPConnectionPool):
@@ -112,12 +141,18 @@ class _TrackedHTTPSConnectionPool(HTTPSConnectionPool):
     ConnectionCls = _TrackedHTTPSConnection
 
 
+_TRACKED_POOLS = {
+    "http": _TrackedHTTPConnectionPool,
+    "https": _TrackedHTTPSConnectionPool,
+}
+
+
 class FetchDeadlineExceeded(requests.exceptions.Timeout):
     """A fetch or download ran past its overall deadline.
 
     The per-request ``timeout`` bounds each socket read, so a server that sends
     a byte just inside it, again and again, never trips it. This bounds the
-    whole operation: every redirect hop and the body.
+    whole operation: every redirect hop, the connection and the body.
     """
 
 
@@ -125,7 +160,9 @@ class _Deadline:
     """One overall deadline for a fetch or download, enforced by a timer.
 
     When it passes, the timer shuts down whatever socket the calling thread is
-    blocked on, headers or body, so the blocked read returns at once.
+    blocked on (handshake, headers or body), so the blocked read returns at
+    once. A socket or response that appears after it fired is aborted on
+    arrival.
     """
 
     def __init__(self, seconds: float, url: str, what: str) -> None:
@@ -142,6 +179,9 @@ class _Deadline:
         self._timer.daemon = True
 
     def __enter__(self) -> "_Deadline":
+        with _SOCKETS_LOCK:
+            _THREAD_DEADLINES[self._thread_id] = self
+            _THREAD_SOCKETS.pop(self._thread_id, None)
         self._timer.start()
         return self
 
@@ -149,8 +189,16 @@ class _Deadline:
         self._timer.cancel()
         # cancel() cannot stop a _fire already running; _done makes it a no-op,
         # so it never touches a socket this thread's next request registered.
-        with _HEADER_READS_LOCK:
+        with _SOCKETS_LOCK:
             self._done = True
+            if _THREAD_DEADLINES.get(self._thread_id) is self:
+                del _THREAD_DEADLINES[self._thread_id]
+
+    def expired(self) -> bool:
+        return (
+            self.fired.is_set()
+            or time.monotonic() >= self._at - _DEADLINE_SLACK_SECONDS
+        )
 
     def remaining(self) -> float:
         left = self._at - time.monotonic()
@@ -159,7 +207,10 @@ class _Deadline:
         return left
 
     def watch(self, response: requests.Response) -> None:
-        self._response = response
+        with _SOCKETS_LOCK:
+            self._response = response
+            if self.fired.is_set():
+                _abort_stream(response)
 
     def error(self) -> FetchDeadlineExceeded:
         got = f" after receiving {self.received} bytes" if self.received else ""
@@ -171,11 +222,11 @@ class _Deadline:
         )
 
     def _fire(self) -> None:
-        with _HEADER_READS_LOCK:
+        with _SOCKETS_LOCK:
             if self._done:
                 return
             self.fired.set()
-            sock = _HEADER_READS.get(self._thread_id)
+            sock = _THREAD_SOCKETS.get(self._thread_id)
             if sock is not None:
                 _shutdown_socket(sock)
             response = self._response
@@ -337,11 +388,15 @@ class PinnedIPAdapter(HTTPAdapter):
 
     def init_poolmanager(self, *args, **kwargs):
         super().init_poolmanager(*args, **kwargs)
-        # Lets a fetch deadline reach a socket that is still reading headers.
-        self.poolmanager.pool_classes_by_scheme = {
-            "http": _TrackedHTTPConnectionPool,
-            "https": _TrackedHTTPSConnectionPool,
-        }
+        # Lets a fetch deadline reach a socket still connecting or reading
+        # headers.
+        self.poolmanager.pool_classes_by_scheme = dict(_TRACKED_POOLS)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        manager = super().proxy_manager_for(proxy, **proxy_kwargs)
+        # The same for requests sent through a proxy.
+        manager.pool_classes_by_scheme = dict(_TRACKED_POOLS)
+        return manager
 
     def _resolve_first_ip(self, host: str, port: int) -> str:
         key = (host, port)
@@ -600,7 +655,7 @@ class WebClient:
         try:
             response = send(timeout)
         except Exception as e:
-            if deadline.fired.is_set():
+            if deadline.expired():
                 raise deadline.error() from e
             raise
         deadline.watch(response)
@@ -620,7 +675,7 @@ class WebClient:
                 deadline.received += len(chunk)
                 yield chunk
         except Exception as e:
-            if deadline.fired.is_set():
+            if deadline.expired():
                 raise deadline.error() from e
             raise
         # An unblocked socket can also read as a clean, truncated end.
@@ -654,7 +709,8 @@ class WebClient:
 
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
-        # Started after the rate-limit wait: that wait is ours, not the server's.
+        # Started after the first rate-limit wait. A redirect to a new domain
+        # waits up to rate_limit (1 s) inside it, which the deadline absorbs.
         with _Deadline(self._fetch_deadline, url, "fetch") as deadline:
             return self._follow_redirects(method, url, domain, deadline, **kwargs)
 
