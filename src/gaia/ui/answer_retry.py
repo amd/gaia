@@ -12,6 +12,7 @@ models answer from the same evidence.
 import json
 import threading
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -59,6 +60,12 @@ _pending: dict[str, PendingRetry] = {}
 def store_pending(session_id: str, retry: PendingRetry) -> None:
     with _pending_lock:
         _pending[session_id] = retry
+
+
+def forget(session_id: str) -> None:
+    """Drop a deleted session's open comparison."""
+    with _pending_lock:
+        _pending.pop(session_id, None)
 
 
 def take_pending(session_id: str, message_id: int) -> Optional[PendingRetry]:
@@ -145,8 +152,12 @@ def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Load *model* the way a chat turn would, then ask it. Blocking."""
     import requests
 
-    from gaia.daemon.broker_client import model_lease
-    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+    from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
+    from gaia.llm.lemonade_client import (
+        InsufficientMemoryError,
+        LemonadeClient,
+        LemonadeClientError,
+    )
     from gaia.llm.lemonade_manager import LemonadeManager
     from gaia.ui._chat_helpers import _maybe_load_expected_model
 
@@ -154,10 +165,16 @@ def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
 
     started = time.monotonic()
     # One lease over load and ask, so no other process swaps the model out between them.
-    with model_lease(model, priority="interactive"):
-        _maybe_load_expected_model(model)
-        # The pre-load logs a refusal instead of raising; asking anyway would let
-        # Lemonade load the model at its own, smaller window.
+    with ExitStack() as lease:
+        # The loader's errors carry the remedy (free memory, another app holds
+        # the model, the daemon kept the slot); pass them on, not a bare 500.
+        try:
+            lease.enter_context(model_lease(model, priority="interactive"))
+            _maybe_load_expected_model(model)
+        except (InsufficientMemoryError, BrokerUnavailableError, RuntimeError) as exc:
+            raise RetryError(503, f"{model} could not be loaded: {exc}") from exc
+        # Asking a model that isn't loaded would let Lemonade load it at its own,
+        # smaller window.
         if not _is_loaded(client, model):
             raise RetryError(
                 503,

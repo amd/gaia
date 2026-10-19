@@ -305,6 +305,10 @@
     white-space: nowrap;
 }
 
+.sb-row-queue.is-failed {
+    color: var(--danger);
+}
+
 .sb-group.is-needs-you .sb-group-label {
     color: var(--accent-yellow);
 }

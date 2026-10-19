@@ -84,6 +84,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils import awake_clock, perf_trace
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -980,6 +981,37 @@ def _model_ctx_size(requirement: "ModelRequirement", base_url: Optional[str]) ->
     return context_for_capacity(requirement, capacity)
 
 
+def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
+    """The window the user chose for *model* in Settings, checked against this PC.
+
+    Raises :class:`LemonadeClientError` when the saved size no longer fits.
+    """
+    from gaia.llm.context_choice import (
+        ContextChoiceError,
+        check_saved_size,
+        saved_context_size,
+    )
+    from gaia.llm.model_fit import ModelFitError
+
+    tokens = saved_context_size(model)
+    if tokens is None:
+        return None
+    try:
+        capacity = machine_capacity(base_url)
+    except (LemonadeClientError, ModelFitError) as e:
+        raise LemonadeClientError(
+            f"GAIA can't read this PC's memory ({e}), so it can't check that the "
+            f"{tokens // 1024}K context size you chose for {model} fits, and won't "
+            "load it unchecked. Choose Automatic in Settings › Model, or set "
+            "GAIA_CTX_SIZE to pin a size yourself."
+        ) from e
+    try:
+        check_saved_size(model, tokens, capacity)
+    except ContextChoiceError as e:
+        raise LemonadeClientError(str(e)) from e
+    return tokens
+
+
 def resolve_ctx_size(
     model: Optional[str] = None,
     device: Optional[str] = None,
@@ -1003,7 +1035,13 @@ def resolve_ctx_size(
     if model:
         on_npu = runs_on_npu(model)
         requirement = find_model_requirement(model)
-        if requirement is not None:
+        # GAIA_CTX_SIZE (applied below) wins, so it can rescue a size that no longer fits.
+        pinned = bool(os.environ.get("GAIA_CTX_SIZE", "").strip())
+        chosen = None if pinned else _chosen_ctx_size(model, base_url)
+        if chosen is not None:
+            # The user's pick is not shrunk to free memory; the load refuses instead.
+            ctx = chosen
+        elif requirement is not None:
             ctx = fit_ctx_to_free_memory(
                 model, _model_ctx_size(requirement, base_url), base_url
             )
@@ -3839,6 +3877,17 @@ class LemonadeClient:
         # Handle string errors
         if isinstance(error, str):
             result["message"] = error
+            # "Request failed with status 404: {...}" carries Lemonade's own body.
+            brace = error.find("{")
+            if brace >= 0:
+                try:
+                    body = json.loads(error[brace:])
+                except ValueError:
+                    return result
+                if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                    result["type"] = body["error"].get("type")
+                    result["code"] = body["error"].get("code")
+                    result["is_structured"] = True
             return result
 
         # Handle dict responses
@@ -3893,6 +3942,8 @@ class LemonadeClient:
             error_type_lower = error_type.lower()
             if error_type_lower in ["not_found", "model_not_found", "model_not_loaded"]:
                 return True
+        if str(error_info.get("code") or "").lower() == "model_not_found":
+            return True
 
         # Fallback to string matching for unstructured errors
         error_message = error_info.get("message") or ""
@@ -4048,7 +4099,8 @@ class LemonadeClient:
         return ModelCallRetrier(
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
-            clock=self._retry_clock or time.monotonic,
+            # A request the PC slept through still has its retry budget.
+            clock=self._retry_clock or awake_clock.monotonic,
             rng=self._retry_rng,
             server_loading=(
                 self._server_load_in_progress
@@ -4101,7 +4153,7 @@ class LemonadeClient:
             StreamCancelledError: Stop was pressed during the wait.
         """
         limit = RetryPolicy.from_env().load_wait
-        clock = self._retry_clock or time.monotonic
+        clock = self._retry_clock or awake_clock.monotonic
         sleep = self._retry_sleep or time.sleep
         is_cancelled = current_cancel_check()
         listener = current_retry_listener()
@@ -4876,6 +4928,8 @@ class LemonadeClient:
             request_budget=timeout,
         )
 
+        recorder = perf_trace.current()
+
         def _open_stream() -> Iterator[Dict[str, Any]]:
             """One attempt: open the stream and convert its chunks, ending it
             once it has been silent longer than *limits* allow."""
@@ -4898,7 +4952,12 @@ class LemonadeClient:
 
             def produce() -> Generator[Dict[str, Any], None, None]:
                 try:
+                    t0 = time.perf_counter()
                     stream = client.chat.completions.create(**request_params)
+                    if recorder is not None:
+                        # Runs on the stream worker thread, so the turn's
+                        # recorder is captured rather than read thread-locally.
+                        recorder.note_client("http_open_s", time.perf_counter() - t0)
                     try:
                         yield from _convert(stream)
                     finally:
@@ -4929,6 +4988,8 @@ class LemonadeClient:
                         "model": chunk.model,
                         "choices": [],
                         "usage": _usage_dict(usage),
+                        # llama.cpp's own prefill/decode split for this request.
+                        "timings": getattr(chunk, "timings", None),
                     }
                     continue
 
@@ -5885,10 +5946,11 @@ class LemonadeClient:
 
         if not checkpoint:
             # A user. model Lemonade has not seen needs its registration on the
-            # first pull; every caller that pulls by name alone gets it here.
+            # first pull, under its user. name even when asked for without it.
             mr = find_model_requirement(model_name)
             registration = mr.pull_kwargs() if mr else {}
             if registration:
+                model_name = mr.model_id
                 checkpoint = registration["checkpoint"]
                 recipe = recipe or registration["recipe"]
                 mmproj = mmproj or registration["mmproj"]
@@ -6611,8 +6673,13 @@ class LemonadeClient:
         def _held():
             # Broker first: a thread holding the broker lease must never wait on
             # this lock while its holder waits on the broker.
-            with lease, _holding_local_request_lock(model):
-                yield
+            t0 = time.perf_counter()
+            with lease:
+                t1 = time.perf_counter()
+                with _holding_local_request_lock(model):
+                    perf_trace.note_wait("lease_wait_s", t1 - t0)
+                    perf_trace.note_wait("lock_wait_s", time.perf_counter() - t1)
+                    yield
 
         return _held()
 
@@ -6653,7 +6720,11 @@ class LemonadeClient:
             return
 
         with self._model_slot_lease(model):
-            self._ensure_model_loaded_locked(model, force=force)
+            t0 = time.perf_counter()
+            try:
+                self._ensure_model_loaded_locked(model, force=force)
+            finally:
+                perf_trace.note_wait("ensure_loaded_s", time.perf_counter() - t0)
 
     def _ensure_model_loaded_locked(self, model: str, *, force: bool = False) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
@@ -7006,6 +7077,10 @@ class LemonadeClient:
                 "Send chat requests through Lemonade; select its provider in "
                 "the TUI provider settings if it is not connected."
             )
+        mr = find_model_requirement(model_name)
+        if mr and mr.pull_kwargs():
+            # Load under the user. name an auto-download registers it as.
+            model_name = mr.model_id
         with self._model_slot_lease(model_name):
             response = self._load_model_leased(
                 model_name,

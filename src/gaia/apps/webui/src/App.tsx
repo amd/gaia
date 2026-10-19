@@ -17,6 +17,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
+import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
@@ -25,6 +26,7 @@ import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID } from './utils/newTask';
+import { runWhileVisible } from './utils/visibleInterval';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -176,7 +178,6 @@ function App() {
         setBackendSlow(false);
         setBackendError(null);
         setBackendConnected(true);
-        if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
         // One slow health probe under load is not an outage.
         failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
         const prev = useChatStore.getState().systemStatus;
@@ -191,7 +192,7 @@ function App() {
     const [statusPoller] = useState(() => createStatusPoller((outcome) => applyStatusRef.current(outcome)));
     const checkSystemStatus = statusPoller.check;
 
-    useEffect(() => statusPoller.start(), [statusPoller]);
+    useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -218,6 +219,8 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    // Queued messages go out when their chat's turn ends, even with another chat open.
+    useEffect(() => startQueueDispatcher(), []);
 
     useChatAlerts();
 
@@ -310,7 +313,6 @@ function App() {
         const session = await api.createSession({
             title: 'New Task',
             agent_type: FLAGSHIP_AGENT_ID,
-            device: store.activeDevice,
             document_ids: store.draftDocumentIds,
         });
         store.clearDraftDocuments();

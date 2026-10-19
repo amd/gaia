@@ -468,3 +468,32 @@ def test_discovered_cloud_history_uses_cached_provider_metadata(monkeypatch):
     helpers._restore_model_history(agent, db, session, "follow-up")
     assert agent.conversation_history == _trace()
     db.close()
+
+
+def test_cloud_history_budget_does_not_reserve_the_reply_in_its_input_budget(
+    monkeypatch,
+):
+    """A 64K input budget minus a 32K reply reserve left ~12K for a 1M-token model's history."""
+    from gaia.agents.base.history import history_budget
+
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 20000)
+    agent = SimpleNamespace(
+        model_id="fireworks.deepseek-v4p1-flash",
+        system_prompt="large",
+        chat=SimpleNamespace(config=SimpleNamespace(max_tokens=32768)),
+    )
+    assert history_budget(agent, "q") == 32768
+
+
+def test_local_history_budget_still_reserves_the_reply(monkeypatch):
+    from gaia.agents.base.history import history_budget
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", "65536")
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 20000)
+    agent = SimpleNamespace(
+        model_id="Gemma-4-E4B-it-GGUF",
+        device="gpu",
+        system_prompt="large",
+        chat=SimpleNamespace(config=SimpleNamespace(max_tokens=32768)),
+    )
+    assert history_budget(agent, "q") == 65536 - 20000 - 32768 - 2048

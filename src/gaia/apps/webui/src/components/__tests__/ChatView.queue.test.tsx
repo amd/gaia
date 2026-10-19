@@ -9,6 +9,7 @@ import { ChatView, QUEUE_BUSY_WAIT_MS } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import type { Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
+import { resetQueueDispatch } from '../../services/queueDispatch';
 
 vi.mock('../../services/api');
 
@@ -63,7 +64,13 @@ beforeEach(() => {
         isLoadingMessages: false,
         pendingPrompt: null,
         systemStatus: null,
+        messageQueues: {},
+        queueHolds: {},
+        runningSessionIds: [],
+        queuedSessionIds: [],
+        activeRunsAt: 0,
     });
+    resetQueueDispatch();
 });
 
 async function type(text: string) {

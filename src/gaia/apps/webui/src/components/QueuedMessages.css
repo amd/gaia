@@ -29,6 +29,17 @@
     border-color: var(--accent-light);
 }
 
+.queued-message.is-failed {
+    border-style: solid;
+    border-color: var(--danger);
+}
+
+.queued-message.is-failed .queued-message-state {
+    flex-shrink: 1;
+    min-width: 0;
+    color: var(--danger);
+}
+
 .queued-message-text {
     flex: 1;
     min-width: 0;
@@ -45,6 +56,9 @@
 }
 
 .queued-message-steer {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     flex-shrink: 0;
     padding: 2px 8px;
     border: 1px solid var(--border);

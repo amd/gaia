@@ -8,6 +8,7 @@ import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { parseScheduleInput } from '../services/api';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import './ScheduleManager.css';
 
 /** Format an interval in seconds to a human-readable string. */
@@ -217,6 +218,8 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 export function ScheduleManager() {
     const { setShowSchedules } = useChatStore();
     const { schedules, loading, error, loadSchedules, createSchedule } = useScheduleStore();
+    const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
+    useEscapeToClose(true, close);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);

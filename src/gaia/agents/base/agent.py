@@ -40,6 +40,7 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base import turn_metrics
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
@@ -169,6 +170,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
@@ -547,7 +549,10 @@ class TurnCancel(threading.Event):
 
 
 class _UserWaitClock:
-    """Time a tool body spends blocked on the user, which its timeout excludes."""
+    """Time a tool body spends blocked on the user, which its timeout excludes.
+
+    Read on the same awake clock as the tool's timeout.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -556,15 +561,15 @@ class _UserWaitClock:
 
     def begin(self) -> None:
         with self._lock:
-            self._open.append(time.monotonic())
+            self._open.append(awake_clock.monotonic())
 
     def end(self) -> None:
         with self._lock:
-            self._done += time.monotonic() - self._open.pop()
+            self._done += awake_clock.monotonic() - self._open.pop()
 
     def waited(self) -> float:
         """Seconds waited so far, including a question still on screen."""
-        now = time.monotonic()
+        now = awake_clock.monotonic()
         with self._lock:
             return self._done + sum(now - started for started in self._open)
 
@@ -1946,6 +1951,15 @@ class Agent(abc.ABC):
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
+    # The sealed recorder, kept until process_query returns so post-answer
+    # work (memory writes) is timed too.
+    _sealed_turn_recorder: Optional[Any] = None
+    # The thread's recorder before this turn's, restored when it ends, so a
+    # nested turn does not cut off the one around it.
+    _outer_turn_recorder: Optional[Any] = None
+    # (name, start, end) perf_counter spans a mixin timed before the turn
+    # opened — e.g. memory recall — folded into the next record.
+    _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
 
@@ -2337,6 +2351,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn (#4447).
         self._denied_effects = DeniedEffects()
+        # (turn, path) for each access prompt declined or left unanswered.
+        self._refused_paths: List[Tuple[int, Path]] = []
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -2683,6 +2699,8 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.turn_metrics import TurnRecorder, turn_log_path
 
+        pre_spans = self._pre_turn_spans or []
+        self._pre_turn_spans = None
         if turn_log_path() is None:
             return None
         try:
@@ -2699,10 +2717,21 @@ Do NOT wrap conversational replies in JSON.
                 ),
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
+                started=min((t0 for _, t0, _ in pre_spans), default=None),
+                prompt_fragments={
+                    origin: len(text)
+                    for text, origin in (self._mixin_prompt_origins or {}).items()
+                    # A subclass may filter a fragment out of the final prompt.
+                    if text in self.system_prompt
+                },
             )
+            for name, t0, t1 in pre_spans:
+                recorder.add_span(name, t0, t1, {})
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("could not start turn record: %s", e)
             return None
+        self._outer_turn_recorder = turn_metrics.current()
+        turn_metrics.activate(recorder)
         chat = getattr(self, "chat", None)
         if chat is not None:
             chat.turn_recorder = recorder
@@ -2724,6 +2753,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = None
         if recorder is None:
             return None
+        self._sealed_turn_recorder = recorder
         try:
             record = recorder.finish(answer=answer or "", steps=steps_taken)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
@@ -3006,6 +3036,19 @@ Do NOT wrap conversational replies in JSON.
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
             return False
+        # One prompt per path per turn: a user who stepped away is not asked
+        # again, and made to wait out the timeout again, for what is inside it.
+        turn = self._turn_seq
+        refused = self._refused_paths
+        target = Path(path).resolve()
+        for seen_turn, denied in refused:
+            if seen_turn == turn and (target == denied or denied in target.parents):
+                logger.info(
+                    "Not asking again this turn about %s (%s was declined)",
+                    target,
+                    denied,
+                )
+                return False
         args = {"path": str(path)}
         # Lets the prompt say "file" or "folder" instead of a catch-all.
         if path.is_dir():
@@ -3017,10 +3060,13 @@ Do NOT wrap conversational replies in JSON.
         if clock is not None:
             clock.begin()
         try:
-            return (
+            granted = (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
+            if not granted:
+                refused.append((turn, target))
+            return granted
         finally:
             if clock is not None:
                 clock.end()
@@ -5856,10 +5902,11 @@ Do NOT wrap conversational replies in JSON.
         )
         worker.start()
         # Time spent on a question the body raised (e.g. path access) is the
-        # user's, not the tool's: abandoning there strands a live prompt.
-        started = time.monotonic()
+        # user's, not the tool's: abandoning there strands a live prompt. Time
+        # the PC sleeps is nobody's: the awake clock leaves it out.
+        started = awake_clock.monotonic()
         while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - time.monotonic()
+            remaining = started + timeout + user_wait.waited() - awake_clock.monotonic()
             if remaining <= 0:
                 break
             worker.join(min(remaining, 0.5))
@@ -8317,6 +8364,13 @@ Do NOT wrap conversational replies in JSON.
             return None
         return verify_after_change_correction(changed)
 
+    def _request_text(self, query: Optional[str]) -> str:
+        """The user's own words this turn, without the memory context prepended.
+
+        A file a recalled memory names is not one the user asked to have read.
+        """
+        return getattr(self, "_original_user_input", None) or query or ""
+
     def _grounding_findings(
         self, answer: Optional[str], query: str, history: str
     ) -> list:
@@ -8330,7 +8384,7 @@ Do NOT wrap conversational replies in JSON.
         roots = [os.getcwd(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
-            query or "",
+            self._request_text(query),
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
@@ -8394,7 +8448,7 @@ Do NOT wrap conversational replies in JSON.
         if answer and answer.strip():
             findings += self._deliverable_findings(
                 strip_verification_scope(answer),
-                query or "",
+                self._request_text(query),
                 history,
                 [os.getcwd(), self._verification_project_root()],
             )
@@ -8597,6 +8651,24 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
             self._detach_step_timer()
+            self._flush_post_turn_record()
+            # Spans a mixin parked for a turn that never opened must not
+            # backdate the next one.
+            self._pre_turn_spans = None
+
+    def _flush_post_turn_record(self) -> None:
+        """Write the post-answer spans and stop routing waits to this turn."""
+        recorder = self._sealed_turn_recorder
+        self._sealed_turn_recorder = None
+        if recorder is not None and turn_metrics.current() is recorder:
+            turn_metrics.activate(self._outer_turn_recorder)
+        self._outer_turn_recorder = None
+        if recorder is None:
+            return
+        try:
+            recorder.write_post()
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("could not write post-turn record: %s", e)
 
     #: How a mid-turn follow-up is framed for the model. It is the user
     #: speaking, so it goes in as a user message — but unlabelled, a user
@@ -8992,9 +9064,10 @@ Do NOT wrap conversational replies in JSON.
                 from gaia.agents.base.artifacts import store_for
 
                 # Only the sent list changes; ``conversation`` keeps every result.
-                self._pending_eviction = self._context_evictor.evict(
-                    messages, steps_taken, store_for(self)
-                )
+                with turn_metrics.span("context_evict"):
+                    self._pending_eviction = self._context_evictor.evict(
+                        messages, steps_taken, store_for(self)
+                    )
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -9875,7 +9948,8 @@ Do NOT wrap conversational replies in JSON.
             # 1000+ char arguments. Don't fail the whole turn: log the error,
             # nudge the model to retry with simpler args, and continue the loop.
             try:
-                parsed = self._parse_llm_response(response)
+                with turn_metrics.span("parse_response"):
+                    parsed = self._parse_llm_response(response)
                 # Budget is consecutive: a clean parse gives the retries back.
                 parse_failures = 0
                 markup_retries = 0
@@ -11688,7 +11762,8 @@ Do NOT wrap conversational replies in JSON.
         # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
         if hasattr(self, "_after_process_query"):
             try:
-                self._after_process_query(user_input, result.get("result", ""))
+                with turn_metrics.span("after_process_query"):
+                    self._after_process_query(user_input, result.get("result", ""))
             except Exception as e:
                 logger.warning(f"Post-query hook failed: {e}")
 

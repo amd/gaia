@@ -26,6 +26,7 @@ export interface ApiSchemas {
   CommandOutputResponse: CommandOutputResponse;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
+  ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   DiscoveryCommit: DiscoveryCommit;
@@ -75,6 +76,7 @@ export interface ApiSchemas {
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
+  RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
   RunningAnswer: RunningAnswer;
@@ -330,6 +332,13 @@ export interface ConnectRequest {
   auth_header_name?: string | null;
   auth_header_prefix?: string | null;
   base_url?: string | null;
+}
+/**
+ * ``ctx_size`` None returns the model to GAIA's automatic size.
+ */
+export interface ContextRequest {
+  ctx_size?: number | null;
+  model: string;
 }
 /**
  * Request to create a new scheduled task.
@@ -862,6 +871,12 @@ export interface PreflightReport {
   tier?: string;
   warnings?: string[];
 }
+/**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
+}
 export interface RetryChoiceRequest {
   keep: "original" | "retry";
   message_id: number;
@@ -1016,6 +1031,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
+  data_dir?: string | null;
   default_model_is_cloud?: boolean;
   default_model_name?: string | null;
   default_model_size_gb?: number | null;

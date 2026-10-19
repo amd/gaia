@@ -4,11 +4,13 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
+import { toolActiveLabel } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { refreshActiveRuns } from '../services/activeRuns';
+import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
@@ -32,6 +34,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -50,8 +53,9 @@ const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
 
-/** How long a queued message waits after finding the chat busy before it is sent again. */
-export const QUEUE_BUSY_WAIT_MS = 3_000;
+export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
+
+const NO_QUEUE: QueuedMessage[] = [];
 
 /**
  * Strip the LLM JSON envelope from streamed/accumulated content.
@@ -211,6 +215,8 @@ interface SendOptions {
     attach?: boolean;
     /** A message from the queue: already composed, and the composer stays as the user left it. */
     queued?: boolean;
+    /** For a queued message: told once whether the server took it. */
+    onQueuedOutcome?: (outcome: SendOutcome) => void;
     /** Re-attach attempt number for a stream that went silent. */
     reconnect?: number;
 }
@@ -305,9 +311,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
-    // Messages typed while a reply runs, and whether the user stopped that reply.
-    const [queue, setQueue] = useState<QueuedMessage[]>([]);
+    // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
+    const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
+    const setQueue = useCallback(
+        (fn: (items: QueuedMessage[]) => QueuedMessage[]) => useChatStore.getState().updateQueue(sessionId, fn),
+        [sessionId],
+    );
     const userStoppedRef = useRef(false);
+    /** This view saw its chat's last turn end, so the queue need not wait for a poll to say so. */
+    const observedEndRef = useRef(false);
+    /** A queued message's send that the server has not yet taken; leaving the chat must not abort it. */
+    const queuedSendPendingRef = useRef(false);
+    const streamingRef = useRef(isStreaming);
+    streamingRef.current = isStreaming;
     const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
     const [contextUnavailable, setContextUnavailable] = useState<string | null>(null);
     const [comparison, setComparison] = useState<{
@@ -321,7 +337,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const comparisonRef = useRef(comparison);
     comparisonRef.current = comparison;
     // Set briefly after a queued send found the chat still busy, so it waits before trying again.
-    const [queueHold, setQueueHold] = useState(false);
+    const queueHold = useChatStore((s) => !!s.queueHolds[sessionId]);
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -358,8 +374,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [setStreamContent, isStale]);
 
     // Load messages on mount, then poll for external changes (MCP, API)
-    const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastMsgCountRef = useRef<number>(0);
+    // Messages sent from this view; a history load that started before one must not replace it.
+    const sentRef = useRef<number>(0);
 
     useEffect(() => {
         log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
@@ -371,6 +388,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const loadMessages = async (isInitial = false) => {
             if (cancelled || loading) return;
             loading = true;
+            const sentBefore = sentRef.current;
             try {
                 if (!isInitial) {
                     if (useChatStore.getState().isStreaming) return;
@@ -380,7 +398,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 const data = await api.getMessages(sessionId);
                 if (cancelled) return;
                 const msgs = fromApiMessages(data.messages);
-                if (isInitial) {
+                if (isInitial && sentRef.current !== sentBefore) {
+                    // A message went out while this loaded; the turn's refetch, or after an error the next poll, syncs the list.
+                    lastMsgCountRef.current = msgs.length;
+                } else if (isInitial) {
                     setMessages(msgs);
                     lastMsgCountRef.current = msgs.length;
                     log.chat.timed(`Loaded ${msgs.length} message(s) for session=${sessionId}`, t);
@@ -404,11 +425,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         loadMessages(true);
 
-        // Poll every 3s for messages added by external tools (MCP API, etc.)
-        msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
+        // Poll every 3s for messages added by external tools (MCP API, etc.); not while hidden.
+        const stopPoll = setVisibleInterval(() => loadMessages(false), 3_000);
         return () => {
             cancelled = true;
-            if (msgPollRef.current) clearInterval(msgPollRef.current);
+            stopPoll();
         };
     }, [sessionId, setMessages, setLoadingMessages]);
 
@@ -467,7 +488,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
 
     useEffect(() => {
-        setQueue([]);
         setComparison(null);
         setContextUsage(null);
         setContextUnavailable(null);
@@ -493,8 +513,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Abort active stream and clean up timers when component unmounts / session changes
     useEffect(() => {
         return () => {
-            if (abortRef.current) {
+            // A turn left running keeps the chat busy until a later poll says otherwise.
+            if (streamingRef.current) markActivity(sessionId);
+            // Aborting a queued send the server has not answered could lose it; it finishes on its own.
+            if (abortRef.current && !queuedSendPendingRef.current) {
                 abortRef.current.abort();
+            }
+            if (abortRef.current) {
                 abortRef.current = null;
             }
             if (stopTimerRef.current) {
@@ -603,14 +628,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
         isNearBottomRef.current = true;
 
         const isInitializing = systemStatus?.init_state === 'initializing';
+        const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
+            notTaken({ kind: 'failed', error: `This chat's "${retiredAgent}" agent was retired, so it cannot take new messages.` });
             return;
         }
+        // Waiting messages go first, so a new one joins the end of the line.
+        const waiting = (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming && !reconnect) return;
-        } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current)) {
+        } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
             setInput('');
@@ -618,6 +647,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             inputRef.current?.focus();
             return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
+            notTaken({ kind: 'busy' });
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
@@ -659,6 +689,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             };
             addMessage(userMsg);
             optimisticUser = userMsg;
+            sentRef.current += 1;
         } else {
             log.chat.info(`Re-attaching to background run for session=${sessionId}${reconnect ? ` (reconnect ${reconnect})` : ''}`);
         }
@@ -685,6 +716,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let historyNotice: string | undefined;
         setLiveHistoryNotice(null);
         let doneHandled = false;
+        observedEndRef.current = false;
+        let streamController: AbortController | null = null;
+        let queuedSettled = !fromQueue;
+        queuedSendPendingRef.current = fromQueue;
+        const settleQueued = (outcome: SendOutcome) => {
+            if (queuedSettled) return;
+            queuedSettled = true;
+            queuedSendPendingRef.current = false;
+            options?.onQueuedOutcome?.(outcome);
+            // The view closed while the server answered; the run goes on without it.
+            if (outcome.kind === 'accepted' && isStale()) streamController?.abort();
+        };
+        const accepted = () => settleQueued({ kind: 'accepted' });
         streamBufferRef.current = '';
         stopRequestedRef.current = false;
         setStopping(false);
@@ -715,6 +759,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             gaveUpOnRunRef.current = true;
             streamEndedAtRef.current = Date.now();
             endStopWait();
+            settleQueued({ kind: 'failed', error: 'Stopped before GAIA confirmed it got this message.' });
             abortRef.current?.abort();
             abortRef.current = null;
             if (streamRafRef.current !== null) {
@@ -751,6 +796,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onChunk: (event) => {
+                accepted();
                 if (isStale()) return; // stop writing after a session switch (#1580)
                 if (useChatStore.getState().awaitingUser) useChatStore.getState().setAwaitingUser(false);
                 const content = event.content || '';
@@ -796,12 +842,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onAgentEvent: (event) => {
-                // Ignore events from a stream the user navigated away from so its
-                // steps don't leak into the new session's view (#1580).
-                if (isStale()) return;
+                // The client's own "waiting to start" notice is not the server taking the message.
+                if (!(event.type === 'status' && event.phase === 'waiting')) accepted();
+                // The queue is this chat's, so it stays current even after the view moved on.
                 if (event.type === 'followup_taken' && event.text) {
                     const takenText = event.text;
                     setQueue((q) => messageQueue.taken(q, takenText));
+                    if (isStale()) return;
                     addMessage({
                         id: Date.now(),
                         session_id: sessionId,
@@ -817,6 +864,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     setQueue((q) => messageQueue.returned(q, texts));
                     return;
                 }
+                // Ignore events from a stream the user navigated away from so its
+                // steps don't leak into the new session's view (#1580).
+                if (isStale()) return;
                 if (event.type === 'context_usage') {
                     setContextUsage(event as unknown as ContextUsage);
                     setContextUnavailable(null);
@@ -1097,11 +1147,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(event.tool ? `Running ${event.tool}` : 'Running a tool', 'tool');
+                        useChatStore.getState().setLiveStatus(toolActiveLabel(event.tool), 'tool');
                     }
                 }
             },
             onDone: (event) => {
+                accepted();
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 useChatStore.getState().closeSessionQuestions(sessionId);
                 if (doneHandled) return;
@@ -1127,6 +1178,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 // `done` is the run's last event, so it is no longer running.
                 streamEndedAtRef.current = Date.now();
+                observedEndRef.current = true;
                 const store = useChatStore.getState();
                 store.setRunningSessions(store.runningSessionIds.filter((id) => id !== sessionId));
 
@@ -1222,6 +1274,32 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);
+                // A queued message the server never took goes back in line, or shows as failed with a retry.
+                if (!queuedSettled) {
+                    if (interrupted) {
+                        accepted();
+                    } else {
+                        settleQueued(isBusyError(err)
+                            ? { kind: 'busy' }
+                            : { kind: 'failed', error: describeStreamError(err) ?? (err.message || 'Unknown error') });
+                        streamEndedAtRef.current = Date.now();
+                        endStopWait();
+                        if (streamRafRef.current !== null) {
+                            cancelAnimationFrame(streamRafRef.current);
+                            streamRafRef.current = null;
+                        }
+                        streamBufferRef.current = '';
+                        if (isStale()) return;
+                        log.chat.info(`Queued message for session=${sessionId} not taken: ${err.message}`);
+                        if (optimisticUser) removeMessage(optimisticUser.id);
+                        observedEndRef.current = true;
+                        setStreaming(false);
+                        clearStreamContent();
+                        clearAgentSteps();
+                        clearCards();
+                        return;
+                    }
+                }
                 // Stop already asked the server to end the turn; don't reopen it.
                 if (interrupted && stopRequestedRef.current && !doneHandled) {
                     log.chat.warn(`Stream for session=${sessionId} was lost while stopping; closing the turn locally`);
@@ -1259,20 +1337,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // the active view's concern, so don't surface it (#1580).
                 if (isStale()) return;
 
-                // The chat was still busy (a goal step, say): the queued message waits its turn again.
-                if (fromQueue && err instanceof api.ApiError && err.httpStatus === 409) {
-                    log.chat.info(`Queued message found session=${sessionId} busy; holding it`);
-                    if (optimisticUser) removeMessage(optimisticUser.id);
-                    setQueue((q) => [messageQueue.item(messageText, 'queued'), ...q]);
-                    setQueueHold(true);
-                    setTimeout(() => setQueueHold(false), QUEUE_BUSY_WAIT_MS);
-                    setStreaming(false);
-                    clearStreamContent();
-                    clearAgentSteps();
-                    clearCards();
-                    return;
-                }
-
+                if (!interrupted) observedEndRef.current = true;
                 log.chat.error(`Chat error for session=${sessionId}`, err);
 
                 // An error while stopping must not wipe the steps the user is auditing.
@@ -1344,6 +1409,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             ? api.attachToRun(sessionId, streamCallbacks)
             : api.sendMessageStream(sessionId, messageText, streamCallbacks);
 
+        streamController = controller;
         abortRef.current = controller;
     }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
 
@@ -1445,6 +1511,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         sendMessage(text);
     }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
 
+    // This view sends its chat's queue while open; the background dispatcher does it otherwise.
+    useEffect(() => claimView(sessionId), [sessionId]);
+    const idleHere = useChatStore(() => idleByPoll(sessionId));
+    const sendQueued = useCallback<QueuedSend>((_sid, text) => new Promise<SendOutcome>((resolve) => {
+        sendMessageRef.current(text, { queued: true, onQueuedOutcome: resolve });
+    }), []);
+
     // Between turns: send the next queued message, or after a Stop hand them all back to the composer.
     const busy = isStreaming || comparing;
     useEffect(() => {
@@ -1453,21 +1526,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
             userStoppedRef.current = false;
             const texts = queue.map((m) => m.text);
             if (texts.length) {
-                setQueue([]);
+                setQueue(() => []);
                 setInput((prev) => [prev.trim(), ...texts].filter(Boolean).join('\n\n'));
             }
             return;
         }
-        const settled = messageQueue.settle(queue);
-        if (settled.some((m, i) => m !== queue[i])) {
-            setQueue(settled);
-            return;
-        }
-        const next = messageQueue.nextToSend(queue);
-        if (!next || queueHold || isLoadingMessages || retiredAgent || systemStatus?.init_state === 'initializing') return;
-        setQueue((q) => messageQueue.remove(q, next.id));
-        sendMessageRef.current(next.text, { queued: true });
-    }, [busy, queue, queueHold, isLoadingMessages, retiredAgent, systemStatus?.init_state]);
+        if (queue.length === 0 || queueHold || isLoadingMessages || retiredAgent || systemStatus?.init_state === 'initializing') return;
+        // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
+        if (isStale() || (!observedEndRef.current && !idleHere)) return;
+        void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
+    }, [busy, queue, queueHold, idleHere, isLoadingMessages, retiredAgent, systemStatus?.init_state, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1487,7 +1555,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
                 setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
             });
-    }, [queue, isStreaming, sessionId]);
+    }, [queue, isStreaming, sessionId, setQueue]);
 
     const handleRetryWith = useCallback((message: Message, model: string) => {
         if (isStreaming || comparingRef.current) return;
@@ -1945,6 +2013,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
+                        onRetry={(id) => setQueue((q) => messageQueue.promote(q, id, 'failed', 'queued'))}
                         onSteer={isStreaming && !stopping ? handleSteer : undefined}
                     />
                     <Composer
@@ -1965,7 +2034,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         rightControls={(
                             <>
                                 <ContextMeter usage={contextUsage} unavailable={contextUnavailable} sessionId={sessionId} busy={busy} onUsage={setContextUsage} />
-                                <ModelChip disabled={busy} />
+                                <ModelChip />
                             </>
                         )}
                     />

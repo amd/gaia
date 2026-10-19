@@ -362,6 +362,11 @@ class ChatDatabase:
             "ELSE 'chat' END",
         )
 
+    @property
+    def db_path(self) -> str:
+        """The SQLite file this database opened, or ``:memory:``."""
+        return self._db_path
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -1269,6 +1274,25 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    def recent_inference_stats(self, limit: int = 500) -> List[Dict]:
+        """Inference stats of the newest assistant messages that recorded any."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT inference_stats FROM messages WHERE role = 'assistant' "
+                "AND inference_stats IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                stats = json.loads(row["inference_stats"])
+            except ValueError:
+                logger.warning("Skipping a message with unreadable inference_stats")
+                continue
+            if isinstance(stats, dict):
+                out.append(stats)
+        return out
 
     # ── Cloud spending ────────────────────────────────────────────────
 

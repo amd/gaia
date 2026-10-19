@@ -1063,6 +1063,9 @@ class TestLemonadeClientMock(unittest.TestCase):
             ),
             patch.object(self.client, "list_models", return_value={"data": []}),
             patch.object(self.client, "load_model", return_value={"status": "success"}),
+            # Reading the saved context size takes the config file lock, whose
+            # clock would eat the fake monotonic values below.
+            patch("gaia.llm.lemonade_client._chosen_ctx_size", return_value=None),
             patch(
                 "gaia.llm.lemonade_client.time.monotonic",
                 side_effect=lambda: next(monotonic_values),

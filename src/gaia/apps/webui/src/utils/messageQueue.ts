@@ -2,18 +2,33 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Messages typed while GAIA is answering. Each is first offered to the running
- * reply; one the reply cannot take waits here and goes out, in order, as the
- * next message once the reply ends.
+ * Messages typed while GAIA is answering. Each waits here and goes out, in
+ * order, as the next message once the reply ends; the user can instead offer
+ * one to the running reply. A message is only ever removed once the chat holds
+ * it, or by the user.
  */
 
-/** `sending`: offered to the running reply. `delivered`: it accepted, not yet read. `queued`: sent after the reply. */
-export type QueuedState = 'sending' | 'delivered' | 'queued';
+/**
+ * `sending`: offered to the running reply. `delivered`: it accepted, not yet read.
+ * `queued`: sent after the reply. `starting`: going out as its own message now.
+ * `failed`: could not be sent; waits for the user.
+ */
+export type QueuedState = 'sending' | 'delivered' | 'queued' | 'starting' | 'failed';
+
+const STATES: readonly QueuedState[] = ['sending', 'delivered', 'queued', 'starting', 'failed'];
 
 export interface QueuedMessage {
     id: number;
     text: string;
     state: QueuedState;
+    /** Why a `failed` message did not go out. */
+    error?: string;
+}
+
+/** What a finished turn did with the messages offered to it (GET /api/chat/followup). */
+export interface FollowUpOutcome {
+    taken: string[];
+    returned: string[];
 }
 
 let nextId = 1;
@@ -28,11 +43,20 @@ export function enqueue(items: QueuedMessage[], text: string, state: QueuedState
 
 /** Move one message from `from` to `to`; a message already settled elsewhere stays put. */
 export function promote(items: QueuedMessage[], id: number, from: QueuedState, to: QueuedState): QueuedMessage[] {
-    return items.map((m) => (m.id === id && m.state === from ? { ...m, state: to } : m));
+    return items.map((m) => (m.id === id && m.state === from ? { ...m, state: to, error: undefined } : m));
 }
 
 export function remove(items: QueuedMessage[], id: number): QueuedMessage[] {
     return items.filter((m) => m.id !== id);
+}
+
+/** A `starting` message did not go out: back in line, or shown as failed. Gone if its chat was deleted. */
+export function notStarted(items: QueuedMessage[], id: number, error?: string): QueuedMessage[] {
+    if (!items.some((m) => m.id === id && m.state === 'starting')) return items;
+    return items.map((m) => {
+        if (m.id !== id) return m;
+        return error === undefined ? { ...m, state: 'queued', error: undefined } : { ...m, state: 'failed', error };
+    });
 }
 
 // The stream can report on a message before its POST answers, so `sending` counts as offered.
@@ -55,17 +79,85 @@ export function returned(items: QueuedMessage[], texts: string[]): QueuedMessage
     });
 }
 
-/**
- * The reply is over: whatever it accepted but never confirmed reading waits for
- * the next turn too, so nothing the user wrote goes unanswered. A message still
- * `sending` is left for its POST to settle, so it can never go out twice.
- */
-export function settle(items: QueuedMessage[]): QueuedMessage[] {
-    return items.map((m) => (m.state === 'delivered' ? { ...m, state: 'queued' } : m));
+/** The reply is over but the chat never heard what it did with these, so it must ask. */
+export function needsOutcome(items: QueuedMessage[]): boolean {
+    return items.some((m) => m.state === 'delivered');
 }
 
-/** The next message to send as its own turn, once nothing is offered to a reply. */
+export const UNCONFIRMED_ERROR = 'GAIA could not confirm it read this message.';
+
+/**
+ * Settle every `delivered` message against the server's record of the turn:
+ * returned ones go out next, read ones are already in the chat, and one the
+ * record does not mention is shown as not sent rather than dropped or doubled.
+ */
+export function reconcile(items: QueuedMessage[], outcome: FollowUpOutcome): QueuedMessage[] {
+    const back = [...outcome.returned];
+    const read = [...outcome.taken];
+    const result: QueuedMessage[] = [];
+    for (const m of items) {
+        if (m.state !== 'delivered') {
+            result.push(m);
+            continue;
+        }
+        const r = back.indexOf(m.text);
+        if (r !== -1) {
+            back.splice(r, 1);
+            result.push({ ...m, state: 'queued' });
+            continue;
+        }
+        const t = read.indexOf(m.text);
+        if (t !== -1) {
+            read.splice(t, 1);
+            continue;
+        }
+        result.push({ ...m, state: 'failed', error: UNCONFIRMED_ERROR });
+    }
+    return result;
+}
+
+/** Mark every `delivered` message as not sent, when the turn's record cannot be read. */
+export function failDelivered(items: QueuedMessage[], error: string): QueuedMessage[] {
+    return items.map((m) => (m.state === 'delivered' ? { ...m, state: 'failed', error } : m));
+}
+
+/**
+ * The next message to send as its own turn. Nothing goes while one is still
+ * offered to a reply, and a failed one holds back the rest so order is kept.
+ */
 export function nextToSend(items: QueuedMessage[]): QueuedMessage | undefined {
-    if (items.some((m) => m.state === 'sending')) return undefined;
-    return items.find((m) => m.state === 'queued');
+    if (items.some((m) => offered(m) || m.state === 'starting')) return undefined;
+    const first = items.find((m) => m.state === 'queued' || m.state === 'failed');
+    return first?.state === 'queued' ? first : undefined;
+}
+
+export const INTERRUPTED_ERROR = 'GAIA closed while this was being sent, so it may not have gone out. '
+    + 'Check the chat above before sending it again.';
+
+/**
+ * Queues read back after a reload. A message whose offer to the reply was in
+ * flight may or may not have arrived, so it is asked about like a delivered one;
+ * one that was starting as its own message is shown as failed for the user to
+ * judge. New ids continue after the saved ones.
+ */
+export function restore(saved: unknown): Record<string, QueuedMessage[]> {
+    if (!saved || typeof saved !== 'object') return {};
+    const out: Record<string, QueuedMessage[]> = {};
+    for (const [sessionId, list] of Object.entries(saved as Record<string, unknown>)) {
+        if (!Array.isArray(list)) continue;
+        const items = list
+            .filter((m): m is QueuedMessage =>
+                !!m && typeof m === 'object'
+                && typeof (m as QueuedMessage).id === 'number'
+                && typeof (m as QueuedMessage).text === 'string'
+                && STATES.includes((m as QueuedMessage).state))
+            .map((m): QueuedMessage => {
+                if (m.state === 'sending') return { ...m, state: 'delivered' };
+                if (m.state === 'starting') return { ...m, state: 'failed', error: INTERRUPTED_ERROR };
+                return m;
+            });
+        for (const m of items) nextId = Math.max(nextId, m.id + 1);
+        if (items.length) out[sessionId] = items;
+    }
+    return out;
 }

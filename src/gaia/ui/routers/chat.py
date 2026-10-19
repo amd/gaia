@@ -700,6 +700,22 @@ async def send_followup(request: FollowUpRequest):
     return {"delivered": True}
 
 
+@router.get("/api/chat/followup/{session_id}")
+async def followup_outcome(session_id: str):
+    """What the chat's last finished turn did with the messages added to it.
+
+    ``taken`` were read by the turn and recorded in the chat; ``returned`` were
+    not and should go out as their own messages. 409 while a turn still runs,
+    since its follow-ups have no outcome yet.
+    """
+    if run_manager.is_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A reply is still running in this chat; ask again once it ends.",
+        )
+    return followups.last_outcome(session_id)
+
+
 @router.get("/api/chat/context/{session_id}")
 async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db)):
     """How full the model's context is for this chat's next message, by kind."""
@@ -887,8 +903,13 @@ async def choose_retry(request: RetryChoiceRequest, db: ChatDatabase = Depends(g
         if pending.recorded
         else None
     )
+    record = db.get_message_record(sid, request.message_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="That answer no longer exists.")
+    # The turn's steps stay, so keep their count and where they ran.
+    stats = {**(record["inference_stats"] or {}), **pending.stats}
     if not db.replace_answer(
-        sid, request.message_id, pending.content, model_messages, pending.stats
+        sid, request.message_id, pending.content, model_messages, stats
     ):
         raise HTTPException(status_code=404, detail="That answer no longer exists.")
-    return {"kept": "retry", "content": pending.content, "stats": pending.stats}
+    return {"kept": "retry", "content": pending.content, "stats": stats}

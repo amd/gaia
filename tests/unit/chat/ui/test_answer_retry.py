@@ -7,6 +7,7 @@ Also covers ``GET /api/chat/context/{id}``, the meter's source between turns.
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -154,6 +155,54 @@ async def test_keeping_the_retry_continues_the_chat_from_it(db):
     assert turns[-1][-1] == {"role": "assistant", "content": RETRIED["content"]}
     listed = db.get_messages(sid)[-1]
     assert listed["id"] == mid and listed["content"] == RETRIED["content"]
+
+
+async def test_keeping_the_retry_keeps_the_turns_step_count_and_place(db):
+    sid, mid = _chat(db)
+    db._conn.execute(
+        "UPDATE messages SET inference_stats = ? WHERE id = ?",
+        (
+            json.dumps(
+                {"steps": 4, "place": "gpu", "tokens_per_second": 20.0, "model": "M"}
+            ),
+            mid,
+        ),
+    )
+    await _retry(db, sid, mid)
+
+    kept = await chat.choose_retry(
+        chat.RetryChoiceRequest(session_id=sid, message_id=mid, keep="retry"), db
+    )
+
+    stats = db.get_message_record(sid, mid)["inference_stats"]
+    assert (stats["steps"], stats["place"]) == (4, "gpu")
+    # Measured by the retry, so the retry's numbers win.
+    assert stats["model"] == "Other-GGUF"
+    assert stats["tokens_per_second"] == RETRIED["stats"]["tokens_per_second"]
+    assert kept["stats"] == stats
+
+
+def test_deleting_a_chat_drops_its_open_comparison():
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.server import create_app
+
+    client = TestClient(create_app(db_path=":memory:"))
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    answer_retry.store_pending(
+        sid,
+        answer_retry.PendingRetry(
+            message_id=1,
+            model="Other-GGUF",
+            content="x",
+            turn=[],
+            recorded=False,
+            stats={},
+        ),
+    )
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert answer_retry.take_pending(sid, 1) is None
 
 
 async def test_keeping_the_original_changes_nothing(db):
@@ -413,6 +462,121 @@ async def test_the_model_is_loaded_and_asked_under_one_slot_lease():
         ("lease", "Other-GGUF", "interactive"),
         ("release", "Other-GGUF"),
     ]
+
+
+def _load_failures():
+    from gaia.daemon.broker_client import BrokerUnavailableError
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
+    return [
+        InsufficientMemoryError("Other-GGUF needs 30 GB; close other apps"),
+        helpers.ModelInUseError("Other-GGUF is loaded by another app"),
+        BrokerUnavailableError("the GAIA daemon did not grant the model slot"),
+        RuntimeError("Lemonade refused to load Other-GGUF"),
+    ]
+
+
+@pytest.mark.parametrize("failure", _load_failures(), ids=lambda e: type(e).__name__)
+async def test_a_load_failure_keeps_its_advice_and_never_asks(failure):
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    with (
+        patch.object(helpers, "_maybe_load_expected_model", side_effect=failure),
+        patch.object(LemonadeClient, "health_check") as checked,
+        patch.object(LemonadeClient, "chat_completions") as asked,
+    ):
+        with pytest.raises(answer_retry.RetryError) as exc:
+            answer_retry.answer_with("Other-GGUF", [{"role": "user", "content": "q"}])
+    assert exc.value.status == 503
+    assert str(failure) in str(exc.value)
+    assert exc.value.__cause__ is failure
+    checked.assert_not_called()
+    asked.assert_not_called()
+
+
+async def test_a_slot_the_daemon_will_not_grant_is_a_retry_error():
+    from contextlib import contextmanager
+
+    from gaia.daemon.broker_client import BrokerUnavailableError
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    @contextmanager
+    def refused(model, **kwargs):
+        raise BrokerUnavailableError("lease timed out after 120 s")
+        yield  # pragma: no cover
+
+    with (
+        patch("gaia.daemon.broker_client.model_lease", refused),
+        patch.object(helpers, "_maybe_load_expected_model") as load,
+        patch.object(LemonadeClient, "chat_completions") as asked,
+    ):
+        with pytest.raises(answer_retry.RetryError) as exc:
+            answer_retry.answer_with("Other-GGUF", [{"role": "user", "content": "q"}])
+    assert exc.value.status == 503
+    assert "lease timed out after 120 s" in str(exc.value)
+    load.assert_not_called()
+    asked.assert_not_called()
+
+
+async def test_a_load_failure_still_releases_the_lease():
+    from contextlib import contextmanager
+
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
+    events = []
+
+    @contextmanager
+    def lease(model, **kwargs):
+        events.append("lease")
+        try:
+            yield None
+        finally:
+            events.append("release")
+
+    failure = InsufficientMemoryError("does not fit")
+    with (
+        patch("gaia.daemon.broker_client.model_lease", lease),
+        patch.object(helpers, "_maybe_load_expected_model", side_effect=failure),
+    ):
+        with pytest.raises(answer_retry.RetryError):
+            answer_retry.answer_with("Other-GGUF", [{"role": "user", "content": "q"}])
+    assert events == ["lease", "release"]
+
+
+async def test_an_unexpected_bug_in_the_loader_is_not_relabelled():
+    """Only the loader's documented failures become "could not be loaded"."""
+    with patch.object(
+        helpers, "_maybe_load_expected_model", side_effect=KeyError("ctx")
+    ):
+        with pytest.raises(KeyError):
+            answer_retry.answer_with("Other-GGUF", [{"role": "user", "content": "q"}])
+
+
+async def test_a_retry_whose_model_does_not_fit_tells_the_user_why(db):
+    from gaia.llm.lemonade_client import InsufficientMemoryError, LemonadeClient
+
+    sid, mid = _chat(db)
+    failure = InsufficientMemoryError(
+        "Other-GGUF needs 30 GB but 12 GB is free; close other apps"
+    )
+    with (
+        patch.object(helpers, "_maybe_load_expected_model", side_effect=failure),
+        patch.object(LemonadeClient, "chat_completions") as asked,
+        patch("gaia.llm.lemonade_client.resolve_ctx_size", return_value=32768),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await chat.retry_with(
+                chat.RetryWithRequest(
+                    session_id=sid, message_id=mid, model="Other-GGUF"
+                ),
+                _http(),
+                db,
+            )
+    assert exc.value.status_code == 503
+    assert "12 GB is free; close other apps" in exc.value.detail
+    asked.assert_not_called()
+    assert turn_queue.locked() is False
+    assert answer_retry.take_pending(sid, mid) is None
 
 
 async def test_a_retry_holds_the_model_slot_and_gives_it_back(db):

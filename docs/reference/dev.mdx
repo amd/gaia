@@ -511,6 +511,44 @@ ratios and deltas â€” how much a prompt shrank, what share was cache-eligible â€
 not as exact model token counts. `out` is the backend's own count.
 </Note>
 
+### Is GAIA keeping the model server busy?
+
+On a local llama.cpp model, each call in the record also carries the server's
+own accounting for that request, read from the stream's `timings`, so it never
+mixes in another client's request:
+
+| Field | Meaning |
+|---|---|
+| `llm_calls[].server` | `prompt_n` tokens prefilled, `cache_n` tokens reused from the KV cache, `prompt_ms` / `predicted_ms`, and `compute_s` (their sum) |
+| `llm_calls[].client` | Time spent before the request reached the server: `lease_wait_s` (daemon model-slot lease), `lock_wait_s` (this process's per-model request lock), `ensure_loaded_s` (the model status probe), `stats_fetch_s` |
+| `totals.server_compute_s` | Seconds the server computed for this turn |
+| `totals.non_model_s` | Turn wall time minus server compute: what GAIA, its tools, and the user cost |
+| `spans` | Named stretches of agent work, such as `memory_context`, `skill_recall`, `memory_post_init`, `context_evict`, `memory_tool_log`, `parse_response` |
+| `gaps` | The time between consecutive model calls, with the tools and spans that filled it |
+
+`server_compute_s` and `non_model_s` appear only when every call reported
+timings; a partial sum would understate the model and overstate GAIA. Work that
+runs after the answer (memory writes) is appended as a second line with schema
+`gaia.turn_post/1` and the same `turn_id`.
+
+The flagship sidecar also serves the last records at
+`GET /v1/gaia/debug/turns?limit=N` (with its caller token) while `GAIA_TURN_LOG`
+is set. The route is off the versioned contract and returns 404 otherwise. It
+returns every session's records, queries included, to anyone holding the
+caller token, so keep turn recording on only on a machine you use alone.
+
+To watch the server itself, `util/perf_turns.py` drives `/v1/gaia/query` and
+samples the llama.cpp server behind Lemonade: `/slots` for per-slot busy time
+and idle gaps, `/metrics` for prefill and decode seconds, and, on Windows, GPU
+utilization per process. It waits for an idle GPU before each session and flags
+a run during which the model was reloaded or another client sent requests. It
+approves every tool confirmation by itself, so only give it queries whose tools
+you would approve:
+
+```bash
+python util/perf_turns.py --sidecar http://127.0.0.1:4311 --token TOKEN --query "hello" --runs 3 --out runs.jsonl
+```
+
 ### Seeing which tools the model was given
 
 A `--trace` run writes `agent_output_<timestamp>.json`, and its `tool_schema`
