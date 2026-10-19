@@ -2389,10 +2389,10 @@ def _maybe_load_expected_model(
 
     try:
         _preflight_load(model_id, sse_handler, stopped)
-    except Exception:
+    except Exception as exc:
         if not stopped():
             raise
-        logger.info("Pre-flight for %s ended by Stop", model_id)
+        logger.info("Pre-flight for %s ended by Stop: %s", model_id, exc)
 
 
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
