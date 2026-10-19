@@ -452,10 +452,11 @@ class TestDecodeStall:
     ):
         real_popen = subprocess.Popen
         children = []
+        kills = []
 
         class Unkillable(real_popen):
             def kill(self):
-                pass  # the process ignores the kill
+                kills.append(self.pid)  # the process ignores the kill
 
         def popen(cmd, **kwargs):
             proc = Unkillable(
@@ -473,6 +474,8 @@ class TestDecodeStall:
                 media._run_ffmpeg(["ffmpeg"], Path("in.mp4"))
             assert time.monotonic() - started < 5
             assert str(children[0].pid) in str(e.value)
+            # One kill and one bounded wait, not a second round after it failed.
+            assert kills == [children[0].pid]
         finally:
             for proc in children:
                 real_popen.kill(proc)

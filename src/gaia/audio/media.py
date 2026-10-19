@@ -435,7 +435,11 @@ def _run_ffmpeg(
     for reader in readers:
         reader.start()
 
+    kill_attempted = False
+
     def stop() -> None:
+        nonlocal kill_attempted
+        kill_attempted = True
         proc.kill()
         deadline = time.monotonic() + _KILL_WAIT_SECONDS
         try:
@@ -484,7 +488,9 @@ def _run_ffmpeg(
     except BaseException:
         # A callback that raises (cancellation) must not leave ffmpeg decoding
         # a file nobody will read, holding two pipes open.
-        if proc.poll() is None:
+        # Not twice: if stop() itself failed, its error already says so, and a
+        # second try would double the wait.
+        if not kill_attempted and proc.poll() is None:
             stop()
         raise
     finally:
