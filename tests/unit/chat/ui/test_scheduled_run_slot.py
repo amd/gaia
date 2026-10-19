@@ -124,9 +124,7 @@ async def test_a_timed_out_run_stuck_before_any_tool_still_frees_the_model(
         return "late"
 
     monkeypatch.setattr(server, "_run_scheduled_prompt", hung_setup)
-    monkeypatch.setattr(
-        "gaia.ui.agent_threads.STOPPED_RUN_MODEL_GRACE_SECONDS", 0.5
-    )
+    monkeypatch.setattr("gaia.ui.agent_threads.STOPPED_RUN_MODEL_GRACE_SECONDS", 0.5)
     runs = server._ScheduledRuns(db, timeout=0.2)
     try:
         run = asyncio.create_task(runs.run("hangs building its agent"))
