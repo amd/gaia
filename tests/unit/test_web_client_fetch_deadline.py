@@ -31,6 +31,21 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):  # noqa: N802 - http.server naming
+        if self.path == "/slow-headers":
+            self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            try:
+                while not self.server.stopping.is_set():
+                    self.wfile.write(b"X-Pad: x\r\n")
+                    self.wfile.flush()
+                    time.sleep(TRICKLE_INTERVAL)
+            except OSError:
+                pass
+            return
+        if self.path == "/silent":
+            self.send_response(200)
+            self.end_headers()
+            self.server.stopping.wait(30)
+            return
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/slow")
@@ -90,7 +105,7 @@ def _bounded(fn, limit=20):
     return box, time.monotonic() - started
 
 
-@pytest.mark.parametrize("path", ["/slow", "/redirect"])
+@pytest.mark.parametrize("path", ["/slow", "/redirect", "/slow-headers"])
 def test_trickling_page_fetch_stops_at_the_deadline(server, path):
     client = _client(fetch_deadline=1)
     box, elapsed = _bounded(lambda: client.get(server + path))
@@ -109,6 +124,21 @@ def test_trickling_download_stops_and_leaves_no_partial_file(server, tmp_path):
 
     assert isinstance(box.get("error"), FetchDeadlineExceeded), box
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_silent_body_read_is_unblocked_at_the_deadline(server):
+    """No bytes at all: the timer, not the 10 s read timeout, ends the read."""
+    client = _client(fetch_deadline=1)
+    box, elapsed = _bounded(lambda: client.get(server + "/silent"))
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+    assert elapsed < 8
+
+
+def test_a_caller_timeout_is_capped_by_the_deadline(server):
+    client = _client(fetch_deadline=1)
+    box, elapsed = _bounded(lambda: client.get(server + "/silent", timeout=(5, 300)))
+    assert isinstance(box.get("error"), FetchDeadlineExceeded), box
+    assert elapsed < 8
 
 
 def test_a_fast_fetch_is_unaffected(server):
