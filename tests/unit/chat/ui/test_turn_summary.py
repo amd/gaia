@@ -3,6 +3,7 @@
 """The per-turn summary the Agent UI side rail renders (#5222)."""
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -180,6 +181,28 @@ def test_upload_display_names_reads_the_composer_link_labels():
         "abc.pdf": "kestrel-plan.pdf",
         "def.md": "notes.md",
     }
+
+
+def test_upload_display_names_matches_the_uploads_folder_however_it_is_spelled():
+    root = uploads_dir().resolve()
+    spellings = {
+        "a.pdf": f"{root.as_posix()}/a.pdf",
+        "b.pdf": f"{root}{os.sep}b.pdf",
+        "c.pdf": f"{root}/sub/../c.pdf",
+    }
+    if os.name == "nt":
+        spellings["d.pdf"] = f"{str(root).upper()}\\d.pdf"
+    message = " ".join(f"[{n}-label]({t})" for n, t in spellings.items())
+    assert upload_display_names(message) == {n: f"{n}-label" for n in spellings}
+
+
+def test_upload_display_names_ignores_lookalike_folders_and_escapes():
+    root = uploads_dir().resolve()
+    message = (
+        f"[sibling]({root}-evil/a.pdf) [parent]({root}/../b.pdf) "
+        f"[prefix]({root}x/c.pdf) [bare]({root})"
+    )
+    assert upload_display_names(message) == {}
 
 
 # ── Files ───────────────────────────────────────────────────────────────

@@ -1210,6 +1210,37 @@ class TestFileStatus:
         resp = client.post("/api/files/status", json={"paths": paths})
         assert resp.status_code == 422
 
+    def test_accepts_exactly_the_cap(self, client, home_tmp_dir):
+        paths = [str(home_tmp_dir / f"f{i}.md") for i in range(50)]
+        resp = client.post("/api/files/status", json={"paths": paths})
+        assert resp.status_code == 200
+        assert [f["exists"] for f in resp.json()["files"]] == [False] * 50
+
+    @pytest.mark.parametrize("bad", ["", "C:/x\x00.md", "\x00"])
+    def test_refuses_an_empty_path_or_a_null_byte(self, client, home_tmp_dir, bad):
+        ok = str(home_tmp_dir / "fine.md")
+        resp = client.post("/api/files/status", json={"paths": [ok, bad]})
+        assert resp.status_code == 400
+
+    def test_a_path_that_climbs_out_of_home_is_not_checked(self, client, home_tmp_dir):
+        climb = str(home_tmp_dir) + "/../../../../../../../../etc/hosts"
+        resp = client.post("/api/files/status", json={"paths": [climb]})
+        assert resp.status_code == 200
+        assert resp.json()["files"] == [{"path": climb, "exists": None, "mtime": None}]
+
+    def test_a_link_out_of_home_is_not_checked(
+        self, client, home_tmp_dir, tmp_path_factory
+    ):
+        outside = tmp_path_factory.mktemp("outside") / "secret.md"
+        outside.write_text("x", encoding="utf-8")
+        link = home_tmp_dir / "link.md"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks need extra privileges here")
+        resp = client.post("/api/files/status", json={"paths": [str(link)]})
+        assert resp.json()["files"][0]["exists"] is None
+
 
 # ── TestSecurityEdgeCases ────────────────────────────────────────────────────
 

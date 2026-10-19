@@ -338,13 +338,15 @@ def upload_display_names(message: str) -> Dict[str, str]:
     """
     from gaia.ui.utils import uploads_dir
 
-    root = str(uploads_dir().resolve())
+    root = os.path.normcase(str(uploads_dir().resolve())) + os.sep
     names: Dict[str, str] = {}
     for match in re.finditer(
         r"\[(?P<label>[^\]\n]+)\]\((?P<target>[^)\s]+)\)", message
     ):
         target = match.group("target")
         base = re.split(r"[\\/]", target)[-1]
-        if target.startswith(root) or target.startswith("/api/files/uploads/"):
+        # A Windows link may use either slash and any letter case.
+        local = os.path.normcase(os.path.normpath(target)).startswith(root)
+        if local or target.startswith("/api/files/uploads/"):
             names[base] = match.group("label").strip()
     return names
