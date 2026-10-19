@@ -172,9 +172,9 @@ icon: "bug"
       it with the command the error names, then retry.
   </Accordion>
 
-  <Accordion title="gaia init can't install the GAIA agent from the Agent Hub" icon="store">
-    `gaia init` installs the GAIA agent from the Agent Hub (`https://hub.amd-gaia.ai`, or
-    `GAIA_HUB_URL`). If the hub can't be reached, setup finishes everything else, then
+  <Accordion title="gaia init can't install the GAIA agent" icon="store">
+    `gaia init` installs the GAIA agent from GAIA's download server (`https://hub.amd-gaia.ai`, or
+    `GAIA_HUB_URL`). If the server can't be reached, setup finishes everything else, then
     reports the setup incomplete and exits with code 1. The Agent UI setup shows the same
     error instead of "GAIA is ready".
 
@@ -182,7 +182,7 @@ icon: "bug"
       root certificate in the system certificate store (IT usually can).
     - **Anything else**: check your internet connection, proxy settings, or `GAIA_HUB_URL`.
 
-    Then run `gaia hub install gaia`. The full error is in `~/.gaia/gaia.log`.
+    Then run `gaia init` again. The full error is in `~/.gaia/gaia.log`.
   </Accordion>
 </AccordionGroup>
 
