@@ -927,6 +927,8 @@ export interface ProviderModel {
     tokens_per_second?: number | null;
     /** An in-flight (or just-finished) download of this model. */
     download_progress?: DownloadProgress | null;
+    /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
+    price?: ModelPrice | null;
 }
 
 export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';
@@ -989,6 +991,35 @@ export interface LocalModelStatus {
     busy_reason?: 'warm_up' | 'request' | null;
     restarting: boolean;
     restart_error: string | null;
+}
+
+/** USD per million tokens, from GAIA's one rate card. */
+export interface ModelPrice {
+    input_per_million: number;
+    cached_input_per_million: number;
+    output_per_million: number;
+    source: string;
+}
+
+/** GET /api/spending/prices/{provider}: prices before connecting. */
+export interface CloudPriceList {
+    provider: string;
+    models: Array<{ model: string; name: string; rank: number | null; note: string | null; price: ModelPrice | null }>;
+    source: string | null;
+    note: string | null;
+}
+
+/** GET /api/spending: this month's cloud chats at list price, and the limit. */
+export interface SpendingReport {
+    month: string;
+    total_usd: number;
+    turns: number;
+    /** Turns on a model with no known price, counted apart rather than as $0. */
+    unpriced_turns: number;
+    limit_usd: number | null;
+    state: 'no_limit' | 'ok' | 'near' | 'reached' | 'allowed_over';
+    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number }>;
+    price_source: string;
 }
 
 export interface ConnectProviderBody {

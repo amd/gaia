@@ -8,6 +8,10 @@ import { useModelStore, displayModelName } from '../../stores/modelStore';
 import { ModelContextSize } from './ModelContextSize';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
+import { CloudPrices } from './CloudPrices';
+import { SpendingLimit } from './SpendingLimit';
+import { formatPrice } from './cloudPrice';
+import './CloudSpending.css';
 import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 
 const DOWNLOAD_POLL_MS = 2000;
@@ -189,6 +193,9 @@ export function ModelSettings() {
                         {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
                         {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
                     </span>
+                    {provider?.remote && (
+                        <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
+                    )}
                     {m.display_name && <span className="model-row-meta">{m.id}</span>}
                     {meta && <span className="model-row-meta">{meta}</span>}
                     {m.placement?.warning && <span className="model-row-meta is-warning" role="alert">{m.placement.warning}</span>}
@@ -250,6 +257,13 @@ export function ModelSettings() {
                             Each model runs where it was built to: GGUF models on the GPU, FLM models on the NPU.
                             {memory && ` Memory for models: ${memory}.`}
                         </p>
+                    )}
+
+                    {provider.remote && !connected && (
+                        <div className="settings-field">
+                            <span className="settings-label">Prices</span>
+                            <CloudPrices provider={provider.id} />
+                        </div>
                     )}
 
                     {provider.remote && (
@@ -337,6 +351,8 @@ export function ModelSettings() {
                             )}
                         </div>
                     )}
+
+                    {provider.remote && <SpendingLimit />}
                 </section>
             )}
         </div>

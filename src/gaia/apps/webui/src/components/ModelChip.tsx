@@ -11,6 +11,7 @@ import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelMetaLine, modelState } from './modelMeta';
+import { formatPrice } from './settings/cloudPrice';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -222,7 +223,7 @@ export function ModelChip() {
                             const current = (queued ?? active?.model) === m.id;
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const note = provider.remote
-                                ? (m.rank ? `#${m.rank} ${m.note}` : null)
+                                ? [m.rank ? `#${m.rank} ${m.note}` : null, formatPrice(m.price)].filter(Boolean).join(' · ')
                                 : [modelMetaLine(m), m.rank ? `#${m.rank} ${m.note}` : null].filter(Boolean).join(' · ');
                             return (
                                 <div key={m.id} className="popover-row">

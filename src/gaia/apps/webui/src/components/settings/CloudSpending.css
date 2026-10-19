@@ -1,0 +1,64 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Cloud prices before connecting, and the monthly spending limit. */
+
+.cloud-prices {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cloud-prices-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12.5px;
+}
+
+.cloud-prices-list li {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 12px;
+}
+
+.cloud-prices-name {
+    color: var(--text-primary);
+}
+
+.cloud-prices-note,
+.cloud-prices-price {
+    color: var(--text-secondary);
+}
+
+.model-row-meta.is-unknown-price {
+    color: var(--accent-yellow);
+}
+
+.spending-total {
+    margin: 0;
+}
+
+.spending-warning {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 0;
+    color: var(--accent-yellow);
+}
+
+.spending-warning p {
+    margin: 0;
+}
+
+.spending-limit-label {
+    align-self: center;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    white-space: nowrap;
+}

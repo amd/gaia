@@ -57,6 +57,7 @@ export interface ApiSchemas {
   InstallRequest: InstallRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
+  LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
   MemorySettingsBody: MemorySettingsBody;
@@ -602,6 +603,12 @@ export interface KnowledgeUpdate {
   entity?: string | null;
   reminded_at?: string | null;
   sensitive?: boolean | null;
+}
+/**
+ * ``limit_usd`` None removes the limit.
+ */
+export interface LimitRequest {
+  limit_usd?: number | null;
 }
 export interface LoadModelRequest {
   ctx_size?: number | null;
