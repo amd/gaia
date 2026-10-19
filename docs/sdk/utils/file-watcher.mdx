@@ -212,8 +212,9 @@ When `extensions` is not specified, FileChangeHandler watches these file types:
 
 A created or modified file is reported once it has gone `debounce_seconds` with no
 events and no change in size or modification time, so a file still being copied in is
-never read half-written, and a burst of saves becomes one callback. Deletes and moves
-are reported as they arrive.
+never read half-written, and a burst of saves becomes one callback. A file that never
+stops changing, such as a log that is written to constantly, is not reported until it
+pauses. Deletes and moves are reported as they arrive.
 
 ```python
 # Report a file once it has been unchanged for 2 seconds (default)

@@ -2794,6 +2794,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.schedule(event_handler, directory, recursive=True)
             observer.start()
             self.observers.append(observer)
+            self.file_handlers.append(event_handler)
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
@@ -2859,6 +2860,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.stop()
             observer.join()
         self.observers.clear()
+        # Each handler reindexes on its own thread; stop those too.
+        for handler in self.file_handlers:
+            handler.close()
+        self.file_handlers.clear()
 
     def load_session(self, session_id: str) -> bool:
         """

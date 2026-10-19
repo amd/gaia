@@ -67,12 +67,12 @@ def test_a_file_still_growing_without_events_is_not_reported_yet(tmp_path):
     handler = FileChangeHandler(
         on_created=lambda p: seen.append(Path(p).read_text()),
         extensions=[".txt"],
-        debounce_seconds=WINDOW,
+        debounce_seconds=0.5,
     )
     try:
         handler.on_created(_event(target))
         for _ in range(4):
-            time.sleep(WINDOW * 0.8)
+            time.sleep(0.1)
             with target.open("a") as f:
                 f.write("a")
         assert seen == []

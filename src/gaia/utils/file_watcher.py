@@ -61,6 +61,10 @@ EventCallback = Callable[[str], None]
 MoveCallback = Callable[[str, str], None]  # (src_path, dest_path)
 FilterCallback = Callable[[str], bool]
 
+# Floor on how soon a still-changing file is checked again, so a zero
+# debounce window cannot spin on stat.
+_MIN_RECHECK_SECONDS = 0.05
+
 # Default chunk size for file hashing (64KB)
 HASH_CHUNK_SIZE = 65536
 
@@ -341,6 +345,8 @@ class FileChangeHandler(FileSystemEventHandler):
 
     def _schedule_settle(self, kind: str, file_path: str) -> None:
         """Report ``file_path`` once it has stopped changing."""
+        # stat outside the lock: a slow share must not stall the observer.
+        signature = self._signature(file_path)
         with self._cond:
             if self._closed:
                 return
@@ -349,7 +355,7 @@ class FileChangeHandler(FileSystemEventHandler):
             self._pending[file_path] = [
                 first_kind,
                 time.monotonic() + self._debounce_seconds,
-                self._signature(file_path),
+                signature,
             ]
             self._ensure_dispatcher()
             self._cond.notify()
@@ -362,21 +368,20 @@ class FileChangeHandler(FileSystemEventHandler):
             self._ensure_dispatcher()
             self._cond.notify()
 
-    def _take_settled(self, now: float) -> List[tuple]:
-        # Caller holds _cond.
+    def _settle(self, checked: List[tuple], now: float) -> List[tuple]:
+        """Decide which checked paths have settled. Caller holds ``_cond``."""
         settled = []
-        for path, entry in list(self._pending.items()):
-            kind, due, signature = entry
-            if due > now:
-                continue
-            current = self._signature(path)
+        for path, entry, current in checked:
+            if self._pending.get(path) is not entry:
+                continue  # a newer event restarted its window
+            kind, _due, signature = entry
             if current is None:
                 # Gone before it settled; its delete event reports that.
                 del self._pending[path]
                 logger.debug(f"File vanished before it settled: {path}")
             elif current != signature:
                 # Still being written: wait another full window.
-                entry[1] = now + self._debounce_seconds
+                entry[1] = now + max(self._debounce_seconds, _MIN_RECHECK_SECONDS)
                 entry[2] = current
             else:
                 del self._pending[path]
@@ -389,11 +394,11 @@ class FileChangeHandler(FileSystemEventHandler):
                 while True:
                     if self._closed:
                         return
-                    items = list(self._ready)
-                    self._ready.clear()
                     now = time.monotonic()
-                    items.extend(self._take_settled(now))
-                    if items:
+                    due = [(p, e) for p, e in self._pending.items() if e[1] <= now]
+                    if self._ready or due:
+                        items = list(self._ready)
+                        self._ready.clear()
                         self._busy = True
                         break
                     if self._pending:
@@ -402,6 +407,10 @@ class FileChangeHandler(FileSystemEventHandler):
                     else:
                         self._cond.wait()
             try:
+                # stat outside the lock, as in _schedule_settle.
+                checked = [(p, e, self._signature(p)) for p, e in due]
+                with self._cond:
+                    items.extend(self._settle(checked, time.monotonic()))
                 for item in items:
                     self._run_callback(*item)
             finally:
