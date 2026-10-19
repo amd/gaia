@@ -13,10 +13,11 @@ authors = [{ name = "AMD" }]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
-# Floor: 0.25.1 is the first core release shipping
-# gaia.agents.tools.reasoning_tools, imported at agent start; 0.25.0 added
-# gaia.agents.tools.path_access (#4656); 0.22.0 added
+# Floor: 0.25.0 is the first core release shipping
+# gaia.agents.tools.path_access (#4656), imported at agent start; 0.22.0 added
 # gaia.agents.registry.get_embedding_model_for_device (#2112).
+# gaia.agents.tools.reasoning_tools first ships in 0.25.1: raise the floor to
+# it in that release, not before, or CI cannot resolve against the in-tree core.
 # tests/test_chat_dependency_floor.py guards this floor.
 #
 # Intentionally bare `amd-gaia` (no `[rag]` extras marker): a plain
@@ -25,7 +26,7 @@ requires-python = ">=3.10"
 # come from `gaia init --profile chat`'s own `_install_pip_extras()` step
 # into the ACTIVE interpreter, not from this wheel's install -- do not "fix"
 # this by adding `[rag]` here (#2358).
-dependencies = ["amd-gaia>=0.25.1"]
+dependencies = ["amd-gaia>=0.25.0"]
 
 [project.entry-points."gaia.agent"]
 chat = "gaia_agent_chat:build_chat"

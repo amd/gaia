@@ -7,9 +7,11 @@
   message starts again at the default. It registers per agent and only on a
   model that grades its reasoning, so other models' agents never see it, even
   in a server that ran gpt-oss earlier.
-- Requires `amd-gaia>=0.25.1`, the first core release that ships
-  `gaia.agents.tools.reasoning_tools`, which the agent imports at start. With
-  an older core the agent fails at import.
+- Needs core 0.25.1, the first release that ships
+  `gaia.agents.tools.reasoning_tools`, which the agent imports at start; on
+  0.25.0 it fails at import. The `amd-gaia` floor rises to 0.25.1 in that
+  release (a floor above the in-tree core cannot resolve), and
+  `tests/test_chat_dependency_floor.py` fails the release until it does.
 
 ## 0.2.0
 

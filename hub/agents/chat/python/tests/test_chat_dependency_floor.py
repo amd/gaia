@@ -18,7 +18,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 CHAT_ROOT = Path(__file__).resolve().parents[1]
+AGENTS_ROOT = CHAT_ROOT.parents[1]
 
 # First core release shipping gaia.agents.registry.get_embedding_model_for_device
 # (introduced by commit 89db99d6, first tagged in v0.22.0).
@@ -83,19 +86,55 @@ def test_pyproject_floor_covers_path_access():
     )
 
 
-def test_pyproject_floor_covers_reasoning_tools():
-    """An older core has no reasoning-effort module, so the agent can't import."""
+def _core_release() -> tuple[int, ...]:
+    from packaging.version import Version
+
+    from gaia.version import __version__
+
+    return (Version(__version__).release + (0, 0, 0))[:3]
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    [CHAT_ROOT / "pyproject.toml", AGENTS_ROOT / "gaia" / "python" / "pyproject.toml"],
+    ids=["chat", "gaia"],
+)
+def test_floor_rises_with_the_core_that_ships_reasoning_tools(pyproject):
+    """The floor can't name an unreleased core, so it must rise at that release.
+
+    Below 0.25.1 the in-tree core is the only one the floor could name; from
+    0.25.1 on, a 0.25.0 floor would let a resolver pick a core the agent can't
+    import, since it loads gaia.agents.tools.reasoning_tools at start.
+    """
     from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin
 
     assert ReasoningEffortToolsMixin
-    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
-    assert match
-    assert _floor_tuple(match.group(1)) >= REASONING_TOOLS_FLOOR, (
-        f"amd-gaia floor {match.group(1)} predates "
-        "gaia.agents.tools.reasoning_tools (first shipped in 0.25.1); the agent "
-        "ImportErrors on an older core"
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
+    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
+    floor = _floor_tuple(match.group(1))
+    assert floor <= _core_release(), (
+        f"amd-gaia floor {match.group(1)} is above the in-tree core; nothing can "
+        "resolve it until that core is released"
     )
+    if _core_release() >= REASONING_TOOLS_FLOOR:
+        assert floor >= REASONING_TOOLS_FLOOR, (
+            f"core is now {_core_release()}, but {pyproject.parent.parent.name}'s "
+            f"amd-gaia floor is still {match.group(1)}; raise it (and "
+            "min_gaia_version) to 0.25.1, the first core with reasoning_tools"
+        )
+
+
+def test_floor_guard_fails_a_release_that_forgets_the_bump(monkeypatch, tmp_path):
+    stale = tmp_path / "pyproject.toml"
+    stale.write_text('dependencies = ["amd-gaia>=0.25.0"]', encoding="utf-8")
+    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 1))
+    with pytest.raises(AssertionError, match="raise it"):
+        test_floor_rises_with_the_core_that_ships_reasoning_tools(stale)
+
+    ahead = tmp_path / "ahead.toml"
+    ahead.write_text('dependencies = ["amd-gaia>=0.26.0"]', encoding="utf-8")
+    with pytest.raises(AssertionError, match="above the in-tree core"):
+        test_floor_rises_with_the_core_that_ships_reasoning_tools(ahead)
 
 
 def test_manifest_floors_match_pyproject():
