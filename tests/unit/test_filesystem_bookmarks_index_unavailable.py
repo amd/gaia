@@ -211,3 +211,42 @@ def test_concurrent_calls_open_the_index_once(monkeypatch, saved):
     finally:
         for service in opened:
             service.close_db()
+
+
+def test_the_first_bookmark_result_says_the_index_was_rebuilt(tmp_path):
+    db_path = tmp_path / "file_index.db"
+    db_path.write_bytes(b"this is not a sqlite database" * 100)
+    agent, bookmark = _agent(_configured(db_path))
+
+    first = bookmark(action="list")
+    second = bookmark(action="list")
+    agent._fs_index.close_db()
+
+    assert first.startswith("Note: the file index was damaged")
+    assert "file_index.db.corrupt-" in first
+    assert "Note:" not in second
+
+
+def test_the_open_lock_exists_for_any_object_the_tools_bind_to():
+    from gaia.agents.tools.filesystem_tools import _open_lock_for
+
+    bare = SimpleNamespace()
+
+    assert _open_lock_for(bare) is _open_lock_for(bare)
+
+
+@pytest.mark.parametrize(
+    "code,kind",
+    [
+        (517, "busy"),  # SQLITE_BUSY_SNAPSHOT
+        (262, "busy"),  # SQLITE_LOCKED_SHAREDCACHE
+        (267, "corrupt"),  # SQLITE_CORRUPT_VTAB
+        (526, "access"),  # SQLITE_CANTOPEN_ISDIR
+        (1032, "access"),  # SQLITE_READONLY_DBMOVED
+        (522, "other"),  # SQLITE_IOERR_SHORT_READ
+    ],
+)
+def test_extended_codes_are_classified_by_their_primary_code(code, kind):
+    from gaia.agents.tools.filesystem_tools import _sqlite_kind
+
+    assert _sqlite_kind(_coded(sqlite3.OperationalError, "x", code)) == kind

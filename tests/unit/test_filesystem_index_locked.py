@@ -12,6 +12,7 @@ database / malformed) means corrupt.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -78,7 +79,7 @@ def test_operational_error_on_open_keeps_the_index(
 
 @pytest.mark.parametrize(
     "prefix",
-    ["PRAGMA journal_mode", "PRAGMA integrity_check", "SELECT 1 FROM sqlite_master"],
+    ["PRAGMA journal_mode", "PRAGMA quick_check", "SELECT 1 FROM sqlite_master"],
 )
 def test_a_lock_error_closes_the_connection_before_raising(
     monkeypatch, index_with_bookmark, prefix
@@ -110,7 +111,7 @@ def test_a_lock_error_closes_the_connection_before_raising(
 def test_a_non_corruption_database_error_keeps_the_index(
     monkeypatch, index_with_bookmark, error
 ):
-    _fail_first(monkeypatch, "PRAGMA integrity_check", error)
+    _fail_first(monkeypatch, "PRAGMA quick_check", error)
 
     with pytest.raises(type(error)):
         FileSystemIndexService(db_path=str(index_with_bookmark))
@@ -123,9 +124,7 @@ def test_a_non_corruption_database_error_keeps_the_index(
 def test_operational_error_in_integrity_check_keeps_the_index(
     monkeypatch, index_with_bookmark, message
 ):
-    _fail_first(
-        monkeypatch, "PRAGMA integrity_check", sqlite3.OperationalError(message)
-    )
+    _fail_first(monkeypatch, "PRAGMA quick_check", sqlite3.OperationalError(message))
 
     with pytest.raises(sqlite3.OperationalError, match=message):
         FileSystemIndexService(db_path=str(index_with_bookmark))
@@ -149,7 +148,7 @@ def test_a_garbage_file_is_still_rebuilt(tmp_path):
 def test_malformed_integrity_result_is_still_rebuilt(monkeypatch, index_with_bookmark):
     _fail_first(
         monkeypatch,
-        "PRAGMA integrity_check",
+        "PRAGMA quick_check",
         sqlite3.DatabaseError("database disk image is malformed"),
     )
 
@@ -222,3 +221,64 @@ def test_corruption_is_decided_by_the_sqlite_error_code(exc, corrupt):
     from gaia.filesystem.index import _is_corruption
 
     assert _is_corruption(exc) is corrupt
+
+
+def test_a_rebuild_keeps_the_damaged_file_aside(tmp_path):
+    db_path = tmp_path / "file_index.db"
+    garbage = b"this is not a sqlite database" * 100
+    db_path.write_bytes(garbage)
+
+    service = FileSystemIndexService(db_path=str(db_path))
+    try:
+        kept = service.rebuilt_from
+    finally:
+        service.close_db()
+
+    assert kept is not None
+    assert Path(kept).name.startswith("file_index.db.corrupt-")
+    assert Path(kept).read_bytes() == garbage
+
+
+def test_a_damaged_file_that_cannot_be_moved_is_not_rebuilt_over(monkeypatch, tmp_path):
+    db_path = tmp_path / "file_index.db"
+    garbage = b"this is not a sqlite database" * 100
+    db_path.write_bytes(garbage)
+
+    def refuse(self, target):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(Path, "rename", refuse)
+
+    with pytest.raises(PermissionError):
+        FileSystemIndexService(db_path=str(db_path))
+
+    monkeypatch.undo()
+    assert db_path.read_bytes() == garbage
+
+
+def test_startup_uses_the_cheap_quick_check(monkeypatch, tmp_path):
+    executed = []
+    real_init = FileSystemIndexService.init_db
+
+    class _Recording:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *args):
+            executed.append(sql)
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    def init_db(self, path=":memory:", **kwargs):
+        real_init(self, path, **kwargs)
+        self._db = _Recording(self._db)
+
+    monkeypatch.setattr(FileSystemIndexService, "init_db", init_db)
+
+    service = FileSystemIndexService(db_path=str(tmp_path / "file_index.db"))
+    service.close_db()
+
+    assert any("quick_check" in sql for sql in executed)
+    assert not any("integrity_check" in sql for sql in executed)

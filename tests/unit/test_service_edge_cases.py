@@ -126,12 +126,12 @@ class TestCheckIntegrity:
         # Confirm the schema is healthy before we break it.
         assert service.table_exists("files")
 
-        # Patch query() so that the PRAGMA integrity_check returns a failure.
+        # Patch query() so that the PRAGMA quick_check returns a failure.
         original_query = service.query
 
         def _bad_integrity(sql, *args, **kwargs):
-            if "integrity_check" in sql:
-                return {"integrity_check": "*** corruption detected ***"}
+            if "quick_check" in sql:
+                return {"quick_check": "*** corruption detected ***"}
             return original_query(sql, *args, **kwargs)
 
         with patch.object(service, "query", side_effect=_bad_integrity):

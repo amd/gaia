@@ -162,6 +162,27 @@ def _is_corruption(exc: sqlite3.DatabaseError) -> bool:
     )
 
 
+def _move_aside(db_path: str) -> Optional[str]:
+    """Rename a damaged index (and its -wal/-shm) aside; return where it went.
+
+    It holds the user's bookmarks, so it is kept rather than deleted. An
+    ``OSError`` (the file is in use, say) propagates: rebuilding over a file
+    that couldn't be moved would lose it.
+    """
+    main = Path(db_path)
+    if not main.exists():
+        return None
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    kept = main.with_name(f"{main.name}.corrupt-{stamp}")
+    main.rename(kept)
+    for suffix in ("-wal", "-shm"):
+        side = main.with_name(main.name + suffix)
+        if side.exists():
+            side.rename(kept.with_name(kept.name + suffix))
+    logger.warning("Damaged file index moved aside to %s", kept)
+    return str(kept)
+
+
 class FileSystemIndexService(DatabaseMixin):
     """
     SQLite-backed persistent file system index.
@@ -190,6 +211,8 @@ class FileSystemIndexService(DatabaseMixin):
         resolved_path = str(
             Path(db_path or (gaia_home() / "file_index.db")).expanduser()
         )
+        # Where a damaged index was moved when this open rebuilt it, else None.
+        self.rebuilt_from: Optional[str] = None
         self.init_db(resolved_path)
 
         # A file that is not a database fails here; rebuild rather than raise.
@@ -218,13 +241,11 @@ class FileSystemIndexService(DatabaseMixin):
         logger.info("FileSystemIndexService initialized: %s", resolved_path)
 
     def _rebuild_db(self, db_path: str) -> None:
-        """Close, delete, and re-init a corrupt DB file.
+        """Close a corrupt DB file, move it aside, and re-init an empty one.
 
-        Used both by ``__init__`` (if the WAL pragma can't even be set) and
-        by ``_check_integrity`` (if the file parses but integrity_check
-        reports corruption). The index DB is safe to rebuild because its
-        contents are derived from the filesystem — a subsequent
-        ``scan_directory`` call will repopulate it.
+        Used by ``__init__`` when the WAL pragma can't even be set. The file
+        list repopulates on the next ``scan_directory``; bookmarks don't, so
+        the damaged file is kept (see :func:`_move_aside`).
         """
         try:
             self.close_db()
@@ -233,10 +254,7 @@ class FileSystemIndexService(DatabaseMixin):
             # why we're rebuilding). Log at debug and continue — this is not
             # a silent fallback, it's the documented teardown path.
             logger.debug("close_db during rebuild raised (%s); continuing", exc)
-        try:
-            Path(db_path).unlink(missing_ok=True)
-        except OSError as exc:
-            logger.error("Failed to delete corrupt index DB: %s", exc)
+        self.rebuilt_from = _move_aside(db_path)
         self.init_db(db_path)
         self._db.execute("PRAGMA journal_mode=WAL")
 
@@ -276,8 +294,10 @@ class FileSystemIndexService(DatabaseMixin):
                 locked or unreadable, say). The file is left alone.
         """
         try:
-            result = self.query("PRAGMA integrity_check", one=True)
-            if result and result.get("integrity_check") == "ok":
+            # quick_check finds page damage at a fraction of integrity_check's
+            # cost, which runs on every agent start.
+            result = self.query("PRAGMA quick_check", one=True)
+            if result and next(iter(result.values())) == "ok":
                 return True
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
@@ -289,11 +309,7 @@ class FileSystemIndexService(DatabaseMixin):
         logger.warning("Database corruption detected, rebuilding...")
         db_path = self._db.execute("PRAGMA database_list").fetchone()[2]
         self.close_db()
-
-        try:
-            Path(db_path).unlink(missing_ok=True)
-        except OSError as exc:
-            logger.error("Failed to delete corrupt database: %s", exc)
+        self.rebuilt_from = _move_aside(db_path)
 
         self.init_db(db_path)
         self._db.execute("PRAGMA journal_mode=WAL")

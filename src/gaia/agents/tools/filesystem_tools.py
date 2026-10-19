@@ -98,6 +98,38 @@ def _path_in_roots(path: str, roots: list) -> bool:
     return any(candidate == root or root in candidate.parents for root in roots)
 
 
+_OPEN_LOCK_GUARD = threading.Lock()
+
+
+def _open_lock_for(agent) -> threading.Lock:
+    """The per-agent lock that serializes opening the file index.
+
+    Created on first use, so any object the filesystem tools are bound to
+    gets one, whether or not it ran ``register_filesystem_tools`` first.
+    """
+    lock = getattr(agent, "_fs_index_open_lock", None)
+    if lock is None:
+        with _OPEN_LOCK_GUARD:
+            lock = getattr(agent, "_fs_index_open_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                agent._fs_index_open_lock = lock
+    return lock
+
+
+def _take_rebuild_notice(agent, index) -> str:
+    """A one-time note that the index was rebuilt, for the next tool result."""
+    kept = getattr(index, "rebuilt_from", None)
+    if not kept or getattr(agent, "_fs_index_rebuild_reported", False):
+        return ""
+    agent._fs_index_rebuild_reported = True
+    return (
+        "Note: the file index was damaged and has been rebuilt empty, so "
+        f"bookmarks saved before may be gone. The damaged file was kept at "
+        f"{kept}.\n\n"
+    )
+
+
 class FileIndexUnavailableError(RuntimeError):
     """The configured file index exists but can't be opened right now."""
 
@@ -166,9 +198,6 @@ class FileSystemToolsMixin:
     _fs_index = None  # Optional FileSystemIndexService instance
     _path_validator = None  # Optional PathValidator instance
     _bookmarks: dict = None  # Per-instance; initialized in register_filesystem_tools()
-    _fs_index_open_lock = (
-        None  # Per-instance; initialized in register_filesystem_tools()
-    )
 
     def _bookmark_index(self):
         """The file index bookmarks live in, opening it if it failed earlier.
@@ -190,7 +219,7 @@ class FileSystemToolsMixin:
 
         from gaia.filesystem.index import FileSystemIndexService
 
-        with self._fs_index_open_lock or threading.Lock():
+        with _open_lock_for(self):
             if self._fs_index is not None:
                 return self._fs_index
             try:
@@ -260,8 +289,6 @@ class FileSystemToolsMixin:
         # sentinel being shared across agents in the same process.
         if self._bookmarks is None:
             self._bookmarks = {}
-        if getattr(self, "_fs_index_open_lock", None) is None:
-            self._fs_index_open_lock = threading.Lock()
 
         mixin = self  # Capture self for nested functions
 
@@ -1203,24 +1230,7 @@ class FileSystemToolsMixin:
                 logger.error(f"Error reading file: {e}")
                 return f"Error reading file: {e}"
 
-        @tool(atomic=True)
-        def bookmark(
-            action: str = "list",
-            path: str = None,
-            label: str = None,
-        ) -> str:
-            """Save, list, or remove bookmarks for frequently accessed files and directories.
-
-            Bookmarks persist across sessions in the file system index.
-            Use 'add' with a path and optional label to save a bookmark.
-            Use 'remove' with a path to delete a bookmark.
-            Use 'list' to see all saved bookmarks.
-
-            Args:
-                action: add, remove, or list (default: list)
-                path: File or directory path to bookmark (required for add/remove)
-                label: Human-friendly name for the bookmark (optional, for add)
-            """
+        def _bookmark_impl(action: str, path: str, label: str) -> str:
             try:
                 index = mixin._bookmark_index()
                 if action == "list":
@@ -1301,6 +1311,27 @@ class FileSystemToolsMixin:
             except Exception as e:
                 logger.error(f"Error managing bookmarks: {e}")
                 return f"Error managing bookmarks: {e}"
+
+        @tool(atomic=True)
+        def bookmark(
+            action: str = "list",
+            path: str = None,
+            label: str = None,
+        ) -> str:
+            """Save, list, or remove bookmarks for frequently accessed files and directories.
+
+            Bookmarks persist across sessions in the file system index.
+            Use 'add' with a path and optional label to save a bookmark.
+            Use 'remove' with a path to delete a bookmark.
+            Use 'list' to see all saved bookmarks.
+
+            Args:
+                action: add, remove, or list (default: list)
+                path: File or directory path to bookmark (required for add/remove)
+                label: Human-friendly name for the bookmark (optional, for add)
+            """
+            result = _bookmark_impl(action, path, label)
+            return _take_rebuild_notice(mixin, mixin._fs_index) + result
 
         # --- Helper functions (not tools, not decorated) ---
 
