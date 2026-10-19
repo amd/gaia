@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -331,3 +332,68 @@ async def test_a_hung_peer_task_in_this_process_is_bounded(monkeypatch, google):
             await asyncio.wait_for(get_or_refresh("google"), 5)
     finally:
         entry.lock.release()
+
+
+@respx.mock
+async def test_a_forward_while_waiting_does_not_clear_the_new_connection(
+    monkeypatch, google, other_process
+):
+    """The refresh resolved the provider before waiting. A forwarded import
+    that ran meanwhile replaced the client, and the stale client hash made the
+    store clear the connection the import had just saved."""
+    from contextlib import nullcontext
+
+    from gaia.connectors import api as api_mod
+    from tests.unit.connectors.test_forwarded_import import FULL_SCOPES
+
+    respx.post(TOKEN_URL).mock(
+        side_effect=_rotating_endpoint("forwarded-refresh", "fresh")
+    )
+    refresh = asyncio.create_task(get_or_refresh("google"))
+    await asyncio.sleep(0.5)
+    assert not refresh.done()
+
+    # The forward itself, as if it ran just before the other process let go.
+    monkeypatch.setattr(api_mod, "held_sync", lambda _provider: nullcontext())
+    api_mod.import_forwarded_connection(
+        provider="google",
+        client_id="forwarded.apps.googleusercontent.com",
+        client_secret="forwarded-secret",
+        refresh_token="forwarded-refresh",
+        scopes=FULL_SCOPES,
+    )
+    _release(other_process)
+
+    assert await asyncio.wait_for(refresh, 10) == "fresh"
+    assert _stored_refresh_token_any_client() == "forwarded-refresh"
+
+
+def _stored_refresh_token_any_client():
+    from gaia.connectors.store import peek_connection
+
+    stored = peek_connection("google")
+    return stored and stored["refresh_token"]
+
+
+async def test_the_slot_and_file_lock_waits_share_one_budget(
+    monkeypatch, google, other_process
+):
+    from gaia.connectors.tokens import _AccessTokenCache, _cache, _cache_key
+
+    monkeypatch.setattr(_refresh_lock, "LOCK_TIMEOUT_SECONDS", 1.0)
+    entry = _AccessTokenCache()
+    _cache[_cache_key("google", "default")] = entry
+    await entry.lock.acquire()
+
+    async def peer_finishes_after(seconds):
+        await asyncio.sleep(seconds)
+        entry.lock.release()
+
+    peer = asyncio.create_task(peer_finishes_after(0.6))
+    started = time.monotonic()
+    with pytest.raises(ConnectorsError, match="has been busy"):
+        await asyncio.wait_for(get_or_refresh("google"), 10)
+    elapsed = time.monotonic() - started
+    await peer
+
+    assert elapsed < 1.4, f"waited {elapsed:.2f}s on a 1.0 s budget"

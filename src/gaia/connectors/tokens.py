@@ -108,7 +108,7 @@ async def get_or_refresh(
     second check inside the locked block prevents N+1 refreshes when 10
     callers race.
     """
-    provider = get_provider(provider_id)
+    get_provider(provider_id)  # an unknown or unconfigured provider fails now
 
     key = _cache_key(provider_id, account_email)
     entry = _cache.get(key)
@@ -118,7 +118,9 @@ async def get_or_refresh(
     if not _is_expired(entry):
         return entry.access_token  # type: ignore[return-value]
 
-    # Bounded like the file lock: a peer task's keyring write can hang.
+    # One wait budget for the slot lock and the file lock together, so the
+    # wait plus the token POST stays inside get_or_refresh_sync's 30 s.
+    deadline = time.monotonic() + _refresh_lock.LOCK_TIMEOUT_SECONDS
     try:
         await asyncio.wait_for(entry.lock.acquire(), _refresh_lock.LOCK_TIMEOUT_SECONDS)
     except asyncio.TimeoutError as exc:
@@ -129,16 +131,21 @@ async def get_or_refresh(
         if not _is_expired(entry):
             return entry.access_token  # type: ignore[return-value]
 
-        async with _refresh_lock.held(provider_id):
-            return await _refresh_locked(provider, provider_id, account_email, entry)
+        remaining = max(0.0, deadline - time.monotonic())
+        async with _refresh_lock.held(provider_id, timeout=remaining):
+            return await _refresh_locked(provider_id, account_email, entry)
     finally:
         entry.lock.release()
 
 
 async def _refresh_locked(
-    provider, provider_id: str, account_email: str, entry: _AccessTokenCache
+    provider_id: str, account_email: str, entry: _AccessTokenCache
 ) -> str:
     """Refresh ``entry``; the caller holds its slot lock and the refresh lock."""
+    # Resolved again under the lock: a forwarded import that ran while we
+    # waited replaced the client, and the old client hash would trip the
+    # store's mismatch check and clear the connection it just saved.
+    provider = get_provider(provider_id)
     # The store raises AuthRequiredError(REAUTH_REQUIRED / TENANT_MISMATCH)
     # directly when the client_id_hash / tenant tripwire fires; we let
     # that propagate without interpretation. ``None`` means the user

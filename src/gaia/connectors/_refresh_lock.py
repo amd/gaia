@@ -14,7 +14,7 @@ import os
 import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Iterator, TypeVar
+from typing import Any, AsyncIterator, Callable, Iterator, Optional, TypeVar
 
 from gaia.config import default_gaia_home
 from gaia.connectors.errors import ConnectorsError
@@ -53,11 +53,18 @@ def timeout_error(provider_id: str) -> ConnectorsError:
 
 
 @asynccontextmanager
-async def held(provider_id: str) -> AsyncIterator[None]:
-    """Hold ``provider_id``'s connection lock from async code."""
+async def held(
+    provider_id: str, timeout: Optional[float] = None
+) -> AsyncIterator[None]:
+    """Hold ``provider_id``'s connection lock from async code.
+
+    ``timeout`` defaults to :data:`LOCK_TIMEOUT_SECONDS`; a caller that already
+    waited for another lock passes what is left of its budget.
+    """
     fd = _open(provider_id)
     try:
-        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        wait = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
+        deadline = time.monotonic() + wait
         while not try_lock(fd):
             if time.monotonic() >= deadline:
                 raise timeout_error(provider_id)
