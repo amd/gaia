@@ -263,7 +263,8 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
     const [usage, setUsage] = useState<ContextUsage | null>(null);
     const [unavailable, setUnavailable] = useState<string | null>(null);
     const [perf, setPerf] = useState<ChatPerformance | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [usageError, setUsageError] = useState<string | null>(null);
+    const [perfError, setPerfError] = useState<string | null>(null);
     const [scope, setScope] = useState<'turn' | 'chat'>('turn');
     const closeRef = useRef<HTMLButtonElement>(null);
     const onUsageRef = useRef(onUsage);
@@ -271,10 +272,16 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
     const onCloseRef = useRef(onClose);
     onCloseRef.current = onClose;
 
+    // Each section loads on its own, so one failing endpoint never blanks the other.
     const load = useCallback(() => {
         let stale = false;
-        Promise.all([api.getContextUsage(sessionId), api.getChatPerformance(sessionId)])
-            .then(([ctx, p]) => {
+        const failed = (what: string, setFailure: (msg: string) => void) => (err: unknown) => {
+            if (stale) return;
+            log.chat.error(`Could not read the ${what} for session=${sessionId}`, err);
+            setFailure(err instanceof Error ? err.message : String(err));
+        };
+        api.getContextUsage(sessionId)
+            .then((ctx) => {
                 if (stale) return;
                 if (ctx.available) {
                     setUsage(ctx);
@@ -284,14 +291,16 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
                     setUsage(null);
                     setUnavailable(ctx.reason);
                 }
-                setPerf(p);
-                setError(null);
+                setUsageError(null);
             })
-            .catch((err) => {
+            .catch(failed('context usage', setUsageError));
+        api.getChatPerformance(sessionId)
+            .then((p) => {
                 if (stale) return;
-                log.chat.error(`Could not read context and performance for session=${sessionId}`, err);
-                setError(err instanceof Error ? err.message : String(err));
-            });
+                setPerf(p);
+                setPerfError(null);
+            })
+            .catch(failed('performance', setPerfError));
         return () => { stale = true; };
     }, [sessionId]);
 
@@ -333,11 +342,10 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
                     </button>
                 </header>
                 <div className="cp-body">
-                    {error && <p className="cp-error" role="alert">{error}</p>}
-
                     <section aria-labelledby="cp-context">
                         <h3 id="cp-context">Context</h3>
-                        {!usage && <p className="cp-note">{unavailable ?? 'Measuring…'}</p>}
+                        {usageError && <p className="cp-error" role="alert">{usageError}</p>}
+                        {!usage && !usageError && <p className="cp-note">{unavailable ?? 'Measuring…'}</p>}
                         {usage && (
                             <>
                                 <p className="cp-lead">
@@ -431,7 +439,8 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
                                 )}
                             </dl>
                         )}
-                        {!perf && !error && <p className="cp-note">Measuring…</p>}
+                        {perfError && <p className="cp-error" role="alert">{perfError}</p>}
+                        {!perf && !perfError && <p className="cp-note">Measuring…</p>}
                         {perf && scope === 'turn' && (latest
                             ? <TurnStats turn={latest} />
                             : <p className="cp-note">

@@ -181,6 +181,41 @@ describe('ContextPanel', () => {
         await waitFor(() => expect(mockedApi.getChatPerformance).toHaveBeenCalledTimes(2));
     });
 
+    it('still shows the context when the performance read fails, and says why', async () => {
+        mockedApi.getChatPerformance.mockRejectedValue(new Error('Lemonade Server is not reachable'));
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        expect(await screen.findByText('18% used')).toBeInTheDocument();
+        const hood = screen.getByRole('heading', { name: 'Under the hood' }).closest('section')!;
+        expect(await within(hood).findByRole('alert')).toHaveTextContent('Lemonade Server is not reachable');
+        expect(within(hood).queryByText('Measuring…')).toBeNull();
+    });
+
+    it('still shows the performance when the context read fails, and says why', async () => {
+        mockedApi.getContextUsage.mockRejectedValue(new Error('context unavailable'));
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        expect(await screen.findByText('In the model')).toBeInTheDocument();
+        const ctx = screen.getByRole('heading', { name: 'Context' }).closest('section')!;
+        expect(await within(ctx).findByRole('alert')).toHaveTextContent('context unavailable');
+        expect(within(ctx).queryByText('Measuring…')).toBeNull();
+    });
+
+    it('with both reads failing, shows each failure in its own section', async () => {
+        mockedApi.getContextUsage.mockRejectedValue(new Error('context down'));
+        mockedApi.getChatPerformance.mockRejectedValue(new Error('performance down'));
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+        expect(screen.queryByText('Measuring…')).toBeNull();
+    });
+
+    it('clears a failure once the next read after a reply succeeds', async () => {
+        mockedApi.getChatPerformance.mockRejectedValueOnce(new Error('performance down'));
+        const { rerender } = render(<ContextPanel sessionId="s1" busy onClose={() => {}} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent('performance down');
+        rerender(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        expect(await screen.findByText('In the model')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
     it('hands the measured usage to the meter so both show one total', async () => {
         const onUsage = vi.fn();
         render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} onUsage={onUsage} />);

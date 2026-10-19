@@ -4026,12 +4026,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 from .turn_insights import summarize_turn
 
                 inference_stats = dict(inference_stats or {})
-                inference_stats["performance"] = summarize_turn(
-                    result_holder["result"],
-                    wall_seconds=_time.monotonic() - turn_started,
-                    model_id=result_holder.get("model"),
-                    loads=result_holder["model_loads"],
-                )
+                try:
+                    inference_stats["performance"] = summarize_turn(
+                        result_holder["result"],
+                        wall_seconds=_time.monotonic() - turn_started,
+                        model_id=result_holder.get("model"),
+                        loads=result_holder["model_loads"],
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    # The answer is still saved; the panel shows the turn as unmeasured.
+                    logger.warning(
+                        "Turn performance for session %s not recorded: %s",
+                        request.session_id,
+                        exc,
+                    )
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
             # Settings › Model shows each model's speed measured on this PC. Not

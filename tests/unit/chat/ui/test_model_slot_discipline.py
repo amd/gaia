@@ -498,6 +498,82 @@ def test_a_turn_stopped_while_waiting_for_the_model_never_queries(
         assert done and done[-1].get("cancelled") is True
 
 
+# ── A turn whose performance can't be summarized still saves its answer ─────
+
+
+def _run_answered_turn(monkeypatch, summarize):
+    import json
+    from unittest.mock import AsyncMock
+
+    from gaia.ui import turn_insights
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.run_manager import RunManager
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="Mine-GGUF", agent_type="chat")
+    sid = session["id"]
+    helpers._agent_cache.clear()
+    helpers._store_agent(sid, "Mine-GGUF", [], _CountingAgent(), "chat")
+    monkeypatch.setattr("gaia.ui.run_manager.run_manager", RunManager())
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
+    monkeypatch.setattr(helpers, "_maybe_load_expected_model", lambda *a, **k: None)
+    monkeypatch.setattr(turn_insights, "summarize_turn", summarize)
+
+    async def run_turn():
+        events = []
+        request = ChatRequest(session_id=sid, message="hi", stream=True)
+        async for chunk in helpers._stream_chat_response(db, session, request):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[len("data: ") :]))
+        return events
+
+    try:
+        events = asyncio.run(run_turn())
+        answers = [m for m in db.get_messages(sid) if m["role"] == "assistant"]
+        performance = db.turn_performance(sid)
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+    return events, answers, performance
+
+
+@pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
+def test_a_turn_whose_performance_cannot_be_summarized_still_saves_its_answer(
+    lemonade, monkeypatch, error
+):
+    def broken(*_a, **_k):
+        raise error("malformed stats record")
+
+    events, answers, performance = _run_answered_turn(monkeypatch, broken)
+
+    assert [a["content"] for a in answers] == ["answered"]
+    assert not [e for e in events if e.get("type") == "error"]
+    # Unmeasured, never a guessed or partial record.
+    assert performance == []
+
+
+def test_an_unexpected_summary_failure_is_not_swallowed(lemonade, monkeypatch):
+    def broken(*_a, **_k):
+        raise RuntimeError("a bug in the summary, not a bad record")
+
+    events, _answers, performance = _run_answered_turn(monkeypatch, broken)
+
+    assert [e for e in events if e.get("type") == "error"]
+    assert performance == []
+
+
+def test_a_summarized_turn_records_its_performance(lemonade, monkeypatch):
+    _events, answers, performance = _run_answered_turn(
+        monkeypatch, lambda *_a, **_k: {"time": {"wall_seconds": 1.0}}
+    )
+
+    assert [a["content"] for a in answers] == ["answered"]
+    assert [p["time"] for p in performance] == [{"wall_seconds": 1.0}]
+
+
 # ── A restart still knows which models are the Agent UI's own ──────────────
 
 
