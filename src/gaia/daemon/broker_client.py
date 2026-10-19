@@ -493,7 +493,20 @@ def acquire_lease(
                 if not raw:
                     check_cancelled(f"the model slot for '{model}'")
                     continue
-                event = json.loads(raw)
+                try:
+                    event = json.loads(raw)
+                except ValueError as e:
+                    raise BrokerUnavailableError(
+                        f"the model-slot broker at {url} sent an unreadable queue "
+                        f"update for '{model}': {raw[:200]!r}. Check `gaia daemon "
+                        "logs`."
+                    ) from e
+                if not isinstance(event, dict):
+                    raise BrokerUnavailableError(
+                        f"the model-slot broker at {url} sent a queue update for "
+                        f"'{model}' that is not an object: {raw[:200]!r}. Check "
+                        "`gaia daemon logs`."
+                    )
                 kind = event.pop("event", None)
                 if kind == "granted":
                     try:

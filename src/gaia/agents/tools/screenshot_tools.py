@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.path_access import write_access_error
 from gaia.logger import get_logger
@@ -58,6 +59,7 @@ class ScreenshotToolsMixin:
                 return denied
 
         out = Path(output_path)
+        before_change(out, "take_screenshot")
         out.parent.mkdir(parents=True, exist_ok=True)
 
         missing = []

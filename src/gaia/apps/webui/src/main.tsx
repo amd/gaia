@@ -5,15 +5,17 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { purgeLegacyAlwaysAllow } from './stores/notificationStore';
-import { applyTheme } from './utils/theme';
+import { applyTheme, resolveTheme } from './utils/theme';
 import './styles/index.css';
+import './styles/motion.css';
 
 // Always-allow tool grants are session-scoped; drop anything an older build
 // persisted so a past tick cannot silently approve tools in this session.
 purgeLegacyAlwaysAllow();
 
-// Apply saved theme (default to dark)
-applyTheme(localStorage.getItem('gaia-chat-theme') === 'light' ? 'light' : 'dark');
+// Paint the saved theme before React mounts; with none saved, follow the OS.
+const savedTheme = localStorage.getItem('gaia-chat-theme');
+applyTheme(resolveTheme(savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'system'));
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

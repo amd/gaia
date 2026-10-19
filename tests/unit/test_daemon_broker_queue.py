@@ -241,6 +241,50 @@ def test_a_daemon_that_goes_silent_mid_queue_is_reported_as_down(monkeypatch):
     listener.close()
 
 
+@pytest.mark.allow_network
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [b"{not json"],
+        [b"[1, 2]"],
+        [b'"granted"'],
+        [b'{"event": "queued", "position": 1, "queue_length": 1}', b"\xff\xfe"],
+    ],
+    ids=["garbled", "array", "bare-string", "garbage-after-queued"],
+)
+def test_an_unreadable_queue_update_is_a_broker_error(monkeypatch, lines):
+    """A corrupt stream line names the daemon, not a raw parse error."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def _serve(conn_lines=lines):
+        conn, _ = listener.accept()
+        conn.recv(65536)
+        body = b"".join(line + b"\n" for line in conn_lines)
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+        )
+        time.sleep(2)
+        conn.close()
+
+    threading.Thread(target=_serve, daemon=True).start()
+    monkeypatch.setenv(BROKER_URL_ENV_VAR, f"http://127.0.0.1:{port}")
+    monkeypatch.setenv(BROKER_TOKEN_ENV_VAR, _TOKEN)
+    monkeypatch.setattr(broker_client, "STREAM_IDLE_TIMEOUT_S", 1.0)
+    updates = []
+
+    with pytest.raises(broker_client.BrokerUnavailableError) as err:
+        broker_client.acquire_lease("m", on_update=updates.append)
+
+    assert "gaia daemon logs" in str(err.value)
+    assert not err.value.unreachable  # a bad line is not a reason to re-attach
+    assert len(updates) == len(lines) - 1
+    listener.close()
+
+
 # ── A2: a requester that goes away leaves the queue ─────────────────────────
 
 
@@ -578,7 +622,7 @@ def test_background_indexing_outlives_its_turn_without_inheriting_its_stop():
     gate, seen = threading.Event(), {}
 
     class _SlowRag:
-        def index_document(self, path, progress_callback=None):
+        def index_document(self, path, progress_callback=None, wait_callback=None):
             gate.wait(5)
             seen["priority"] = broker_client.current_priority()
             try:

@@ -121,9 +121,9 @@
     border: 1px solid var(--accent-fill);
     background: var(--accent-fill);
     color: var(--accent-fill-text);
-    font-size: 12px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     cursor: pointer;
     white-space: nowrap;
     transition: all var(--duration) var(--ease);
@@ -308,11 +308,12 @@
 }
 
 .fb-entry-size, .fb-entry-date {
-    font-size: 11px;
+    font-size: var(--fs-caption);
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
 }
 
 .fb-entry-size { min-width: 55px; text-align: right; }
@@ -386,10 +387,11 @@
     display: flex;
     gap: 10px;
     padding: 6px 12px;
-    font-size: 11px;
+    font-size: var(--fs-caption);
     color: var(--text-muted);
     border-bottom: 1px solid var(--border-light);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
 }
 
 .fb-preview-columns {
@@ -443,9 +445,9 @@
 }
 
 .fb-index-status {
-    font-size: 11px;
+    font-size: var(--fs-caption);
     color: var(--accent);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
 .fb-action-btns {

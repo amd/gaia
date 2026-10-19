@@ -148,6 +148,7 @@ from gaia.agents.base.verification import (
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
+    RECONNECTING_MESSAGE,
     budget_for_ctx,
     is_context_overflow_error,
     resolve_default_chat_model,
@@ -4389,6 +4390,8 @@ Do NOT wrap conversational replies in JSON.
                     self.console.report_phase(
                         "downloading_model", f"Downloading {model}"
                     )
+                elif state == "reconnecting":
+                    self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
                 else:
                     self.console.report_phase(
                         "loading_model", f"Loading {model} into memory"

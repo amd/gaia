@@ -14,6 +14,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/query/{run_id}/cancel` takes it out of the queue. Before, the stream went
   silent for the whole wait, so a client could not tell a queued turn from a
   dead one.
+- **No more approval prompts for files that aren't there.** Naming a missing
+  file or folder outside the allowed paths opened a 10-minute approval prompt,
+  and only after it did the agent learn the file didn't exist; a retry asked
+  again. The tool now says the file wasn't found straight away, without asking,
+  and names an allowed or attached file with the same name. `analyze_data_file`
+  given a bare file name uses the attached file of that name instead of asking
+  about one in the working folder. Secret and protected paths are refused
+  exactly as before, whether or not they exist.
+- **Background memory upkeep no longer wipes the chat's cached prompt.**
+  Memory consolidation, reconciliation and skill distillation ran on the
+  model slot the conversation uses, so the next message re-read the whole
+  ~19K-token prompt (~45 s on Gemma-4-E4B). They now run on the side slot,
+  as memory extraction already did.
+- **Opening a session or switching its model no longer freezes the other
+  sessions.** The sidecar built a new session's agent, and ran a `/model`
+  switch (which builds a new client and checks its server), on its event
+  loop. Every other session's stream stopped for that long, heartbeats
+  included, so the TUI and the daemon relay saw an idle connection. That
+  setup now runs on a worker thread, and a request that goes away mid-setup
+  still releases its session.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two
