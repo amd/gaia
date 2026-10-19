@@ -77,9 +77,10 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
             if (request.cancelled) return null;
             if (controller.signal.aborted) return { kind: 'slow' };
             const httpStatus = (error as { httpStatus?: unknown })?.httpStatus;
-            // The status handler never sends 502/504; a proxy or tunnel does when nothing answers behind it.
-            if ((error as Error)?.name === 'ApiError' && typeof httpStatus === 'number'
-                && httpStatus !== 502 && httpStatus !== 504) {
+            // The status handler never sends these: a gateway's 504 means it gave up waiting on a busy
+            // backend, a 502 means nothing answered behind it.
+            if (httpStatus === 504) return { kind: 'slow' };
+            if ((error as Error)?.name === 'ApiError' && typeof httpStatus === 'number' && httpStatus !== 502) {
                 return { kind: 'error', httpStatus, message: (error as Error).message };
             }
             return { kind: 'unreachable', error };

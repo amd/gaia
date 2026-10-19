@@ -43,13 +43,19 @@ describe('createStatusPoller', () => {
         expect(outcomes[0]).toMatchObject({ kind: 'error', httpStatus: code });
     });
 
-    // The status handler never raises these; a dev proxy, reverse proxy or tunnel
-    // sends them when nothing answers behind it.
-    it.each([502, 504])('reads a gateway HTTP %i as an unreachable backend', async (code) => {
-        mocked.getSystemStatus.mockRejectedValue(new api.ApiError(`HTTP ${code}`, code, 'Bad Gateway', null));
+    // The status handler never raises these; a dev proxy, reverse proxy or tunnel does.
+    it('reads a gateway HTTP 502 as an unreachable backend', async () => {
+        mocked.getSystemStatus.mockRejectedValue(new api.ApiError('HTTP 502', 502, 'Bad Gateway', null));
         const outcomes: unknown[] = [];
         await createStatusPoller((o) => outcomes.push(o)).check();
         expect(outcomes[0]).toMatchObject({ kind: 'unreachable' });
+    });
+
+    it('reads a gateway HTTP 504 as a slow backend, not a lost one', async () => {
+        mocked.getSystemStatus.mockRejectedValue(new api.ApiError('HTTP 504', 504, 'Gateway Timeout', null));
+        const outcomes: unknown[] = [];
+        await createStatusPoller((o) => outcomes.push(o)).check();
+        expect(outcomes[0]).toMatchObject({ kind: 'slow' });
     });
 
     it('shares the request in flight when Check again is pressed during a slow probe', async () => {
