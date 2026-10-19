@@ -10,6 +10,10 @@
  *   npm run test:visual                 # compare against the baselines
  *   npm run test:visual -- --update-snapshots
  *
+ * A local tool, not a CI gate: baselines are committed for Windows only (the
+ * snapshot path includes {platform}), so on Linux or macOS the first run reports
+ * missing snapshots. Pass --update-snapshots there to create your own.
+ *
  * Baselines carry the OS in their name, since font rasterisation differs per
  * platform. Set GAIA_VISUAL_CHROMIUM to a Chromium or Chrome binary to use one
  * already on the machine instead of `npx playwright install chromium`.

@@ -37,6 +37,7 @@ from ..sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from ..turn_queue import TurnCancelled, turn_queue
 from ..utils import resolve_upload_links
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,9 @@ async def send_message(
     """Send a message and get a response (streaming or non-streaming).
 
     Concurrency is controlled at two levels:
-    1. A global semaphore (chat_semaphore) limits overall concurrent
-       chat requests to avoid resource exhaustion.
+    1. Every turn waits in one visible line for the model (``turn_queue``).
+       A streamed turn waits inside its detached run and reports its place
+       in line; a non-streamed one waits here for up to 60 s.
     2. A per-session lock (session_locks) prevents the same session
        from having overlapping requests that would corrupt conversation
        state.
@@ -100,7 +102,6 @@ async def send_message(
     # ── Per-session lock ─────────────────────────────────────────────
     # setdefault is atomic: safe under concurrent requests for the same session
     session_locks = http_request.app.state.session_locks
-    chat_semaphore = http_request.app.state.chat_semaphore
     sid = request.session_id
     session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
@@ -118,26 +119,30 @@ async def send_message(
         )
     await session_lock.acquire()
 
-    # ── Global concurrency gate ──────────────────────────────────────
-    # Queue rather than immediately reject: wait up to 60 s for a slot.
-    # This prevents spurious 429s for sequential workloads (eval runner,
-    # multi-turn conversations) where the prior request is just wrapping up.
-    try:
-        await asyncio.wait_for(chat_semaphore.acquire(), timeout=60.0)
-    except asyncio.TimeoutError:
-        session_lock.release()
-        raise HTTPException(
-            status_code=429,
-            detail="The server is busy processing other chat requests. "
-            "Please try again in a few moments.",
-        )
-    except asyncio.CancelledError:
-        session_lock.release()
-        raise
-
-    # Both session_lock and chat_semaphore are now held by this coroutine.
-    # Track whether ownership was transferred to the streaming generator.
-    sem_released = False
+    # A streamed turn takes its place in line inside the run, so leaving the
+    # chat while it waits doesn't drop it.
+    holds_turn = False
+    if not request.stream:
+        try:
+            await asyncio.wait_for(turn_queue.acquire(sid), timeout=60.0)
+            holds_turn = True
+        except asyncio.TimeoutError:
+            session_lock.release()
+            raise HTTPException(
+                status_code=429,
+                detail="The model is busy with another chat. Try again when it "
+                "finishes, or use streaming to wait in line.",
+            )
+        except TurnCancelled:
+            session_lock.release()
+            raise HTTPException(
+                status_code=409,
+                detail="This message was stopped while it waited for another "
+                "chat to finish. Send it again to retry.",
+            )
+        except asyncio.CancelledError:
+            session_lock.release()
+            raise
 
     # Resolve the patchable functions through gaia.ui.server so tests
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
@@ -158,7 +163,6 @@ async def send_message(
                     return
                 stream_resources_released = True
                 session_lock.release()
-                chat_semaphore.release()
 
             async def _release_stream_resources():
                 # A disconnected subscriber must not admit a second producer.
@@ -181,7 +185,6 @@ async def send_message(
                 finally:
                     await _release_stream_resources()
 
-            sem_released = True
             return StreamingResponse(
                 _stream(),
                 media_type="text/event-stream",
@@ -193,6 +196,9 @@ async def send_message(
                 background=BackgroundTask(_release_stream_resources),
             )
         else:
+            from .._chat_helpers import _record_run_outcome
+
+            run_status = "failed"
             try:
                 db.add_message(request.session_id, "user", request.message)
                 model_messages = []
@@ -243,18 +249,18 @@ async def send_message(
                         model_id=session.get("model"),
                     )
                 )
+                run_status = "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,
                     sources=[],
                 )
             finally:
+                _record_run_outcome(db, request.session_id, run_status)
                 session_lock.release()
     finally:
-        # Release the semaphore for non-streaming requests or on error before
-        # the streaming generator took ownership.
-        if not sem_released:
-            chat_semaphore.release()
+        if holds_turn:
+            turn_queue.release()
 
 
 # A late answer to a turn that already ended: say so, not "no session".
@@ -565,6 +571,9 @@ async def cancel_stream(request: CancelStreamRequest):
     """
     from .._chat_helpers import _active_sse_handlers
 
+    # A turn still waiting in line has no handler yet; withdraw it instead.
+    if turn_queue.cancel(request.session_id):
+        return {"status": "ok", "cancelled": True}
     handler = _active_sse_handlers.get(request.session_id)
     if not handler:
         raise HTTPException(
@@ -579,14 +588,30 @@ async def cancel_stream(request: CancelStreamRequest):
 
 @router.get("/api/chat/active")
 async def list_active_runs():
-    """Return the session ids with a currently-running chat turn.
+    """Return the chats with a turn in flight, and what each is waiting on.
 
-    The Agent UI polls this to render a "still running" indicator on
-    backgrounded sessions in the sidebar — runs continue server-side after
-    the user navigates away, so this is the source of truth independent of
-    any open SSE connection (#1580 follow-up).
+    The Agent UI polls this for the chat list: runs continue server-side
+    after the user navigates away, so this is the source of truth
+    independent of any open SSE connection (#1580 follow-up).
+
+    * ``session_ids`` — every chat with a turn running or waiting in line.
+    * ``queued`` — chats waiting for the model, first to run next first.
+    * ``awaiting_user`` — chat id → ``"permission"`` or ``"question"`` for
+      turns paused on the user (#5221).
     """
-    return {"session_ids": run_manager.active_sessions()}
+    session_ids = run_manager.active_sessions()
+    awaiting = {}
+    for sid in session_ids:
+        run = run_manager.get(sid)
+        handler = run.handler if run is not None else None
+        waiting_on = handler.waiting_on() if handler is not None else None
+        if waiting_on:
+            awaiting[sid] = waiting_on
+    return {
+        "session_ids": session_ids,
+        "queued": [sid for sid in turn_queue.waiting() if run_manager.is_running(sid)],
+        "awaiting_user": awaiting,
+    }
 
 
 @router.get("/api/chat/attach")
@@ -711,13 +736,14 @@ async def retry_with(
             detail="GAIA is still answering in this chat. Retry once it finishes.",
         )
     # Loading the other model unloads the one any running chat is using.
-    chat_semaphore = http_request.app.state.chat_semaphore
-    if chat_semaphore.locked():
+    if turn_queue.locked():
         raise HTTPException(
             status_code=409,
             detail="GAIA is answering in another chat. Retry once it finishes.",
         )
-    async with session_lock, chat_semaphore:
+    async with session_lock:
+        # Free a moment ago, so this takes the slot at once and holds new turns back.
+        await turn_queue.acquire(sid)
         try:
             earlier, question, recorded = answer_retry.split_latest_turn(
                 db.get_context_messages(sid), record
@@ -730,6 +756,8 @@ async def retry_with(
             )
         except answer_retry.RetryError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        finally:
+            turn_queue.release()
     answer_retry.store_pending(
         sid,
         answer_retry.PendingRetry(

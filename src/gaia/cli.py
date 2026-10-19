@@ -8585,13 +8585,25 @@ def _handle_daemon_start():
 def _handle_daemon_status():
     from gaia.daemon import client, paths
 
-    report = client.status_report()
+    report = client.status_report(
+        on_slow=lambda: print(
+            "GAIA daemon: slow to answer, waiting up to "
+            f"{client.BUSY_PROBE_TIMEOUT_S:.0f}s…"
+        )
+    )
     state = report["state"]
     if state == "not_running":
         print("GAIA daemon: not running")
         print("  Start it with `gaia daemon start`.")
         return
     inst = report["instance"]
+    if state == "busy":
+        print("GAIA daemon: running, but not answering (busy or stuck)")
+        print(f"  Registry: {paths.instance_path()} (pid {inst.pid}, port {inst.port})")
+        print("  It was left running. Retry in a moment; if it stays like this,")
+        print("  `gaia daemon restart` restarts it and its sidecar agents.")
+        print("  Where to look: `gaia daemon logs`.")
+        return
     if state == "stale":
         reason = {
             "pid_dead": "recorded pid is not alive",
@@ -8895,7 +8907,7 @@ def _resolve_sidecar_log(agent_id: str):
     try:
         from gaia.daemon import client
 
-        inst = client.attach()
+        inst = client.attach(patient=False)
         if inst is not None:
             for entry in _fetch_daemon_agents(inst):
                 if entry.get("agent_id") == agent_id and entry.get("port"):

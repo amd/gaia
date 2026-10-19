@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -556,8 +556,23 @@ export async function deactivateConnectorAgent(
 
 // -- Sessions ------------------------------------------------------------------
 
+/** The backend's largest page of chats. */
+export const SESSION_PAGE_SIZE = 200;
+
+/** Every chat, newest first, fetched page by page so none past the first page go missing. */
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-    return apiFetch('GET', '/sessions');
+    const byId = new Map<string, Session>();
+    let total = 0;
+    for (let offset = 0; ; offset += SESSION_PAGE_SIZE) {
+        const page: { sessions: Session[]; total: number } = await apiFetch(
+            'GET', `/sessions?limit=${SESSION_PAGE_SIZE}&offset=${offset}`,
+        );
+        total = page.total;
+        // A chat updated between two page reads can shift into both; keep one.
+        for (const s of page.sessions) if (!byId.has(s.id)) byId.set(s.id, s);
+        if (page.sessions.length < SESSION_PAGE_SIZE || offset + SESSION_PAGE_SIZE >= total) break;
+    }
+    return { sessions: [...byId.values()], total };
 }
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
@@ -570,6 +585,19 @@ export async function updateSession(id: string, data: { title?: string; title_is
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function getSession(id: string): Promise<Session> {
+    return apiFetch('GET', `/sessions/${id}`);
+}
+
+export async function pinSession(id: string, pinned: boolean): Promise<Session> {
+    return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/** Clear the chat's unread mark. */
+export async function markSessionRead(id: string): Promise<Session> {
+    return apiFetch('POST', `/sessions/${id}/read`);
 }
 
 export async function toggleSessionPrivacy(id: string): Promise<Session> {
@@ -986,26 +1014,6 @@ export function attachToRun(
         });
 
     return controller;
-}
-
-// -- Tool Confirmation ---------------------------------------------------------
-
-export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
-    return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
-}
-
-export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
-    return apiFetch('GET', '/chat/permissions');
-}
-
-export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
-    return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
-}
-
-/** Revoke one "always allow" grant, or all of them when `key` is omitted. */
-export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
-    const q = key ? `?key=${encodeURIComponent(key)}` : '';
-    return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
 }
 
 // -- Documents -----------------------------------------------------------------

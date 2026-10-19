@@ -363,6 +363,10 @@ class SessionResponse(BaseModel):
     inference_provider: Optional[str] = None       # "lemonade", "fireworks", "amd", ...
     inference_provider_name: Optional[str] = None  # "Fireworks AI"
     inference_description: Optional[str] = None    # one sentence, as the TUI shows it
+    pinned: bool = False                    # pinned to the top of the chat list
+    unread: bool = False                    # a turn finished since the chat was last opened
+    last_run_status: Optional[str] = None   # "done" | "failed" | "stopped"
+    kind: str = "chat"                      # "chat" | "eval" | "scheduled"
 
 class SessionListResponse(BaseModel):
     sessions: List[SessionResponse]
@@ -740,6 +744,18 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   <Accordion title="PATCH /api/sessions/{session_id}/private">
     Toggle a session's private (incognito) mode.
   </Accordion>
+
+  <Accordion title="PUT /api/sessions/{session_id}/pin">
+    Pin (`{"pinned": true}`) or unpin a chat. Leaves `updated_at` alone, so the
+    chat keeps its place in the recency groups. **Response:** `SessionResponse`
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/read">
+    Clear the chat's `unread` flag; the UI calls it when the chat is opened.
+    Every finished turn sets `unread` and `last_run_status`. A chat titled
+    `Eval: …` or `Schedule: …` is created with `kind` `eval` or `scheduled`.
+    **Response:** `SessionResponse`
+  </Accordion>
 </AccordionGroup>
 
 ### Undo a turn's file changes
@@ -823,6 +839,14 @@ Deleting a chat deletes its copies.
     From the Agent UI (`X-Gaia-Client: agent-ui`) a non-`gaia` `agent_type` is
     a **422**, and sending into a chat stored under another agent is a **409**
     ("start a new chat"). See [Flagship only](#flagship-only).
+
+    Turns run one at a time. A streamed turn sent while another chat is working
+    starts at once and waits in line inside its run, sending
+    `{"type": "status", "phase": "queued", "queue_position": 1,
+    "queue_waited_s": 0, "message": "Waiting for the GPU — 1st in line"}`
+    whenever its place changes and again every 10 s while it waits, so the
+    stream is never silent. A non-streamed turn waits up to 60 s, then gets
+    **429**.
 
     **Request:**
     ```json
@@ -934,9 +958,21 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="GET /api/chat/active">
-    Session ids with a currently-running chat turn — a run continues
-    server-side after the user navigates away, so this (not an open SSE
-    connection) is the source of truth for a "still running" indicator.
+    Chats with a turn in flight — a run continues server-side after the user
+    navigates away, so this (not an open SSE connection) is the source of
+    truth for the chat list.
+
+    ```json
+    {
+      "session_ids": ["a", "b"],
+      "queued": ["b"],
+      "awaiting_user": {"a": "permission"}
+    }
+    ```
+
+    `queued` lists chats waiting for the model, next to run first.
+    `awaiting_user` maps a chat paused on the user to `permission` or
+    `question`.
   </Accordion>
 
   <Accordion title="GET /api/chat/attach">
@@ -948,7 +984,8 @@ Deleting a chat deletes its copies.
   <Accordion title="POST /api/chat/cancel">
     Cancel an active streaming turn without tearing down the HTTP connection
     — sets the SSE handler's cancelled flag and, for an email-relay turn
-    parked in a blocking socket read, forces it to error out.
+    parked in a blocking socket read, forces it to error out. A turn still
+    waiting in line is withdrawn and ends with a cancelled `done` event.
   </Accordion>
 
   <Accordion title="POST /api/chat/user-input">

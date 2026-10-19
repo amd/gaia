@@ -406,6 +406,20 @@ class SessionResponse(BaseModel):
     inference_provider: Optional[str] = None
     inference_provider_name: Optional[str] = None
     inference_description: Optional[str] = None
+    # The chat list as a queue (#5221).
+    pinned: bool = False
+    # A turn finished since the user last opened the chat.
+    unread: bool = False
+    # How the last turn ended: "done", "failed" or "stopped"; None before any.
+    last_run_status: Optional[str] = None
+    # "chat" for a person's chats; "eval" and "scheduled" are hidden by default.
+    kind: str = "chat"
+
+
+class SessionPinRequest(BaseModel):
+    """Pin or unpin a chat."""
+
+    pinned: bool
 
 
 class SessionListResponse(BaseModel):

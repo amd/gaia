@@ -215,7 +215,6 @@ def client(db):
     app.include_router(chat_router)
     app.state.db = db
     app.state.session_locks = {}
-    app.state.chat_semaphore = None
     return TestClient(app)
 
 
