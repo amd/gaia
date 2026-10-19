@@ -847,8 +847,13 @@ async def choose_retry(request: RetryChoiceRequest, db: ChatDatabase = Depends(g
         if pending.recorded
         else None
     )
+    record = db.get_message_record(sid, request.message_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="That answer no longer exists.")
+    # The turn's steps stay, so keep their count and where they ran.
+    stats = {**(record["inference_stats"] or {}), **pending.stats}
     if not db.replace_answer(
-        sid, request.message_id, pending.content, model_messages, pending.stats
+        sid, request.message_id, pending.content, model_messages, stats
     ):
         raise HTTPException(status_code=404, detail="That answer no longer exists.")
-    return {"kept": "retry", "content": pending.content, "stats": pending.stats}
+    return {"kept": "retry", "content": pending.content, "stats": stats}

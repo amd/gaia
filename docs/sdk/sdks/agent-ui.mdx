@@ -1070,7 +1070,9 @@ Deleting a chat deletes its copies.
     Keep one answer from a comparison: `{session_id, message_id, keep}`, where
     `keep` is `original` or `retry`. `retry` replaces the answer in place,
     keeping the turn's tool evidence, so the next message continues from it.
-    404: no open comparison for that message.
+    Its stats become the retry's, keeping the turn's step count and where it
+    ran. Deleting the session drops an open comparison. 404: no open
+    comparison for that message.
   </Accordion>
 </AccordionGroup>
 

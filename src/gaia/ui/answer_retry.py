@@ -62,6 +62,12 @@ def store_pending(session_id: str, retry: PendingRetry) -> None:
         _pending[session_id] = retry
 
 
+def forget(session_id: str) -> None:
+    """Drop a deleted session's open comparison."""
+    with _pending_lock:
+        _pending.pop(session_id, None)
+
+
 def take_pending(session_id: str, message_id: int) -> Optional[PendingRetry]:
     """Remove and return the session's pending retry of *message_id*."""
     with _pending_lock:

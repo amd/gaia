@@ -7,6 +7,7 @@ Also covers ``GET /api/chat/context/{id}``, the meter's source between turns.
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -154,6 +155,54 @@ async def test_keeping_the_retry_continues_the_chat_from_it(db):
     assert turns[-1][-1] == {"role": "assistant", "content": RETRIED["content"]}
     listed = db.get_messages(sid)[-1]
     assert listed["id"] == mid and listed["content"] == RETRIED["content"]
+
+
+async def test_keeping_the_retry_keeps_the_turns_step_count_and_place(db):
+    sid, mid = _chat(db)
+    db._conn.execute(
+        "UPDATE messages SET inference_stats = ? WHERE id = ?",
+        (
+            json.dumps(
+                {"steps": 4, "place": "gpu", "tokens_per_second": 20.0, "model": "M"}
+            ),
+            mid,
+        ),
+    )
+    await _retry(db, sid, mid)
+
+    kept = await chat.choose_retry(
+        chat.RetryChoiceRequest(session_id=sid, message_id=mid, keep="retry"), db
+    )
+
+    stats = db.get_message_record(sid, mid)["inference_stats"]
+    assert (stats["steps"], stats["place"]) == (4, "gpu")
+    # Measured by the retry, so the retry's numbers win.
+    assert stats["model"] == "Other-GGUF"
+    assert stats["tokens_per_second"] == RETRIED["stats"]["tokens_per_second"]
+    assert kept["stats"] == stats
+
+
+def test_deleting_a_chat_drops_its_open_comparison():
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.server import create_app
+
+    client = TestClient(create_app(db_path=":memory:"))
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    answer_retry.store_pending(
+        sid,
+        answer_retry.PendingRetry(
+            message_id=1,
+            model="Other-GGUF",
+            content="x",
+            turn=[],
+            recorded=False,
+            stats={},
+        ),
+    )
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert answer_retry.take_pending(sid, 1) is None
 
 
 async def test_keeping_the_original_changes_nothing(db):
