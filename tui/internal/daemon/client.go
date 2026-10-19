@@ -146,6 +146,25 @@ func (c *Client) verify(ctx context.Context, inst *Instance) error {
 type statusBody struct {
 	Service string `json:"service"`
 	PID     int    `json:"pid"`
+	// Raw, to tell absent (an older daemon) from null (no limit) from a number.
+	AgentReadTimeoutS  json.RawMessage `json:"agent_read_timeout_s"`
+	AgentReadTimeoutEr string          `json:"agent_read_timeout_error"`
+}
+
+func (b statusBody) relayBudget() RelayBudget {
+	switch {
+	case b.AgentReadTimeoutEr != "":
+		return RelayBudget{Known: true, Err: b.AgentReadTimeoutEr}
+	case len(b.AgentReadTimeoutS) == 0:
+		return RelayBudget{}
+	case string(b.AgentReadTimeoutS) == "null":
+		return RelayBudget{Known: true}
+	}
+	var secs float64
+	if err := json.Unmarshal(b.AgentReadTimeoutS, &secs); err != nil || secs <= 0 {
+		return RelayBudget{Known: true, Err: fmt.Sprintf("the daemon reported an unreadable relay budget %s", b.AgentReadTimeoutS)}
+	}
+	return RelayBudget{Known: true, Seconds: secs}
 }
 
 // probe checks the recorded port with the recorded token. It returns a nil error
@@ -189,6 +208,7 @@ func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 		return StaleForeign, fmt.Errorf("port %d is served by pid %d but the registry records pid %d",
 			inst.Port, body.PID, inst.PID)
 	}
+	inst.RelayBudget = body.relayBudget()
 	return StaleCorrupt, nil
 }
 
