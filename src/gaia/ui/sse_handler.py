@@ -1868,12 +1868,19 @@ class SSEOutputHandler(OutputHandler):
         return result
 
     def waiting_on(self) -> Optional[str]:
-        """``"permission"`` or ``"question"`` while the turn is paused on the user."""
+        """``"permission"`` or ``"question"`` while the turn is paused on the user.
+
+        An answered prompt no longer counts, even while the turn waits in line
+        to get back on the model.
+        """
         with self._confirm_lock:
-            if self._confirm_id is not None or self._relay_confirm_id is not None:
+            unanswered = self._confirm_event is None or not self._confirm_event.is_set()
+            if (
+                self._confirm_id is not None and unanswered
+            ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if self._user_input_events:
+            if any(not evt.is_set() for evt in self._user_input_events.values()):
                 return "question"
         return None
 
