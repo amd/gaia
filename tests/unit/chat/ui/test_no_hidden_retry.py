@@ -21,8 +21,6 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.run_manager import RunManager
 
-pytestmark = pytest.mark.asyncio
-
 
 class _ToolThenModelError:
     """Runs a tool with a side effect, then the model call fails."""
