@@ -49,6 +49,7 @@ on:
       - 'src/gaia/eval/flagship_tasks.py'
       - 'eval/tasks/swebench_subsets.json'
       - '.github/workflows/eval_swebench.yml'
+      - 'util/swebench_model_preflight.py'
 
 permissions:
   contents: read
@@ -103,24 +104,18 @@ jobs:
           gaia lemonade embedded start --timeout 180
           gaia lemonade embedded status
 
-      # One tiny request before ten 40-minute tasks: a model Fireworks will not
-      # serve fails here with its status, not as ten ERROR rows and "no predictions".
+      # One tiny request before ten 40-minute tasks. A model Fireworks itself
+      # will not serve skips a PR run with a warning (no PR can fix it) and fails
+      # a dispatch; a key or GAIA routing fault fails both.
       - name: Require the model to answer
+        id: model
         run: |
           . "$HOME/.gaia/lemonade/env.sh"
-          body=$(printf '{"model":"%s","messages":[{"role":"user","content":"ok"}],"max_tokens":1}' "$SWE_MODEL")
-          # curl prints 000 itself when it cannot connect; never add a second code.
-          code=$(curl -sS -o "$RUNNER_TEMP/preflight.json" -w '%{http_code}' \
-            -H "Authorization: Bearer $LEMONADE_API_KEY" -H 'Content-Type: application/json' \
-            -d "$body" "$LEMONADE_BASE_URL/chat/completions" || true)
-          if [ "$code" != "200" ]; then
-            echo "::error title=SWE-bench model unavailable::$SWE_MODEL answered HTTP $code through the embedded Lemonade, so no task can run. | WHAT TO DO: 404 means Fireworks does not serve this model to the FIREWORKS_API_KEY account (retired or not deployed) - pick a served model and update SWE_MODEL and the rate card in src/gaia/eval/bench/metering.py; 401/403 means the key is wrong or revoked - rotate FIREWORKS_API_KEY. | WHERE TO LOOK: .github/workflows/eval_swebench.yml"
-            exit 1
-          fi
-          echo "$SWE_MODEL answered."
+          python util/swebench_model_preflight.py
 
       - name: Pick the instances
         id: pick
+        if: steps.model.outputs.ready == 'true'
         run: |
           if [ -n "${{ github.event.inputs.instances }}" ]; then
             ids="${{ github.event.inputs.instances }}"
@@ -131,6 +126,7 @@ jobs:
           echo "Instances: $ids"
 
       - name: Run and grade
+        if: steps.model.outputs.ready == 'true'
         # One task at a time; each image is pulled before its run and removed
         # after, which keeps the hosted runner's disk under its limit.
         run: |
@@ -140,7 +136,7 @@ jobs:
             --no-judge --run-timeout 2400 --out "$OUT"
 
       - name: Summarize
-        if: always()
+        if: always() && steps.model.outputs.ready == 'true'
         run: |
           python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
           import json, os, pathlib
@@ -174,7 +170,7 @@ jobs:
           EOF
 
       - name: Upload results
-        if: always()
+        if: always() && steps.model.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: swebench-${{ env.SUBSET }}-${{ github.run_id }}

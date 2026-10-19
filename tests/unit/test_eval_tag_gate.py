@@ -275,6 +275,12 @@ def test_swebench_runs_on_dispatch_not_a_schedule_and_checks_the_model_first():
         "Setup Python Environment"
     )
     assert names.index("Require the model to answer") < names.index("Run and grade")
+    # A PR skips the tasks when the model is unavailable upstream; nothing that
+    # needs the model may run unless the preflight said ready.
+    steps = {s.get("name", ""): s for s in workflow["jobs"]["swebench"]["steps"]}
+    assert steps["Require the model to answer"]["id"] == "model"
+    for name in ("Pick the instances", "Run and grade", "Summarize", "Upload results"):
+        assert "steps.model.outputs.ready == 'true'" in steps[name]["if"], name
 
 
 def test_merge_queue_notifier_only_wakes_for_merge_queue_runs():
