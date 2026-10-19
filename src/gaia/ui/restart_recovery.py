@@ -177,6 +177,8 @@ def recover_interrupted_work(db: ChatDatabase) -> Dict[str, int]:
             tools_notice=tools_ran_notice,
         )
         if closed is not None:
+            # The chat list shows it failed and unread, as a turn that errors does.
+            db.finish_session_run(row["session_id"], "failed")
             turns += 1
     documents = len(db.fail_unfinished_indexing(INTERRUPTED_INDEXING_ERROR))
     if turns or documents:

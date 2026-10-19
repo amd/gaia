@@ -631,3 +631,88 @@ async def test_a_clock_step_does_not_make_a_live_server_look_gone(monkeypatch):
     assert not process_owner.owner_is_gone(f"{parent}:b00t/4242:other")
     # A different process now holding that pid started at another tick.
     assert process_owner.owner_is_gone(f"{parent}:b00t/9999:other")
+
+
+async def test_a_recovered_turn_shows_failed_and_unread_in_the_chat_list(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        other = db.create_session()["id"]
+        db.begin_turn(sid, "hello?")
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+            # A second pass finds nothing, and never touches a chat it didn't close.
+            assert recover_interrupted_work(db)["turns"] == 0
+        session = db.get_session(sid)
+        untouched = db.get_session(other)
+    finally:
+        db.close()
+    assert session["last_run_status"] == "failed"
+    assert session["unread"]
+    assert not untouched.get("last_run_status")
+    assert not untouched["unread"]
+
+
+async def test_a_turn_withdrawn_from_the_queue_is_closed_by_its_cancel(tmp_path):
+    """Stop while waiting for the model saves "Cancelled." as the turn's reply,
+    so no marker is left for a restart to call interrupted."""
+    from gaia.ui.turn_queue import TurnCancelled
+
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hi")
+
+        class _WithdrawnQueue:
+            async def acquire(self, owner, on_position=None):
+                raise TurnCancelled(owner)
+
+            def position(self, _owner):
+                return 0
+
+        emitted = []
+        with patch("gaia.ui.turn_queue.turn_queue", _WithdrawnQueue()):
+            await helpers._run_chat_lifecycle(
+                SimpleNamespace(emit=emitted.append),
+                db,
+                {},
+                ChatRequest(session_id=sid, message="hi"),
+            )
+        assert db.turns_in_progress() == []
+        contents = [m["content"] for m in db.get_messages(sid)]
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 0
+    finally:
+        db.close()
+    assert contents == ["hi", "Cancelled."]
+
+
+async def test_a_spending_refusal_is_the_turns_one_reply(tmp_path):
+    """A turn stopped by the cloud spending limit saves the refusal as its
+    reply; closing the turn must not add the same text a second time."""
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        session = db.create_session(model="M-GGUF", agent_type="chat")
+        sid = session["id"]
+        db.begin_turn(sid, "hi")
+
+        async def no_queue_wait(*_args, **_kwargs):
+            return None
+
+        with (
+            patch.object(helpers, "_agent_registry", None),
+            patch.object(helpers.spending, "limit_refusal", return_value="Over limit."),
+            patch("gaia.ui.turn_queue.turn_queue.acquire", no_queue_wait),
+            patch("gaia.ui.turn_queue.turn_queue.release"),
+        ):
+            await helpers._run_chat_lifecycle(
+                SimpleNamespace(emit=lambda _data: None, handler=None),
+                db,
+                session,
+                ChatRequest(session_id=sid, message="hi", stream=True),
+            )
+        contents = [m["content"] for m in db.get_messages(sid)]
+        assert db.turns_in_progress() == []
+    finally:
+        db.close()
+    assert contents == ["hi", "Over limit."]

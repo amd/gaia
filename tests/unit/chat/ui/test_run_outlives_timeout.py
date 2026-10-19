@@ -24,6 +24,7 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.routers import chat
 from gaia.ui.run_manager import RunManager
+from gaia.ui.turn_queue import TurnQueue
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.allow_network]
 
@@ -53,9 +54,7 @@ class _BlockingAgent:
 def runtime():
     db = ChatDatabase(":memory:")
     manager = RunManager()
-    state = SimpleNamespace(
-        session_locks={}, chat_semaphore=asyncio.BoundedSemaphore(1)
-    )
+    state = SimpleNamespace(session_locks={}, turn_queue=TurnQueue())
     request = SimpleNamespace(app=SimpleNamespace(state=state), headers={})
     server = SimpleNamespace(
         _stream_chat_response=helpers._stream_chat_response,
@@ -66,6 +65,8 @@ def runtime():
         patch.object(chat, "run_manager", manager),
         patch("gaia.ui.run_manager.run_manager", manager),
         patch.object(chat, "_server_mod", return_value=server),
+        patch.object(chat, "turn_queue", state.turn_queue),
+        patch("gaia.ui.turn_queue.turn_queue", state.turn_queue),
         patch.object(helpers, "_agent_registry", None),
         patch.object(helpers, "_maybe_load_expected_model"),
         patch.object(helpers, "_maybe_update_session_title", AsyncMock()),
@@ -101,7 +102,7 @@ async def test_non_streaming_timeout_holds_session_until_worker_exits(runtime):
 
             assert not task.done()
             assert state.session_locks[sid].locked()
-            assert state.chat_semaphore.locked()
+            assert state.turn_queue.locked()
             # The worker was told to stop at its next step boundary.
             assert agent._cancel_event is not None and agent._cancel_event.is_set()
         finally:
@@ -111,7 +112,7 @@ async def test_non_streaming_timeout_holds_session_until_worker_exits(runtime):
     # The worker finished after being told to stop; its answer is kept.
     assert response.content == "late answer"
     assert not state.session_locks[sid].locked()
-    assert not state.chat_semaphore.locked()
+    assert not state.turn_queue.locked()
 
 
 async def test_torn_down_stream_holds_session_until_producer_exits(runtime):
@@ -141,7 +142,7 @@ async def test_torn_down_stream_holds_session_until_producer_exits(runtime):
 
         assert manager.is_running(sid)
         assert state.session_locks[sid].locked()
-        assert state.chat_semaphore.locked()
+        assert state.turn_queue.locked()
     finally:
         agent.release.set()
     await asyncio.gather(run.task, return_exceptions=True)
@@ -149,7 +150,7 @@ async def test_torn_down_stream_holds_session_until_producer_exits(runtime):
 
     assert not manager.is_running(sid)
     assert not state.session_locks[sid].locked()
-    assert not state.chat_semaphore.locked()
+    assert not state.turn_queue.locked()
 
 
 async def test_timed_out_goal_tick_holds_session_until_worker_exits(
@@ -173,12 +174,11 @@ async def test_timed_out_goal_tick_holds_session_until_worker_exits(
         agent_loop_mod.AgentLoop, "_get_actionable_goals", lambda s: [goal]
     )
     monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.1)
+    monkeypatch.setattr(agent_loop_mod, "turn_queue", TurnQueue())
 
     loop = agent_loop_mod.AgentLoop()
     loop._db = db
-    loop._app_state = SimpleNamespace(
-        tunnel=None, session_locks={}, chat_semaphore=asyncio.Semaphore(1)
-    )
+    loop._app_state = SimpleNamespace(tunnel=None, session_locks={})
     tick = asyncio.create_task(
         loop._run_step(agent_loop_mod.AgentTrigger("idle_tick", session["id"]))
     )
@@ -194,4 +194,4 @@ async def test_timed_out_goal_tick_holds_session_until_worker_exits(
     await asyncio.wait_for(tick, timeout=5)
 
     assert not loop._app_state.session_locks[sid].locked()
-    assert not loop._app_state.chat_semaphore.locked()
+    assert not agent_loop_mod.turn_queue.locked()
