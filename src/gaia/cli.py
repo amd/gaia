@@ -1045,6 +1045,32 @@ def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
         )
 
 
+def _hide_subcommands(subparsers, names) -> None:
+    """Drop subcommands from ``-h`` while they keep parsing and dispatching.
+
+    ``add_parser(help=argparse.SUPPRESS)`` is not enough before Python 3.14:
+    the name stays in the ``{a,b,c}`` metavar and prints ``==SUPPRESS==``.
+    argparse's "invalid choice" error still lists hidden names; dropping them
+    from ``choices`` would stop them dispatching.
+    """
+    hidden = set(names)
+    unknown = hidden - set(subparsers.choices)
+    if unknown:
+        raise ValueError(f"cannot hide unknown subcommands: {sorted(unknown)}")
+    # pylint: disable=protected-access
+    subparsers._choices_actions = [
+        a for a in subparsers._choices_actions if a.dest not in hidden
+    ]
+    visible = [n for n in subparsers.choices if n not in hidden]
+    subparsers.metavar = "{" + ",".join(visible) + "}"
+
+
+# Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
+# publishing agents is no longer a user-facing feature (#5172).
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -3272,7 +3298,7 @@ Examples:
     # Agent Hub command (install/uninstall agents through the daemon)
     hub_parser = subparsers.add_parser(
         "hub",
-        help="Browse, install and uninstall agents from the GAIA Agent Hub",
+        help="Install and uninstall agents",
     )
     hub_subparsers = hub_parser.add_subparsers(
         dest="hub_action", help="Hub action to perform"
@@ -3407,7 +3433,7 @@ Examples:
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Author and manage agents (init/version/test, export/import)",
+        help="Test and manage agents (test, export/import, install)",
     )
     agent_subparsers = agent_parser.add_subparsers(
         dest="agent_action", help="Agent action to perform"
@@ -3450,7 +3476,7 @@ Examples:
     # the Agent Hub. The headless equivalent of the Agent UI's Install button.
     agent_install_parser = agent_subparsers.add_parser(
         "install",
-        help="Install a published agent from the Agent Hub into ~/.gaia/agents/",
+        help="Install a published agent into ~/.gaia/agents/",
     )
     agent_install_parser.add_argument(
         "agent_id",
@@ -3476,8 +3502,9 @@ Examples:
     # errors resolves to a real command).
     agent_subparsers.add_parser(
         "list",
-        help="List installed agents and agents available from the Agent Hub",
+        help="List installed agents and the agents available to install",
     )
+    _hide_subcommands(agent_subparsers, HIDDEN_AGENT_COMMANDS)
 
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
     # MCP-server connectors + per-agent grants. The subparser tree lives in
@@ -3787,6 +3814,7 @@ Examples:
     )
 
     _register_uninstall_subparser(subparsers, parent_parser)
+    _hide_subcommands(subparsers, HIDDEN_TOP_LEVEL_COMMANDS)
     return parser
 
 
@@ -8265,8 +8293,8 @@ def handle_agent_command(args):
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
         print(
-            "Available actions: init, version, test, configure, health, status, "
-            "export, import, install, list"
+            "Available actions: test, configure, health, status, export, import, "
+            "install, list"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -8285,7 +8313,7 @@ def handle_agent_command(args):
 
 
 def handle_agent_list(_args):
-    """List installed agents and agents available from the Agent Hub.
+    """List installed agents and the agents available to install.
 
     Read-only discovery for ``gaia agent install`` — degrades to an
     installed-only listing (with a loud note) if the hub catalog is unreachable,
@@ -8302,12 +8330,12 @@ def handle_agent_list(_args):
         available = result.agents
         offline = result.offline
     except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
-        print(f"⚠ Could not reach the Agent Hub catalog: {exc}", file=sys.stderr)
+        print(f"⚠ Could not reach the agent catalog: {exc}", file=sys.stderr)
 
     available_ids = {e.get("id") for e in available}
     if available:
         suffix = " (offline cache)" if offline else ""
-        print(f"Available from the Agent Hub{suffix}:")
+        print(f"Available to install{suffix}:")
         for entry in sorted(available, key=lambda a: a.get("id", "")):
             aid = entry.get("id", "?")
             ver = entry.get("latest_version", "?")
@@ -8326,12 +8354,12 @@ def handle_agent_list(_args):
 
     extra = [aid for aid in sorted(installed) if aid not in available_ids]
     if extra:
-        print("\nInstalled (not in the hub catalog):")
+        print("\nInstalled (not in the catalog):")
         for aid in extra:
             print(f"  {aid:<24} {installed[aid].version}")
 
     if not available and not installed:
-        print("No agents installed, and the Agent Hub catalog is unavailable.")
+        print("No agents installed, and the agent catalog is unavailable.")
     else:
         print("\nInstall one with: gaia agent install <id>")
         if any(
@@ -9071,12 +9099,12 @@ def _handle_hub_list(args):
     body = r.json()
     agents = body.get("agents", [])
     if body.get("offline"):
-        print("⚠️  hub unreachable — showing the cached catalog")
+        print("⚠️  agent catalog unreachable — showing the cached copy")
     if not agents:
         print(
             "No agents installed."
             if getattr(args, "installed", False)
-            else "The Agent Hub catalog is empty."
+            else "The agent catalog is empty."
         )
         return
     print(f"{'AGENT':<14} {'LATEST':<10} {'INSTALLED':<12} {'SIZE':<8} NAME")
@@ -9108,7 +9136,7 @@ def _handle_hub_list(args):
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
         print(
-            f"\n{len(hidden)} hub agent(s) hidden — this GAIA build cannot run "
+            f"\n{len(hidden)} agent(s) hidden — this GAIA build cannot run "
             f"them yet: {', '.join(hidden)}"
         )
 
