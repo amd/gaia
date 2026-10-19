@@ -91,13 +91,19 @@ def _finish(procs, timeout: float = 120):
 # --------------------------------------------------------------------------
 
 _CONFIG_WRITER = """
-import sys
+import os, sys, time
 from pathlib import Path
 from gaia.config import GaiaConfig
 path, key, n = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+# Optional: keep writing until a reader has overlapped enough reads.
+reader_ready = sys.argv[4] if len(sys.argv) > 4 else None
 together()
-for i in range(n):
+i, deadline = 0, time.monotonic() + 60
+while i < n or (
+    reader_ready and not os.path.exists(reader_ready) and time.monotonic() < deadline
+):
     GaiaConfig.save_key(key, f"{key}-{i}", path)
+    i += 1
 finished()
 """
 
@@ -105,7 +111,7 @@ _CONFIG_READER = """
 import sys, time
 from pathlib import Path
 from gaia.config import GaiaConfig, GaiaConfigError
-path = Path(sys.argv[1])
+path, enough = Path(sys.argv[1]), sys.argv[2]
 errors = reads = 0
 together()
 while not others_finished():
@@ -115,6 +121,8 @@ while not others_finished():
     except (GaiaConfigError, OSError) as e:
         errors += 1
         last = repr(e)
+    if reads == 200:
+        open(enough, "w").close()
 print(errors, reads)
 if errors:
     print(last, file=sys.stderr)
@@ -124,11 +132,12 @@ if errors:
 def test_config_reader_never_sees_a_half_written_file(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"tui_only_key": "x" * 4000}), encoding="utf-8")
+    enough = tmp_path / "reader-overlapped"
     procs = _race(
         tmp_path,
         [
-            (_CONFIG_WRITER, str(path), "last_model", "300"),
-            (_CONFIG_READER, str(path)),
+            (_CONFIG_WRITER, str(path), "last_model", "300", str(enough)),
+            (_CONFIG_READER, str(path), str(enough)),
         ],
     )
     (w_rc, _, w_err), (r_rc, r_out, r_err) = _finish(procs)
