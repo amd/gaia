@@ -434,7 +434,7 @@ jobs:
   benchmark:
     name: C++ Benchmarks
     needs: [build-and-test]
-    if: needs.build-and-test.result == 'success'
+    if: "!cancelled() && needs.build-and-test.result == 'success'"
     uses: ./.github/workflows/benchmark_cpp.yml
 
   # Summary job

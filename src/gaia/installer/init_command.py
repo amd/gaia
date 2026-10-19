@@ -1242,21 +1242,22 @@ class InitCommand:
             # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
             try:
-                from gaia.config import GaiaConfig, GaiaConfigError
+                from gaia.config import GaiaConfig
 
-                # Load-then-update so a user-set default_model (or any future
-                # field) survives re-running `gaia init`. init is also the
-                # natural recovery path, so if the existing file is corrupt,
-                # reset to a fresh config rather than leaving the bad file.
-                try:
-                    config = GaiaConfig.load()
-                except GaiaConfigError as e:
-                    self._print_warning(f"Resetting unreadable config: {e}")
-                    config = GaiaConfig()
-                config.profile = self.profile
-                config.default_device = "npu" if self.profile == "npu" else "gpu"
-                self._record_chat_choice(config)
-                config.save()
+                def _apply_profile(config) -> None:
+                    config.profile = self.profile
+                    config.default_device = "npu" if self.profile == "npu" else "gpu"
+                    self._record_chat_choice(config)
+
+                # Read under the lock, so a default_model another process saved
+                # during this long-running init survives. init is the recovery
+                # path, so a corrupt file is reset rather than left in place.
+                GaiaConfig.update(
+                    _apply_profile,
+                    on_unreadable=lambda e: self._print_warning(
+                        f"Resetting unreadable config: {e}"
+                    ),
+                )
             except Exception as e:
                 self._print_error(
                     f"Failed to save profile '{self.profile}' to "

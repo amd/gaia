@@ -2953,6 +2953,8 @@ The running daemon reloads schedules every second, so adding, pausing, resuming,
 
 A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
 
+Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
+
 Only one `gaia schedule daemon` can run per schedule store. A second one exits immediately with an error instead of firing every schedule twice. The daemon holds `~/.gaia/schedules.lock` while it runs; the OS releases it when the process exits, even after a crash. On Windows that error names no pid — Windows refuses another process's read of the locked byte, so the holder is unknowable.
 
 ```bash
@@ -2964,8 +2966,8 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | Action | Description |
 |--------|-------------|
 | `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
-| `list` | List all schedules with their next fire time |
-| `show <name>` | Show one schedule's full configuration and next fire time |
+| `list` | List all schedules with their next fire time, and how many runs each missed |
+| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs |
 | `remove <name>` | Delete a schedule |
 | `pause <name>` | Disable a schedule without deleting it |
 | `resume <name>` | Re-enable a paused schedule |
@@ -3241,9 +3243,32 @@ model **evicts** the first. The daemon therefore runs a **model-slot broker**
 that hands out one lease at a time, so model loads queue instead of racing.
 
 When a daemon is running, `gaia` commands and the Agent UI backend attach to it
-automatically and take a lease around each model load — you may see a brief
-`⏳ switching model…` while another process finishes. Interactive chat turns
-take priority over background work (embedder warm-ups, autonomous briefs).
+automatically and take a lease around each model load and request. Interactive
+chat turns take priority over background work (memory extraction, embedder
+warm-ups, autonomous briefs).
+
+A request that has to wait is **queued, not failed**:
+
+- It waits for as long as the request ahead of it holds the slot. The holder
+  renews its lease every 15 seconds. One that stops renewing for a minute (it
+  exited) is dropped and the queue moves on. One that keeps renewing past the
+  time its own request is allowed (its request timeout, the two-minute retry
+  window, and 15 minutes for a model load) is wedged, and loses the slot too.
+- Background work (memory extraction, document indexing) that has waited ten
+  minutes goes ahead of newer chat turns, so it is never starved.
+- While an **Agent UI** turn waits, it shows `Waiting for the model — <who> is
+  using it` with its place in line and seconds waited, updated every two
+  seconds, and the wait never counts toward the turn's idle stop. A `gaia`
+  command prints `⏳` once. The gaia agent's `/query` stream, which the
+  terminal UI reads, carries the same wait as a `model_queue` status (see
+  `docs/spec/agent-ui-query-sse-contract.md` §4.4).
+- Pressing Stop in the Agent UI, cancelling a `/query` run, pressing Ctrl+C, or
+  closing the app takes the request out of the queue, so the slot never goes to a caller that has left.
+  Indexing a turn started keeps going after the turn ends.
+- To cap the wait, set `GAIA_MODEL_LEASE_WAIT_S` to a number of seconds. Past
+  it, the request fails with where it stood in line and who held the model.
+- If the daemon stops sending queue updates for 30 seconds, the request fails
+  and names the daemon as the cause.
 
 With **no daemon running, nothing changes**: there are no sidecars, nothing else
 holds the slot, and loads proceed directly. Attaching never starts a daemon.
@@ -3340,6 +3365,15 @@ SHA-256 before it is written; a mismatch fails the install and leaves nothing be
 Install and uninstall stop a running sidecar first, and two installs of the same agent
 never race (the second gets a clean "already in progress" error). Requires the daemon
 extras (`pip install "amd-gaia[api]"`).
+
+A Python agent's install waits up to 5 minutes when another install holds uv's
+package cache (GAIA sets `UV_LOCK_TIMEOUT` for uv, keeping a shorter value of your
+own). While it waits, the install status reads "waiting for another install to
+finish"; if the cache is still taken, it stops with an error saying so. An install
+that does no work (no CPU or disk activity) for 900 seconds is stopped as stuck
+(`GAIA_HUB_PIP_TIMEOUT` changes that window), and one still running after 2 hours is
+stopped however busy it looks (`GAIA_HUB_PIP_MAX_SECONDS` changes that ceiling).
+Either way, everything the install started is stopped and the install is rolled back.
 
 Any agent outside the `verified` security tier runs third-party code on your machine,
 so the daemon refuses it with **HTTP 403** until you pass `--trust`. The error shows

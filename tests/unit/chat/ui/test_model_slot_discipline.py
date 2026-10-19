@@ -276,6 +276,57 @@ def test_title_runs_on_the_side_slot_under_the_lease(title_client):
     assert kwargs["auto_download"] is False
 
 
+def test_title_gives_up_on_a_long_model_queue(title_client, monkeypatch):
+    """A title waits at most 30 s for the model, then returns None instead of
+    holding a worker thread behind a long turn."""
+    client, _made, _posts = title_client
+    limits = []
+
+    @contextmanager
+    def busy_lease(model, **_kwargs):
+        limit, _source = broker_client.current_wait_limit()
+        limits.append(limit)
+        raise BrokerUnavailableError(
+            f"gave up waiting {limit}s for '{model}'", status_code=504
+        )
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(broker_client, "model_lease", busy_lease)
+
+    title = asyncio.run(
+        helpers._generate_session_title(
+            _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+        )
+    )
+
+    assert title is None
+    assert limits == [30.0]
+    client.chat_completions.assert_not_called()
+    # The cap is the title's alone; it does not leak into the caller's scope.
+    assert broker_client.current_wait_limit() == (None, None)
+
+
+def test_title_wait_cap_overrides_a_longer_env_limit(title_client, monkeypatch):
+    """GAIA_MODEL_LEASE_WAIT_S set high must not let a title wait longer."""
+    client, _made, _posts = title_client
+    monkeypatch.setenv(broker_client.LEASE_WAIT_LIMIT_ENV_VAR, "3600")
+    limits = []
+
+    @contextmanager
+    def lease(model, **_kwargs):
+        limits.append(broker_client.current_wait_limit()[0])
+        yield None
+
+    monkeypatch.setattr(broker_client, "model_lease", lease)
+    asyncio.run(
+        helpers._generate_session_title(
+            _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+        )
+    )
+
+    assert limits == [30.0]
+
+
 # ── Settings → Load: through the lease, and asks while a chat answers ────────
 
 

@@ -675,6 +675,9 @@ def uninstall(
         raise AgentNotInstalledError(
             f"{exc} See what is installed with `gaia hub list --installed`."
         ) from exc
+    except installer_mod.InstallInProgressError as exc:
+        # Another process (the Agent UI, `gaia hub`) is installing it.
+        raise InstallBusyError(f"cannot uninstall '{agent_id}': {exc}") from exc
     except installer_mod.InstallError as exc:
         raise InstallFailedError(str(exc)) from exc
     finally:
