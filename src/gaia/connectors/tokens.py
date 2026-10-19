@@ -11,7 +11,8 @@ Critical invariants (T-5b, plan amendments A6, A7):
   pairs are forbidden — they deadlock if a refresh raises.
 
 - The daemon, the Agent UI and the CLI each refresh in their own process,
-  so a refresh also holds a per-provider OS file lock and re-reads the
+  so a refresh also holds the per-provider connection lock
+  (``_refresh_lock``, shared with connect and disconnect) and re-reads the
   stored connection after taking it. Without it two processes refresh with
   the same refresh token, and the loser's ``invalid_grant`` deleted the
   connection the winner had just rotated.
@@ -37,15 +38,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import AsyncIterator, Optional, Tuple
+from typing import Optional, Tuple
 
 import httpx
 
+from gaia.connectors import _refresh_lock
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -60,7 +59,6 @@ from gaia.connectors.store import (
     peek_connection,
     save_connection,
 )
-from gaia.daemon.lock import try_lock, unlock
 
 logger = logging.getLogger(__name__)
 
@@ -70,41 +68,9 @@ logger = logging.getLogger(__name__)
 # that expires mid-API-call.
 _EXPIRY_BUFFER_SECONDS = 60
 
-# A peer's token POST (10 s timeout) plus its keyring writes, leaving room for
-# our own refresh inside get_or_refresh_sync's 30 s bound (_loop.py).
-_REFRESH_LOCK_TIMEOUT_SECONDS = 15.0
-_REFRESH_LOCK_POLL_SECONDS = 0.05
-
-
-def _refresh_lock_path(provider_id: str) -> Path:
-    # Scoped like the keyring it guards: per user (not per GAIA_HOME), per
-    # provider (the slot is keyed by provider alone, store.py A10).
-    return Path.home() / ".gaia" / "connectors" / f"{provider_id}.refresh.lock"
-
-
-@asynccontextmanager
-async def _cross_process_refresh_lock(provider_id: str) -> AsyncIterator[None]:
-    """Hold the refresh lock every GAIA process takes for ``provider_id``."""
-    path = _refresh_lock_path(provider_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        deadline = time.monotonic() + _REFRESH_LOCK_TIMEOUT_SECONDS
-        while not try_lock(fd):
-            if time.monotonic() >= deadline:
-                raise ConnectorsError(
-                    f"Another GAIA process has been refreshing the {provider_id} "
-                    f"token for over {_REFRESH_LOCK_TIMEOUT_SECONDS:.0f}s (lock "
-                    f"held on {path}). Retry; if it keeps happening, look for a "
-                    "stuck `gaia daemon` or Agent UI process."
-                )
-            await asyncio.sleep(_REFRESH_LOCK_POLL_SECONDS)
-        try:
-            yield
-        finally:
-            unlock(fd)
-    finally:
-        os.close(fd)
+# An overall cap on the token POST (httpx's timeout is per phase), so a peer
+# holding the connection lock always finishes inside its 15 s wait.
+_TOKEN_POST_DEADLINE_SECONDS = 10.0
 
 
 @dataclass
@@ -158,7 +124,7 @@ async def get_or_refresh(
         if not _is_expired(entry):
             return entry.access_token  # type: ignore[return-value]
 
-        async with _cross_process_refresh_lock(provider_id):
+        async with _refresh_lock.held(provider_id):
             return await _refresh_locked(provider, provider_id, account_email, entry)
 
 
@@ -172,7 +138,7 @@ async def _refresh_locked(
     # never connected. ``current_tenant`` (A18) is the LIVE provider's
     # resolved tenant — ``getattr`` because non-Microsoft providers
     # (Google) have no ``.tenant`` attribute at all.
-    stored = await asyncio.to_thread(
+    stored = await _refresh_lock.run_to_completion(
         load_connection,
         provider_id,
         current_client_id_hash=provider.client_id_hash,
@@ -189,7 +155,9 @@ async def _refresh_locked(
             provider, stored["refresh_token"]
         )
     except ConnectorsError as e:
-        if isinstance(e, ConnectionRevokedError) and not await asyncio.to_thread(
+        if isinstance(
+            e, ConnectionRevokedError
+        ) and not await _refresh_lock.run_to_completion(
             _delete_if_unchanged, provider_id, account_email, stored["refresh_token"]
         ):
             raise _replaced_error(provider_id) from e
@@ -236,12 +204,11 @@ async def _refresh_locked(
     # guess on every future unrelated failure).
     if new_refresh and new_refresh != stored["refresh_token"]:
         # A reconnect or disconnect during the POST must not be overwritten.
-        if not await asyncio.to_thread(
-            _still_holds, provider_id, account_email, stored["refresh_token"]
-        ):
-            raise _replaced_error(provider_id)
-        await asyncio.to_thread(
-            save_connection,
+        if not await _refresh_lock.run_to_completion(
+            _save_if_still_holds,
+            provider_id,
+            account_email,
+            stored["refresh_token"],
             provider=provider_id,
             account_email=stored.get("account_email", DEFAULT_ACCOUNT),
             refresh_token=new_refresh,
@@ -256,7 +223,8 @@ async def _refresh_locked(
             # forwarded across rotation, or the next disconnect would
             # revoke the host app's own grant.
             forwarded=bool(stored.get("forwarded")),
-        )
+        ):
+            raise _replaced_error(provider_id)
 
     entry.access_token = new_access
     entry.expires_at = time.monotonic() + expires_in
@@ -300,8 +268,17 @@ async def _refresh_token(
     """
     body = provider.refresh_request_body(refresh_token)
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(provider.token_url, data=body)
+    async def _post():
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await client.post(provider.token_url, data=body)
+
+    try:
+        response = await asyncio.wait_for(_post(), _TOKEN_POST_DEADLINE_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise httpx.TimeoutException(
+            f"Token endpoint for {provider.provider_id} did not answer within "
+            f"{_TOKEN_POST_DEADLINE_SECONDS:.0f}s. Check your connection and retry."
+        ) from exc
 
     if response.status_code == 400:
         try:
@@ -383,10 +360,19 @@ async def _refresh_token(
     return access, new_refresh, int(expires_in)
 
 
-def _still_holds(provider_id: str, account_email: str, refresh_token: str) -> bool:
-    """Whether the stored connection still holds ``refresh_token``."""
-    current = peek_connection(provider_id, account_email=account_email)
-    return current is not None and current.get("refresh_token") == refresh_token
+def _save_if_still_holds(
+    slot_provider: str, slot_account: str, sent_refresh_token: str, **save_kwargs
+) -> bool:
+    """Save a rotated token only if the stored one is still the token sent.
+
+    The compare and the write run in one call under the connection lock, so a
+    reconnect or disconnect can't land between them.
+    """
+    current = peek_connection(slot_provider, account_email=slot_account)
+    if current is None or current.get("refresh_token") != sent_refresh_token:
+        return False
+    save_connection(**save_kwargs)
+    return True
 
 
 def _delete_if_unchanged(
@@ -394,12 +380,11 @@ def _delete_if_unchanged(
 ) -> bool:
     """Delete the connection only if it still holds the rejected refresh token.
 
-    A reconnect, or a process outside the refresh lock (an older GAIA), may
-    have stored a new one meanwhile; deleting that would lose a working
-    connection.
+    ``None`` from the store can mean a torn read of a chunked blob that a
+    reconnect is writing, so it is never taken as permission to delete.
     """
     current = peek_connection(provider_id, account_email=account_email)
-    if current is not None and current.get("refresh_token") != sent_refresh_token:
+    if current is None or current.get("refresh_token") != sent_refresh_token:
         return False
     delete_connection(provider_id, account_email=account_email)
     return True

@@ -24,7 +24,7 @@ import httpx
 import pytest
 import respx
 
-from gaia.connectors import tokens
+from gaia.connectors import _refresh_lock, tokens
 from gaia.connectors.errors import ConnectionRevokedError, ConnectorsError
 from gaia.connectors.providers import _registry
 from gaia.connectors.store import load_connection, save_connection
@@ -140,7 +140,7 @@ async def test_waits_for_the_other_process_and_uses_its_rotated_token(
 
 @respx.mock
 async def test_lock_held_too_long_fails_loudly(monkeypatch, google, other_process):
-    monkeypatch.setattr(tokens, "_REFRESH_LOCK_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(_refresh_lock, "LOCK_TIMEOUT_SECONDS", 0.3)
     route = respx.post(TOKEN_URL).mock(side_effect=_rotating_endpoint(SEED, "x"))
 
     with pytest.raises(ConnectorsError, match="Another GAIA process"):
@@ -243,3 +243,77 @@ async def test_rotation_after_a_disconnect_does_not_resurrect_it(google):
         await get_or_refresh("google")
 
     assert _stored_refresh_token(google) is None
+
+
+@respx.mock
+async def test_invalid_grant_during_a_torn_read_deletes_nothing(monkeypatch, google):
+    # A chunked blob being rewritten by a reconnect reads back as None.
+    monkeypatch.setattr(tokens, "peek_connection", lambda *_a, **_k: None)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(400, json={"error": "invalid_grant"})
+    )
+
+    with pytest.raises(ConnectorsError, match="replaced"):
+        await get_or_refresh("google")
+
+    monkeypatch.undo()
+    assert _stored_refresh_token(google) == SEED
+
+
+def _lock_is_free() -> bool:
+    from gaia.daemon.lock import try_lock, unlock
+
+    fd = os.open(str(_lock_path()), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if try_lock(fd):
+            unlock(fd)
+            return True
+        return False
+    finally:
+        os.close(fd)
+
+
+@respx.mock
+async def test_cancel_during_a_write_keeps_the_lock_until_it_finishes(
+    monkeypatch, google
+):
+    respx.post(TOKEN_URL).mock(return_value=_rotated())
+    started, finish = threading.Event(), threading.Event()
+    real_save = tokens.save_connection
+
+    def slow_save(**kwargs):
+        started.set()
+        assert finish.wait(5), "test never released the write"
+        real_save(**kwargs)
+
+    monkeypatch.setattr(tokens, "save_connection", slow_save)
+
+    refresh = asyncio.create_task(get_or_refresh("google"))
+    for _ in range(100):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.05)
+    assert started.is_set()
+
+    refresh.cancel()
+    await asyncio.sleep(0.2)
+    assert not _lock_is_free(), "lock released while the keyring write ran"
+
+    finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(refresh, 5)
+    assert _lock_is_free()
+    assert _stored_refresh_token(google) == "r2"
+
+
+async def test_a_slow_token_endpoint_fails_inside_the_lock_cap(monkeypatch, google):
+    monkeypatch.setattr(tokens, "_TOKEN_POST_DEADLINE_SECONDS", 0.2)
+
+    async def slow_post(self, url, **kwargs):
+        await asyncio.sleep(1.0)
+        return _rotated()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", slow_post)
+
+    with pytest.raises(httpx.TimeoutException, match="did not answer"):
+        await get_or_refresh("google")

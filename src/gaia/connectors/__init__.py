@@ -15,7 +15,8 @@ running as the user can drive the full flow.
 Scope assumption: the in-memory token cache is process-local. Two GAIA
 processes running concurrently (e.g. ``gaia chat --ui`` and ``gaia connectors
 status``) each maintain their own cache and share the keyring, so a refresh
-holds a per-provider file lock and re-reads the stored refresh token under it.
+holds a per-provider file lock (shared with connect and disconnect) and
+re-reads the stored refresh token under it.
 See ``docs/security/connectors.mdx`` for the cross-process discussion.
 
 The internal modules (``tokens``, ``flow``, ``store``, ``grants``, ``pkce``,

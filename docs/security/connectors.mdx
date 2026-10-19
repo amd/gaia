@@ -96,9 +96,10 @@ locally (browsers, native mail clients, etc.).
 **Concurrent processes refreshing the same provider's token.** Two GAIA
 processes running as the same user (e.g. `gaia chat --ui` and
 `gaia connectors status`) each maintain their own in-memory access-
-token cache and share the keyring. A refresh holds a per-provider file
-lock (`~/.gaia/connectors/<provider>.refresh.lock`, per user like the
-keyring) and re-reads the stored refresh token after taking it, so two
+token cache and share the keyring. A refresh, a connect and a disconnect
+each hold a per-provider file lock
+(`~/.gaia/connectors/<provider>.refresh.lock`, per user like the keyring).
+A refresh re-reads the stored refresh token after taking it, so two
 processes never refresh with the same token. A refresh that finishes
 after the user reconnected or disconnected leaves the stored connection
 alone: `invalid_grant` deletes it, and a rotated token replaces it, only

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia.connectors._refresh_lock import locked_write
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -259,7 +260,9 @@ class OAuthPkceHandler:
             provider_id, account_email=account_email
         )
 
-        delete_connection(provider_id, account_email=account_email)
+        await locked_write(
+            provider_id, delete_connection, provider_id, account_email=account_email
+        )
 
         # Wipe per-agent grants for this connector_id. Local import keeps
         # the module-level dependency graph identical to before.
