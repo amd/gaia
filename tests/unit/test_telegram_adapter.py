@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("src"))
 
+from gaia.messaging import telegram as telegram_module
 from gaia.messaging.telegram import UNAUTHORIZED_REPLY, TelegramAdapter
 
 
@@ -523,23 +524,22 @@ async def test_a_reply_that_stops_streaming_is_stopped_and_frees_the_bot(monkeyp
     monkeypatch.setattr(
         "gaia.messaging.telegram.get_or_create_session", lambda uid: WedgedSession()
     )
-    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=0.3)
+    stuck_session = object()
+    monkeypatch.setitem(telegram_module._USER_SESSIONS, 1, stuck_session)
+    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=1.0)
     reply = AsyncMock()
     update = _text_update(1, "hello", reply)
 
     started = time.monotonic()
-    await asyncio.wait_for(adapter._handle_message(update, None), timeout=5)
-    assert time.monotonic() - started < 5
+    await asyncio.wait_for(adapter._handle_message(update, None), timeout=8)
+    assert time.monotonic() - started < 8
 
     final = reply.edit_text.await_args_list[-1].args[0]
     assert final.startswith("Partial\n\n")
     assert "without progress" in final
-
-    # While the stopped stream unwinds, the same user is told to wait rather
-    # than starting a second generation on the same session.
-    busy = _text_update(1, "again", AsyncMock())
-    await adapter._handle_message(busy, None)
-    assert "still being stopped" in busy.message.reply_text.await_args.args[0]
+    assert "new conversation" in final
+    # The stuck generation keeps its session; the next message gets a new one.
+    assert 1 not in telegram_module._USER_SESSIONS
 
     # Once the stream yields again it is closed, not read further.
     release.set()

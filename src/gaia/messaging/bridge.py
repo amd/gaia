@@ -409,12 +409,14 @@ class AgentChannel:
                 return
             self._turn_done.clear()
             state = _TurnState(turn=turn, last_progress=self._clock())
-            with self._active_lock:
-                self._active = state
             if self._dead is not None:
-                self._dispatch_terminal_error(self._dead)
+                # Never made active, so nothing the killed child flushed late
+                # can land in this turn's reply.
+                self._render_terminal_error(state, self._dead)
                 self._finish_turn()
                 continue
+            with self._active_lock:
+                self._active = state
             try:
                 # Always wrapped: a bare line carrying a newline would be read as
                 # several unrelated questions, and the agent would answer only
@@ -454,11 +456,16 @@ class AgentChannel:
 
     def _stop_idle_turn(self, state: _TurnState, idle: float) -> None:
         log.warning("Agent turn made no progress for %.0fs; stopping it", idle)
-        self._render_terminal_error(
+        ended = self._render_terminal_error(
             state,
-            f"{turn_idle_message(self._idle_limit)} Anything it finished before "
-            'then is kept. Send "continue" to pick up where it left off.',
+            f'{turn_idle_message(self._idle_limit)} Send "continue" to pick up '
+            "where it left off.",
         )
+        if not ended:
+            # Its own answer arrived first; let the reader finish rendering it.
+            with self._active_lock:
+                state.stopped_at = None
+            return
         try:
             self.cancel()
         except AgentChannelError as e:
@@ -562,6 +569,10 @@ class AgentChannel:
             elif etype == "tool_result":
                 state.tool_running = False
             state.awaiting_decision = etype == NEEDS_CONFIRMATION
+            if etype in TERMINAL_EVENTS:
+                # Claimed before rendering, so a stop racing this answer
+                # cannot render over it.
+                state.saw_terminal = True
         if etype == NEEDS_CONFIRMATION:
             confirm_id = event.get("confirm_id")
             if confirm_id:
@@ -575,7 +586,6 @@ class AgentChannel:
             log.exception("Messaging adapter raised while rendering an event")
 
         if etype in TERMINAL_EVENTS:
-            state.saw_terminal = True
             self._turn_done.set()
 
     def _dispatch_terminal_error(self, detail: str) -> None:

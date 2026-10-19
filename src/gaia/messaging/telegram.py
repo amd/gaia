@@ -34,8 +34,6 @@ log = get_logger(__name__)
 # Simple per-user session store: user_id -> AgentSDK
 _USER_SESSIONS: Dict[int, AgentSDK] = {}
 _SESSIONS_LOCK = threading.RLock()
-# Users whose generation thread is still running, guarded by _SESSIONS_LOCK.
-_GENERATING: Set[int] = set()
 
 
 def get_or_create_session(user_id: int) -> AgentSDK:
@@ -244,24 +242,8 @@ class TelegramAdapter:
 
         user_input = f"{text} {media_note}".strip()
 
-        # A stopped turn's generation may still be unwinding; a second one on
-        # the same session would interleave its history.
-        with _SESSIONS_LOCK:
-            if user.id in _GENERATING:
-                await update.message.reply_text(
-                    "Your previous message is still being stopped. Send this "
-                    "one again in a moment."
-                )
-                return
-            _GENERATING.add(user.id)
-
         # Reply immediately with a placeholder we will edit
-        try:
-            reply = await update.message.reply_text("Thinking...")
-        except BaseException:
-            with _SESSIONS_LOCK:
-                _GENERATING.discard(user.id)
-            raise
+        reply = await update.message.reply_text("Thinking...")
 
         # Use an asyncio.Queue to bridge generator (blocking) -> async edits
         queue: asyncio.Queue = asyncio.Queue()
@@ -295,9 +277,10 @@ class TelegramAdapter:
                 # Closing the generator ends the model stream behind it.
                 close = getattr(stream, "close", None)
                 if close is not None:
-                    close()
-                with _SESSIONS_LOCK:
-                    _GENERATING.discard(user.id)
+                    try:
+                        close()
+                    except Exception:
+                        log.exception("Could not close the stopped reply stream")
 
         # Start generator in thread to avoid blocking the asyncio loop
         asyncio.get_running_loop().run_in_executor(None, run_generation)
@@ -313,15 +296,19 @@ class TelegramAdapter:
                 )
             except asyncio.TimeoutError:
                 stopped.set()
+                # The stuck generation still holds the session; the next message
+                # gets a fresh one rather than racing it on the same history.
+                with _SESSIONS_LOCK:
+                    _USER_SESSIONS.pop(user.id, None)
                 log.warning(
                     "Telegram turn for user %s made no progress for %.0fs; "
-                    "stopping it",
+                    "stopped it and started a new session",
                     user.id,
                     self._idle_limit,
                 )
                 note = (
-                    f"{turn_idle_message(self._idle_limit)} Send your message "
-                    "again to retry."
+                    f"{turn_idle_message(self._idle_limit)} The next message "
+                    "starts a new conversation. Send yours again to retry."
                 )
                 text_chunk = f"{accumulated}\n\n{note}" if accumulated else note
                 done = True
