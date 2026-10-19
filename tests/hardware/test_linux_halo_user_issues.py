@@ -470,6 +470,10 @@ def test_eu4_gaia_llm_shows_the_memory_message(gemma_install):
 # =============================================================================
 
 
+def _no_crlf(value: str) -> str:
+    return value.replace("\r", "").replace("\n", "")
+
+
 class RecordingProxy:
     """Forwards to the user's Lemonade and records every request it sees."""
 
@@ -504,7 +508,8 @@ class RecordingProxy:
                 self.send_response(resp.status)
                 for k, v in resp.getheaders():
                     if k.lower() not in ("transfer-encoding", "connection"):
-                        self.send_header(k, v)
+                        # Never let a forwarded header carry a line break.
+                        self.send_header(_no_crlf(k), _no_crlf(v))
                 self.end_headers()
                 while True:
                     chunk = resp.read1(65536)
