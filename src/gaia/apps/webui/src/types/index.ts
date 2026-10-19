@@ -247,6 +247,8 @@ export interface InferenceStats {
     model?: string | null;
     /** Set with `model`: how long that model took, loading included. */
     seconds?: number | null;
+    /** True only for an answer kept from Retry with…. */
+    retried?: boolean | null;
 }
 
 /** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
@@ -371,6 +373,7 @@ export interface RetryResult {
     content: string;
     stats: {
         model: string;
+        retried: true;
         seconds: number;
         load_seconds: number;
         input_tokens: number;

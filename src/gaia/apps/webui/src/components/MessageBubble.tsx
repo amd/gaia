@@ -583,7 +583,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {latencyMs != null && latencyMs > 0 && (
                                 <span title="Total response time">{formatLatency(latencyMs)}</span>
                             )}
-                            {message.stats?.model && (
+                            {message.stats?.retried && message.stats.model && (
                                 <span title="This answer was kept from Retry with…">{message.stats.model}</span>
                             )}
                             {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (

@@ -42,7 +42,7 @@ const RESULT: RetryResult = {
     model: 'Qwen3.6-35B-A3B-GGUF',
     content: 'Eleven is prime.',
     stats: {
-        model: 'Qwen3.6-35B-A3B-GGUF', seconds: 21.4, load_seconds: 15.2,
+        model: 'Qwen3.6-35B-A3B-GGUF', retried: true, seconds: 21.4, load_seconds: 15.2,
         input_tokens: 400, output_tokens: 6, tokens_per_second: 44.5, time_to_first_token: 0.3,
     },
 };
@@ -51,7 +51,12 @@ let resolveRetry: (r: RetryResult) => void = () => {};
 
 beforeEach(() => {
     vi.clearAllMocks();
-    mockedApi.getMessages.mockResolvedValue({ messages: MESSAGES, total: 2 });
+    // The server holds what the chat shows, so a background refresh never wipes the test's messages.
+    mockedApi.getMessages.mockImplementation(async () => {
+        const { messages } = useChatStore.getState();
+        return { messages, total: messages.length };
+    });
+    mockedApi.getMessageCount.mockImplementation(async () => useChatStore.getState().messages.length);
     mockedApi.getActiveRuns.mockResolvedValue(NO_ACTIVE_RUNS);
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
@@ -132,6 +137,7 @@ describe('Retry with…', () => {
         const kept = useChatStore.getState().messages.find((m) => m.id === 2);
         expect(kept?.content).toBe('Eleven is prime.');
         expect(kept?.stats?.model).toBe('Qwen3.6-35B-A3B-GGUF');
+        expect(kept?.stats?.retried).toBe(true);
         expect(screen.queryByLabelText('Compare answers')).toBeNull();
     });
 

@@ -510,6 +510,8 @@ class InferenceStatsResponse(BaseModel):
     # and how long it took, loading included.
     model: Optional[str] = None
     seconds: Optional[float] = None
+    # True only for an answer kept from "Retry with…".
+    retried: Optional[bool] = None
 
 
 class MessageResponse(BaseModel):

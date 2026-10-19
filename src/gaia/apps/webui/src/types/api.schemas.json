@@ -1794,6 +1794,17 @@
         "title": "Output Tokens",
         "type": "integer"
       },
+      "retried": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Retried"
+      },
       "seconds": {
         "anyOf": [
           {
