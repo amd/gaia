@@ -18,6 +18,7 @@ on:
       # Tested here, but outside src/: the PE-resource gate and the installer
       # filename table.
       - 'util/check_pe_resources.py'
+      - 'util/check_component_core_api.py'
       # The wholesale-skip guard and the allowlist it reads.
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
@@ -49,6 +50,7 @@ on:
       # Tested here, but outside src/: the PE-resource gate and the installer
       # filename table.
       - 'util/check_pe_resources.py'
+      - 'util/check_component_core_api.py'
       # The wholesale-skip guard and the allowlist it reads.
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
@@ -212,6 +214,15 @@ jobs:
           echo "Catches an upstream asset rename before it 404s gaia init"
           echo ""
           pytest tests/integration/test_lemonade_release_assets.py -v --tb=short
+
+      - name: Run component publish guard against live PyPI
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Reading released daemon APIs from the real amd-gaia wheels ==="
+          echo "The unit tests stub PyPI; this proves the real index still parses"
+          echo ""
+          pytest tests/integration/test_component_core_api_pypi.py -v --tb=short
 
       - name: Run live web-fetch TLS test
         env:

@@ -36,6 +36,9 @@ If PyPI cannot be reached, or answers with something that is not a release
 index, the check fails. It never guesses from this tree, because the tree is
 ahead of every release — that skew is the whole point of the check.
 
+There is no "predates the daemon" shortcut either: a minimum older than any
+release with a wheel fails with "no unyanked wheel" rather than passing.
+
 Usage:
     python util/check_component_core_api.py
     python util/check_component_core_api.py --release-version 0.23.0
@@ -258,7 +261,8 @@ def released_versions(index: dict) -> dict[tuple[int, int, int], str]:
     """
     published: dict[tuple[int, int, int], str] = {}
     for raw, files in index["releases"].items():
-        if not re.fullmatch(r"\d+(\.\d+)*", raw):
+        # More than three parts would collide with its three-part prefix.
+        if not re.fullmatch(r"\d+(\.\d+){0,2}", raw):
             continue
         if any(not f.get("yanked") for f in files or []):
             published[parse_version(raw)] = raw

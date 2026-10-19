@@ -280,6 +280,32 @@ def test_prereleases_alone_do_not_count_as_a_release():
     assert set(guard.released_versions(index)) == {(0, 23, 0)}
 
 
+def test_a_four_part_version_cannot_overwrite_its_three_part_release():
+    index = {
+        "releases": {
+            "0.23.0": pypi_release("0.23.0"),
+            "0.23.0.1": pypi_release("0.23.0.1"),
+        }
+    }
+    assert guard.released_versions(index) == {(0, 23, 0): "0.23.0"}
+
+
+def test_a_four_part_version_listed_first_still_loses_to_the_release():
+    index = {
+        "releases": {
+            "0.23.0.1": pypi_release("0.23.0.1"),
+            "0.23.0": pypi_release("0.23.0"),
+        }
+    }
+    assert guard.released_versions(index) == {(0, 23, 0): "0.23.0"}
+
+
+def test_an_index_of_only_four_part_versions_is_not_a_release_index():
+    index = {"releases": {"0.23.0.1": pypi_release("0.23.0.1")}}
+    with pytest.raises(guard.CheckError, match="no installable"):
+        guard.released_versions(index)
+
+
 def test_a_release_with_no_uploaded_files_does_not_count():
     index = {"releases": {"0.23.0": pypi_release("0.23.0"), "0.23.1": []}}
     assert set(guard.released_versions(index)) == {(0, 23, 0)}
