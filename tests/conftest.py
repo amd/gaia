@@ -196,6 +196,23 @@ def _reset_model_broker_state():
     _reset()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ui_model_record(tmp_path, monkeypatch):
+    """Keep the Agent UI's record of the models it loaded out of the real home.
+
+    Every chat pre-flight or Settings load that succeeds records its model in
+    ``<GAIA home>/ui/loaded_models.json``; many tests run one with a mocked
+    client, and would otherwise write that record into the developer's GAIA.
+    """
+    try:
+        from gaia.ui import _chat_helpers
+    except ImportError:
+        return
+    record = tmp_path / "ui-loaded-models.json"
+    monkeypatch.setattr(_chat_helpers, "_owned_models_path", lambda: record)
+    monkeypatch.setattr(_chat_helpers, "_models_loaded_here", None)
+
+
 @pytest.fixture(scope="session")
 def _hub_installer_active_env_root(tmp_path_factory):
     return tmp_path_factory.mktemp("hub-installer-active-env")

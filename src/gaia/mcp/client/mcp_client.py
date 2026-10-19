@@ -696,6 +696,11 @@ class MCPClient:
         """
 
         def wrapper(**kwargs: Any) -> Dict[str, Any]:
+            if mcp_tool_requires_confirmation(tool.name, tool.annotations):
+                # Lazy: the MCP client must not pull in the agent framework.
+                from gaia.agents.base.file_snapshots import note_untracked
+
+                note_untracked("mcp", f"{self.name}: {tool.name}")
             return self.call_tool(tool.name, kwargs)
 
         return wrapper
