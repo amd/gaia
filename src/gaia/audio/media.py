@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import platform
+import queue
 import re
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ from typing import Callable, List, Optional, Sequence
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.tool_cancellation import ToolCancelled, current_cancel_event
 
 log = get_logger(__name__)
 
@@ -42,6 +44,10 @@ _PROBE_TIMEOUT_SECONDS = 60
 _DECODE_STALL_SECONDS = 300.0
 # How much of ffmpeg's stderr is kept for the error message.
 _STDERR_KEEP_CHARS = 16384
+# How long to wait for a killed ffmpeg, and its pipes, to go away.
+_KILL_WAIT_SECONDS = 10.0
+# How often a running decode checks for a stall or a cancelled tool call.
+_POLL_SECONDS = 0.25
 
 # (package manager executable, install argv). First manager present on PATH wins.
 _INSTALL_COMMANDS: dict[str, Sequence[tuple[str, Sequence[str]]]] = {
@@ -354,18 +360,45 @@ def _decode_failure(src: Path, returncode: int, stderr: str) -> MediaError:
     )
 
 
+def _pump_lines(
+    stream, sink: "queue.Queue[Optional[str]]", keep_chars: Optional[int] = None
+) -> None:
+    """Copy ``stream``'s lines into ``sink``, then None at end of stream.
+
+    With ``keep_chars``, only that much is queued; the rest is still read so
+    the child never blocks on a full pipe.
+    """
+    kept = 0
+    try:
+        # readline, not iteration: the iterator's read-ahead holds lines back.
+        for line in iter(stream.readline, ""):
+            if keep_chars is None or kept < keep_chars:
+                sink.put(line)
+                kept += len(line)
+    except (OSError, ValueError) as e:
+        log.debug("ffmpeg output closed: %s", e)
+    finally:
+        sink.put(None)
+
+
 def _run_ffmpeg(
     cmd: List[str],
     src: Path,
     total_seconds: float = 0.0,
     progress_callback: Optional[Callable[[float], None]] = None,
 ) -> None:
-    """Run a decode, stopping it if ffmpeg reports no progress for a while.
+    """Run a decode, stopping it if it stalls or the tool call is cancelled.
 
     A decode's length scales with the file, so there is no fixed total limit.
     ffmpeg writes a progress block about twice a second while it works; one
     that goes silent for ``_DECODE_STALL_SECONDS`` is stuck (a drive or share
-    that stopped answering, a stream that stopped sending) and is killed.
+    that stopped answering, a stream that stopped sending) and is killed. The
+    calling thread's tool cancellation is polled the whole time, not only when
+    progress arrives, so Stop works during a stall too.
+
+    Raises:
+        ToolCancelled: the agent stopped waiting for this tool.
+        MediaError: the decode failed, stalled, or ffmpeg could not be stopped.
     """
     progress_cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
     try:
@@ -384,72 +417,111 @@ def _run_ffmpeg(
         raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e
 
     stall_seconds = _DECODE_STALL_SECONDS
-    last_output = [time.monotonic()]
-    finished = threading.Event()
-    stalled = threading.Event()
-
-    def watchdog() -> None:
-        while not finished.wait(min(1.0, stall_seconds / 4)):
-            if time.monotonic() - last_output[0] >= stall_seconds:
-                stalled.set()
-                proc.kill()
-                return
+    cancel_event = current_cancel_event()
 
     # Drained on its own thread: a damaged file logs an error per frame, and a
     # full stderr pipe would block ffmpeg and read as a stall.
-    stderr_kept: List[str] = []
+    stderr_lines: "queue.Queue[Optional[str]]" = queue.Queue()
+    stdout_lines: "queue.Queue[Optional[str]]" = queue.Queue()
+    readers = [
+        threading.Thread(
+            target=_pump_lines, args=(stream, sink, keep), name=name, daemon=True
+        )
+        for stream, sink, keep, name in (
+            (proc.stdout, stdout_lines, None, "ffmpeg-stdout"),
+            (proc.stderr, stderr_lines, _STDERR_KEEP_CHARS, "ffmpeg-stderr"),
+        )
+    ]
+    for reader in readers:
+        reader.start()
 
-    def drain_stderr() -> None:
-        kept = 0
+    def stop() -> None:
+        proc.kill()
+        deadline = time.monotonic() + _KILL_WAIT_SECONDS
         try:
-            for line in iter(proc.stderr.readline, ""):
-                if kept < _STDERR_KEEP_CHARS:
-                    stderr_kept.append(line)
-                    kept += len(line)
-        except (OSError, ValueError) as e:
-            # The pipe was closed under us after a kill; nothing left to read.
-            log.debug("ffmpeg stderr closed: %s", e)
+            proc.wait(timeout=_KILL_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise MediaError(
+                f"ffmpeg (pid {proc.pid}) could not be stopped while decoding "
+                f"{src}. End it in Task Manager (or with `kill -9 {proc.pid}`), "
+                "then retry."
+            ) from None
+        for reader in readers:
+            reader.join(max(0.0, deadline - time.monotonic()))
 
-    threading.Thread(target=watchdog, name="ffmpeg-stall-watchdog", daemon=True).start()
-    stderr_reader = threading.Thread(
-        target=drain_stderr, name="ffmpeg-stderr", daemon=True
-    )
-    stderr_reader.start()
-
-    assert proc.stdout is not None
+    stopped_for: Optional[str] = None
+    last_output = time.monotonic()
     try:
-        # readline, not iteration: the iterator's read-ahead holds lines back.
-        for line in iter(proc.stdout.readline, ""):
-            last_output[0] = time.monotonic()
-            if progress_callback is None or total_seconds <= 0:
-                continue
-            elapsed = _parse_progress_seconds(line)
-            if elapsed is not None:
-                progress_callback(min(elapsed / total_seconds, 1.0))
-        returncode = proc.wait()
-        stderr_reader.join()
-        stderr = "".join(stderr_kept)
+        while True:
+            try:
+                line = stdout_lines.get(timeout=_POLL_SECONDS)
+            except queue.Empty:
+                line = ""
+            if line is None:
+                break
+            if line:
+                last_output = time.monotonic()
+                if progress_callback is not None and total_seconds > 0:
+                    elapsed = _parse_progress_seconds(line)
+                    if elapsed is not None:
+                        progress_callback(min(elapsed / total_seconds, 1.0))
+            if cancel_event is not None and cancel_event.is_set():
+                stopped_for = "cancelled"
+            elif time.monotonic() - last_output >= stall_seconds:
+                stopped_for = "stalled"
+            if stopped_for:
+                stop()
+                break
+        if stopped_for is None:
+            try:
+                returncode = proc.wait(timeout=_KILL_WAIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                # It closed its output but will not exit: treat as stuck.
+                stop()
+                stopped_for = "stalled"
+        for reader in readers:
+            reader.join(_KILL_WAIT_SECONDS)
     except BaseException:
         # A callback that raises (cancellation) must not leave ffmpeg decoding
         # a file nobody will read, holding two pipes open.
-        proc.kill()
-        proc.wait()
+        if proc.poll() is None:
+            stop()
         raise
     finally:
-        finished.set()
-        if proc.stdout:
+        # Closed only once nothing is reading them: closing a pipe another
+        # thread is blocked reading can itself block.
+        if not any(reader.is_alive() for reader in readers):
             proc.stdout.close()
-        if proc.stderr:
             proc.stderr.close()
 
-    if stalled.is_set():
+    if stopped_for == "cancelled":
+        raise ToolCancelled()
+    if stopped_for == "stalled":
         raise MediaError(
             f"ffmpeg made no progress decoding {src} for {stall_seconds:.0f}s, so "
             "it was stopped. The file may be on a drive or network share that "
             "stopped responding. Copy it to a local disk and retry. "
             f"See {DOCS_URL}"
         )
+    stderr = _drain(stderr_lines, _STDERR_KEEP_CHARS)
     if returncode != 0:
         raise _decode_failure(src, returncode, stderr)
     if progress_callback is not None:
         progress_callback(1.0)
+
+
+def _drain(lines: "queue.Queue[Optional[str]]", keep: int) -> str:
+    """The first ``keep`` characters of what a reader collected."""
+    kept: List[str] = []
+    size = 0
+    while True:
+        try:
+            line = lines.get_nowait()
+        except queue.Empty:
+            break
+        if line is None:
+            break
+        if size < keep:
+            kept.append(line)
+            size += len(line)
+    return "".join(kept)

@@ -427,6 +427,57 @@ class TestDecodeStall:
             media._run_ffmpeg(["ffmpeg"], Path("bad.mp3"))
         assert "Error while decoding stream" in str(excinfo.value)
 
+    def test_stop_during_a_stall_ends_the_decode_promptly(self, monkeypatch):
+        """Stop used to be checked only when progress arrived, so a stalled
+        decode ignored it for the whole stall window."""
+        import threading
+
+        from gaia.tool_cancellation import ToolCancelled, set_tool_cancel_event
+
+        self._fake_ffmpeg(monkeypatch, "import time; time.sleep(60)")
+        monkeypatch.setattr(media, "_DECODE_STALL_SECONDS", 300.0)
+        cancel = threading.Event()
+        set_tool_cancel_event(cancel)
+        try:
+            threading.Timer(0.5, cancel.set).start()
+            started = time.monotonic()
+            with pytest.raises(ToolCancelled):
+                media._run_ffmpeg(["ffmpeg"], Path("in.mp4"), 60.0, lambda _f: None)
+            assert time.monotonic() - started < 2.5
+        finally:
+            set_tool_cancel_event(None)
+
+    def test_an_ffmpeg_that_survives_the_kill_is_reported_with_its_pid(
+        self, monkeypatch
+    ):
+        real_popen = subprocess.Popen
+        children = []
+
+        class Unkillable(real_popen):
+            def kill(self):
+                pass  # the process ignores the kill
+
+        def popen(cmd, **kwargs):
+            proc = Unkillable(
+                [sys.executable, "-c", "import time; time.sleep(60)"], **kwargs
+            )
+            children.append(proc)
+            return proc
+
+        monkeypatch.setattr(media.subprocess, "Popen", popen)
+        monkeypatch.setattr(media, "_DECODE_STALL_SECONDS", 0.5)
+        monkeypatch.setattr(media, "_KILL_WAIT_SECONDS", 0.5, raising=False)
+        started = time.monotonic()
+        try:
+            with pytest.raises(media.MediaError, match="could not be stopped") as e:
+                media._run_ffmpeg(["ffmpeg"], Path("in.mp4"))
+            assert time.monotonic() - started < 5
+            assert str(children[0].pid) in str(e.value)
+        finally:
+            for proc in children:
+                real_popen.kill(proc)
+                proc.wait(10)
+
     def test_non_utf8_stderr_does_not_stop_the_drain(self, monkeypatch):
         self._fake_ffmpeg(
             monkeypatch,
