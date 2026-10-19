@@ -197,6 +197,9 @@ def _env_number(name: str, default: float, kind: type, *, minimum: float) -> flo
 #: Statuses that mean "not now" rather than "not this request".
 RETRYABLE_STATUSES = frozenset({408, 429, 502, 503, 504})
 
+#: Retry reason for the KV cache running out under concurrent requests.
+KV_CACHE_SHARED_REASON = "KV cache shared with another request"
+
 #: Body wording of a failed upstream hop: nothing was computed, so the request
 #: is safe to send again. Matched case-insensitively. These win over
 #: :data:`_NOT_RETRYABLE_PHRASES` because a proxy that lost its upstream often
@@ -271,6 +274,8 @@ def classify_http_failure(status: Optional[int], body: str = "") -> Optional[str
 
     * A context-window overflow or content-filter rejection is never retried,
       whatever status it wears.
+    * The KV cache running out under requests sharing it is retried: it
+      clears once the other request ends.
     * 408, 429, 502, 503 and 504 are retried.
     * 500 is retried unless its body says the request itself is at fault —
       some servers answer a request they will never accept with a 500.
@@ -279,9 +284,14 @@ def classify_http_failure(status: Optional[int], body: str = "") -> Optional[str
       that names a failed upstream hop — a dropped connection, a cloud time
       limit, a proxy's upstream error — is retried.
     """
-    from gaia.llm.lemonade_client import is_context_overflow_error
+    from gaia.llm.lemonade_client import (
+        is_context_overflow_error,
+        is_kv_cache_shared_error,
+    )
 
     text = (body or "").lower()
+    if text and is_kv_cache_shared_error(body):
+        return KV_CACHE_SHARED_REASON
     if text and is_context_overflow_error(body):
         return None
     dropped = any(phrase in text for phrase in _CONNECTION_DROP_PHRASES)

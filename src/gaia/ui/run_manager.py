@@ -121,6 +121,8 @@ class Run:
         self.subscribers: List[asyncio.Queue] = []
         self.done = asyncio.Event()
         self.task: Optional[asyncio.Task] = None
+        # The turn's place on the model (``turn_queue.TurnSlot``), once in line.
+        self.slot = None
 
     # ── Producer side (called from the lifecycle task) ────────────────
     def emit(self, data: str) -> None:

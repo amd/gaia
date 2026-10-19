@@ -3264,6 +3264,14 @@ Before stopping anything, GAIA checks that the process is its own server: the
 recorded API key. A process that reused the recorded pid, or a Lemonade you
 run yourself, is never killed.
 
+If GAIA's server crashes, or is killed without its child processes, its
+model servers (`llama-server` and the like) can keep running and holding
+their memory. GAIA stops them the next time it starts its server, or when it
+finds the server gone. It stops a process only when it runs from
+`~/.gaia/lemonade/cache/bin` and the process that started it has exited. A
+tool from that folder that you run yourself, such as `llama-bench`, is left
+alone while the shell that started it is open.
+
 The daemon never installs Lemonade, never restarts a server that is slow to
 answer while its owner is running (it may be loading a model), and never
 replaces one running a different version. Those need `gaia init`. With
