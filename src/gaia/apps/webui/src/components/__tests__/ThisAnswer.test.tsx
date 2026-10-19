@@ -148,7 +148,7 @@ describe('ThisAnswer', () => {
         'file:///C:/Windows/System32/calc.exe',
         'vbscript:msgbox(1)',
     ])('never makes a page with an unsafe address %s clickable', (url) => {
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             pages: [{ url, title: 'Looks harmless', kind: 'page' }],
         }))} />);
         expect(screen.getByText('Looks harmless')).toBeInTheDocument();
