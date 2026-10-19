@@ -84,7 +84,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
-from gaia.utils import awake_clock
+from gaia.utils import awake_clock, perf_trace
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -4928,6 +4928,8 @@ class LemonadeClient:
             request_budget=timeout,
         )
 
+        recorder = perf_trace.current()
+
         def _open_stream() -> Iterator[Dict[str, Any]]:
             """One attempt: open the stream and convert its chunks, ending it
             once it has been silent longer than *limits* allow."""
@@ -4950,7 +4952,12 @@ class LemonadeClient:
 
             def produce() -> Generator[Dict[str, Any], None, None]:
                 try:
+                    t0 = time.perf_counter()
                     stream = client.chat.completions.create(**request_params)
+                    if recorder is not None:
+                        # Runs on the stream worker thread, so the turn's
+                        # recorder is captured rather than read thread-locally.
+                        recorder.note_client("http_open_s", time.perf_counter() - t0)
                     try:
                         yield from _convert(stream)
                     finally:
@@ -4981,6 +4988,8 @@ class LemonadeClient:
                         "model": chunk.model,
                         "choices": [],
                         "usage": _usage_dict(usage),
+                        # llama.cpp's own prefill/decode split for this request.
+                        "timings": getattr(chunk, "timings", None),
                     }
                     continue
 
@@ -6664,8 +6673,13 @@ class LemonadeClient:
         def _held():
             # Broker first: a thread holding the broker lease must never wait on
             # this lock while its holder waits on the broker.
-            with lease, _holding_local_request_lock(model):
-                yield
+            t0 = time.perf_counter()
+            with lease:
+                t1 = time.perf_counter()
+                with _holding_local_request_lock(model):
+                    perf_trace.note_wait("lease_wait_s", t1 - t0)
+                    perf_trace.note_wait("lock_wait_s", time.perf_counter() - t1)
+                    yield
 
         return _held()
 
@@ -6706,7 +6720,11 @@ class LemonadeClient:
             return
 
         with self._model_slot_lease(model):
-            self._ensure_model_loaded_locked(model, force=force)
+            t0 = time.perf_counter()
+            try:
+                self._ensure_model_loaded_locked(model, force=force)
+            finally:
+                perf_trace.note_wait("ensure_loaded_s", time.perf_counter() - t0)
 
     def _ensure_model_loaded_locked(self, model: str, *, force: bool = False) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while

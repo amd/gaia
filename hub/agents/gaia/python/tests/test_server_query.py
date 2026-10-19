@@ -1347,3 +1347,31 @@ def test_a_cancel_reaches_a_turn_waiting_for_the_model(built, monkeypatch):
 
     assert r.status_code == 200, r.text
     assert outcome == {"cancelled": True}
+
+
+# ---------------------------------------------------------------------------
+# /debug/turns — the turn log's last records, only while recording is on
+# ---------------------------------------------------------------------------
+
+
+def test_debug_turns_is_404_unless_turn_recording_is_on(built, monkeypatch):
+    monkeypatch.delenv("GAIA_TURN_LOG", raising=False)
+    client, _ = built
+    r = client.get("/v1/gaia/debug/turns")
+    assert r.status_code == 404
+    assert "GAIA_TURN_LOG" in r.json()["detail"]
+
+
+def test_debug_turns_returns_the_newest_records(built, monkeypatch, tmp_path):
+    from collections import deque
+
+    from gaia.agents.base import turn_metrics
+
+    monkeypatch.setenv("GAIA_TURN_LOG", str(tmp_path / "turns.jsonl"))
+    recent = deque([{"turn_id": t} for t in "abc"], maxlen=50)
+    monkeypatch.setattr(turn_metrics, "RECENT_TURNS", recent)
+    client, _ = built
+    r = client.get("/v1/gaia/debug/turns", params={"limit": 2})
+    assert r.status_code == 200
+    assert [t["turn_id"] for t in r.json()["turns"]] == ["b", "c"]
+    assert client.get("/v1/gaia/debug/turns", params={"limit": 0}).status_code == 422

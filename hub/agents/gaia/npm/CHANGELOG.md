@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The turn log says how busy the model server was.** With `GAIA_TURN_LOG`
+  set, each model call records the server's own prefill, decode and cache-reuse
+  figures and the time spent waiting on the model-slot lease, the slot lock and
+  the status probe; each turn records its server compute, its non-model time,
+  and what filled the gaps between model calls. `GET /v1/gaia/debug/turns`
+  returns the last records while recording is on (off the versioned contract).
 - **A context overflow no longer throws away the evidence.** A task that read
   many documents used to fill a 32K–64K window, after which the overflow retry
   dropped every older result and the answer was built on whatever was left
