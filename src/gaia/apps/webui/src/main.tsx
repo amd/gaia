@@ -7,6 +7,7 @@ import App from './App';
 import { purgeLegacyAlwaysAllow } from './stores/notificationStore';
 import { applyTheme } from './utils/theme';
 import './styles/index.css';
+import './styles/motion.css';
 
 // Always-allow tool grants are session-scoped; drop anything an older build
 // persisted so a past tick cannot silently approve tools in this session.

@@ -224,11 +224,11 @@ jobs:
           echo ""
           pytest tests/integration/test_web_client_live_sni.py -v --tb=short --timeout=300
 
-      - name: Run embedded Lemonade checksum pinning test
+      - name: Run Lemonade checksum pinning test
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          echo "=== Verifying embedded Lemonade SHA-256 pins against live upstream ==="
+          echo "=== Verifying Lemonade SHA-256 pins (embeddable + installers) against live upstream ==="
           echo "Catches a stale executable digest before embedded install reaches users"
           echo ""
           pytest tests/integration/test_lemonade_embeddable_assets.py -v --tb=short
