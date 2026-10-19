@@ -364,6 +364,7 @@ class LemonadeManager:
         client = LemonadeClient(keep_alive=True, verbose=not quiet)
         on_status = None if quiet else (lambda msg: print(msg, file=sys.stderr))
         try:
+            # False means "not GAIA's server" too; callers check gaia_runs_lemonade first.
             client.wait_for_gaia_lemonade(on_status=on_status)
         except LemonadeClientError as e:
             cls._log.error("%s", e)
