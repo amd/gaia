@@ -24,7 +24,7 @@ import psutil
 import pytest
 
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui import process_owner, restart_recovery
+from gaia.ui import restart_recovery
 from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.restart_recovery import (
@@ -35,6 +35,7 @@ from gaia.ui.restart_recovery import (
 )
 from gaia.ui.routers import chat
 from gaia.ui.run_manager import RunManager
+from gaia.utils import process_owner
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.allow_network]
 

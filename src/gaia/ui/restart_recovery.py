@@ -27,8 +27,9 @@ import sqlite3
 import time
 from typing import Callable, Dict, List, Optional
 
+from gaia.utils.process_owner import owner_is_gone
+
 from .database import ChatDatabase
-from .process_owner import owner_is_gone
 from .sse_handler import clean_reply_text
 
 logger = logging.getLogger(__name__)

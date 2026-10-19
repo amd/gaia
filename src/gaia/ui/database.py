@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
-
-from .process_owner import current_owner, owner_is_gone
+from gaia.utils.process_owner import current_owner, owner_is_gone
 
 logger = logging.getLogger(__name__)
 

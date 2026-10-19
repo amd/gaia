@@ -1,10 +1,11 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Which server process owns a row of work in progress, and whether it is gone.
+"""Which process owns a row of work in progress, and whether it is gone.
 
-Rows that say "this is running" (a chat turn, a document being indexed) carry
-the owner that wrote them, so any server sharing the database can tell work
-that is still running elsewhere from work whose process has ended.
+Rows that say "this is running" (an Agent UI chat turn or document index, a
+TUI turn's stand-in in its session history) carry the owner that wrote them,
+so any process sharing the database can tell work that is still running
+elsewhere from work whose process has ended.
 
 An owner is ``pid:start:token``. *start* tells a process from a later one that
 reused its pid:
