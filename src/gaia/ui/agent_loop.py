@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
+from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
 from gaia.ui.run_manager import run_manager
 from gaia.ui.turn_queue import turn_queue
 
@@ -134,6 +135,8 @@ class AgentLoop:
         # Rate limiting
         self._hour_start: float = time.time()
         self._calls_this_hour: int = 0
+        # A timed-out tick's agent thread that ignored the stop, per session.
+        self._lingering_ticks: Dict[str, asyncio.Future] = {}
         # Track in-flight tick (prevents overlapping runs)
         self._running_lock: Optional[asyncio.Lock] = None
 
@@ -340,7 +343,12 @@ class AgentLoop:
             return await self._execute_tick(session_id, session, goals)
         finally:
             turn_queue.release()
-            session_lock.release()
+            stuck = self._lingering_ticks.pop(session_id, None)
+            if stuck is not None and not stuck.done():
+                # Its thread still drives the session's agent.
+                stuck.add_done_callback(lambda _done: session_lock.release())
+            else:
+                session_lock.release()
 
     async def _get_active_session(self) -> Optional[str]:
         """Return the most recently updated non-private session, or None."""
@@ -432,7 +440,8 @@ class AgentLoop:
                     # A prior streaming turn leaves its fired cancel event behind.
                     agent._cancel_event = None
                     agent.console = sse_handler
-                    agent._register_tools()
+                    with _helpers.writing_tool_registry():
+                        agent._register_tools()
                 else:
                     # Run the heavier sync work inline (we're in a thread).
                     try:
@@ -469,7 +478,8 @@ class AgentLoop:
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),
                     )
-                    agent = GaiaAgent(config)
+                    with _helpers.writing_tool_registry():
+                        agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
 
@@ -488,18 +498,31 @@ class AgentLoop:
             finally:
                 sse_handler.signal_done()
 
-        # Run synchronous agent in a thread pool so we don't block the event loop
-        worker = asyncio.get_running_loop().run_in_executor(None, _run_agent)
+        worker = run_in_own_thread(_run_agent, name=f"gaia-tick-{session_id[:8]}")
         try:
             done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
             if not done:
                 logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
-        finally:
-            if not worker.done():
                 cancel_event.set()
                 sse_handler.cancelled.set()
-                # The session lock held by _run_step must outlive the worker thread.
-                await asyncio.wait({worker})
+                finished = await wait_until_off_the_model(
+                    worker, sse_handler, what=f"Tick for session {session_id[:8]}"
+                )
+                if not finished:
+                    logger.error(
+                        "AgentLoop: tick for session %s is still running after "
+                        "it was stopped; freeing the model and holding the "
+                        "session until its thread exits",
+                        session_id[:8],
+                    )
+                    self._lingering_ticks[session_id] = worker
+                    return LoopDirective("idle", reason="tick timed out")
+        except asyncio.CancelledError:
+            cancel_event.set()
+            sse_handler.cancelled.set()
+            # The session stays held until the thread has stopped.
+            self._lingering_ticks[session_id] = worker
+            raise
 
         # Save the autonomous tick as a message in the session DB
         # (stored as role="autonomous" — hidden from the UI by default)
