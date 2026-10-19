@@ -1396,7 +1396,9 @@ it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
 Each request runs on its own thread, so `/health` and `/status` answer while a
 `/llm` or `/chat` call waits on a busy model. Calls to the same tool take turns:
-`/chat` shares one conversation. A client that stops sending its headers or body
+`/chat` shares one conversation. A queued caller waits for the call ahead of it,
+which can run 15 minutes or more, so give clients such as n8n a generous HTTP
+timeout. A client that stops sending its headers or body
 for 30 s gets **408**. A request body over 1 MiB gets **413**; raise the limit with
 `GAIA_MCP_MAX_BODY_BYTES` (bytes). A request with any `Transfer-Encoding`
 (chunked or other) gets **411**; send a plain `Content-Length` body instead.
