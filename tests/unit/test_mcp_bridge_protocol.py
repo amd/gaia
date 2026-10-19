@@ -6,7 +6,7 @@
 """MCP spec compliance of the ``gaia mcp`` bridge's JSON-RPC endpoint.
 
 Strict MCP clients validate every response against the spec. These tests drive
-the real ``GAIAMCPBridge`` behind a real ``HTTPServer`` and check each response
+the real ``GAIAMCPBridge`` behind the server the bridge ships and check each response
 shape; when the optional ``mcp`` package is installed they also validate it
 with the SDK's own pydantic types, which is what those clients do.
 """
@@ -16,7 +16,6 @@ import re
 import threading
 import urllib.error
 import urllib.request
-from http.server import HTTPServer
 
 import pytest
 
@@ -24,7 +23,7 @@ from gaia.mcp.mcp_bridge import (
     MCP_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
     GAIAMCPBridge,
-    MCPHTTPHandler,
+    create_server,
 )
 
 # The suite drives a loopback HTTPServer on an ephemeral port.
@@ -46,11 +45,7 @@ class _EchoLLM:
 @pytest.fixture(name="bridge_server")
 def _bridge_server():
     bridge = GAIAMCPBridge(port=0)
-
-    def handler(*args, **kwargs):
-        return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
-
-    httpd = HTTPServer(("127.0.0.1", 0), handler)
+    httpd = create_server(bridge, "127.0.0.1", 0)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{httpd.server_port}/", bridge

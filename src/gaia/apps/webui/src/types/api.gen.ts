@@ -76,6 +76,8 @@ export interface ApiSchemas {
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
   RestartRequest: RestartRequest;
+  RunningAnswer: RunningAnswer;
+  RunningIndexJob: RunningIndexJob;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -105,11 +107,14 @@ export interface ApiSchemas {
   TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
   UndoSettings: UndoSettings;
+  UnloadModelRequest: UnloadModelRequest;
+  UnloadModelResponse: UnloadModelResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   WarmUpStatus: WarmUpStatus;
+  WorkInProgress: WorkInProgress;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -863,6 +868,20 @@ export interface RestartRequest {
   confirm?: boolean;
 }
 /**
+ * A chat whose answer is still being written.
+ */
+export interface RunningAnswer {
+  session_id: string;
+  title?: string | null;
+}
+/**
+ * A document still being indexed.
+ */
+export interface RunningIndexJob {
+  document_id: string;
+  filename?: string | null;
+}
+/**
  * List of scheduled tasks.
  */
 export interface ScheduleListResponse {
@@ -1092,6 +1111,15 @@ export interface UndoSettings {
   max_mb: number;
   retention_days: number;
 }
+export interface UnloadModelRequest {
+  model_name: string;
+}
+/**
+ * The model server dropped its models from memory.
+ */
+export interface UnloadModelResponse {
+  status: string;
+}
 /**
  * Request to update a scheduled task.
  */
@@ -1121,4 +1149,11 @@ export interface UserInputRequest {
   request_id: string;
   session_id: string;
   value: string;
+}
+/**
+ * Work that quitting or unloading the model would cut short.
+ */
+export interface WorkInProgress {
+  answers: RunningAnswer[];
+  indexing: RunningIndexJob[];
 }

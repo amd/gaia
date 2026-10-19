@@ -459,7 +459,7 @@ class TestLoadFailureIsLoud:
         model = "Gemma-4-E4B-it-GGUF"
         client = LemonadeClient(host="localhost", port=13305)
 
-        mock_status.side_effect = RuntimeError("transient /health hiccup")
+        mock_status.side_effect = LemonadeClientError("transient /health hiccup")
         mock_list.return_value = {"data": [{"id": model, "downloaded": True}]}
         mock_load.return_value = {"status": "success"}
 
