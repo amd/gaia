@@ -26,6 +26,7 @@ import json
 import sqlite3
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from gaia.daemon.scheduler.models import (
@@ -53,7 +54,10 @@ CREATE TABLE IF NOT EXISTS daemon_jobs (
     error           TEXT,
     created_at      REAL NOT NULL,
     fired_at        REAL,
-    run_count       INTEGER NOT NULL DEFAULT 0
+    run_count       INTEGER NOT NULL DEFAULT 0,
+    claimed_at      REAL,
+    claim_id        TEXT,
+    superseded_claim TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_daemon_jobs_due
     ON daemon_jobs(status, fire_at);
@@ -68,9 +72,34 @@ CREATE TABLE IF NOT EXISTS daemon_migration_ledger (
 """
 
 
+_LEASE_COLUMNS = (
+    ("claimed_at", "REAL"),
+    ("claim_id", "TEXT"),
+    ("superseded_claim", "TEXT"),
+)
+
+
 def init_schema(db) -> None:
-    """Create both tables if absent. Idempotent."""
+    """Create both tables if absent, and add columns newer code relies on."""
     db.execute(DAEMON_JOBS_DDL)
+    columns = {r["name"] for r in db.query("PRAGMA table_info(daemon_jobs)")}
+    for name, sql_type in _LEASE_COLUMNS:
+        if name in columns:
+            continue
+        try:
+            db.execute(f"ALTER TABLE daemon_jobs ADD COLUMN {name} {sql_type}")
+        except sqlite3.OperationalError as e:
+            # Another connection added it between our check and the ALTER.
+            if "duplicate column name" not in str(e):
+                raise
+    # A row left firing by a build that recorded no claim time starts its
+    # stale window now, rather than counting as hours old on sight.
+    db.update(
+        "daemon_jobs",
+        {"claimed_at": time.time()},
+        "status = :firing AND claimed_at IS NULL",
+        {"firing": STATUS_FIRING},
+    )
 
 
 def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,6 +116,8 @@ def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": row["created_at"],
         "fired_at": row["fired_at"],
         "run_count": row["run_count"],
+        "claimed_at": row["claimed_at"],
+        "claim_id": row["claim_id"],
     }
 
 
@@ -178,62 +209,196 @@ def fetch_due(db, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
     return [_row_to_job(r) for r in rows or ()]
 
 
-def claim_job(db, *, job_id: str) -> bool:
-    """Atomically transition ``pending -> firing``. True iff this caller won.
+def claim_job(db, *, job_id: str, now: Optional[float] = None) -> Optional[str]:
+    """Atomically transition ``pending -> firing``. Returns the claim token
+    iff this caller won, else None.
 
     The status guard in the WHERE clause is what makes a job fire exactly once
     across concurrent drivers — the transition guard the whole reconciliation
-    rests on (no double-run when both old and new paths briefly coexist).
+    rests on (no double-run when both old and new paths briefly coexist). The
+    claim is a lease: renew it with :func:`renew_claim` while the job runs,
+    and pass the token to :func:`mark_fired` / :func:`mark_failed`.
     """
+    claim_id = uuid.uuid4().hex
     affected = db.update(
         "daemon_jobs",
-        {"status": STATUS_FIRING},
+        {
+            "status": STATUS_FIRING,
+            "claimed_at": now if now is not None else time.time(),
+            "claim_id": claim_id,
+            "superseded_claim": None,
+        },
         "job_id = :id AND status = :pending",
         {"id": job_id, "pending": STATUS_PENDING},
     )
-    return bool(affected == 1)
+    return claim_id if affected == 1 else None
 
 
-def mark_fired(db, *, job_id: str) -> None:
+def renew_claim(db, *, job_id: str, claim_id: str, now: float) -> bool:
+    """Heartbeat a firing claim. False once the claim is no longer ours."""
+    affected = db.update(
+        "daemon_jobs",
+        {"claimed_at": now},
+        "job_id = :id AND status = :firing AND claim_id = :claim",
+        {"id": job_id, "firing": STATUS_FIRING, "claim": claim_id},
+    )
+    return affected == 1
+
+
+# The holder of a claim may still report its outcome after another driver
+# recovered the job, as long as the job was not claimed again since.
+_HOLDER_GUARD = (
+    "job_id = :id AND ((status = :firing AND claim_id = :claim) OR "
+    "(superseded_claim = :claim AND status IN ({statuses})))"
+)
+
+
+def mark_fired(db, *, job_id: str, claim_id: str) -> bool:
     """Mark a one-shot job fired, or roll a recurring job to its next fire.
 
     Recurring jobs go back to ``pending`` with ``fire_at`` advanced by their
     interval, so the single clock keeps firing them — no per-job timer object,
-    just a row and the driver.
+    just a row and the driver. Returns False if the claim was taken over and
+    the job claimed again meanwhile; a recovery that only failed or re-queued
+    the job is overwritten, since the holder knows what really happened.
     """
     job = get_job(db, job_id=job_id)
     if job is None:
-        return
+        return False
     now = time.time()
-    run_count = (job["run_count"] or 0) + 1
+    values: Dict[str, Any] = {
+        "fired_at": now,
+        "run_count": (job["run_count"] or 0) + 1,
+        "error": None,
+        "claim_id": None,
+        "superseded_claim": None,
+    }
     if job["kind"] == KIND_RECURRING and job["interval_seconds"]:
-        db.update(
-            "daemon_jobs",
-            {
-                "status": STATUS_PENDING,
-                "fired_at": now,
-                "fire_at": now + job["interval_seconds"],
-                "run_count": run_count,
-            },
-            "job_id = :id",
-            {"id": job_id},
+        values.update(
+            {"status": STATUS_PENDING, "fire_at": now + job["interval_seconds"]}
         )
     else:
-        db.update(
-            "daemon_jobs",
-            {"status": STATUS_FIRED, "fired_at": now, "run_count": run_count},
-            "job_id = :id",
-            {"id": job_id},
-        )
-
-
-def mark_failed(db, *, job_id: str, error: str) -> None:
-    db.update(
+        values["status"] = STATUS_FIRED
+    affected = db.update(
         "daemon_jobs",
-        {"status": STATUS_FAILED, "error": error, "fired_at": time.time()},
-        "job_id = :id",
-        {"id": job_id},
+        values,
+        _HOLDER_GUARD.format(statuses=":failed, :pending"),
+        {
+            "id": job_id,
+            "firing": STATUS_FIRING,
+            "claim": claim_id,
+            "failed": STATUS_FAILED,
+            "pending": STATUS_PENDING,
+        },
     )
+    return affected == 1
+
+
+def mark_failed(db, *, job_id: str, claim_id: str, error: str) -> bool:
+    """Mark a job failed. False if the claim was taken over meanwhile.
+
+    Replaces a recovery's generic failure with the real error, but never
+    overrides a re-queued job: its re-run decides the outcome.
+    """
+    affected = db.update(
+        "daemon_jobs",
+        {
+            "status": STATUS_FAILED,
+            "error": error,
+            "fired_at": time.time(),
+            "claim_id": None,
+            "superseded_claim": None,
+        },
+        _HOLDER_GUARD.format(statuses=":failed"),
+        {
+            "id": job_id,
+            "firing": STATUS_FIRING,
+            "claim": claim_id,
+            "failed": STATUS_FAILED,
+        },
+    )
+    return affected == 1
+
+
+def find_stale_firing(db, *, now: float, stale_after: float) -> List[Dict[str, Any]]:
+    """Every ``firing`` job whose lease has not been renewed in ``stale_after``."""
+    rows = db.query(
+        "SELECT * FROM daemon_jobs WHERE status = :firing "
+        "AND (claimed_at IS NULL OR claimed_at <= :cutoff)",
+        {"firing": STATUS_FIRING, "cutoff": now - stale_after},
+    )
+    return [_row_to_job(r) for r in rows or ()]
+
+
+def _describe_heartbeat(claimed: Optional[float], now: float) -> str:
+    """``at 14:05 on 2026-10-18 (3 hours ago)``, in local time."""
+    if claimed is None:
+        return "at an unknown time"
+    stamp = datetime.fromtimestamp(claimed).strftime("%H:%M on %Y-%m-%d")
+    minutes = max(0, int((now - claimed) // 60))
+    if minutes >= 120:
+        ago = f"{minutes // 60} hours ago"
+    elif minutes >= 1:
+        ago = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    else:
+        ago = "under a minute ago"
+    return f"at {stamp} ({ago})"
+
+
+def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
+    """Move on from an abandoned lease. Returns ``"requeued"``, ``"failed"``,
+    or None if the lease changed since ``job`` was read (it is alive).
+
+    A recurring row, or a one-shot whose payload sets ``"rerunnable": True``,
+    goes back to ``pending`` and fires on the next pass. Any other one-shot row
+    is marked ``failed``: its executor may already have taken effect (an email
+    sent), so running it again is not safe. If the holder
+    turns out to be alive, its own outcome still lands (``superseded_claim``).
+    """
+    claim_id, claimed = job["claim_id"], job["claimed_at"]
+    guard = "job_id = :id AND status = :firing AND " + " AND ".join(
+        (
+            "claim_id IS NULL" if claim_id is None else "claim_id = :claim",
+            "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed",
+        )
+    )
+    when = _describe_heartbeat(claimed, now)
+    recurring = job["kind"] == KIND_RECURRING and job["interval_seconds"]
+    if recurring or job["payload"].get("rerunnable") is True:
+        values: Dict[str, Any] = {
+            "status": STATUS_PENDING,
+            "claimed_at": None,
+            "error": (
+                f"re-queued: its lease stopped being renewed (last heartbeat "
+                f"{when}); the daemon stopped or the store was locked mid-fire"
+            ),
+        }
+        outcome = "requeued"
+    else:
+        values = {
+            "status": STATUS_FAILED,
+            "fired_at": now,
+            "error": (
+                f"interrupted while firing (last heartbeat {when}). Not run "
+                "again because it may already have taken effect. Check its "
+                "result before scheduling it again: if it did run, this job "
+                "may still change to fired."
+            ),
+        }
+        outcome = "failed"
+    values.update({"claim_id": None, "superseded_claim": claim_id})
+    affected = db.update(
+        "daemon_jobs",
+        values,
+        guard,
+        {
+            "id": job["job_id"],
+            "firing": STATUS_FIRING,
+            "claim": claim_id,
+            "claimed": claimed,
+        },
+    )
+    return outcome if affected == 1 else None
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +456,7 @@ __all__ = [
     "claim_job",
     "count_jobs",
     "fetch_due",
+    "find_stale_firing",
     "get_job",
     "init_schema",
     "ledger_entry",
@@ -299,5 +465,7 @@ __all__ = [
     "mark_failed",
     "mark_fired",
     "record_migration",
+    "recover_claim",
     "register_job",
+    "renew_claim",
 ]

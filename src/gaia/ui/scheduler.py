@@ -1401,7 +1401,9 @@ class Scheduler:
             task.session_id = None
         if has_sessions and not task.session_id:
             try:
-                session = self._db.create_session(title=f"Schedule: {task.name}")
+                session = self._db.create_session(
+                    title=f"Schedule: {task.name}", kind="scheduled"
+                )
                 task.session_id = session["id"]
                 logger.info(
                     "Created session %s for schedule '%s'",

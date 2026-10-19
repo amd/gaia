@@ -8,7 +8,6 @@ omit the backend), the choice being limited to what this machine can run, and
 the choice reaching the ``/load`` request.
 """
 
-import asyncio
 import json
 
 import pytest
@@ -474,34 +473,32 @@ def test_choosing_an_available_backend_persists(ui, config_file):
 
 @pytest.mark.allow_network
 def test_ui_load_model_sends_the_chosen_backend(monkeypatch, config_file):
-    from gaia.ui.routers import system as system_mod
+    """Settings → Load goes through LemonadeClient.load_model, chosen backend and all."""
+    import time
+
     from gaia.ui.server import create_app
 
     config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
-    sent = []
+    calls = []
+    real_client = lemonade_client.LemonadeClient
+    monkeypatch.setattr(real_client, "_check_free_memory", lambda *a: None)
 
-    def fake_post(path, payload, **_kw):
-        sent.append((path, payload))
-        return asyncio.sleep(0)
+    def recording(**_kwargs):
+        client = real_client(verbose=False)
+        client._send_request = _recording_client(calls)._send_request
+        return client
 
-    monkeypatch.setattr(system_mod, "_lemonade_post", fake_post)
-    monkeypatch.setattr(
-        lemonade_client.LemonadeClient,
-        "_model_recipe",
-        lambda self, name: "llamacpp",
-    )
+    monkeypatch.setattr(lemonade_client, "LemonadeClient", recording)
     resp = TestClient(create_app(db_path=":memory:")).post(
         "/api/system/load-model",
         json={"model_name": "Gemma-4-E4B-it-GGUF", "ctx_size": 65536},
     )
     assert resp.status_code == 202
-    assert sent == [
-        (
-            "load",
-            {
-                "model_name": "Gemma-4-E4B-it-GGUF",
-                "ctx_size": 65536,
-                "llamacpp_backend": "rocm",
-            },
-        )
-    ]
+    for _ in range(200):
+        if _loads(calls):
+            break
+        time.sleep(0.01)
+    load = _loads(calls)[0]
+    assert load["model_name"] == "Gemma-4-E4B-it-GGUF"
+    assert load["ctx_size"] == 65536
+    assert load["llamacpp_backend"] == "rocm"

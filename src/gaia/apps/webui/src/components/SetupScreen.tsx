@@ -4,9 +4,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
-import { useModelStore } from '../stores/modelStore';
+import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupRunStatus, SetupStep } from '../types';
+import { CloudPrices } from './settings/CloudPrices';
+import './settings/CloudSpending.css';
+import { formatGb } from '../utils/modelLabels';
+import { ChatModelChoice, SystemCheck } from './SetupSteps';
+import { StartCards } from './StartCards';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupRunStatus, SetupStep, StartCard } from '../types';
 import './SetupScreen.css';
 
 const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
@@ -17,8 +22,6 @@ const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
 
 const POLL_MS = 1000;
 const CHOICE_KEY = 'gaia-setup-choice';
-// The check ran for a local install, so a missing chat model is not a cloud user's problem.
-const CHAT_MODEL_MISSING = /^Model '(?![^']*embed)[^']*' is not downloaded$/i;
 
 /** The provider picked for this setup, kept across reloads, new tabs and restarts. */
 function readChoice(): ProviderId | null {
@@ -55,27 +58,41 @@ const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too
 function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'gaia') => void }) {
     const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
     const [checkError, setCheckError] = useState<string | null>(null);
+    // Something answered the connection but not the question: "couldn't tell", not "none".
+    const [unchecked, setUnchecked] = useState<string[]>([]);
+    const [checking, setChecking] = useState(false);
     const [key, setKey] = useState('');
     const [needsKey, setNeedsKey] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
 
-    useEffect(() => {
-        let live = true;
-        (async () => {
+    const live = useRef(true);
+    const detect = useCallback(async () => {
+        setCheckError(null);
+        try {
             const target = await api.getLemonadeTarget();
             if (!target.offer) return;
-            const { found } = await api.detectLemonade();
-            if (live && found && OFFERED.includes(found.status)) {
+            setChecking(true);
+            const { found, unchecked: missed = [] } = await api.detectLemonade();
+            if (!live.current) return;
+            setUnchecked(found ? [] : missed);
+            if (found && OFFERED.includes(found.status)) {
                 setOffer({ target, found });
                 setNeedsKey(found.status === 'needs_key');
             }
-        })().catch((err) => {
-            if (live) setCheckError(err instanceof Error ? err.message : String(err));
-        });
-        return () => { live = false; };
+        } catch (err) {
+            if (live.current) setCheckError(err instanceof Error ? err.message : String(err));
+        } finally {
+            if (live.current) setChecking(false);
+        }
     }, []);
+
+    useEffect(() => {
+        live.current = true;
+        void detect();
+        return () => { live.current = false; };
+    }, [detect]);
 
     const choose = useCallback(async (mode: 'external' | 'gaia') => {
         if (!offer) return;
@@ -96,10 +113,27 @@ function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'ga
         }
     }, [offer, key, onChosen]);
 
-    if (checkError) {
-        return <p className="setup-hint">Could not check for a Lemonade Server you already run: {checkError}</p>;
+    if (checkError || unchecked.length > 0) {
+        return (
+            <div className="setup-row">
+                <span className="setup-hint">
+                    {checkError
+                        ? `Couldn't check for a Lemonade Server you already run: ${checkError}`
+                        : `Couldn't check whether your Lemonade Server at ${unchecked.join(' or ')} is running: it didn't answer in time.`}
+                </span>
+                <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
+                    {checking && <Loader2 size={13} className="spin" />} Check again
+                </button>
+            </div>
+        );
     }
-    if (!offer) return null;
+    if (!offer) {
+        return checking ? (
+            <p className="setup-hint" role="status">
+                <Loader2 size={13} className="spin" aria-hidden="true" /> Looking for a Lemonade Server you already run…
+            </p>
+        ) : null;
+    }
     const { target, found } = offer;
     if (chosen) {
         return (
@@ -146,13 +180,32 @@ function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'ga
 interface SetupScreenProps {
     /** What `gaia init --check` said; the screen is shown only when it is not ready. */
     initial: SetupCheck;
-    onReady: () => void;
+    /** Setup is done; `first` is a task the user picked to start with. */
+    onReady: (first?: StartCard) => void;
+}
+
+/** The steps as they will run, from what is known before setup starts. */
+function plannedSteps(steps: SetupStep[], plan: SetupPlan | null, cloud: boolean): SetupStep[] {
+    if (!plan) return steps;
+    return steps.map((step) => {
+        if (step.key === 'server' && plan.lemonade.mode === 'external') {
+            return { ...step, label: 'Use your Lemonade Server', detail: plan.lemonade.url };
+        }
+        if (step.key === 'models' && !cloud && !plan.decided_after_server) {
+            const size = plan.download_gb === 0 ? 'already downloaded'
+                : plan.download_gb != null ? formatGb(plan.download_gb) : null;
+            const detail = `chat model ${shortModelName(plan.chat_model.id)}, plus the embedding model`;
+            return { ...step, detail: size ? `${detail} (${size})` : detail };
+        }
+        return step;
+    });
 }
 
 /**
- * First run, the same steps as the TUI: install the local model server, then
- * download the models, then check they load. A cloud choice skips the local
- * chat model (the embedding model is still needed for documents and memory).
+ * First run, the same steps as the TUI: check this PC, choose where GAIA runs
+ * and which chat model, then install the model server, download the models and
+ * check they load. A cloud choice skips the local chat model (the embedding
+ * model is still needed for documents and memory). Ends on a first task.
  */
 export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const refreshModel = useModelStore((s) => s.refresh);
@@ -165,24 +218,48 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const [key, setKey] = useState('');
     const [keyState, setKeyState] = useState<{ busy: boolean; error: string | null; done: boolean }>({ busy: false, error: null, done: false });
     const [showLog, setShowLog] = useState(false);
+    const [plan, setPlan] = useState<SetupPlan | null>(null);
+    const [planError, setPlanError] = useState<string | null>(null);
+    const [cloudModel, setCloudModel] = useState<string | null>(null);
+    const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const cloud = choice !== 'local';
-    const steps: SetupStep[] = run?.steps ?? (cloud ? initial.cloud_steps ?? initial.steps : initial.steps);
-    // The check ran before setup; once a run starts its steps say what is left.
-    const reason = run ? undefined : initial.reasons?.find((r) => !(cloud && CHAT_MODEL_MISSING.test(r)));
+    const steps: SetupStep[] = run?.steps
+        ?? plannedSteps(cloud ? initial.cloud_steps ?? initial.steps : initial.steps, plan, cloud);
     const running = run?.state === 'running' || run?.state === 'verifying';
     const installed = run?.state === 'ready';
+    // The run's steps are numbered after: check, where, and (local) model.
+    const firstRunStep = cloud ? 3 : 4;
+
+    const loadHardware = useCallback(() => {
+        setHardwareError(null);
+        api.getOnboardingPreflight()
+            .then(setHardware)
+            .catch((err) => setHardwareError(err instanceof Error ? err.message : String(err)));
+    }, []);
+
+    // A cold PC's first plan can answer after the one asked for once "Use mine" is picked.
+    const planRequest = useRef(0);
+    const loadPlan = useCallback(() => {
+        const request = ++planRequest.current;
+        setPlan(null);
+        setPlanError(null);
+        api.getSetupPlan()
+            .then((p) => { if (request === planRequest.current) setPlan(p); })
+            .catch((err) => {
+                if (request === planRequest.current) setPlanError(err instanceof Error ? err.message : String(err));
+            });
+    }, []);
 
     useEffect(() => {
         api.getLemonadeTarget()
             .then((t) => setUsersServer(t.source === 'config'))
             .catch((err) => console.warn('[SetupScreen] could not read which Lemonade GAIA uses', err));
-        api.getOnboardingPreflight()
-            .then(setHardware)
-            .catch((err) => setHardwareError(err instanceof Error ? err.message : String(err)));
+        loadHardware();
+        loadPlan();
         // Pick up a setup another tab (or a reload) already started.
         api.getSetupStatus()
             .then((s) => {
@@ -193,7 +270,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                 if (s.skip_chat_model && !readChoice()) setChoice('fireworks');
             })
             .catch((err) => setStartError(`Could not read setup progress: ${err instanceof Error ? err.message : err}`));
-    }, []);
+    }, [loadHardware, loadPlan]);
 
     const stopPolling = useCallback(() => {
         if (pollRef.current) clearInterval(pollRef.current);
@@ -228,6 +305,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
             const pick = models.find((m) => m.rank === 1) ?? models[0];
             if (!pick) throw new Error('Connected, but the provider listed no chat models.');
             await selectModel(pick.id);
+            setCloudModel(pick.id);
             setKey('');
             setKeyState({ busy: false, error: null, done: true });
         } catch (err) {
@@ -241,31 +319,54 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         setKeyState({ busy: false, error: null, done: false });
     }, []);
 
-    const finish = useCallback(async () => {
+    const finish = useCallback(async (first?: StartCard) => {
         await refreshModel();
-        onReady();
+        onReady(first);
     }, [onReady, refreshModel]);
 
     const canFinish = installed && (!cloud || keyState.done);
     const activeStep = steps.find((s) => s.status === 'active' || s.status === 'failed');
+    // The one model that answers: what setup (or the cloud step) actually chose.
+    const answering = cloud ? cloudModel
+        : run?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
+
+    useEffect(() => {
+        if (!canFinish) return;
+        api.getStartScreen()
+            .then((s) => setFirstTasks(s.cards))
+            .catch((err) => console.warn('[SetupScreen] no first tasks to offer', err));
+    }, [canFinish]);
 
     return (
         <main className="setup" aria-labelledby="setup-title">
             <div className="setup-inner">
                 <h1 id="setup-title" className="setup-title">Set up GAIA</h1>
                 <p className="setup-lede">
-                    {reason ? `${reason}.` : 'A few things are needed before the first chat.'}
+                    {canFinish ? 'All set.' : run ? 'Setting things up. Setup keeps going if you switch away.'
+                        : 'A few minutes of setup, then your first chat.'}
                 </p>
 
                 <ol className="setup-steps">
+                    <li className={`setup-step${hardware || hardwareError ? ' is-done' : ' is-current'}`}>
+                        <div className="setup-step-head">
+                            <span className="setup-step-num">{hardware || hardwareError ? <Check size={14} aria-hidden="true" /> : 1}</span>
+                            <span className="setup-step-label">Check this PC</span>
+                        </div>
+                        {!run && (
+                            <div className="setup-step-body">
+                                <SystemCheck hardware={hardware} error={hardwareError} />
+                            </div>
+                        )}
+                    </li>
+
                     <li className={`setup-step${run ? ' is-done' : ' is-current'}`}>
                         <div className="setup-step-head">
-                            <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 1}</span>
+                            <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 2}</span>
                             <span className="setup-step-label">Choose where GAIA runs</span>
                         </div>
                         {!run && (
                             <div className="setup-step-body">
-                                <ExistingLemonadeOffer onChosen={(mode) => setUsersServer(mode === 'external')} />
+                                <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); loadPlan(); }} />
                                 <div className="setup-choices" role="radiogroup" aria-label="Where GAIA runs">
                                     {CHOICES.map((c) => (
                                         <button
@@ -284,30 +385,36 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                         </button>
                                     ))}
                                 </div>
-                                {hardware && (
-                                    <p className="setup-hint">
-                                        This PC: {hardware.ram_gb != null ? `${hardware.ram_gb} GB memory` : 'memory unknown'}
-                                        {hardware.gpu_name ? ` · ${hardware.gpu_name}` : ''}
-                                        {hardware.npu_detected ? ' · Ryzen AI NPU' : ''}
-                                        {hardware.disk_free_gb != null ? ` · ${hardware.disk_free_gb} GB free` : ''}
-                                    </p>
-                                )}
-                                {hardwareError && (
-                                    <p className="setup-hint">Could not read this PC&rsquo;s hardware: {hardwareError}</p>
-                                )}
-                                {hardware && !hardware.compatible && hardware.blockers.length > 0 && (
-                                    <p className="setup-error" role="alert">{hardware.blockers.join(' ')}</p>
-                                )}
-                                {hardware && hardware.warnings.length > 0 && (
-                                    <p className="setup-hint">{hardware.warnings.join(' ')}</p>
-                                )}
-                                <button type="button" className="btn-primary setup-start" onClick={() => void start()}>
-                                    Start setup
-                                </button>
-                                {startError && <p className="setup-error" role="alert">{startError}</p>}
                             </div>
                         )}
                     </li>
+
+                    {!cloud && (
+                        <li className={`setup-step${run ? ' is-done' : ' is-current'}`}>
+                            <div className="setup-step-head">
+                                <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 3}</span>
+                                <span className="setup-step-label">Chat model</span>
+                            </div>
+                            <div className="setup-step-body">
+                                <ChatModelChoice
+                                    plan={plan}
+                                    planError={planError}
+                                    chosen={run?.chat_model ?? null}
+                                    locked={!!run}
+                                    onPlan={setPlan}
+                                />
+                            </div>
+                        </li>
+                    )}
+
+                    {!run && (
+                        <li className="setup-step-action">
+                            <button type="button" className="btn-primary setup-start" onClick={() => void start()}>
+                                Start setup
+                            </button>
+                            {startError && <p className="setup-error" role="alert">{startError}</p>}
+                        </li>
+                    )}
 
                     {steps.map((step, i) => {
                         const status = run ? step.status : 'pending';
@@ -316,7 +423,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                         return (
                             <li key={step.key} className={`setup-step is-${status ?? 'pending'}`} aria-current={isActive ? 'step' : undefined}>
                                 <div className="setup-step-head">
-                                    <span className="setup-step-num"><StepIcon status={status} n={i + 2} /></span>
+                                    <span className="setup-step-num"><StepIcon status={status} n={i + firstRunStep} /></span>
                                     <span className="setup-step-label">
                                         {step.label}
                                         {step.detail && <span className="setup-step-detail"> — {step.detail}</span>}
@@ -346,7 +453,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                     {cloud && (
                         <li className={`setup-step${keyState.done ? ' is-done' : installed ? ' is-current' : ' is-pending'}`}>
                             <div className="setup-step-head">
-                                <span className="setup-step-num">{keyState.done ? <Check size={14} aria-hidden="true" /> : steps.length + 2}</span>
+                                <span className="setup-step-num">{keyState.done ? <Check size={14} aria-hidden="true" /> : steps.length + firstRunStep}</span>
                                 <span className="setup-step-label">Connect {CHOICES.find((c) => c.id === choice)?.title}</span>
                             </div>
                             {installed && !keyState.done && (
@@ -366,6 +473,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             </button>
                                         ))}
                                     </div>
+                                    <CloudPrices provider={choice} limit={3} />
                                     {usersServer ? (
                                         <p className="setup-hint">
                                             GAIA uses this provider as your Lemonade Server already has it set up. It doesn&rsquo;t send your server a key or change its setup.
@@ -405,10 +513,21 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
 
                 {canFinish && (
                     <div className="setup-done" role="status">
-                        <p>GAIA is ready.</p>
-                        <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
-                            Start chatting
-                        </button>
+                        <div className="setup-done-head">
+                            <p>
+                                GAIA is ready.
+                                {answering && <> <strong>{shortModelName(answering)}</strong> answers{cloud ? ' in the cloud' : ' on this PC'}.</>}
+                            </p>
+                            <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
+                                Start chatting
+                            </button>
+                        </div>
+                        {firstTasks.length > 0 && (
+                            <>
+                                <p className="setup-hint">Or start with one of these:</p>
+                                <StartCards cards={firstTasks} onPick={(card) => void finish(card)} />
+                            </>
+                        )}
                     </div>
                 )}
             </div>

@@ -47,6 +47,19 @@ def resolved_default_model() -> str:
 
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
+SESSION_KINDS = ("chat", "eval", "scheduled")
+
+
+def session_kind_for_title(title: str | None) -> str:
+    """Eval and scheduler chats are named by their runner; a person's never are."""
+    t = (title or "").lstrip()
+    if t.startswith("Eval:"):
+        return "eval"
+    if t.startswith("Schedule:"):
+        return "scheduled"
+    return "chat"
+
+
 PLACEHOLDER_TITLES = {
     "",
     "new chat",
@@ -150,7 +163,20 @@ CREATE TABLE IF NOT EXISTS schedule_results (
     error       TEXT
 );
 
+-- One row per cloud chat turn; usd is NULL when the model has no known price.
+CREATE TABLE IF NOT EXISTS cloud_spend (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    month         TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    usd           REAL
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_cloud_spend_month ON cloud_spend(month);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
@@ -285,6 +311,7 @@ class ChatDatabase:
         self._add_column("messages", "model_messages", "TEXT")
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
+        self._add_column("messages", "turn_summary", "TEXT")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -318,6 +345,21 @@ class ChatDatabase:
             "UPDATE sessions SET title_is_custom = 1 "
             f"WHERE LOWER(TRIM(COALESCE(title, ''))) NOT IN ({placeholders})",
             tuple(PLACEHOLDER_TITLES),
+        )
+
+        # The chat list as a queue (#5221): pin, unread, how the last turn
+        # ended, and whether a person or the eval/scheduler started the chat.
+        self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("sessions", "last_run_status", "TEXT")
+        self._add_column(
+            "sessions",
+            "kind",
+            "TEXT NOT NULL DEFAULT 'chat'",
+            "UPDATE sessions SET kind = CASE "
+            "WHEN title LIKE 'Eval:%' THEN 'eval' "
+            "WHEN title LIKE 'Schedule:%' THEN 'scheduled' "
+            "ELSE 'chat' END",
         )
 
     def close(self):
@@ -355,8 +397,13 @@ class ChatDatabase:
         agent_type: str | None = None,
         device: str | None = None,
         mail_provider: str | None = None,
+        kind: str | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Create a new chat session."""
+        """Create a new chat session.
+
+        ``kind`` defaults from the title (``Eval:`` / ``Schedule:`` prefixes),
+        since the eval driver creates chats through the plain API.
+        """
         session_id = str(uuid.uuid4())
         now = self._now()
         # An explicit caller-supplied model wins; otherwise resolve against
@@ -371,13 +418,18 @@ class ChatDatabase:
         # picker no longer offers.
         agent_type = agent_type or "gaia"
         device = device or "gpu"
+        kind = kind or session_kind_for_title(title)
+        if kind not in SESSION_KINDS:
+            raise ValueError(
+                f"Unknown session kind {kind!r}; expected one of {SESSION_KINDS}"
+            )
         # mail_provider is a FILTER (#1596): no pick stays NULL ("every
         # connected mailbox") — never silently coerce to google.
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider, kind)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -390,6 +442,7 @@ class ChatDatabase:
                     agent_type,
                     device,
                     mail_provider,
+                    kind,
                 ),
             )
 
@@ -452,6 +505,34 @@ class ChatDatabase:
                 sessions.append(session)
 
             return sessions
+
+    def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
+        """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET pinned = ? WHERE id = ?",
+                (1 if pinned else 0, session_id),
+            )
+        return cur.rowcount > 0
+
+    def mark_session_read(self, session_id: str) -> bool:
+        """Clear a chat's unread flag (the user opened it)."""
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET unread = 0 WHERE id = ?", (session_id,)
+            )
+        return cur.rowcount > 0
+
+    def finish_session_run(self, session_id: str, status: str) -> bool:
+        """Record how a turn ended (``done``/``failed``/``stopped``) and mark it unread."""
+        if status not in ("done", "failed", "stopped"):
+            raise ValueError(f"Unknown run status {status!r}")
+        with self._transaction():
+            cur = self._conn.execute(
+                "UPDATE sessions SET last_run_status = ?, unread = 1 WHERE id = ?",
+                (status, session_id),
+            )
+        return cur.rowcount > 0
 
     def count_sessions(self) -> int:
         """Count total sessions."""
@@ -564,19 +645,22 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -588,6 +672,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -612,6 +697,7 @@ class ChatDatabase:
         tokens_completion: int | None = None,
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
+        turn_summary: Dict | None = None,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -625,6 +711,7 @@ class ChatDatabase:
         steps_json = json.dumps(agent_steps) if agent_steps else None
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
+        summary_json = json.dumps(turn_summary) if turn_summary else None
 
         with self._transaction():
             if msg_id is not None:
@@ -636,8 +723,9 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
+                    turn_summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -649,6 +737,7 @@ class ChatDatabase:
                     tokens_completion,
                     stats_json,
                     model_json,
+                    summary_json,
                 ),
             )
 
@@ -711,6 +800,16 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("turn_summary"):
+                try:
+                    msg["turn_summary"] = json.loads(msg["turn_summary"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Message %s has an unreadable turn summary: %s",
+                        msg.get("id"),
+                        exc,
+                    )
+                    msg["turn_summary"] = None
             messages.append(msg)
 
         return messages
@@ -1081,6 +1180,35 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    # ── Cloud spending ────────────────────────────────────────────────
+
+    def add_cloud_spend(
+        self,
+        month: str,
+        model: str,
+        provider: str,
+        input_tokens: Optional[int],
+        output_tokens: Optional[int],
+        usd: Optional[float],
+    ) -> None:
+        """Record one cloud chat turn; *usd* None when its price is unknown."""
+        with self._transaction():
+            self._conn.execute(
+                "INSERT INTO cloud_spend (month, model, provider, input_tokens, "
+                "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
+                (month, model, provider, input_tokens, output_tokens, usd),
+            )
+
+    def cloud_spend_for_month(self, month: str) -> List[Dict]:
+        """Every cloud turn recorded in *month* (``YYYY-MM``)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE month = ? ORDER BY id",
+                (month,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Settings ──────────────────────────────────────────────────────
 
