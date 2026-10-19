@@ -141,3 +141,55 @@ describe('Sidebar', () => {
         expect(screen.getByRole('button', { name: 'Fireworks AI · Gemma-4-E4B-it-GGUF' })).toBeInTheDocument();
     });
 });
+
+describe('Sidebar width', () => {
+    beforeEach(() => localStorage.removeItem('gaia-chat-sidebar-width'));
+
+    const handle = () => screen.getByRole('separator', { name: 'Resize sidebar' });
+    const width = () => screen.getByRole('complementary', { name: 'Chats' }).style.width;
+
+    it('resizes from the keyboard and remembers the width', () => {
+        const { unmount } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(handle()).toHaveAttribute('aria-valuenow', '260');
+        fireEvent.keyDown(handle(), { key: 'ArrowRight' });
+        expect(width()).toBe('276px');
+        fireEvent.keyDown(handle(), { key: 'End' });
+        expect(handle()).toHaveAttribute('aria-valuenow', '420');
+        unmount();
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(width()).toBe('420px');
+    });
+
+    it('double-click resets to the default width', () => {
+        localStorage.setItem('gaia-chat-sidebar-width', '380');
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(width()).toBe('380px');
+        fireEvent.doubleClick(handle());
+        expect(width()).toBe('260px');
+    });
+
+    it('dragging narrow collapses the sidebar to its rail', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.pointerDown(handle(), { button: 0, clientX: 260, pointerId: 1 });
+        fireEvent.pointerMove(handle(), { clientX: 100, pointerId: 1 });
+        fireEvent.pointerUp(handle(), { clientX: 100, pointerId: 1 });
+        expect(useChatStore.getState().sidebarCollapsed).toBe(true);
+    });
+
+    it('dragging resizes within the limits', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.pointerDown(handle(), { button: 0, clientX: 260, pointerId: 1 });
+        fireEvent.pointerMove(handle(), { clientX: 900, pointerId: 1 });
+        fireEvent.pointerUp(handle(), { clientX: 900, pointerId: 1 });
+        expect(width()).toBe('420px');
+        expect(localStorage.getItem('gaia-chat-sidebar-width')).toBe('420');
+    });
+
+    it('keeps the GAIA icon when collapsed, with no handle', () => {
+        useChatStore.setState({ sidebarCollapsed: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelector('.sb-brand img')).not.toBeNull();
+        expect(screen.queryByText('GAIA')).not.toBeInTheDocument();
+        expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).not.toBeInTheDocument();
+    });
+});

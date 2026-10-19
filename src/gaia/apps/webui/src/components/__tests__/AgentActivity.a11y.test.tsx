@@ -28,6 +28,7 @@ it('keeps collapsed activity out of the tab order and the accessibility tree', (
 it('names the icon-only copy button on command output', () => {
     render(<AgentActivity steps={steps} isActive={false} variant="summary" />);
     fireEvent.click(screen.getByRole('button', { name: 'Expand agent activity' }));
+    fireEvent.click(screen.getByRole('button', { name: /Ran command/ }));
 
     expect(screen.getByRole('button', { name: 'Copy command output' })).toBeInTheDocument();
 });

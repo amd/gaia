@@ -51,7 +51,7 @@ class _FakeRun:
 def test_active_empty_by_default(client):
     resp = client.get("/api/chat/active")
     assert resp.status_code == 200
-    assert resp.json() == {"session_ids": []}
+    assert resp.json() == {"session_ids": [], "queued": [], "awaiting_user": {}}
 
 
 def test_active_reports_running_sessions(client):
