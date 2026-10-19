@@ -435,7 +435,9 @@ class TestRAGSDK:
 
                 encode_calls = []
 
-                def fake_encode(texts, show_progress=False):  # noqa: ARG001
+                def fake_encode(
+                    texts, show_progress=False, wait_callback=None
+                ):  # noqa: ARG001
                     encode_calls.append(list(texts))
                     return np.array(
                         [[0.1, 0.2, 0.3, 0.4] for _ in texts], dtype=np.float32
@@ -497,7 +499,9 @@ class TestRAGSDK:
 
                 encode_calls = []
 
-                def fake_encode(texts, show_progress=False):  # noqa: ARG001
+                def fake_encode(
+                    texts, show_progress=False, wait_callback=None
+                ):  # noqa: ARG001
                     encode_calls.append(list(texts))
                     return np.array(
                         [[0.1, 0.2, 0.3, 0.4] for _ in texts], dtype=np.float32

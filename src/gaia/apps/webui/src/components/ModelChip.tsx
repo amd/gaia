@@ -7,6 +7,7 @@ import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore, useInferencePlace, selectChipModel, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
+import { formatPrice } from './settings/cloudPrice';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -129,9 +130,12 @@ export function ModelChip({ disabled }: { disabled?: boolean }) {
                                     </span>
                                     <span className="popover-item-body">
                                         <span className="popover-item-title">{shortModelName(m.id)}</span>
-                                        {(m.note || needsDownload) && (
+                                        {(m.note || needsDownload || provider.remote) && (
                                             <span className="popover-item-note">
-                                                {needsDownload ? 'Not downloaded — get it in Settings' : `#${m.rank} ${m.note}`}
+                                                {needsDownload
+                                                    ? 'Not downloaded — get it in Settings'
+                                                    : [m.note ? `#${m.rank} ${m.note}` : null, provider.remote ? formatPrice(m.price) : null]
+                                                        .filter(Boolean).join(' · ')}
                                             </span>
                                         )}
                                     </span>

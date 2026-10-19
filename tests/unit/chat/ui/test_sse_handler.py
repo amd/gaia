@@ -379,6 +379,23 @@ class TestPrintPlan:
         assert "query='test'" in step
         assert "directory='/src'" in step
 
+    def test_plan_carries_one_plain_line_per_step(self, handler):
+        plan = [
+            {"tool": "read_file", "tool_args": {"file_path": "notes.txt"}},
+            {"tool": "list_skills"},
+            {"description": "Compare the two lists"},
+            "Write the summary",
+        ]
+        handler.print_plan(plan, current_step=1)
+        event = _drain(handler)[0]
+        assert event["step_narrations"] == [
+            "Reading file: notes.txt",
+            "Checking your installed skills",
+            "Compare the two lists",
+            "Write the summary",
+        ]
+        assert len(event["step_narrations"]) == len(event["steps"])
+
 
 # ===========================================================================
 # SSEOutputHandler.print_tool_usage
@@ -408,6 +425,7 @@ class TestPrintToolUsage:
             "type": "tool_start",
             "tool": "search_file",
             "detail": _tool_description("search_file"),
+            "narration": "Searching file",
         }
 
     def test_emits_tool_start_unknown_tool_empty_detail(self, handler):
@@ -450,6 +468,11 @@ class TestPrettyPrintJsonArguments:
         assert event["tool"] == "search_file"
         assert event["args"] == args
         assert "query" in event["detail"]
+
+    def test_tool_args_event_says_what_the_call_does(self, handler):
+        handler._last_tool_name = "read_file"
+        handler.pretty_print_json({"file_path": "C:/notes.txt"}, title="Arguments")
+        assert _drain(handler)[0]["narration"] == "Reading file: C:/notes.txt"
 
     def test_returns_early_for_arguments_title(self, handler):
         """Arguments title should emit tool_args, not tool_result."""
@@ -1024,6 +1047,7 @@ class TestPrintCommandExecuting:
             "type": "tool_start",
             "tool": "run_shell_command",
             "detail": "git status",
+            "narration": "Running command: git status",
         }
 
 
@@ -1560,6 +1584,16 @@ class TestFormatToolArgs:
     def test_more_than_two_parts_newline_joined(self):
         result = _format_tool_args("tool", {"a": "1", "b": "2", "c": "3"})
         assert result == "a: 1\nb: 2\nc: 3"
+
+    def test_list_value_reads_as_a_plain_list(self):
+        result = _format_tool_args(
+            "extract_document_items", {"fields": ["owner", "task", "due"]}
+        )
+        assert result == "fields: owner, task, due"
+
+    def test_value_holding_a_comma_forces_one_row_per_argument(self):
+        result = _format_tool_args("tool", {"fields": ["a", "b"], "file": "x.html"})
+        assert result == "fields: a, b\nfile: x.html"
 
     def test_numeric_values(self):
         result = _format_tool_args("tool", {"count": 42})

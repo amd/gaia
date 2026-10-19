@@ -300,6 +300,27 @@ This allows project-specific MCP server configurations while maintaining a globa
 This format is compatible with Claude Desktop and other Anthropic tools. The `mcpServers` key, separate `command`/`args` fields, and `env` support are standard across the ecosystem.
 </Note>
 
+Each request to a server waits 30 seconds for its reply, and GAIA waits 10 seconds
+for all servers to connect. A server whose first start is slower, such as an
+`npx -y` or `uvx` package that downloads on first use, can set its own `timeout`
+(seconds, at most 600), which raises both. All servers connect together, so the
+connect wait is the longest `timeout` any of them sets:
+
+```json
+"github": {
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-github"],
+  "timeout": 120
+}
+```
+
+A tool call waits for the longer of the server's `timeout` and the agent's own
+per-tool limit less 5 seconds (`GAIA_AGENT_TOOL_TIMEOUT`, 180 seconds by
+default, so 175). Inside an agent turn the agent's limit still applies, so a
+server `timeout` above it ends the call with the agent's generic timeout
+rather than an error naming the server. For a tool that needs longer, raise
+`GAIA_AGENT_TOOL_TIMEOUT` as well.
+
 ### Popular MCP Servers
 
 <Tabs>

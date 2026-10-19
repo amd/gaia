@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,6 +25,7 @@ from starlette.background import BackgroundTask
 from gaia.agents.base.tool_grants import grant_scope
 
 from .. import permissions as session_permissions
+from .._chat_helpers import _spawn_background, stuck_producer
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
@@ -36,6 +38,7 @@ from ..sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from ..turn_queue import TurnCancelled, turn_queue
 from ..utils import resolve_upload_links
 
 logger = logging.getLogger(__name__)
@@ -82,8 +85,10 @@ async def send_message(
     """Send a message and get a response (streaming or non-streaming).
 
     Concurrency is controlled at two levels:
-    1. A global semaphore (chat_semaphore) limits overall concurrent
-       chat requests to avoid resource exhaustion.
+    1. Every turn waits in one visible line for the model (``turn_queue``).
+       A streamed turn waits inside its detached run and reports its place
+       in line; a non-streamed one waits here, its message already saved,
+       until it reaches the model or is stopped with ``/api/chat/cancel``.
     2. A per-session lock (session_locks) prevents the same session
        from having overlapping requests that would corrupt conversation
        state.
@@ -99,7 +104,6 @@ async def send_message(
     # ── Per-session lock ─────────────────────────────────────────────
     # setdefault is atomic: safe under concurrent requests for the same session
     session_locks = http_request.app.state.session_locks
-    chat_semaphore = http_request.app.state.chat_semaphore
     sid = request.session_id
     session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
@@ -109,6 +113,13 @@ async def send_message(
     #
     # The session lock and run registry cover the entire producer lifetime,
     # including detached runs, to protect the cached agent's conversation state.
+    if stuck_producer(sid) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is still stopping the previous reply in this chat: "
+            "a tool it was running has not returned yet. Send your message "
+            "again in a moment; other chats are not affected.",
+        )
     if session_lock.locked() or run_manager.is_running(sid):
         raise HTTPException(
             status_code=409,
@@ -117,26 +128,31 @@ async def send_message(
         )
     await session_lock.acquire()
 
-    # ── Global concurrency gate ──────────────────────────────────────
-    # Queue rather than immediately reject: wait up to 60 s for a slot.
-    # This prevents spurious 429s for sequential workloads (eval runner,
-    # multi-turn conversations) where the prior request is just wrapping up.
-    try:
-        await asyncio.wait_for(chat_semaphore.acquire(), timeout=60.0)
-    except asyncio.TimeoutError:
-        session_lock.release()
-        raise HTTPException(
-            status_code=429,
-            detail="The server is busy processing other chat requests. "
-            "Please try again in a few moments.",
-        )
-    except asyncio.CancelledError:
-        session_lock.release()
-        raise
-
-    # Both session_lock and chat_semaphore are now held by this coroutine.
-    # Track whether ownership was transferred to the streaming generator.
-    sem_released = False
+    # A streamed turn takes its place in line inside the run, so leaving the
+    # chat while it waits doesn't drop it. A non-streamed one is saved first,
+    # so a long wait never loses it.
+    holds_turn = False
+    if not request.stream:
+        try:
+            db.add_message(sid, "user", request.message)
+            await turn_queue.acquire(sid)
+            holds_turn = True
+        except TurnCancelled:
+            db.add_message(sid, "assistant", "Cancelled.")
+            session_lock.release()
+            raise HTTPException(
+                status_code=409,
+                detail="This message was stopped while it waited for another "
+                "chat to finish. It is saved in the chat; send it again to retry.",
+            )
+        except asyncio.CancelledError:
+            # The client left while waiting: close the turn it saved.
+            db.add_message(sid, "assistant", "Cancelled.")
+            session_lock.release()
+            raise
+        except BaseException:
+            session_lock.release()
+            raise
 
     # Resolve the patchable functions through gaia.ui.server so tests
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
@@ -156,8 +172,12 @@ async def send_message(
                 if stream_resources_released:
                     return
                 stream_resources_released = True
+                stuck = stuck_producer(sid)
+                if stuck is not None:
+                    # The stopped turn's thread still drives this chat's agent.
+                    _spawn_background(_release_after(stuck, session_lock))
+                    return
                 session_lock.release()
-                chat_semaphore.release()
 
             async def _release_stream_resources():
                 # A disconnected subscriber must not admit a second producer.
@@ -180,7 +200,6 @@ async def send_message(
                 finally:
                     await _release_stream_resources()
 
-            sem_released = True
             return StreamingResponse(
                 _stream(),
                 media_type="text/event-stream",
@@ -192,11 +211,18 @@ async def send_message(
                 background=BackgroundTask(_release_stream_resources),
             )
         else:
+            from .._chat_helpers import _record_run_outcome
+
+            run_status = "failed"
             try:
-                db.add_message(request.session_id, "user", request.message)
                 model_messages = []
+                turn_box: dict = {}
                 response_text = await srv._get_chat_response(
-                    db, session, agent_request, model_messages=model_messages
+                    db,
+                    session,
+                    agent_request,
+                    model_messages=model_messages,
+                    turn_box=turn_box,
                 )
                 # Clean LLM output artifacts (same pipeline as streaming path)
                 if response_text:
@@ -212,6 +238,8 @@ async def send_message(
                     response_text,
                     model_messages=model_messages or None,
                 )
+                if "recording" in turn_box:
+                    turn_box["recording"].link_message(msg_id)
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 
@@ -221,10 +249,7 @@ async def send_message(
                 # _maybe_update_session_title for the rules. We pass
                 # model_id from the loaded session so the title call uses
                 # whichever LLM is actually live in Lemonade.
-                from gaia.ui._chat_helpers import (
-                    _maybe_update_session_title,
-                    _spawn_background,
-                )
+                from gaia.ui._chat_helpers import _maybe_update_session_title
 
                 _spawn_background(
                     _maybe_update_session_title(
@@ -235,18 +260,35 @@ async def send_message(
                         model_id=session.get("model"),
                     )
                 )
+                run_status = "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,
                     sources=[],
                 )
             finally:
+                _record_run_outcome(db, request.session_id, run_status)
                 session_lock.release()
     finally:
-        # Release the semaphore for non-streaming requests or on error before
-        # the streaming generator took ownership.
-        if not sem_released:
-            chat_semaphore.release()
+        if holds_turn:
+            turn_queue.release()
+
+
+async def _release_after(thread: threading.Thread, session_lock: asyncio.Lock):
+    """Free a chat once the agent thread of its stopped turn has exited."""
+    # Polled, not joined: a join would hold a worker of the shared executor.
+    # No limit: the thread still drives this chat's agent until it exits.
+    waited = 0.0
+    while thread.is_alive():
+        await asyncio.sleep(0.5)
+        waited += 0.5
+        if waited % 300 == 0:
+            logger.warning(
+                "A stopped chat's agent thread is still running after %.0f s; "
+                "the chat stays busy until it returns",
+                waited,
+            )
+    session_lock.release()
 
 
 # A late answer to a turn that already ended: say so, not "no session".
@@ -557,6 +599,9 @@ async def cancel_stream(request: CancelStreamRequest):
     """
     from .._chat_helpers import _active_sse_handlers
 
+    # A turn still waiting in line has no handler yet; withdraw it instead.
+    if turn_queue.cancel(request.session_id):
+        return {"status": "ok", "cancelled": True}
     handler = _active_sse_handlers.get(request.session_id)
     if not handler:
         raise HTTPException(
@@ -571,14 +616,30 @@ async def cancel_stream(request: CancelStreamRequest):
 
 @router.get("/api/chat/active")
 async def list_active_runs():
-    """Return the session ids with a currently-running chat turn.
+    """Return the chats with a turn in flight, and what each is waiting on.
 
-    The Agent UI polls this to render a "still running" indicator on
-    backgrounded sessions in the sidebar — runs continue server-side after
-    the user navigates away, so this is the source of truth independent of
-    any open SSE connection (#1580 follow-up).
+    The Agent UI polls this for the chat list: runs continue server-side
+    after the user navigates away, so this is the source of truth
+    independent of any open SSE connection (#1580 follow-up).
+
+    * ``session_ids`` — every chat with a turn running or waiting in line.
+    * ``queued`` — chats waiting for the model, first to run next first.
+    * ``awaiting_user`` — chat id → ``"permission"`` or ``"question"`` for
+      turns paused on the user (#5221).
     """
-    return {"session_ids": run_manager.active_sessions()}
+    session_ids = run_manager.active_sessions()
+    awaiting = {}
+    for sid in session_ids:
+        run = run_manager.get(sid)
+        handler = run.handler if run is not None else None
+        waiting_on = handler.waiting_on() if handler is not None else None
+        if waiting_on:
+            awaiting[sid] = waiting_on
+    return {
+        "session_ids": session_ids,
+        "queued": [sid for sid in turn_queue.waiting() if run_manager.is_running(sid)],
+        "awaiting_user": awaiting,
+    }
 
 
 @router.get("/api/chat/attach")
