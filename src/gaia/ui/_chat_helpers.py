@@ -35,7 +35,7 @@ from gaia.agents.install_hints import (
     agent_import_error_message,
     agent_not_installed_message,
 )
-from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import (
     InferenceLocation,
@@ -43,6 +43,12 @@ from gaia.llm.inference_location import (
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
+from gaia.stream_timeout import (
+    DEFAULT_STREAM_TIMEOUT_SECONDS,
+    MAX_STREAM_TIMEOUT_SECONDS,
+    STREAM_TIMEOUT_ENV,
+    stream_timeout_from_env,
+)
 from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
@@ -240,11 +246,11 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
-_STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
-# Longer than one model call may stay silent (an hour of slow local prefill),
-# so a quiet model is always ended by the LLM layer, not by this limit.
-_DEFAULT_STREAM_TIMEOUT_SECONDS = 4500
-_MAX_STREAM_TIMEOUT_SECONDS = 86400
+# Shared with the messaging bridges (gaia.stream_timeout).
+_STREAM_TIMEOUT_ENV = STREAM_TIMEOUT_ENV
+_DEFAULT_STREAM_TIMEOUT_SECONDS = DEFAULT_STREAM_TIMEOUT_SECONDS
+_MAX_STREAM_TIMEOUT_SECONDS = MAX_STREAM_TIMEOUT_SECONDS
+_stream_timeout_from_env = stream_timeout_from_env
 # How often a waiting turn checks whether it has gone idle.
 _IDLE_POLL_SECONDS = 0.2
 # How long an ended turn waits for its agent thread before freeing the model.
@@ -261,37 +267,6 @@ def stuck_producer(session_id: str) -> Optional[threading.Thread]:
         _stopping_sessions.pop(session_id, None)
         return None
     return thread
-
-
-def _stream_timeout_from_env() -> int:
-    """Resolve the turn's no-progress limit in seconds from ``GAIA_STREAM_TIMEOUT``.
-
-    A turn is stopped only after this long without progress; a turn that keeps
-    making progress has no time limit. Unset or empty returns the 4500 s
-    default. Any other value must be a whole number of seconds from 1 to 86400.
-
-    Raises:
-        ValueError: the variable is set to a non-integer or out-of-range value.
-    """
-    raw = os.environ.get(_STREAM_TIMEOUT_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_STREAM_TIMEOUT_SECONDS
-    remedy = (
-        f"Set it to a whole number of seconds from 1 to "
-        f"{_MAX_STREAM_TIMEOUT_SECONDS} (e.g. {_STREAM_TIMEOUT_ENV}=1800), or "
-        f"unset it for the {_DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
-        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
-    )
-    try:
-        value = int(raw)
-    except ValueError as e:
-        raise ValueError(
-            f"{_STREAM_TIMEOUT_ENV}={raw!r} is not a whole number of seconds. "
-            f"{remedy}"
-        ) from e
-    if not 1 <= value <= _MAX_STREAM_TIMEOUT_SECONDS:
-        raise ValueError(f"{_STREAM_TIMEOUT_ENV}={value} is out of range. {remedy}")
-    return value
 
 
 # Read once at import so a bad value stops the Agent UI server at startup.
@@ -665,7 +640,7 @@ async def _generate_session_title(
     """
     from contextlib import nullcontext
 
-    from gaia.daemon.broker_client import model_lease
+    from gaia.daemon.broker_client import lease_wait_limit, model_lease
     from gaia.llm.lemonade_client import (
         SIDE_SLOT,
         LemonadeClient,
@@ -694,7 +669,8 @@ async def _generate_session_title(
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
-        with lease:
+        # Give up rather than hold a default-pool thread behind a long queue.
+        with lease_wait_limit(30), lease:
             if local:
                 loaded = client.health_check().get("all_models_loaded", [])
                 if not any(
@@ -2053,6 +2029,34 @@ def _format_duration(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
+def _as_interactive_turn(run, cancel_event, sse_handler=None, on_wait_event=None):
+    """*run* as the user's turn: it leases the model ahead of background work,
+    a wait for the model shows on the turn's stream (or reaches
+    *on_wait_event* when it has none), and Stop ends the wait."""
+    from gaia.daemon.broker_client import interactive_turn, queue_status_event
+
+    # Each update also counts as progress, so a long queue never trips the
+    # turn's idle stop.
+    def _listen(event: dict) -> None:
+        sse_handler._emit(queue_status_event(event))
+
+    class _Stopped:
+        # Stop sets the handler's flag; teardown and the idle stop set the turn's.
+        def is_set(self) -> bool:
+            return cancel_event.is_set() or (
+                sse_handler is not None and sse_handler.cancelled.is_set()
+            )
+
+    def _run():
+        with interactive_turn(
+            on_wait_event=_listen if sse_handler is not None else on_wait_event,
+            cancel=_Stopped(),
+        ):
+            return run()
+
+    return _run
+
+
 def _turn_idle_message(seconds: int) -> str:
     """What the user is told when a turn is stopped for making no progress."""
     return (
@@ -2525,6 +2529,8 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     except ModelInUseError as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
+    except LeaseWaitCancelled:
+        logger.info("Pre-flight model load stopped with the turn")
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
@@ -2841,7 +2847,16 @@ async def _get_chat_response(
 
     try:
         idle = _TurnIdleClock(_time.monotonic())
-        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        # A wait for the model is progress: the queue reports every few seconds.
+        queue_seen = {"at": 0.0}
+
+        def _queue_update(_event: dict) -> None:
+            queue_seen["at"] = _time.monotonic()
+
+        worker = asyncio.get_running_loop().run_in_executor(
+            None,
+            _as_interactive_turn(_do_chat, cancel_event, on_wait_event=_queue_update),
+        )
         idle_message = None
         try:
             while not worker.done():
@@ -2851,6 +2866,7 @@ async def _get_chat_response(
                 owned_wait = activity is not None and activity.tool_running
                 if activity is not None:
                     idle.progressed(activity.last_progress)
+                idle.progressed(queue_seen["at"])
                 if (
                     not worker.done()
                     and idle.idle_for(owned_wait, _time.monotonic())
@@ -3468,7 +3484,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # task that keeps making progress runs to the end.
         _idle = _TurnIdleClock(_time.monotonic())
         idle_message = None
-        producer = threading.Thread(target=_run_agent, daemon=True)
+        producer = threading.Thread(
+            target=_as_interactive_turn(_run_agent, cancel_event, sse_handler),
+            daemon=True,
+        )
         producer.start()
 
         # Yield SSE events from the handler's queue

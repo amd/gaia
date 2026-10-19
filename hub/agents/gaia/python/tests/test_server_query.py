@@ -220,12 +220,18 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
     client, agents = built
     session_id = f"s-{uuid.uuid4()}"
 
-    assert client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code == 200
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
+        == 200
+    )
 
     r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": True})
     assert r.status_code == 200, r.text
 
-    assert client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code == 200
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
+        == 200
+    )
 
     console = agents[0].console
     assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
@@ -939,7 +945,9 @@ def test_a_claude_model_without_a_provider_builds_a_claude_agent(built):
     """
     client, agents = built
 
-    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
+    r = client.post(
+        "/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5")
+    )
 
     assert r.status_code == 200, r.text
     assert len(agents) == 1
@@ -957,7 +965,9 @@ def test_a_claude_model_without_a_provider_agrees_on_new_and_live_sessions(
     client, agents = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
 
-    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
+    r = client.post(
+        "/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5")
+    )
 
     assert r.status_code == 200, r.text
     assert switched_backend == [("claude-opus-5",)]
@@ -1256,6 +1266,87 @@ def test_a_caller_that_cannot_answer_is_never_asked(built):
     assert agents[0].console.answers_questions is False
     types = [e.get("type") for e in _events(response)]
     assert "needs_input" not in types, types
+
+
+# ---------------------------------------------------------------------------
+# A turn waiting for the model is shown as waiting, on the sidecar stream too
+#
+# The TUI reads this stream. Without the queued state it cannot tell a turn
+# queued behind another process's request from a broken one (#5319).
+# ---------------------------------------------------------------------------
+
+_QUEUED = {
+    "event": "queued",
+    "scope": "daemon",
+    "position": 2,
+    "queue_length": 3,
+    "holder": "email",
+    "holder_model": "M-GGUF",
+    "held_for_s": 12.0,
+    "waited_s": 4.0,
+    "model": "M-GGUF",
+}
+
+
+def test_a_queued_turn_streams_its_place_in_line(built, monkeypatch):
+    from gaia.daemon import broker_client
+
+    client, agents = built
+    seen = {}
+
+    def queued_query(self, query, max_steps=None):
+        seen["priority"] = broker_client.current_priority()
+        broker_client.notify_wait(_QUEUED)
+        broker_client.notify_wait(
+            {"event": "granted", "scope": "daemon", "model": "M-GGUF", "waited_s": 9.4}
+        )
+        return {"answer": "done"}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", queued_query)
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    queue = [e for e in _events(r) if e.get("phase") == "model_queue"]
+    assert [e["queue"]["event"] for e in queue] == ["queued", "granted"]
+    assert queue[0]["type"] == "status"
+    assert queue[0]["queue"]["position"] == 2
+    assert queue[0]["queue"]["waited_s"] == 4.0
+    assert "'email' is using it" in queue[0]["message"]
+    assert queue[1]["message"] == "Got the model after waiting 9s"
+    assert seen["priority"] == "interactive"
+
+
+def test_a_cancel_reaches_a_turn_waiting_for_the_model(built, monkeypatch):
+    from gaia.daemon import broker_client
+
+    client, agents = built
+    run_id = str(uuid.uuid4())
+    outcome = {}
+
+    def waiting_query(self, query, max_steps=None):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                broker_client.check_cancelled("the model slot")
+            except broker_client.LeaseWaitCancelled:
+                outcome["cancelled"] = True
+                return {"answer": "stopped"}
+            time.sleep(0.02)
+        outcome["cancelled"] = False
+        return {"answer": "never stopped"}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", waiting_query)
+
+    def cancel_soon():
+        time.sleep(0.3)
+        client.post(f"/v1/gaia/query/{run_id}/cancel")
+
+    threading.Thread(target=cancel_soon, daemon=True).start()
+    r = client.post("/v1/gaia/query", json=_body(run_id=run_id))
+
+    assert r.status_code == 200, r.text
+    assert outcome == {"cancelled": True}
 
 
 # ---------------------------------------------------------------------------

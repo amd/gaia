@@ -61,6 +61,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.version import LEMONADE_MIN_VERSION
@@ -1202,7 +1203,16 @@ async def query(request: QueryRequest):
             if one_shot_agent is not None:
                 close_agent(one_shot_agent)
 
-    thread = threading.Thread(target=_run_agent, daemon=True)
+    def _run_turn() -> None:
+        # The user's turn: it leases ahead of background work, a wait for the
+        # model reaches this stream, and /cancel ends that wait.
+        with interactive_turn(
+            on_wait_event=lambda event: handler._emit(queue_status_event(event)),
+            cancel=run.cancel_event,
+        ):
+            _run_agent()
+
+    thread = threading.Thread(target=_run_turn, daemon=True)
     try:
         thread.start()
     except Exception as exc:
