@@ -1072,46 +1072,54 @@ class TestMaybeUpdateSessionTitleHonorsPin:
         assert gen.await_args.kwargs["assistant_msg"] == ""
 
 
+def _resident_title_client(model_id, reply):
+    """A model client with *model_id* loaded on two slots, answering *reply*."""
+    client = MagicMock()
+    client.health_check.return_value = {
+        "all_models_loaded": [{"model_name": model_id, "type": "llm"}]
+    }
+    client.slot_count.return_value = 2
+    client.chat_completions.return_value = {
+        "choices": [{"message": {"content": reply}}]
+    }
+    return client
+
+
 class TestSessionTitleRequest:
     """The 24-token title request must not be spent on a thinking model's reasoning."""
 
-    def _sent_body(self, model_id):
+    def _sent_kwargs(self, model_id):
         from gaia.ui import _chat_helpers as ch
 
-        resp = MagicMock(status_code=200)
-        resp.json.return_value = {"choices": [{"message": {"content": "Trip plan"}}]}
-        client = MagicMock()
-        client.post = AsyncMock(return_value=resp)
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=client):
+        client = _resident_title_client(model_id, "Trip plan")
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
             title = asyncio.run(
                 ch._generate_session_title(
                     "http://localhost:13305/api/v1", model_id, "plan a trip", "ok"
                 )
             )
         assert title == "Trip plan"
-        return client.post.call_args.kwargs["json"]
+        return client.chat_completions.call_args.kwargs
 
     def test_thinking_model_titles_with_thinking_off(self):
         from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
 
-        body = self._sent_body(LARGE_DEFAULT_MODEL_NAME)
-        assert body["chat_template_kwargs"] == {"enable_thinking": False}
+        sent = self._sent_kwargs(LARGE_DEFAULT_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
     def test_other_models_get_no_template_switch(self):
-        body = self._sent_body("Gemma-4-E4B-it-GGUF")
-        assert "chat_template_kwargs" not in body
-        assert body["max_tokens"] == 24
+        sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
+        assert "chat_template_kwargs" not in sent
+        assert sent["max_tokens"] == 24
 
     def test_a_model_that_always_reasons_gets_room_for_it(self):
         """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
         and the title was cut mid-word ("Step-by-Step Bread-", measured)."""
         from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
 
-        body = self._sent_body(GPT_OSS_20B_MODEL_NAME)
-        assert body["chat_template_kwargs"] == {"reasoning_effort": "low"}
-        assert body["max_tokens"] > 24
+        sent = self._sent_kwargs(GPT_OSS_20B_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
+        assert sent["max_tokens"] > 24
 
 
 class TestGuardModelTitles:
@@ -1120,13 +1128,8 @@ class TestGuardModelTitles:
     def _title_reply(self, content, user_msg="How do I reset my router password?"):
         from gaia.ui import _chat_helpers as ch
 
-        resp = MagicMock(status_code=200)
-        resp.json.return_value = {"choices": [{"message": {"content": content}}]}
-        client = MagicMock()
-        client.post = AsyncMock(return_value=resp)
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=client):
+        client = _resident_title_client("some-model", content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
             return asyncio.run(
                 ch._generate_session_title(
                     "http://localhost:13305/api/v1", "some-model", user_msg, "ok"

@@ -56,6 +56,7 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
+from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.project_map import resolve_project_root
 
@@ -1793,6 +1794,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
+                    note_untracked("execute_python_file", str(p))
                     job = run_python_job(
                         cmd,
                         cwd=str(run_dir),
@@ -1934,6 +1936,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     handle.write(code)
                     snippet = Path(handle.name)
                 cmd = python_command(snippet)
+                note_untracked("run_python", code.strip().splitlines()[0] if code.strip() else "")
                 start = time.monotonic()
                 try:
                     job = run_python_job(
@@ -2493,6 +2496,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
                 )
                 client.ensure_model()
+                before_change(output_path, "text_to_speech")
                 duration = client.synthesize_to_wav(text, output_path, voice=voice)
             except Exception as e:
                 return {"status": "error", "error": str(e)}

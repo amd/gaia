@@ -244,6 +244,8 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
     from gaia.llm.recommended_models import rank
 
+    from ..spending import price_card
+
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
@@ -274,6 +276,8 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
                 "rank": ranked[0] if ranked else None,
                 "note": ranked[1].note if ranked else None,
                 "evidence": ranked[1].evidence if ranked else None,
+                # List price per million tokens; None when unknown, never $0.
+                "price": None if provider == LOCAL else price_card(model_id),
             }
         )
     # A custom model Lemonade has not registered yet is not in its list; a
