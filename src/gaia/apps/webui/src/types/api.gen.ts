@@ -543,6 +543,7 @@ export interface InferenceCommitItem {
 export interface InferenceStatsResponse {
   input_tokens?: number;
   output_tokens?: number;
+  place?: string | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;

@@ -1765,6 +1765,17 @@
         "title": "Output Tokens",
         "type": "integer"
       },
+      "place": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Place"
+      },
       "steps": {
         "anyOf": [
           {
