@@ -135,20 +135,47 @@ def _beat() -> None:
         heartbeat()
 
 
+def _is_read_timeout(exc: BaseException) -> bool:
+    """Whether *exc*, or anything it was raised from, is a read timeout."""
+    import requests  # pylint: disable=import-outside-toplevel
+
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, requests.exceptions.ReadTimeout):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+class _EmbedderWarmingUp(Exception):
+    """The embedder answered with no vectors: it is still loading."""
+
+
 class EmbeddingUnavailableError(RuntimeError):
     """The embedding model could not run, so nothing was embedded or searched.
 
     ``unreachable`` is True when Lemonade Server itself could not be reached,
-    as opposed to the server answering with an error.
+    as opposed to the server answering with an error. ``busy`` is True when
+    the server was reached but did not answer in time — the hardware it runs
+    on is shared with other work.
     """
 
     def __init__(self, model: str, cause: BaseException):
         self.model = model
         self.unreachable = _is_connection_failure(cause)
+        self.busy = not self.unreachable and _is_read_timeout(cause)
         if self.unreachable:
             what = (
                 f"Lemonade Server is not reachable, so the embedding model "
                 f"{model} could not run"
+            )
+        elif self.busy:
+            what = (
+                f"The embedding model {model} did not answer within "
+                f"{EMBED_BATCH_TIMEOUT_S}s; the GPU or CPU it runs on is likely "
+                "busy with another model or app"
             )
         else:
             what = f"The embedding model {model} failed"
@@ -176,6 +203,17 @@ EMBED_MAX_CHARS = int(
 
 #: Chunks embedded between two progress reports during indexing.
 PROGRESS_SLICE_CHUNKS = 250
+
+#: Chunks sent in one ``/embeddings`` request.
+EMBED_BATCH_SIZE = 25
+#: How long one batch may wait for the embedder. It is sent once: resending a
+#: timed-out batch queues the same work again on hardware too busy to finish it.
+EMBED_BATCH_TIMEOUT_S = 300
+#: Seconds between "still waiting" reports while a batch is outstanding.
+EMBED_WAIT_REPORT_S = 15
+#: Tries for a batch the embedder answers with no vectors (still loading).
+EMBED_WARMUP_ATTEMPTS = 3
+EMBED_WARMUP_PAUSE_S = 2
 
 
 def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
@@ -703,14 +741,25 @@ class RAGSDK:
         )
 
     def _encode_texts(
-        self, texts: List[str], show_progress: bool = False
+        self,
+        texts: List[str],
+        show_progress: bool = False,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> "np.ndarray":
         """
         Encode texts to embeddings using Lemonade server with batching and timing.
 
+        Each batch is sent once and waits up to ``EMBED_BATCH_TIMEOUT_S``. Only
+        two failures are tried again, both logged: an embedder still loading
+        (no vectors back, up to ``EMBED_WARMUP_ATTEMPTS`` tries) and one
+        reloaded with too small a batch (reloaded once). Everything else raises
+        ``EmbeddingUnavailableError`` at once.
+
         Args:
             texts: List of text strings to encode
             show_progress: Whether to show progress
+            wait_callback: Called every ``EMBED_WAIT_REPORT_S`` with the seconds
+                the current batch has waited, and with 0 once it answers.
 
         Returns:
             numpy array of embeddings with shape (num_texts, embedding_dim)
@@ -727,16 +776,14 @@ class RAGSDK:
             )
         safe_texts = list(texts)
 
-        # Batch embedding requests to avoid timeouts
-        BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
         all_embeddings = []
 
-        total_batches = (len(safe_texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        total_batches = (len(safe_texts) + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
         total_start = time.time()
 
-        for batch_idx in range(0, len(safe_texts), BATCH_SIZE):
-            batch_texts = safe_texts[batch_idx : batch_idx + BATCH_SIZE]
-            batch_num = (batch_idx // BATCH_SIZE) + 1
+        for batch_idx in range(0, len(safe_texts), EMBED_BATCH_SIZE):
+            batch_texts = safe_texts[batch_idx : batch_idx + EMBED_BATCH_SIZE]
+            batch_num = (batch_idx // EMBED_BATCH_SIZE) + 1
 
             batch_start = time.time()
 
@@ -745,73 +792,10 @@ class RAGSDK:
                     f"   📦 Embedding batch {batch_num}/{total_batches} ({len(batch_texts)} chunks)..."
                 )
 
-            # Call Lemonade embeddings API for this batch with retry
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    # Use longer timeout for embedding batches (180s = 3 minutes per batch)
-                    response = self.embedder.embeddings(
-                        batch_texts, model=self.config.embedding_model, timeout=180
-                    )
-                    batch_embeddings = []
-                    data = response.get("data", [])
-                    if any("index" in item for item in data):
-                        indices = [item.get("index") for item in data]
-                        if any(
-                            not isinstance(i, int) or isinstance(i, bool)
-                            for i in indices
-                        ) or sorted(indices) != list(range(len(batch_texts))):
-                            raise RuntimeError(
-                                "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
-                            )
-                        data = sorted(data, key=lambda item: item["index"])
-                    for item in data:
-                        embedding = item.get("embedding", [])
-                        batch_embeddings.append(embedding)
-
-                    if len(batch_embeddings) != len(batch_texts):
-                        raise RuntimeError(
-                            f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
-                            f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
-                            "Verify Lemonade Server is reachable and the embedding model is "
-                            "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
-                            "Then retry indexing. No partial batch was accepted."
-                        )
-                    expected_dim = len(all_embeddings[0]) if all_embeddings else None
-                    for embedding in batch_embeddings:
-                        if not embedding or (
-                            expected_dim is not None and len(embedding) != expected_dim
-                        ):
-                            raise RuntimeError(
-                                f"Embedding backend returned an empty or inconsistent vector "
-                                f"in batch {batch_num} using {self.config.embedding_model!r}. "
-                                "Verify the embedding model is fully loaded or lower chunk_size if "
-                                "inputs exceed its token limit, then retry indexing."
-                            )
-                        expected_dim = len(embedding)
-
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(
-                            f"   ⚠️  Batch {batch_num} attempt {attempt + 1} failed, retrying: {e}"
-                        )
-                        if "physical batch size" in str(e):
-                            self.log.warning(
-                                "   The embedder was reloaded with a smaller batch "
-                                "than RAG chunks need; reloading it with "
-                                f"{EMBEDDER_LLAMACPP_ARGS} before retrying."
-                            )
-                            self.embedder = None
-                            self._load_embedder()
-                        time.sleep(2)  # Wait before retry
-                    else:
-                        self.log.error(
-                            f"   ❌ Batch {batch_num} failed after {max_retries + 1} attempts"
-                        )
-                        raise EmbeddingUnavailableError(
-                            self.config.embedding_model, e
-                        ) from e
+            expected_dim = len(all_embeddings[0]) if all_embeddings else None
+            batch_embeddings = self._embed_batch(
+                batch_texts, batch_num, expected_dim, wait_callback
+            )
 
             batch_duration = time.time() - batch_start
 
@@ -826,7 +810,7 @@ class RAGSDK:
                 )
 
         total_duration = time.time() - total_start
-        if len(safe_texts) > BATCH_SIZE:
+        if len(safe_texts) > EMBED_BATCH_SIZE:
             overall_rate = len(safe_texts) / total_duration if total_duration > 0 else 0
             self.log.info(
                 f"   🎯 Total embedding time: {total_duration:.2f}s ({overall_rate:.1f} chunks/sec, {total_batches} batches)"
@@ -834,6 +818,158 @@ class RAGSDK:
 
         # Convert to numpy array
         return np.array(all_embeddings, dtype=np.float32)
+
+    def _embed_batch(
+        self,
+        batch_texts: List[str],
+        batch_num: int,
+        expected_dim: Optional[int],
+        wait_callback: Optional[Callable[[int], None]],
+    ) -> List[List[float]]:
+        """One batch's vectors, in input order, under the policy in ``_encode_texts``."""
+        warmup_attempt = 1
+        reloaded = False
+        while True:
+            try:
+                response = self._request_embeddings(batch_texts, wait_callback)
+            except Exception as e:  # noqa: BLE001 — classified, then re-raised
+                if "physical batch size" in str(e) and not reloaded:
+                    self.log.warning(
+                        f"   ⚠️  Batch {batch_num}: the embedder was reloaded with a "
+                        "smaller batch than RAG chunks need; reloading it with "
+                        f"{EMBEDDER_LLAMACPP_ARGS} and sending the batch once more."
+                    )
+                    reloaded = True
+                    self.embedder = None
+                    self._load_embedder()
+                    continue
+                self.log.error(f"   ❌ Batch {batch_num} failed: {e}")
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
+
+            try:
+                return self._vectors_from_response(
+                    response, batch_texts, batch_num, expected_dim
+                )
+            except _EmbedderWarmingUp as e:
+                if warmup_attempt >= EMBED_WARMUP_ATTEMPTS:
+                    raise EmbeddingUnavailableError(
+                        self.config.embedding_model,
+                        RuntimeError(
+                            f"it is still loading: batch {batch_num} came back with "
+                            f"no vectors {EMBED_WARMUP_ATTEMPTS} times. Check "
+                            "Lemonade Server's log for a load error, then retry."
+                        ),
+                    ) from e
+                self.log.warning(
+                    f"   ⏳ Batch {batch_num}: the embedding model is still loading "
+                    f"(no vectors back); try {warmup_attempt + 1}/"
+                    f"{EMBED_WARMUP_ATTEMPTS} in {EMBED_WARMUP_PAUSE_S}s."
+                )
+                warmup_attempt += 1
+                time.sleep(EMBED_WARMUP_PAUSE_S)
+            except RuntimeError as e:
+                self.log.error(f"   ❌ Batch {batch_num} failed: {e}")
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
+
+    def _request_embeddings(
+        self,
+        batch_texts: List[str],
+        wait_callback: Optional[Callable[[int], None]],
+    ) -> Dict[str, Any]:
+        """Send one batch, reporting how long it has waited while it is out."""
+        if wait_callback is None:
+            return self.embedder.embeddings(
+                batch_texts,
+                model=self.config.embedding_model,
+                timeout=EMBED_BATCH_TIMEOUT_S,
+            )
+
+        answered = threading.Event()
+        started = time.monotonic()
+
+        def _report_waiting():
+            while not answered.wait(EMBED_WAIT_REPORT_S):
+                wait_callback(max(1, int(time.monotonic() - started)))
+
+        reporter = threading.Thread(
+            target=_report_waiting, name="rag-embed-wait", daemon=True
+        )
+        reporter.start()
+        try:
+            response = self.embedder.embeddings(
+                batch_texts,
+                model=self.config.embedding_model,
+                timeout=EMBED_BATCH_TIMEOUT_S,
+            )
+        finally:
+            answered.set()
+            reporter.join()
+        # Cleared only on success so a raising callback can't mask the real error.
+        wait_callback(0)
+        return response
+
+    @staticmethod
+    def _vectors_from_response(
+        response: Dict[str, Any],
+        batch_texts: List[str],
+        batch_num: int,
+        expected_dim: Optional[int],
+    ) -> List[List[float]]:
+        """The batch's vectors in input order, or why the response is unusable.
+
+        Raises:
+            _EmbedderWarmingUp: no vectors at all — the model is still loading.
+            RuntimeError: a malformed response; sending it again won't help.
+        """
+        if not isinstance(response, dict) or "data" not in response:
+            detail = response.get("error") if isinstance(response, dict) else None
+            raise RuntimeError(
+                f"Embedding backend sent no 'data' for batch {batch_num}"
+                f"{f': {detail}' if detail else ''}. Check Lemonade Server's log, "
+                "then retry indexing."
+            )
+        data = response["data"]
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("embedding", []), list)
+            for item in data
+        ):
+            raise RuntimeError(
+                f"Embedding backend sent a malformed reply for batch {batch_num}; "
+                "verify the backend and retry indexing."
+            )
+        if not any(item.get("embedding") for item in data):
+            raise _EmbedderWarmingUp()
+        if any("index" in item for item in data):
+            indices = [item.get("index") for item in data]
+            if any(
+                not isinstance(i, int) or isinstance(i, bool) for i in indices
+            ) or sorted(indices) != list(range(len(batch_texts))):
+                raise RuntimeError(
+                    "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
+                )
+            data = sorted(data, key=lambda item: item["index"])
+        batch_embeddings = [item.get("embedding", []) for item in data]
+
+        if len(batch_embeddings) != len(batch_texts):
+            raise RuntimeError(
+                f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
+                f"vectors for batch {batch_num}. "
+                "Verify Lemonade Server is reachable and the embedding model is "
+                "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
+                "Then retry indexing. No partial batch was accepted."
+            )
+        for embedding in batch_embeddings:
+            if not embedding or (
+                expected_dim is not None and len(embedding) != expected_dim
+            ):
+                raise RuntimeError(
+                    f"Embedding backend returned an empty or inconsistent vector "
+                    f"in batch {batch_num}. "
+                    "Verify the embedding model is fully loaded or lower chunk_size if "
+                    "inputs exceed its token limit, then retry indexing."
+                )
+            expected_dim = len(embedding)
+        return batch_embeddings
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
@@ -2351,11 +2487,13 @@ These positions indicate where to split the text."""
         chunks: List[str],
         return_embeddings: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting.
 
         ``progress_callback(done, total)`` is called before the first chunk is
         embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
+        ``wait_callback`` is passed to ``_encode_texts``.
         """
         import time as time_module  # pylint: disable=reimported
 
@@ -2374,7 +2512,9 @@ These positions indicate where to split the text."""
         embed_start = time_module.time()
         if progress_callback is None or not chunks:
             embeddings = self._encode_texts(
-                chunks, show_progress=self.config.show_stats
+                chunks,
+                show_progress=self.config.show_stats,
+                wait_callback=wait_callback,
             )
         else:
             progress_callback(0, len(chunks))
@@ -2382,7 +2522,11 @@ These positions indicate where to split the text."""
             for start in range(0, len(chunks), PROGRESS_SLICE_CHUNKS):
                 part = chunks[start : start + PROGRESS_SLICE_CHUNKS]
                 parts.append(
-                    self._encode_texts(part, show_progress=self.config.show_stats)
+                    self._encode_texts(
+                        part,
+                        show_progress=self.config.show_stats,
+                        wait_callback=wait_callback,
+                    )
                 )
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
@@ -2704,6 +2848,7 @@ These positions indicate where to split the text."""
         self,
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
         heartbeat: Optional[Callable[[], None]] = None,
     ) -> Dict[str, Any]:
         """Index a document for retrieval; see :meth:`_index_document`.
@@ -2715,7 +2860,7 @@ These positions indicate where to split the text."""
         previous = getattr(_HEARTBEAT, "fn", None)
         _HEARTBEAT.fn = heartbeat
         try:
-            return self._index_document(file_path, progress_callback)
+            return self._index_document(file_path, progress_callback, wait_callback)
         finally:
             _HEARTBEAT.fn = previous
 
@@ -2723,6 +2868,7 @@ These positions indicate where to split the text."""
         self,
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
@@ -2742,6 +2888,9 @@ These positions indicate where to split the text."""
             file_path: Path to document or code file
             progress_callback: Optional ``(chunks_embedded, total_chunks)``
                 callback, called as embedding starts and while it runs.
+            wait_callback: Optional ``(seconds_waited)`` callback, called every
+                ``EMBED_WAIT_REPORT_S`` while a batch waits on a busy embedder
+                and with 0 once it answers.
 
         Returns:
             Dict with indexing results and statistics:
@@ -2905,6 +3054,7 @@ These positions indicate where to split the text."""
                     list(cached_chunks),
                     return_embeddings=True,
                     progress_callback=progress_callback,
+                    wait_callback=wait_callback,
                 )
 
                 with self._state_lock:
@@ -3063,6 +3213,7 @@ These positions indicate where to split the text."""
                 list(new_chunks),
                 return_embeddings=True,
                 progress_callback=progress_callback,
+                wait_callback=wait_callback,
             )
 
             with self._state_lock:
@@ -3237,6 +3388,7 @@ These positions indicate where to split the text."""
         stats["error"] = str(error)
         stats["error_type"] = "embedding_unavailable"
         stats["lemonade_unreachable"] = error.unreachable
+        stats["embedder_busy"] = error.busy
         return stats
 
     def _retrieve_chunks_from_file(self, query: str, file_path: str) -> tuple:

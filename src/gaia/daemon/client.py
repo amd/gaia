@@ -24,7 +24,12 @@ from typing import Callable, Optional
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
 from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
-from gaia.daemon.errors import DaemonError, DaemonStartError, DaemonVersionError
+from gaia.daemon.errors import (
+    DaemonError,
+    DaemonStartError,
+    DaemonVersionError,
+    LemonadeNotAnsweringError,
+)
 from gaia.daemon.instance import (
     DaemonInstance,
     is_live,
@@ -37,7 +42,7 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
-from gaia.utils.terminal import background_popen_kwargs
+from gaia.utils.terminal import background_popen_kwargs, popen_outliving_job
 
 logger = get_logger(__name__)
 
@@ -246,7 +251,7 @@ def _spawn_and_wait(
     # the console programs the daemon starts don't each open a blank window.
     spawn_kwargs = background_popen_kwargs()
     try:
-        proc = subprocess.Popen(
+        proc = popen_outliving_job(
             [sys.executable, "-m", "gaia.daemon"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -398,6 +403,8 @@ def ensure_lemonade(
             must already be running: this never starts another home's daemon.
 
     Raises:
+        LemonadeNotAnsweringError: GAIA's server is up but not answering yet;
+            the daemon left it alone, so asking again later may find it back.
         DaemonError: The daemon is unreachable, has nothing to start (another
             server is configured, or GAIA's own is not installed), or the
             server would not start. The message names the remedy.
@@ -433,6 +440,8 @@ def ensure_lemonade(
             f"Server: {e}. Check `gaia daemon status` and the daemon log at "
             f"{paths.log_path()}."
         ) from e
+    if r.status_code == 503 and r.headers.get("Retry-After"):
+        raise LemonadeNotAnsweringError(_error_detail(r))
     if r.status_code != 200:
         raise DaemonError(
             f"the daemon could not start Lemonade Server: {_error_detail(r)}"

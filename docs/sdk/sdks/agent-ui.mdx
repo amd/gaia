@@ -317,6 +317,11 @@ All request and response bodies use Pydantic models from `gaia.ui.models`.
 class SystemStatus(BaseModel):
     """System readiness status returned by GET /api/system/status."""
     lemonade_running: bool = False
+    # Why Lemonade's state is unknown, when it is; None when the probe succeeded.
+    lemonade_error: Optional[str] = None
+    # How the Lemonade probe ended: "ok", "down" (nothing listening),
+    # "timed_out" (busy, or out of the 20 s probe budget), or "error".
+    lemonade_probe: Optional[Literal["ok", "down", "timed_out", "error"]] = None
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
@@ -442,6 +447,8 @@ class AttachDocumentRequest(BaseModel):
 
 ## REST API Endpoints
 
+Every other path serves the Agent UI page, except paths under `/api`: an unknown one returns a JSON **404** (`{"detail": "Not Found"}`), and a known one called with the wrong method returns **405**.
+
 ### System
 
 <AccordionGroup>
@@ -452,6 +459,8 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "lemonade_running": true,
+      "lemonade_error": null,
+      "lemonade_probe": "ok",
       "model_loaded": "Qwen3.5-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
@@ -460,6 +469,8 @@ class AttachDocumentRequest(BaseModel):
       "version": "0.1.0"
     }
     ```
+
+    `lemonade_probe` tells clients why Lemonade is or isn't reachable: `ok`, `down` (nothing listening, so it needs starting), `timed_out` (running but busy, or the probes ran past their 20-second budget), or `error` (Lemonade answered with an error, or the probe failed some other way; see `lemonade_error`).
   </Accordion>
 
   <Accordion title="GET /api/health">
@@ -548,8 +559,11 @@ class AttachDocumentRequest(BaseModel):
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
     | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
+
+    The load takes the same model-slot lease and load lock a chat turn does, so it waits for another app's load instead of racing it. While a chat is answering, the request returns `409` (loading another model could cut that answer off); send it again with `"force": true` to load anyway.
 
     **Response (202):**
     ```json
@@ -587,7 +601,7 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, and on a PC with under 24 GB of RAM, where the model loads with the first message instead. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
@@ -660,6 +674,8 @@ class AttachDocumentRequest(BaseModel):
 
     **Response:** `SessionResponse`
 
+    A `title` longer than 200 characters is a **422**.
+
     From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
     agent: an omitted `agent_type` becomes `gaia` and any other value is a
     **422**. See [Flagship only](#flagship-only).
@@ -689,7 +705,7 @@ class AttachDocumentRequest(BaseModel):
     }
     ```
 
-    Changing `agent_type`, `device`, or `mail_provider` while a chat turn is running on the session returns **409**; retry once the turn finishes. Renames are always accepted.
+    Changing `agent_type`, `device`, or `mail_provider` while a chat turn is running on the session returns **409**; retry once the turn finishes. Renames are accepted mid-turn. A `title` longer than 200 characters is a **422**; the Agent UI's rename box stops at 200.
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">
@@ -726,6 +742,78 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 </AccordionGroup>
 
+### Undo a turn's file changes
+
+Before an agent tool writes, edits, creates or deletes a file, GAIA saves the
+file as it was under `<GAIA home>/snapshots/<session_id>/<turn_id>/`. The copies
+live with the agent, not the UI, so any client can list and undo them.
+Deleting a chat deletes its copies.
+
+<AccordionGroup>
+  <Accordion title="GET /api/sessions/{session_id}/changes">
+    Every turn in the session that changed files, oldest first.
+
+    **Response:**
+    ```json
+    {
+      "turns": [
+        {
+          "turn_id": "20261016153012-1a2b3c4d",
+          "message_id": 42,
+          "finished_at": "2026-10-16T15:30:40+00:00",
+          "restored_at": null,
+          "files": [{"path": "C:\\notes\\todo.md", "change": "edited", "tool": "edit_file"}],
+          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": []}],
+          "incomplete": true
+        }
+      ]
+    }
+    ```
+
+    `message_id` is the assistant message that answered the turn. `change` is
+    `edited`, `created` or `deleted`. `incomplete` is true when the turn ran
+    something GAIA can't copy ahead of time — a shell command outside the
+    read-only tier, a Python snippet or script, or an MCP tool not marked
+    read-only — and `untracked` lists each one. Undo does not cover what those
+    changed.
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/changes/{turn_id}/diff">
+    What the turn did to each file, as a unified diff from the copy saved
+    before the turn to the copy saved when it ended. Binary files carry
+    `binary: true` with `before_size` and `after_size` instead of a diff; a diff
+    over 200,000 characters is cut and carries `truncated: true`.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/changes/{turn_id}/undo">
+    Put every file the turn changed back as it was before the turn: edited and
+    deleted files get their old bytes, created files are removed, and folders
+    the turn created are removed when empty.
+
+    **Request:** `{"force": false}`
+
+    It is all or nothing. Every file is checked first; a write that fails
+    part-way puts back the files already restored. Returns **409** without
+    changing anything when a file changed after the turn (`detail.conflicts`
+    names each one; send `"force": true` to overwrite those changes), when the
+    turn was already undone, when a saved copy is damaged, when the turn never
+    finished, or while a turn is running in the chat. **404** means the copies
+    are gone, usually removed by the retention limit.
+  </Accordion>
+
+  <Accordion title="GET /api/settings/undo">
+    The retention limits and current use:
+    `{"retention_days": 7, "max_mb": 500, "used_bytes": 18233, "turns": 3, "path": "..."}`.
+    Stored as `undo_retention_days` and `undo_max_mb` in `~/.gaia/config.json`.
+  </Accordion>
+
+  <Accordion title="PUT /api/settings/undo">
+    Set `retention_days` (1–365) and `max_mb` (10–100000), then remove history
+    past the new limits. Turns older than the time limit go first, then the
+    oldest until the total fits. The size limit never removes the newest turn.
+  </Accordion>
+</AccordionGroup>
+
 ### Chat
 
 <AccordionGroup>
@@ -757,14 +845,14 @@ class AttachDocumentRequest(BaseModel):
     | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
     | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
     | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
-    | `plan` | `steps` (string[]), `current_step` (int or null) | Agent execution plan. Each entry in `steps` is a human-readable description of a planned action. |
+    | `plan` | `steps` (string[]), `step_narrations` (string[]), `current_step` (int or null) | Agent execution plan, re-sent before each step it executes. `steps` names each planned tool call with its arguments; `step_narrations` is the same list as one plain line per step (e.g. `"Reading file: notes.txt"`). `current_step` is the zero-based index of the step being executed. |
 
     **Tool Execution**
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `tool_start` | `tool` (string), `detail` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. |
-    | `tool_args` | `tool` (string), `args` (object), `detail` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments. |
+    | `tool_start` | `tool` (string), `detail` (string), `narration` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. `narration` is what the call does in plain words (`"Searching your documents"`). |
+    | `tool_args` | `tool` (string), `args` (object), `detail` (string), `narration` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments, one `key: value` per line when there are more than two or a value holds a list. `narration` repeats the call's plain line with its main argument (`"Searching your documents: database init"`). |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
     | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
     | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
@@ -803,14 +891,14 @@ class AttachDocumentRequest(BaseModel):
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `done` | `message_id` (int), `content` (string) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. |
+    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. |
 
     **Example stream** showing a typical multi-step interaction:
     ```
     data: {"type": "thinking", "content": "Sending to Qwen3.5-35B..."}
     data: {"type": "step", "step": 1, "total": 10, "status": "started"}
-    data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content"}
-    data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init"}
+    data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content", "narration": "Searching your documents"}
+    data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init", "narration": "Searching your documents: database init"}
     data: {"type": "tool_result", "title": "Result", "summary": "Found 3 relevant chunk(s) (best score: 0.87)", "success": true, "result_data": {"type": "search_results", "count": 3, "scores": [0.87, 0.72, 0.65], "previews": ["def init_db()..."]}}
     data: {"type": "tool_end", "success": true}
     data: {"type": "chunk", "content": "This function"}
@@ -820,6 +908,19 @@ class AttachDocumentRequest(BaseModel):
     data: {"type": "status", "status": "complete", "message": "Completed in 1 steps", "steps": 1, "elapsed": 3.45}
     data: {"type": "done", "message_id": 42, "content": "This function initializes the database..."}
     ```
+
+    **`turn_summary`** describes what the turn used and where its data went. It is built from the turn's tool calls and the location of the model that answered, never assumed:
+
+    | Field | Description |
+    |-------|-------------|
+    | `pages` | Web pages the turn read (`url`, `title`, `kind: "page"`). When it only searched, the search hits (`kind: "search_result"`). |
+    | `documents` | Documents it drew passages from: `name` (the name the file was attached under, not the upload copy's ID), `path`, `pages`, `passages`. |
+    | `files` | Files it created or changed and that still exist: `path`, `name`, `openable` (false for scripts, programs and web pages), `mtime` (when the turn ended). |
+    | `sites` | Hosts GAIA's web tools contacted. |
+    | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
+    | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
+    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), or `unknown`. |
+    | `error` | Set, with the rest empty, when the summary could not be built. |
 
     **Non-streaming response:**
     ```json
@@ -937,6 +1038,7 @@ class AttachDocumentRequest(BaseModel):
     |-------|------|-------------|
     | `path` | string | Absolute path to the file or folder to open. |
     | `reveal` | boolean | If `true` (default), reveal the file selected in its parent folder. If `false`, open the containing folder directly. Ignored when `path` is a directory. |
+    | `launch` | boolean | If `true`, open the file itself in its default app instead of the explorer. Only documents, data files and images (for example `.md`, `.pdf`, `.xlsx`, `.png`); anything that could run code, such as `.py`, `.exe` or `.html`, is refused with **400**. |
 
     **Response:**
     ```json
@@ -950,9 +1052,26 @@ class AttachDocumentRequest(BaseModel):
 
     | Status | Condition |
     |--------|-----------|
-    | `400` | Invalid path (empty or contains null bytes), or path is a symbolic link |
+    | `400` | Invalid path (empty or contains null bytes), path is a symbolic link, or `launch` was asked for a folder or a file type that could run |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
+  </Accordion>
+
+  <Accordion title="POST /api/files/status">
+    Report whether each path still exists and when it last changed. The side rail uses it to show files deleted or changed since the turn that wrote them.
+
+    **Request:** `{"paths": ["/home/user/out/report.md"]}` (at most 50 paths).
+
+    **Response:**
+    ```json
+    {
+      "files": [
+        {"path": "/home/user/out/report.md", "exists": true, "mtime": 1792195636.2}
+      ]
+    }
+    ```
+
+    `exists` is `false` for a missing path or a folder, and `null` for a path outside the home folder, which is not checked. Returns **422** for more than 50 paths and **400** for a path containing a null byte.
   </Accordion>
 
   <Accordion title="POST /api/files/upload">
@@ -1780,6 +1899,16 @@ First-run hardware scan (issues #1726, #1727).
     machine (the `default_model` `gaia init` chose, else Gemma-4-E4B), and
     `required_disk_gb` is sized for that model's download.
   </Accordion>
+
+  <Accordion title="GET /api/onboarding/start">
+    What a new chat's empty screen offers: up to four `cards` and the
+    `working_folder` (`{path, name, gaia_folder}`) a new chat's agent works in.
+    Each card (`{skill, title, note, prompt, needs_input}`) is backed by an
+    installed skill; cards for what the user set up (indexed documents, a
+    connected mail account) come first. `needs_input` means the prompt ends
+    where the user types the subject. When the agent can't list its skills,
+    `cards` is empty and `skills_error` says why. Makes no model call.
+  </Accordion>
 </AccordionGroup>
 
 ### Setup
@@ -1802,6 +1931,26 @@ so the two can never disagree about whether GAIA is set up.
     never reported as "not set up".
   </Accordion>
 
+  <Accordion title="GET /api/setup/plan">
+    What setup will use, before it starts, from the same functions `gaia init`
+    decides with: `lemonade` (`mode`, `url`, `reachable`), the `chat_model`
+    (`id`, `user_set`, `size_gb`, `downloaded`), `recommended_model`, the
+    default chat models as `options` with whether each fits this PC, every
+    model to download with its size, and `download_gb`. Before GAIA's own
+    server runs the hardware can't be read, so `decided_after_server` is true
+    and the chat model is named once setup reports it. Loads and downloads
+    nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
+    worked out.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/chat-model">
+    Pick setup's chat model before it starts. Body: `{"model_id": "..."}`, one
+    of the default chat models. Picking the recommendation clears
+    `default_model`, so setup keeps its own pick; any other is saved as
+    `default_model`. Returns the new plan. **422** when the model isn't one of
+    setup's, won't fit this PC, or the model server isn't running yet.
+  </Accordion>
+
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes` in the background; follow it with
     `/api/setup/status`. Body: `{"skip_chat_model": false}`. **409** when setup
@@ -1812,7 +1961,9 @@ so the two can never disagree about whether GAIA is set up.
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
     their status, progress `text` and `percent`, `error`, the equivalent
-    `command`, and the last 40 output lines.
+    `command`, the last 40 output lines, and `chat_model` once setup has said
+    which chat model it chose. When the user chose their own Lemonade Server,
+    the first step is "Use your Lemonade Server" rather than an install.
   </Accordion>
 
   <Accordion title="POST /api/setup/cancel">
@@ -1842,7 +1993,10 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     A Lemonade the user already runs on this PC's default ports:
     `{"found": {"url", "status", "version", "minimum", "message"}}`, or
     `{"found": null}` when none answers. `status` is `ok`, `needs_key`,
-    `bad_key`, `too_old`, `not_lemonade`, or `unreachable`.
+    `bad_key`, `too_old`, `not_lemonade`, or `unreachable`. `unchecked` lists
+    the URLs where something accepted the connection but didn't answer within
+    10 s, such as a busy server. Then "none found" isn't known, and the setup
+    screen offers to check again.
   </Accordion>
 
   <Accordion title="POST /api/lemonade/target">
@@ -1921,6 +2075,44 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `{"model": "fireworks.glm-5p3-flash"}`. **409** when the model cannot run
     now; **503** while the local model server is still starting. A successful
     pick clears this run's restore notice.
+  </Accordion>
+</AccordionGroup>
+
+### Cloud prices and spending
+
+What cloud models cost before one is picked, what this month's cloud chats
+cost, and an optional monthly limit. Prices are list prices per million
+tokens from GAIA's one rate card, the same one a turn's cost estimate uses. A
+model with no known price reads as unknown, never $0. Cloud models from
+`GET /api/providers/{provider}/models` also carry `price`.
+
+<AccordionGroup>
+  <Accordion title="GET /api/spending/prices/{provider}">
+    List prices for a provider's models before it is connected: `models`
+    (`model`, `name`, `rank`, `note`, `price` with `input_per_million`,
+    `cached_input_per_million`, `output_per_million`), recommended first, and
+    their `source`. `amd` returns no models and a `note`: the gateway's prices
+    are set by the organization that runs it. **404** for another provider.
+  </Accordion>
+
+  <Accordion title="GET /api/spending">
+    This month's cloud chat turns in the Agent UI at list price, without cache
+    discounts. A turn that fails or is stopped before it answers isn't counted,
+    so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
+    known price, counted apart), `by_model`, `limit_usd`, and `state`
+    (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
+    `allowed_over`). **500** when the saved limit is unreadable.
+  </Accordion>
+
+  <Accordion title="PUT /api/spending/limit">
+    Set the monthly limit: `{"limit_usd": 10}`, or `null` for none. **422**
+    for a limit of $0 or less. Once `total_usd` reaches it, a chat turn on a
+    cloud model is refused before anything is sent, with how to go on; models
+    on this PC are never stopped.
+  </Accordion>
+
+  <Accordion title="POST /api/spending/allow-month">
+    Let cloud chats go on past the limit until the month ends.
   </Accordion>
 </AccordionGroup>
 

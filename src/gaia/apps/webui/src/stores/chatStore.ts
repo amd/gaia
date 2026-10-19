@@ -40,10 +40,10 @@ function readPref(key: string, fallback: string): string {
     }
 }
 
-/** The stored appearance; anything unrecognised reads as the dark default. */
+/** The stored appearance; nothing saved, or anything unrecognised, follows the OS. */
 function readThemePreference(): ThemePreference {
-    const v = readPref('gaia-chat-theme', 'dark');
-    return v === 'light' || v === 'system' ? v : 'dark';
+    const v = readPref('gaia-chat-theme', 'system');
+    return v === 'light' || v === 'dark' ? v : 'system';
 }
 
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
