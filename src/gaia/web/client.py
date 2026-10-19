@@ -672,8 +672,8 @@ class WebClient:
         for redirect_count in range(self.MAX_REDIRECTS + 1):
             response = self._send_hop(
                 deadline,
-                lambda timeout: self._session.request(
-                    method, current_url, timeout=timeout, **kwargs
+                lambda timeout, hop_url=current_url: self._session.request(
+                    method, hop_url, timeout=timeout, **kwargs
                 ),
                 caller_timeout,
             )
@@ -1047,8 +1047,8 @@ class WebClient:
             response.close()
             response = self._send_hop(
                 deadline,
-                lambda timeout: self._session.get(
-                    redirect_url, stream=True, timeout=timeout, allow_redirects=False
+                lambda timeout, hop_url=redirect_url: self._session.get(
+                    hop_url, stream=True, timeout=timeout, allow_redirects=False
                 ),
             )
             url = redirect_url
