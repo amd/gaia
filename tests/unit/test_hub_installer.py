@@ -205,6 +205,52 @@ def test_install_concurrency_guard(tmp_path):
             )
 
 
+def _hold_install_lock(root, seconds):
+    """Hold demo's install lock from another thread, as a status probe does."""
+    import threading
+
+    from gaia.utils.file_lock import file_lock
+
+    held = threading.Event()
+
+    def holder():
+        with file_lock(root / ".demo.install"):
+            held.set()
+            threading.Event().wait(seconds)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert held.wait(5)
+    return thread
+
+
+def test_install_slot_waits_out_a_brief_status_probe(tmp_path):
+    thread = _hold_install_lock(tmp_path, 0.1)
+    try:
+        with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+            pass
+    finally:
+        thread.join()
+
+
+def test_install_slot_still_rejects_a_real_concurrent_install(tmp_path):
+    thread = _hold_install_lock(tmp_path, 2)
+    try:
+        with pytest.raises(InstallInProgressError):
+            with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+                pass
+    finally:
+        thread.join()
+
+
+def test_install_in_progress_probe_does_not_block_a_claim(tmp_path):
+    with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+        assert installer.install_in_progress("demo", tmp_path)
+    assert not installer.install_in_progress("demo", tmp_path)
+    with installer._install_slot("demo", tmp_path):  # noqa: SLF001
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Update creates backup; rollback restores
 # ---------------------------------------------------------------------------

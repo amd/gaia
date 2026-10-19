@@ -1612,6 +1612,34 @@ class TestCacheSecurity:
                 assert "Another GAIA process" in result["error"]
 
 
+class TestCacheBusyMessage:
+    """Only a lock timeout blames another process; other lock errors don't."""
+
+    def _busy(self, error):
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+        from gaia.rag.sdk import RAGSDK
+
+        rag = RAGSDK.__new__(RAGSDK)
+        rag.config = Mock(show_stats=False)
+        rag.log = Mock()
+        return rag._cache_busy({}, "doc.pdf", error)
+
+    def test_timeout_names_another_process(self):
+        from gaia.utils.file_lock import FileLockTimeout
+
+        stats = self._busy(FileLockTimeout("lock held", Path("x.lock")))
+        assert stats["error_type"] == "cache_busy"
+        assert "Another GAIA process" in stats["error"]
+
+    def test_unwritable_lock_dir_does_not_blame_another_process(self):
+        from gaia.utils.file_lock import FileLockError
+
+        stats = self._busy(FileLockError("cannot create x.lock", Path("x.lock")))
+        assert "cannot create x.lock" in stats["error"]
+        assert "Another GAIA process" not in stats["error"]
+
+
 class TestClearCacheSafety:
     """clear_cache must only ever delete files the RAG cache wrote (#4194)."""
 

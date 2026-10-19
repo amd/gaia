@@ -347,8 +347,9 @@ def _install_slot(agent_id: str, install_root: Optional[Path] = None):
     try:
         root = install_root or default_install_root()
         try:
+            # Not 0: a brief install_in_progress() probe must not reject a claim.
             with file_lock(
-                root / f".{_require_safe_agent_id(agent_id)}.install", timeout=0
+                root / f".{_require_safe_agent_id(agent_id)}.install", timeout=0.5
             ):
                 yield
         except FileLockTimeout as exc:

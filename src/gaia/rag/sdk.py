@@ -52,6 +52,7 @@ from gaia.logger import get_logger
 from gaia.security import PathValidator
 from gaia.utils.file_lock import (
     FileLockError,
+    FileLockTimeout,
     file_lock,
     write_bytes_atomic,
     write_text_atomic,
@@ -3198,11 +3199,12 @@ These positions indicate where to split the text."""
         self, stats: Dict[str, Any], file_path: str, error: FileLockError
     ) -> Dict[str, Any]:
         """Index stats for a document whose cache another process holds locked."""
-        message = (
-            f"Could not read the cached index for {Path(file_path).name}: {error} "
-            "Another GAIA process is probably indexing into the same cache; "
-            "index the document again once it finishes."
-        )
+        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        if isinstance(error, FileLockTimeout):
+            message += (
+                " Another GAIA process is probably indexing into the same cache; "
+                "index the document again once it finishes."
+            )
         if self.config.show_stats:
             print(f"❌ {message}")
         self.log.error(message)
