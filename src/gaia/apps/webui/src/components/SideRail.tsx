@@ -223,8 +223,8 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <Globe size={13} className="side-rail-item-icon" aria-hidden="true" />
                         <div className="side-rail-item-text">
                             <a href={safeUrlTransform(p.url) || undefined} target="_blank" rel="noopener noreferrer" className="side-rail-link" title={p.url}>
-                                {p.title || hostOf(p.url)}
-                                <ExternalLink size={10} aria-hidden="true" />
+                                <span className="side-rail-link-text">{p.title || hostOf(p.url)}</span>
+                                <ExternalLink size={10} aria-hidden="true" className="side-rail-link-icon" />
                             </a>
                             <span className="side-rail-meta">
                                 {hostOf(p.url)}{p.kind === 'search_result' ? ' · search result' : ''}

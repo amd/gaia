@@ -126,8 +126,19 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    max-width: 100%;
     text-decoration: none;
 }
+
+/* A flex item's bare text never gets an ellipsis, so the title needs its own box. */
+.side-rail-link-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.side-rail-link-icon { flex-shrink: 0; }
 
 .side-rail-link:hover { color: var(--accent); text-decoration: underline; }
 
