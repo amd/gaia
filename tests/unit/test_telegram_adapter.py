@@ -491,3 +491,62 @@ async def test_unsupported_media_type_replies_directly(monkeypatch, media_type):
     reply_text.assert_awaited_once_with(
         "Unsupported media type — I can handle photos and documents."
     )
+
+
+def _text_update(user_id, text, reply):
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=user_id),
+        message=SimpleNamespace(
+            text=text,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(return_value=reply),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_stops_streaming_is_stopped_and_frees_the_bot(monkeypatch):
+    """Updates are handled one at a time, so a wedged reply held every chat."""
+    release = threading.Event()
+    closed = threading.Event()
+
+    class WedgedSession:
+        def send_stream(self, text):
+            try:
+                yield SimpleNamespace(text="Partial")
+                release.wait(10)
+                yield SimpleNamespace(text=" more")
+            finally:
+                closed.set()
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session", lambda uid: WedgedSession()
+    )
+    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=0.3)
+    reply = AsyncMock()
+    update = _text_update(1, "hello", reply)
+
+    started = time.monotonic()
+    await asyncio.wait_for(adapter._handle_message(update, None), timeout=5)
+    assert time.monotonic() - started < 5
+
+    final = reply.edit_text.await_args_list[-1].args[0]
+    assert final.startswith("Partial\n\n")
+    assert "without progress" in final
+
+    # While the stopped stream unwinds, the same user is told to wait rather
+    # than starting a second generation on the same session.
+    busy = _text_update(1, "again", AsyncMock())
+    await adapter._handle_message(busy, None)
+    assert "still being stopped" in busy.message.reply_text.await_args.args[0]
+
+    # Once the stream yields again it is closed, not read further.
+    release.set()
+    assert await asyncio.to_thread(closed.wait, 5)
+    assert all(" more" not in c.args[0] for c in reply.edit_text.await_args_list)
+
+
+def test_idle_limit_must_be_positive():
+    with pytest.raises(ValueError, match="idle_limit"):
+        TelegramAdapter(token="t", allowed_users={1}, idle_limit=0)

@@ -72,6 +72,36 @@ NEEDS_CONFIRMATION = "needs_confirmation"
 #: (``[project.scripts] gaia-agent = "gaia_agent.entry:main"``).
 DEFAULT_AGENT_BINARY = "gaia-agent"
 
+#: How long a turn may go without progress before it is stopped. The same
+#: window the Agent UI uses: longer than one model call may stay silent, so a
+#: quiet model is ended by the LLM layer first. A running tool or a pending
+#: approval is not idle; each has its own deadline.
+DEFAULT_TURN_IDLE_SECONDS = 4500.0
+
+#: How long a stopped turn's child gets to acknowledge the stop before it is
+#: treated as wedged and shut down.
+DEFAULT_CANCEL_GRACE_SECONDS = 30.0
+
+#: How often the writer checks a running turn for progress.
+_IDLE_POLL_SECONDS = 0.5
+
+
+def _format_duration(seconds: float) -> str:
+    whole = int(seconds)
+    for unit, size in (("hour", 3600), ("minute", 60)):
+        if whole >= size and whole % size == 0:
+            count = whole // size
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{whole} second{'s' if whole != 1 else ''}"
+
+
+def turn_idle_message(seconds: float) -> str:
+    """What a messaging user is told when a turn is stopped for no progress."""
+    return (
+        f"This turn ran for {_format_duration(seconds)} without progress, so "
+        "GAIA stopped it."
+    )
+
 
 class AgentChannelError(RuntimeError):
     """The agent child could not be started, or died and cannot be used."""
@@ -98,8 +128,14 @@ class _TurnState:
     """Bookkeeping for the turn currently in flight."""
 
     turn: Turn
+    last_progress: float = 0.0
     saw_terminal: bool = False
     pending_confirm_ids: List[str] = field(default_factory=list)
+    #: Quiet by design, with deadlines of their own, so not idle.
+    tool_running: bool = False
+    awaiting_decision: bool = False
+    #: When the idle watchdog stopped this turn, if it did.
+    stopped_at: Optional[float] = None
 
 
 class StreamThrottle:
@@ -169,6 +205,12 @@ class AgentChannel:
     * the **reader** owns stdout and dispatches every event;
     * the **caller's** thread posts decisions, which must land *while* a turn is
       in flight — that is the only moment an approval is worth anything.
+
+    A turn that makes no progress for ``idle_limit`` seconds is stopped, so one
+    wedged child cannot hold every later message. The user is told, and the
+    child is sent a cancel. If it does not end the turn within
+    ``cancel_grace`` seconds it is shut down, and every later message is
+    answered with an error naming the restart instead of waiting.
     """
 
     def __init__(
@@ -179,7 +221,22 @@ class AgentChannel:
         env: Optional[Dict[str, str]] = None,
         spawn: Optional[Callable[..., Any]] = None,
         on_busy: Optional[Callable[[Turn, int], None]] = None,
+        idle_limit: float = DEFAULT_TURN_IDLE_SECONDS,
+        cancel_grace: float = DEFAULT_CANCEL_GRACE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        poll_seconds: float = _IDLE_POLL_SECONDS,
     ) -> None:
+        for name, value in (
+            ("idle_limit", idle_limit),
+            ("cancel_grace", cancel_grace),
+            ("poll_seconds", poll_seconds),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be > 0 seconds, got {value}")
+        self._idle_limit = idle_limit
+        self._cancel_grace = cancel_grace
+        self._clock = clock
+        self._poll_seconds = poll_seconds
         self._argv = list(argv) if argv else [DEFAULT_AGENT_BINARY]
         self._env = env
         self._on_event = on_event
@@ -197,6 +254,8 @@ class AgentChannel:
         self._writer: Optional[threading.Thread] = None
         self._closing = threading.Event()
         self._depth = 0
+        #: Set once a wedged child has been shut down: why no turn can run.
+        self._dead: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -349,8 +408,13 @@ class AgentChannel:
             if turn is None:
                 return
             self._turn_done.clear()
+            state = _TurnState(turn=turn, last_progress=self._clock())
             with self._active_lock:
-                self._active = _TurnState(turn=turn)
+                self._active = state
+            if self._dead is not None:
+                self._dispatch_terminal_error(self._dead)
+                self._finish_turn()
+                continue
             try:
                 # Always wrapped: a bare line carrying a newline would be read as
                 # several unrelated questions, and the agent would answer only
@@ -361,8 +425,68 @@ class AgentChannel:
                 self._finish_turn()
                 continue
             # The reader sets this on the turn's one terminal event.
-            self._turn_done.wait()
+            self._await_turn(state)
             self._finish_turn()
+
+    def _await_turn(self, state: _TurnState) -> None:
+        """Wait for ``state``'s terminal event, stopping it if it goes idle."""
+        while not self._turn_done.wait(self._poll_seconds):
+            if self._closing.is_set():
+                return
+            now = self._clock()
+            with self._active_lock:
+                if state.stopped_at is None:
+                    if state.tool_running or state.awaiting_decision:
+                        state.last_progress = now
+                    idle = now - state.last_progress
+                    if idle < self._idle_limit:
+                        continue
+                    state.stopped_at = now
+                    wedged = False
+                else:
+                    wedged = now - state.stopped_at >= self._cancel_grace
+                    if not wedged:
+                        continue
+            if wedged:
+                self._shut_down_wedged_child()
+                return
+            self._stop_idle_turn(state, idle)
+
+    def _stop_idle_turn(self, state: _TurnState, idle: float) -> None:
+        log.warning("Agent turn made no progress for %.0fs; stopping it", idle)
+        self._render_terminal_error(
+            state,
+            f"{turn_idle_message(self._idle_limit)} Anything it finished before "
+            'then is kept. Send "continue" to pick up where it left off.',
+        )
+        try:
+            self.cancel()
+        except AgentChannelError as e:
+            # The reader sees the same dead pipe and ends the turn.
+            log.warning("Could not send the stop to the agent: %s", e)
+
+    def _shut_down_wedged_child(self) -> None:
+        self._dead = (
+            "The agent stopped responding and was shut down, so this message "
+            "was not answered. Restart the adapter (for Slack, `gaia slack "
+            "start`) to serve messages again."
+        )
+        log.error(
+            "Agent child did not end a stopped turn within %.0fs; shutting it "
+            "down. Messages are refused until the adapter is restarted.",
+            self._cancel_grace,
+        )
+        proc = self._proc
+        try:
+            proc.terminate()
+        except (OSError, AttributeError) as e:
+            log.debug("Agent child already gone: %s", e)
+        wait = getattr(proc, "wait", None)
+        if wait is not None:
+            try:
+                wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
     def _finish_turn(self) -> None:
         with self._active_lock:
@@ -392,7 +516,8 @@ class AgentChannel:
         # goes quiet is the failure mode the daemon relay exists to prevent.
         if not self._closing.is_set():
             self._dispatch_terminal_error(
-                "The agent stopped responding mid-answer and the reply is "
+                self._dead
+                or "The agent stopped responding mid-answer and the reply is "
                 "incomplete. It most likely crashed — check "
                 "~/.gaia/logs, then resend the message."
             )
@@ -424,6 +549,19 @@ class AgentChannel:
             return
 
         etype = event.get("type")
+        with self._active_lock:
+            if state.saw_terminal:
+                # The turn was already ended for the user (stopped while
+                # idle); only the child's own end of it still matters.
+                if etype in TERMINAL_EVENTS:
+                    self._turn_done.set()
+                return
+            state.last_progress = self._clock()
+            if etype == "tool_call":
+                state.tool_running = True
+            elif etype == "tool_result":
+                state.tool_running = False
+            state.awaiting_decision = etype == NEEDS_CONFIRMATION
         if etype == NEEDS_CONFIRMATION:
             confirm_id = event.get("confirm_id")
             if confirm_id:
@@ -443,11 +581,19 @@ class AgentChannel:
     def _dispatch_terminal_error(self, detail: str) -> None:
         with self._active_lock:
             state = self._active
-        if state is None or state.saw_terminal:
+        if state is None:
             return
-        state.saw_terminal = True
+        if self._render_terminal_error(state, detail):
+            self._turn_done.set()
+
+    def _render_terminal_error(self, state: _TurnState, detail: str) -> bool:
+        """End ``state`` for the user with ``detail``. False if already ended."""
+        with self._active_lock:
+            if state.saw_terminal:
+                return False
+            state.saw_terminal = True
         try:
             self._on_event({"type": "error", "detail": detail}, state.turn)
         except Exception:
             log.exception("Messaging adapter raised while rendering a crash")
-        self._turn_done.set()
+        return True

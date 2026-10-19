@@ -26,6 +26,7 @@ from typing import Dict, Optional, Set
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.mcp.ports import TELEGRAM_HEALTH_PORT
+from gaia.messaging.bridge import DEFAULT_TURN_IDLE_SECONDS, turn_idle_message
 from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 log = get_logger(__name__)
@@ -33,6 +34,8 @@ log = get_logger(__name__)
 # Simple per-user session store: user_id -> AgentSDK
 _USER_SESSIONS: Dict[int, AgentSDK] = {}
 _SESSIONS_LOCK = threading.RLock()
+# Users whose generation thread is still running, guarded by _SESSIONS_LOCK.
+_GENERATING: Set[int] = set()
 
 
 def get_or_create_session(user_id: int) -> AgentSDK:
@@ -141,7 +144,16 @@ def is_adapter_process(pid: int) -> bool:
 
 
 class TelegramAdapter:
-    def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
+    def __init__(
+        self,
+        token: str,
+        allowed_users: Optional[Set[int]] = None,
+        idle_limit: float = DEFAULT_TURN_IDLE_SECONDS,
+    ):
+        if idle_limit <= 0:
+            raise ValueError(f"idle_limit must be > 0 seconds, got {idle_limit}")
+        #: Seconds a reply may go without a new chunk before it is stopped.
+        self._idle_limit = idle_limit
         # Refused here rather than at start(): an adapter that cannot serve
         # anyone should never exist, so no caller can reach a permissive one.
         if not allowed_users:
@@ -232,20 +244,41 @@ class TelegramAdapter:
 
         user_input = f"{text} {media_note}".strip()
 
+        # A stopped turn's generation may still be unwinding; a second one on
+        # the same session would interleave its history.
+        with _SESSIONS_LOCK:
+            if user.id in _GENERATING:
+                await update.message.reply_text(
+                    "Your previous message is still being stopped. Send this "
+                    "one again in a moment."
+                )
+                return
+            _GENERATING.add(user.id)
+
         # Reply immediately with a placeholder we will edit
-        reply = await update.message.reply_text("Thinking...")
+        try:
+            reply = await update.message.reply_text("Thinking...")
+        except BaseException:
+            with _SESSIONS_LOCK:
+                _GENERATING.discard(user.id)
+            raise
 
         # Use an asyncio.Queue to bridge generator (blocking) -> async edits
         queue: asyncio.Queue = asyncio.Queue()
+        stopped = threading.Event()
 
         loop = asyncio.get_running_loop()
 
         def run_generation():
+            stream = None
             try:
                 # Reuse per-user AgentSDK synchronously in thread
                 chat = get_or_create_session(user.id)
                 full = ""
-                for chunk in chat.send_stream(user_input):
+                stream = chat.send_stream(user_input)
+                for chunk in stream:
+                    if stopped.is_set():
+                        return
                     full += chunk.text
                     # Put the current accumulated text into the async queue
                     loop.call_soon_threadsafe(queue.put_nowait, (full, False))
@@ -258,42 +291,63 @@ class TelegramAdapter:
                     e,
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, (f"Error: {e}", True))
+            finally:
+                # Closing the generator ends the model stream behind it.
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+                with _SESSIONS_LOCK:
+                    _GENERATING.discard(user.id)
 
         # Start generator in thread to avoid blocking the asyncio loop
         asyncio.get_running_loop().run_in_executor(None, run_generation)
 
-        # Consume queue and edit message
+        # Consume queue and edit message. Updates are handled one at a time,
+        # so a turn that never finishes would hold every other chat.
         accumulated = ""
         last_edited = None
-        try:
-            while True:
-                text_chunk, done = await queue.get()
-                accumulated = text_chunk
-                # Edit the reply with the latest accumulated text (Telegram rate limits apply)
+        while True:
+            try:
+                text_chunk, done = await asyncio.wait_for(
+                    queue.get(), timeout=self._idle_limit
+                )
+            except asyncio.TimeoutError:
+                stopped.set()
+                log.warning(
+                    "Telegram turn for user %s made no progress for %.0fs; "
+                    "stopping it",
+                    user.id,
+                    self._idle_limit,
+                )
+                note = (
+                    f"{turn_idle_message(self._idle_limit)} Send your message "
+                    "again to retry."
+                )
+                text_chunk = f"{accumulated}\n\n{note}" if accumulated else note
+                done = True
+            accumulated = text_chunk
+            # Edit the reply with the latest accumulated text (Telegram rate limits apply)
+            try:
+                if accumulated != last_edited:
+                    await reply.edit_text(accumulated)
+                    last_edited = accumulated
+            except Exception as e:
+                # Ignore transient edit failures (rate limits) where possible,
+                # but log for observability. Classify common telegram errors if available.
                 try:
-                    if accumulated != last_edited:
-                        await reply.edit_text(accumulated)
-                        last_edited = accumulated
-                except Exception as e:
-                    # Ignore transient edit failures (rate limits) where possible,
-                    # but log for observability. Classify common telegram errors if available.
-                    try:
-                        from telegram.error import NetworkError, RetryAfter, TimedOut
+                    from telegram.error import NetworkError, RetryAfter, TimedOut
 
-                        if isinstance(e, (TimedOut, RetryAfter, NetworkError)):
-                            log.debug("Transient telegram edit failure: %s", e)
-                        else:
-                            log.exception(
-                                "Unexpected error editing telegram message: %s", e
-                            )
-                    except ImportError:
-                        # If telegram isn't available in this environment, fall back
-                        log.debug("Failed to edit telegram message: %s", e)
-                if done:
-                    break
-        finally:
-            # Optionally finalize or log
-            pass
+                    if isinstance(e, (TimedOut, RetryAfter, NetworkError)):
+                        log.debug("Transient telegram edit failure: %s", e)
+                    else:
+                        log.exception(
+                            "Unexpected error editing telegram message: %s", e
+                        )
+                except ImportError:
+                    # If telegram isn't available in this environment, fall back
+                    log.debug("Failed to edit telegram message: %s", e)
+            if done:
+                break
 
     def start(
         self,
