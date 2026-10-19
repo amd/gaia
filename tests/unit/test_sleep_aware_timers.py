@@ -134,32 +134,26 @@ class _QuietSocket(httpcore.NetworkStream):
         pass
 
 
-def test_a_socket_read_spanning_a_sleep_does_not_time_out(monkeypatch):
-    import gaia.llm.stream_watchdog as watchdog
-
+def test_a_socket_read_spanning_a_sleep_does_not_time_out():
     raw = FakeClock()
-    monkeypatch.setattr(watchdog.time, "monotonic", raw)
 
     def on_read(n):
         if n == 3:
             raw.advance(EIGHT_HOURS)  # the PC slept during this slice
         return b"data" if n == 5 else None
 
-    stream = _AbortableStream(_QuietSocket(on_read), ByteActivity(clock=raw))
+    stream = _AbortableStream(_QuietSocket(on_read), ByteActivity(clock=raw), clock=raw)
     assert stream.read(1024, timeout=150.0) == b"data"
 
 
-def test_a_socket_read_still_times_out_on_a_silent_server(monkeypatch):
-    import gaia.llm.stream_watchdog as watchdog
-
+def test_a_socket_read_still_times_out_on_a_silent_server():
     raw = FakeClock()
-    monkeypatch.setattr(watchdog.time, "monotonic", raw)
 
     def on_read(_n):
         raw.advance(1.0)
         return None
 
-    stream = _AbortableStream(_QuietSocket(on_read), ByteActivity(clock=raw))
+    stream = _AbortableStream(_QuietSocket(on_read), ByteActivity(clock=raw), clock=raw)
     with pytest.raises(httpcore.ReadTimeout):
         stream.read(1024, timeout=150.0)
 

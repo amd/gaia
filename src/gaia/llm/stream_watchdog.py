@@ -114,13 +114,19 @@ class _AbandonedStream(httpcore.ReadError):
 class _AbortableStream(httpcore.NetworkStream):
     """A connection whose reads wait in short slices and stop once aborted."""
 
-    def __init__(self, inner: httpcore.NetworkStream, activity: ByteActivity):
+    def __init__(
+        self,
+        inner: httpcore.NetworkStream,
+        activity: ByteActivity,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self._inner = inner
         self._activity = activity
+        self._clock = clock
 
     def read(self, max_bytes: int, timeout: Optional[float] = None) -> bytes:
         # Time the PC spends asleep during the read does not use up its timeout.
-        awake = AwakeClock(time.monotonic)
+        awake = AwakeClock(self._clock)
         deadline = None if timeout is None else awake() + timeout
         while True:
             if self._activity.aborted:
@@ -158,7 +164,7 @@ class _AbortableStream(httpcore.NetworkStream):
         timeout: Optional[float] = None,
     ) -> httpcore.NetworkStream:
         tls = self._inner.start_tls(ssl_context, server_hostname, timeout)
-        return _AbortableStream(tls, self._activity)
+        return _AbortableStream(tls, self._activity, self._clock)
 
     def get_extra_info(self, info: str) -> Any:
         return self._inner.get_extra_info(info)

@@ -85,7 +85,7 @@ def clock():
     never_sleeps = AwakeClock(fake.monotonic, gap=float("inf"))
     with (
         patch.object(helpers, "_time", fake_time),
-        patch.object(helpers, "_sleep_clock", lambda: never_sleeps, create=True),
+        patch.object(helpers, "_sleep_clock", lambda: never_sleeps),
     ):
         yield fake
 
@@ -517,7 +517,7 @@ def sleeping_pc(clock):
     from gaia.utils.awake_clock import AwakeClock
 
     watcher = AwakeClock(clock.monotonic)
-    with patch.object(helpers, "_sleep_clock", lambda: watcher, create=True):
+    with patch.object(helpers, "_sleep_clock", lambda: watcher):
         yield clock
 
 
