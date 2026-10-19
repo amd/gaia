@@ -11,6 +11,7 @@ import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentInfo, Session } from '../../types';
 import * as api from '../../services/api';
+import { MAX_SESSION_TITLE_CHARS } from '../../utils/constants';
 import type { StreamEvent } from '../../types';
 
 vi.mock('../../services/api');
@@ -128,5 +129,36 @@ describe('ChatView title pinning (#2165)', () => {
             title: 'My Research Project',
             title_is_custom: true,
         });
+    });
+
+    it('caps a rename at the backend title limit (#5257)', async () => {
+        setSession({ ...SESSION, title: 'Auto Generated Title' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Auto Generated Title' }));
+        const input = screen.getByLabelText('Chat title');
+        expect(input).toHaveAttribute('maxLength', String(MAX_SESSION_TITLE_CHARS));
+        await act(async () => {
+            fireEvent.change(input, { target: { value: 'x'.repeat(100_000) } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+        });
+
+        expect(mockedApi.updateSession).toHaveBeenCalledWith(SESSION.id, {
+            title: 'x'.repeat(MAX_SESSION_TITLE_CHARS),
+            title_is_custom: true,
+        });
+    });
+
+    it('leaves an old over-long title alone when the rename is not edited', async () => {
+        const longTitle = 'y'.repeat(MAX_SESSION_TITLE_CHARS + 50);
+        setSession({ ...SESSION, title: longTitle });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: longTitle }));
+        await act(async () => {
+            fireEvent.blur(screen.getByLabelText('Chat title'));
+        });
+
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
     });
 });

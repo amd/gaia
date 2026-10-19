@@ -90,13 +90,13 @@ function buildProgressHtml({ logPath }) {
    * src/styles/index.css, so the dark theme's role values are mirrored
    * here. Keep them in step with that file; nothing below names a hex. */
   :root {
-    --bg-primary: #17161C;
-    --bg-tertiary: #2A2831;
-    --border: #3A3842;
-    --text-primary: #F0EDE7;
-    --text-secondary: #AAA5B0;
-    --text-muted: #8C8794;
-    --accent-fill: #9A4930;
+    --bg-primary: #1A1917;
+    --bg-tertiary: #2C2B27;
+    --border: #4A4740;
+    --text-primary: #EFECE6;
+    --text-secondary: #B3ADA5;
+    --text-muted: #958F87;
+    --accent-solid: #D4B47E;
   }
   html, body {
     margin: 0;
@@ -152,7 +152,7 @@ function buildProgressHtml({ logPath }) {
   }
   .fill {
     height: 100%;
-    background: var(--accent-fill);
+    background: var(--accent-solid);
     border-radius: 9999px;
     transition: width 300ms ease-out;
     width: 0%;
@@ -268,7 +268,7 @@ function createProgressWindow() {
     frame: false,
     transparent: false,
     show: false,
-    backgroundColor: "#17161C", // --bg-primary, dark theme (see the :root block above)
+    backgroundColor: "#1A1917", // --bg-primary, dark theme (see the :root block above)
     title: "Installing GAIA",
     webPreferences: {
       nodeIntegration: false,

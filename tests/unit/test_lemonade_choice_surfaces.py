@@ -160,6 +160,14 @@ class TestAgentUiRouter:
             client.get("/api/lemonade/target", headers=self.H).json()["offer"] is False
         )
 
+    def test_detect_says_which_ports_it_could_not_check(self, client, monkeypatch):
+        url = "http://localhost:13305/api/v1"
+        monkeypatch.setattr(
+            choice, "detect_lemonade", lambda: choice.Detection(None, (url,))
+        )
+        r = client.get("/api/lemonade/detect", headers={"X-Gaia-UI": "1"})
+        assert r.json() == {"found": None, "unchecked": [url]}
+
     def test_reads_need_the_ui_header(self, client):
         assert client.get("/api/lemonade/target").status_code == 403
         assert client.get("/api/lemonade/detect").status_code == 403
