@@ -5,13 +5,13 @@
 ``uv pip install`` waits, with no limit, for a cache lock another session's
 ``uv`` holds. With no timeout on the child, the install thread waited with it
 and the agent's install slot stayed taken: every retry got "already in
-progress". The runner now has a deadline, kills the child, and raises an
-``InstallError`` that names the likely lock; the slot is released.
+progress". The runner now has a deadline, kills the child's whole process tree
+(``python -m uv`` runs the real ``uv`` as a grandchild that holds the pipes),
+and raises an ``InstallError`` that names the likely lock.
 """
 
 from __future__ import annotations
 
-import subprocess
 import sys
 import threading
 import time
@@ -22,6 +22,22 @@ from gaia.hub import installer
 from gaia.hub.installer import InstallError
 
 _HANG = [sys.executable, "-c", "import time; time.sleep(60)"]
+
+# A parent that starts a long-lived grandchild sharing its stdout/stderr, the
+# shape of ``python -m uv``. Killing only the parent leaves the pipes open.
+_HANG_WITH_GRANDCHILD = [
+    sys.executable,
+    "-c",
+    "import subprocess, sys, time; "
+    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+    "time.sleep(60)",
+]
+
+
+@pytest.fixture(autouse=True)
+def _short_timeout(monkeypatch):
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.delenv(installer.PIP_TIMEOUT_ENV, raising=False)
 
 
 def _run_in_thread(fn, limit):
@@ -41,44 +57,55 @@ def _run_in_thread(fn, limit):
     return box.get("error")
 
 
-def test_hung_pip_frontend_times_out_with_an_actionable_error(monkeypatch):
-    monkeypatch.setattr(installer, "_pip_frontends", lambda: [_HANG])
-    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
+@pytest.mark.parametrize(
+    "frontend", [_HANG, _HANG_WITH_GRANDCHILD], ids=["child", "grandchild"]
+)
+def test_hung_pip_frontend_times_out_with_an_actionable_error(monkeypatch, frontend):
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [frontend])
 
     started = time.monotonic()
-    error = _run_in_thread(lambda: installer._default_run_pip(["pkg"]), 20)
+    error = _run_in_thread(lambda: installer._default_run_pip(["pkg"]), 30)
 
-    assert isinstance(error, InstallError)
-    assert time.monotonic() - started < 20
+    assert isinstance(error, InstallError), error
+    assert time.monotonic() - started < 30
     message = str(error)
-    assert "did not finish within 1s" in message
+    assert "timed out after 1s" in message
     assert "lock" in message
+    assert installer.PIP_TIMEOUT_ENV in message
 
 
 def test_timeout_does_not_fall_through_to_the_next_frontend(monkeypatch):
     calls = []
-    real_run = subprocess.run
+    real = installer._run_frontend
 
-    def recording_run(cmd, *a, **k):
+    def recording(cmd, timeout):
         calls.append(cmd)
-        return real_run(cmd, *a, **k)
+        return real(cmd, timeout)
 
     monkeypatch.setattr(installer, "_pip_frontends", lambda: [_HANG, ["never-run"]])
-    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
-    monkeypatch.setattr(installer.subprocess, "run", recording_run)
+    monkeypatch.setattr(installer, "_run_frontend", recording)
 
-    with pytest.raises(InstallError):
+    with pytest.raises(InstallError, match="timed out"):
         installer._default_run_pip(["pkg"])
     assert len(calls) == 1
 
 
-def test_every_pip_run_is_given_a_deadline(monkeypatch):
-    seen = {}
+def test_the_limit_comes_from_the_environment_when_set(monkeypatch):
+    seen = []
 
-    def fake_run(cmd, *a, **k):
-        seen["timeout"] = k.get("timeout")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+    def fake(cmd, timeout):
+        seen.append(timeout)
+        return installer.subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer, "_run_frontend", fake)
     installer._default_run_pip(["pkg"])
-    assert seen["timeout"] == installer.PIP_TIMEOUT_SECONDS
+    monkeypatch.setenv(installer.PIP_TIMEOUT_ENV, "1800")
+    installer._default_run_pip(["pkg"])
+    assert seen == [1.0, 1800.0]
+
+
+@pytest.mark.parametrize("raw", ["soon", "0", "-5"])
+def test_a_bad_limit_in_the_environment_fails_loudly(monkeypatch, raw):
+    monkeypatch.setenv(installer.PIP_TIMEOUT_ENV, raw)
+    with pytest.raises(InstallError, match=installer.PIP_TIMEOUT_ENV):
+        installer._default_run_pip(["pkg"])

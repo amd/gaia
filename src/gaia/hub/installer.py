@@ -417,10 +417,30 @@ def _download_and_verify(
 # ---------------------------------------------------------------------------
 
 
-#: Longest one pip/uv install may run. A wheel and its dependencies install in
-#: well under this; past it the child is almost always parked on a cache lock
+#: Default for how long one pip/uv install may run. A wheel and its dependencies
+#: install well within it; past it the child is usually parked on a cache lock
 #: another ``uv`` process holds, which uv waits on with no limit of its own.
 PIP_TIMEOUT_SECONDS = 900.0
+
+#: Overrides ``PIP_TIMEOUT_SECONDS``, for a slow link pulling large dependencies.
+PIP_TIMEOUT_ENV = "GAIA_HUB_PIP_TIMEOUT"
+
+
+def _pip_timeout() -> float:
+    raw = os.environ.get(PIP_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return PIP_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if value <= 0:
+        raise InstallError(
+            f"{PIP_TIMEOUT_ENV}={raw!r} is not a positive number of seconds. "
+            f"Set it to e.g. 1800, or unset it for the "
+            f"{PIP_TIMEOUT_SECONDS:.0f}s default."
+        )
+    return value
 
 
 def _pip_frontends() -> List[List[str]]:
@@ -431,10 +451,37 @@ def _pip_frontends() -> List[List[str]]:
     ]
 
 
-def _output_tail(output: Any, limit: int = 500) -> str:
-    if isinstance(output, bytes):
-        output = output.decode("utf-8", errors="replace")
-    return (output or "").strip()[-limit:]
+class _PipTimeout(Exception):
+    def __init__(self, output: str) -> None:
+        super().__init__(output)
+        self.output = output
+
+
+def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess:
+    """Run one pip frontend, killing its whole process tree past ``timeout``.
+
+    ``subprocess.run(timeout=)`` kills only the direct child, then reads the
+    pipes until they close. ``python -m uv`` and a ``uv`` shim each start the
+    real ``uv`` as a grandchild that holds those pipes, so that read, and the
+    install, would still wait on the lock forever.
+    """
+    proc = subprocess.Popen(  # noqa: S603 - args are constructed, not shell
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Imported here: gaia.agents.tools pulls in every tool mixin.
+        from gaia.agents.tools.command_timeouts import terminate_process_tree
+
+        stdout, stderr = terminate_process_tree(proc)
+        tail = ((stderr or "") + (stdout or "")).strip()[-500:]
+        raise _PipTimeout(tail) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def _default_run_pip(args: List[str]) -> None:
@@ -445,34 +492,28 @@ def _default_run_pip(args: List[str]) -> None:
     venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
     ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
     still installs the wheel instead of hard-failing. Raises InstallError
-    if every frontend fails, or as soon as one runs past
-    ``PIP_TIMEOUT_SECONDS`` -- a frontend that hangs is not handed to the next,
-    which would wait on the same lock.
+    if every frontend fails, or as soon as one runs past the pip timeout --
+    a frontend that hangs is not handed to the next, which would wait on the
+    same lock.
     """
+    timeout = _pip_timeout()
     attempts: List[str] = []
     for frontend in _pip_frontends():
         cmd = [*frontend, *args]
         try:
-            proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=PIP_TIMEOUT_SECONDS,
-            )
+            proc = _run_frontend(cmd, timeout)
         except FileNotFoundError:
             attempts.append(f"{frontend[0]} (not found on PATH)")
             continue
-        except subprocess.TimeoutExpired as e:
-            # subprocess.run has already killed the child.
-            output = _output_tail(e.stderr) or _output_tail(e.output)
+        except _PipTimeout as e:
             raise InstallError(
-                f"'{' '.join(frontend)}' did not finish within "
-                f"{PIP_TIMEOUT_SECONDS:.0f}s, so the install was stopped and "
-                "nothing was installed. It is most likely waiting for a "
-                "package-cache lock held by another install (another GAIA "
-                "session, or a uv/pip command in a terminal). Let that finish, "
-                "then retry." + (f"\nLast output: {output}" if output else "")
+                f"'{' '.join(frontend)}' timed out after {timeout:.0f}s and was "
+                "stopped; nothing was installed. This is often a package-cache "
+                "lock held by another install (another GAIA session, or a "
+                "uv/pip command in a terminal): let it finish, then retry. If "
+                "the install is just slow, raise the limit with "
+                f"{PIP_TIMEOUT_ENV}=<seconds>."
+                + (f"\nLast output: {e.output}" if e.output else "")
             ) from e
         if proc.returncode == 0:
             return

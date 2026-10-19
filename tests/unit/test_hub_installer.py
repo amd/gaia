@@ -1558,19 +1558,19 @@ def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
 
     from tests.fixtures.wheel_builder import build_chat_shaped_fixture_wheel
 
-    real_run = installer.subprocess.run
+    real_popen = installer.subprocess.Popen
     uv_calls = []
     pip_calls = []
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_popen(cmd, *args, **kwargs):
         if cmd[0] == "uv" or (cmd[0] == sys.executable and cmd[1:3] == ["-m", "uv"]):
             uv_calls.append(cmd)
             raise FileNotFoundError(f"simulated missing uv: {cmd[0]}")
         if cmd[0] == sys.executable and cmd[1:3] == ["-m", "pip"]:
             pip_calls.append(cmd)
-        return real_run(cmd, *args, **kwargs)
+        return real_popen(cmd, *args, **kwargs)
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
 
     agent_id = "uvfallbacktestagent"
     module_name = f"{agent_id}_pkg"
@@ -1600,10 +1600,10 @@ def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
     actionable InstallError naming what was tried -- never silently no-op.
     """
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_popen(cmd, *args, **kwargs):
         raise FileNotFoundError(f"simulated missing frontend: {cmd[0]}")
 
-    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
 
     with pytest.raises(InstallError, match="every pip frontend failed"):
         installer._default_run_pip(["--target", "/nonexistent", "some-package"])
@@ -1856,6 +1856,7 @@ def test_hung_pip_fails_the_install_and_frees_the_slot(tmp_path, monkeypatch):
     hang = [sys.executable, "-c", "import time; time.sleep(60)"]
     monkeypatch.setattr(installer, "_pip_frontends", lambda: [hang])
     monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.delenv(installer.PIP_TIMEOUT_ENV, raising=False)
     manifest = _manifest()
 
     def attempt():
@@ -1868,13 +1869,13 @@ def test_hung_pip_fails_the_install_and_frees_the_slot(tmp_path, monkeypatch):
             active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
         )
 
-    with pytest.raises(InstallError, match="did not finish within 1s"):
+    with pytest.raises(InstallError, match="timed out after 1s"):
         attempt()
     assert not installer.is_installing("demo")
     assert installer.get_install_status("demo")["status"] == "failed"
     assert read_sentinel("demo", tmp_path) is None
 
     # A retry gets the same honest error, not "already in progress".
-    with pytest.raises(InstallError, match="did not finish") as retry:
+    with pytest.raises(InstallError, match="timed out") as retry:
         attempt()
     assert not isinstance(retry.value, InstallInProgressError)
