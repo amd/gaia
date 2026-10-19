@@ -35,6 +35,7 @@ import { useSessionPanelStore } from '../stores/sessionPanelStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
+import { useJumpToMessage } from '../hooks/useJumpToMessage';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
@@ -538,18 +539,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
 
-    /** Bring a turn into view from the session panel; false when it isn't loaded. */
-    const jumpToMessage = useCallback((messageId: number): boolean => {
-        const answer = messagesScrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
-        if (!answer) return false;
-        const asked = answer.previousElementSibling as HTMLElement | null;
-        const target = asked?.dataset.role === 'user' ? asked : answer;
-        isNearBottomRef.current = false;
-        target.scrollIntoView?.({ block: 'start', behavior: scrollBehavior() });
-        answer.classList.add('msg-jump-target');
-        window.setTimeout(() => answer.classList.remove('msg-jump-target'), 1600);
-        return true;
-    }, []);
+    const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
