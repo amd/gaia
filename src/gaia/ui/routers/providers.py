@@ -268,7 +268,9 @@ def _suggested_local_models() -> set:
     return {m.lower() for m in (*DEFAULT_MODEL_LADDER, default)}
 
 
-def _list_models(provider: str) -> List[Dict[str, Any]]:
+def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
+    """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
+    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
     from gaia.llm.recommended_models import rank
 
     from ..spending import price_card
@@ -276,7 +278,11 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
-    suggested = _suggested_local_models() if provider == LOCAL else set()
+    offered: List[str] = []
+    if provider == LOCAL:
+        offered = [*_suggested_local_models()]
+        if offer_optional:
+            offered += _optional_models_that_fit()
     out: List[Dict[str, Any]] = []
     for m in body.get("data") or []:
         model_id = str(m.get("id") or "")
@@ -284,7 +290,10 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
             continue
         is_cloud = m.get("recipe") == "cloud" or bool(m.get("cloud_provider"))
         if provider == LOCAL:
-            if is_cloud or not (m.get("downloaded") or model_id.lower() in suggested):
+            if is_cloud or not (
+                m.get("downloaded")
+                or any(_model_ids_match(model_id, o) for o in offered)
+            ):
                 continue
         elif not model_id.startswith(f"{provider}."):
             continue
@@ -304,10 +313,48 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
                 "price": None if provider == LOCAL else price_card(model_id),
             }
         )
+    # A custom model Lemonade has not registered yet is not in its list; a
+    # missing built-in is one this Lemonade cannot pull, so it stays out.
+    for model_id in offered:
+        if model_id.startswith("user.") and not any(
+            _model_ids_match(model_id, m["id"]) for m in out
+        ):
+            req = find_model_requirement(model_id)
+            out.append(
+                {
+                    "id": model_id,
+                    "context_length": None,
+                    "downloaded": False,
+                    "labels": [],
+                    "recipe": req.recipe if req else None,
+                    "size_gb": req.size_gb if req else None,
+                    "rank": None,
+                    "note": None,
+                    "evidence": None,
+                    "price": None,
+                }
+            )
     if provider == AMD:
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _optional_models_that_fit() -> List[str]:
+    """Optional local models to offer for download: only those this PC holds."""
+    from gaia.llm.lemonade_client import optional_chat_models_that_fit
+    from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
+
+    status, info = _lemonade("GET", "system-info")
+    try:
+        if status >= 400:
+            raise ModelFitError(f"Lemonade answered /system-info with HTTP {status}")
+        capacity = capacity_from_system_info(info)
+    except ModelFitError as e:
+        # Not offering what may not fit; downloaded models still list.
+        logger.warning("Not offering optional local models: %s", e)
+        return []
+    return optional_chat_models_that_fit(capacity)
 
 
 def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:
@@ -586,7 +633,7 @@ def _local_downloaded(view: Dict[str, Any]) -> Optional[bool]:
     if view["remote"] or not view["model"]:
         return None
     try:
-        models = {m["id"].lower(): m for m in _list_models(LOCAL)}
+        models = {m["id"].lower(): m for m in _list_models(LOCAL, offer_optional=False)}
     except ProviderError as e:
         # Unknown, not an error: the chip simply makes no download claim.
         logger.info("Could not tell whether %s is downloaded: %s", view["model"], e)
@@ -1003,7 +1050,11 @@ def _memory_view(
     elif model_id:
         # Unknown KV cost: weights plus the shared margin, from Lemonade's size.
         size = next(
-            (m.get("size_gb") for m in _list_models(LOCAL) if m["id"] == model_id),
+            (
+                m.get("size_gb")
+                for m in _list_models(LOCAL, offer_optional=False)
+                if m["id"] == model_id
+            ),
             None,
         )
         if isinstance(size, (int, float)) and size > 0:

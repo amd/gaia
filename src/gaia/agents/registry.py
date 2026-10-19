@@ -66,6 +66,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "reasoning_effort": (
+        "gaia.agents.tools.reasoning_tools",
+        "ReasoningEffortToolsMixin",
+    ),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading

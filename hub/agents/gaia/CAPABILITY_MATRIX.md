@@ -9,7 +9,7 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on. This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 8 functional verbs, a purpose-built streaming facade for external callers.
+- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on, and set_reasoning_effort, which registers only on a model that grades its reasoning (gpt-oss). This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 8 functional verbs, a purpose-built streaming facade for external callers.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
@@ -45,7 +45,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `file_edit`: 3
   - `file_search`: 3
   - `image_gen`: 3
-  - `loop_control`: 3
+  - `loop_control`: 4
   - `media_transcription`: 4
   - `memory`: 5
   - `rag_index`: 5

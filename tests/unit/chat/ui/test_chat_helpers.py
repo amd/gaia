@@ -1108,7 +1108,36 @@ class TestSessionTitleRequest:
         assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
     def test_other_models_get_no_template_switch(self):
-        assert "chat_template_kwargs" not in self._sent_kwargs("Gemma-4-E4B-it-GGUF")
+        sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
+        assert "chat_template_kwargs" not in sent
+        assert sent["max_tokens"] == 24
+
+    def test_a_model_that_always_reasons_gets_room_for_it(self):
+        """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
+        and the title was cut mid-word ("Step-by-Step Bread-", measured)."""
+        from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+
+        sent = self._sent_kwargs(GPT_OSS_20B_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
+        assert sent["max_tokens"] > 24
+
+    @pytest.mark.parametrize("content", [None, "", "  \n "])
+    def test_reasoning_that_eats_the_budget_still_names_the_chat(self, content):
+        """If gpt-oss reasons past the budget, the reply carries no title text."""
+        from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client(GPT_OSS_20B_MODEL_NAME, content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    GPT_OSS_20B_MODEL_NAME,
+                    "plan a trip to Lisbon",
+                    "ok",
+                )
+            )
+        assert title == "plan a trip to Lisbon"
 
     @staticmethod
     def _sent_prompt(model_id, user_msg):

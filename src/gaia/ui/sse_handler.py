@@ -2449,6 +2449,8 @@ def _tool_description(tool_name: str) -> str:
         "get_file_preview": "Previewing file contents",
         "index_document": "Indexing a document for retrieval",
         "evaluate_retrieval": "Evaluating document retrieval quality",
+        # Registered per agent, so the global label lookup cannot see it.
+        "set_reasoning_effort": "Setting reasoning effort",
     }
     return descriptions.get(tool_name, "")
 

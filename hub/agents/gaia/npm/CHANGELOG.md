@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Needs core 0.25.1.** The chat agent this one builds on imports the
+  reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
+  floor and `min_gaia_version` rise to it in that release; a release whose
+  core is 0.25.1 or later fails its floor test until they do.
+- **gpt-oss 20B and 120B are supported models.** On a model that grades its
+  reasoning, the agent gets `set_reasoning_effort` (low, medium or high) to
+  choose how hard it thinks for the rest of the request; every new message
+  starts again at medium. It is not registered on other models, so the
+  agent's 95 tools on Gemma and Qwen are unchanged.
 - **The turn log says how busy the model server was.** With `GAIA_TURN_LOG`
   set, each model call records the server's own prefill, decode and cache-reuse
   figures and the time spent waiting on the model-slot lease, the slot lock and

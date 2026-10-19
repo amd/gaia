@@ -63,7 +63,8 @@ _spec.loader.exec_module(capability_matrix)
 # `wait_for_condition`, plus `sleep`, the three cli_setup tools, and the
 # persistent shell session's `get_shell_state` / `reset_shell_session`), plus
 # the eight live-browser tools. 95 since per-turn tool selection went off by
-# default: `load_tools` registers only while it is on.
+# default: `load_tools` registers only while it is on. `set_reasoning_effort`
+# is in the loop_control bundle but registers on gpt-oss only, so not counted.
 _EXPECTED_TOOLS_TOTAL = 95
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
