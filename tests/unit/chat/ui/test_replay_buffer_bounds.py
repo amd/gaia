@@ -146,3 +146,26 @@ async def test_the_newest_frame_survives_a_trim_and_sizes_count_escapes(monkeypa
         run2.emit(_frame({"type": "chunk", "content": "日本語テキスト"}))
     replayed = await _replay(run2)
     assert sum(len(f.encode("utf-8")) for f in replayed) <= 10_000 + 2_000
+
+
+async def test_thinking_tokens_merge_and_stay_apart_from_the_answer():
+    run = Run("s7")
+    for i in range(5000):
+        run.emit(_frame({"type": "thinking", "content": f"t{i} "}))
+    run.emit(_frame({"type": "tool_start", "tool": "search"}))
+    for i in range(3):
+        run.emit(_frame({"type": "thinking", "content": f"u{i} "}))
+    for i in range(500):
+        run.emit(_frame({"type": "chunk", "content": f"w{i} "}))
+
+    events = _events(await _replay(run))
+
+    assert [e["type"] for e in events] == [
+        "thinking",
+        "tool_start",
+        "thinking",
+        "chunk",
+    ]
+    assert events[0]["content"] == "".join(f"t{i} " for i in range(5000))
+    assert events[2]["content"] == "u0 u1 u2 "
+    assert _answer(events) == "".join(f"w{i} " for i in range(500))

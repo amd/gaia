@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from typing import Awaitable, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -73,12 +74,18 @@ def _parse(frame: str) -> Optional[dict]:
     return event if isinstance(event, dict) else None
 
 
-def _plain_chunk(event: Optional[dict]) -> bool:
-    return (
+# Streamed text events the client concatenates while consecutive.
+_MERGEABLE_TYPES = ("chunk", "thinking")
+
+
+def _mergeable_type(event: Optional[dict]) -> Optional[str]:
+    if (
         event is not None
-        and event.get("type") == "chunk"
+        and event.get("type") in _MERGEABLE_TYPES
         and set(event) == {"type", "content"}
-    )
+    ):
+        return event["type"]
+    return None
 
 
 def _progress_tick(event: Optional[dict]) -> bool:
@@ -101,11 +108,12 @@ class Run:
         # Held so an external cancel can signal the producer to bail.
         self.handler = None
         # What a re-attaching subscriber replays: every ``data:`` frame so
-        # far, unpadded (see ``_record``). The chunk text still streaming is
-        # kept as parts and joined only when replayed or closed.
+        # far, unpadded (see ``_record``). The chunk or thinking text still
+        # streaming is kept as parts and joined only when replayed or closed.
         self.buffer: List[str] = []
         self._buffer_bytes = 0
-        self._open_chunk: List[str] = []
+        self._open_type: Optional[str] = None
+        self._open_chunk: deque = deque()
         self._open_chunk_bytes = 0
         self._last_event: Optional[dict] = None
         self._trimmed = False
@@ -124,16 +132,21 @@ class Run:
     def _record(self, data: str) -> None:
         """Keep what a re-attaching client needs to rebuild the reply, and no more.
 
-        Keepalives and padding are dropped, consecutive plain chunks become
-        one chunk, and the periodic "Model is processing" tick replaces the
-        one just before it, as the client shows them. Past
-        ``MAX_REPLAY_BYTES`` the oldest frames go, behind a note that says so.
+        Keepalives and padding are dropped, consecutive plain chunks (or
+        thinking tokens) become one frame, and the periodic "Model is
+        processing" tick replaces the one just before it, as the client shows
+        them. Past ``MAX_REPLAY_BYTES`` the oldest frames go, behind a note
+        that says so.
         """
         line = data.split("\n", 1)[0]
         if not line.startswith("data: "):
             return
         event = _parse(line)
-        if _plain_chunk(event):
+        merge_type = _mergeable_type(event)
+        if merge_type:
+            if merge_type != self._open_type:
+                self._close_chunk()
+                self._open_type = merge_type
             text = event.get("content") or ""
             self._open_chunk.append(text)
             # Sized as it will be sent: JSON escapes non-ASCII text.
@@ -157,15 +170,17 @@ class Run:
 
     def _chunk_frame(self) -> str:
         content = "".join(self._open_chunk)
-        return f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+        event = {"type": self._open_type, "content": content}
+        return f"data: {json.dumps(event)}\n\n"
 
     def _close_chunk(self) -> None:
         if not self._open_chunk:
             return
         self._append(self._chunk_frame())
-        self._open_chunk = []
+        self._last_event = {"type": self._open_type}
+        self._open_chunk = deque()
         self._open_chunk_bytes = 0
-        self._last_event = {"type": "chunk"}
+        self._open_type = None
 
     def _replay_frames(self) -> List[str]:
         frames = list(self.buffer)
@@ -196,7 +211,7 @@ class Run:
             self._buffer_bytes + self._open_chunk_bytes > MAX_REPLAY_BYTES
             and len(self._open_chunk) > 1
         ):
-            self._open_chunk_bytes -= len(json.dumps(self._open_chunk.pop(0))) - 2
+            self._open_chunk_bytes -= len(json.dumps(self._open_chunk.popleft())) - 2
 
     def finish(self) -> None:
         """Mark the run complete and close out every live subscriber."""
