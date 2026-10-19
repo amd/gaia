@@ -1019,7 +1019,7 @@ def test_model_switch_missing_credential_leaves_previous_model_running(monkeypat
 
 
 def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_running(
-    monkeypatch,
+    monkeypatch, stub_lemonade
 ):
     from gaia_agent import stdio as stdio_mod
 

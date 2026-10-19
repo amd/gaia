@@ -24,8 +24,8 @@ export function resolveTheme(pref: ThemePreference): Theme {
  * token in both themes.
  */
 const CANVAS: Record<Theme, string> = {
-    light: '#FFFFFF',
-    dark: '#17161C',
+    light: '#FAF9F7',
+    dark: '#1A1917',
 };
 
 /** Single writer for the theme, so the frame can never disagree with the app. */

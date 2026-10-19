@@ -63,10 +63,15 @@ def get_target() -> Dict[str, Any]:
 @router.get("/api/lemonade/detect", dependencies=[Depends(require_ui_header)])
 def detect() -> Dict[str, Any]:
     """A Lemonade the user already runs on this PC's default ports, if any."""
-    from gaia.llm.lemonade_choice import detect_running_lemonade
+    from gaia.llm.lemonade_choice import detect_lemonade
 
-    found = detect_running_lemonade()
-    return {"found": found.to_dict() if found else None}
+    detection = detect_lemonade()
+    found = detection.found
+    # "unchecked" ports didn't answer in time: the UI says so and offers a retry.
+    return {
+        "found": found.to_dict() if found else None,
+        "unchecked": list(detection.unchecked),
+    }
 
 
 class TargetRequest(BaseModel):
