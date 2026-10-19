@@ -13,7 +13,7 @@
 //   services/notification-service.js  — Desktop notifications + permission prompts (T5)
 //   preload.cjs                       — contextBridge for IPC channels (T0/T1)
 
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -56,6 +56,7 @@ try {
 const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
+const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { buildIndexQuery } = require("./services/index-query.cjs");
@@ -76,6 +77,7 @@ const {
   describeBlockedUrl,
 } = require("./services/link-policy.cjs");
 const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
+const { installWindowKeys } = require("./services/window-keys.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
 // Electron-recommended switch for distro-agnostic Linux behaviour: picks
@@ -224,6 +226,9 @@ let agentProcessManager = null;
 
 /** @type {NotificationService | null} */
 let notificationService = null;
+
+/** @type {KeepAwake | null} */
+let keepAwake = null;
 
 /** @type {PortManager} */
 const portManager = new PortManager({
@@ -523,8 +528,40 @@ function reportBlockedLink(url) {
     );
 }
 
+// No system title bar: the app's own top row is the window's top edge, and
+// the native window controls are drawn into it (traffic lights on macOS).
+// Keep the height in sync with --titlebar-h in src/styles/index.css. The
+// renderer sends its canvas and text colors once it paints; until then the
+// controls use the dark canvas, like the window background.
+const TITLE_BAR_HEIGHT = 48;
+const TITLE_BAR_INITIAL = { color: "#1A1917", symbolColor: "#EFECE6" };
+const IS_MAC = process.platform === "darwin";
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+function titleBarOptions() {
+  return IS_MAC
+    ? { titleBarStyle: "hidden", trafficLightPosition: { x: 16, y: 16 } }
+    : {
+        titleBarStyle: "hidden",
+        titleBarOverlay: { ...TITLE_BAR_INITIAL, height: TITLE_BAR_HEIGHT },
+      };
+}
+
+// The renderer sends its canvas and text colors so the controls match the theme.
+ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
+  const { color, symbolColor } = colors || {};
+  if (!HEX_COLOR.test(color) || !HEX_COLOR.test(symbolColor)) {
+    throw new Error(`Title bar colors must be #rrggbb, got ${JSON.stringify(colors)}`);
+  }
+  if (!IS_MAC && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setTitleBarOverlay({ color, symbolColor });
+  }
+  return true;
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
+    ...titleBarOptions(),
     width: windowConfig.width,
     height: windowConfig.height,
     minWidth: windowConfig.minWidth,
@@ -539,7 +576,12 @@ function createWindow() {
     },
   });
 
-  // Remove default menu bar
+  // No File/Edit/View menu: hiding the bar alone still lets Alt bring it back.
+  // macOS keeps its menu, which carries copy, paste and quit.
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
+  }
   mainWindow.setMenuBarVisibility(false);
 
   // Open external links in the default browser. The URL here is already
@@ -631,9 +673,9 @@ async function loadApp() {
              * src/styles/index.css, so the dark theme's role values are
              * mirrored here. Keep them in step with that file. */
             :root {
-              --bg-primary: #17161C;
-              --text-primary: #F0EDE7;
-              --text-secondary: #AAA5B0;
+              --bg-primary: #1A1917;
+              --text-primary: #EFECE6;
+              --text-secondary: #B3ADA5;
             }
             body {
               font-family: -apple-system, BlinkMacSystemFont, sans-serif;
@@ -685,6 +727,9 @@ function initializeServices() {
     agentProcessManager,
     trayManager
   );
+
+  // #5226: hold off idle sleep while a chat turn runs
+  keepAwake = new KeepAwake();
 
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
@@ -1256,6 +1301,11 @@ async function cleanup() {
   if (notificationService) {
     notificationService.destroy();
     notificationService = null;
+  }
+
+  if (keepAwake) {
+    keepAwake.destroy();
+    keepAwake = null;
   }
 
   // Stop all managed OS agents gracefully

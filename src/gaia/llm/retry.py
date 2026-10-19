@@ -71,6 +71,10 @@ DEFAULT_RETRY_BASE_DELAY = 2.0
 DEFAULT_RETRY_MAX_DELAY = 30.0
 DEFAULT_RETRY_DEADLINE = 120.0
 DEFAULT_STALL_ATTEMPTS = 2
+#: Longest one request waits for a model load the server reports in progress
+#: (another app's, on a shared server), apart from the retry deadline.
+LOAD_WAIT_ENV = "GAIA_LLM_LOAD_WAIT"
+DEFAULT_LOAD_WAIT = 600.0
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,9 @@ class RetryPolicy:
     #: Attempts that may end in a stalled stream. Each one costs a whole idle
     #: limit, so this, not ``deadline``, is what bounds a stalling endpoint.
     max_stall_attempts: int = DEFAULT_STALL_ATTEMPTS
+    #: Seconds a request may spend behind a model load the server reports.
+    #: Kept out of ``deadline``: a 30B cold load outlasts it.
+    load_wait: float = DEFAULT_LOAD_WAIT
 
     @classmethod
     def from_env(cls) -> "RetryPolicy":
@@ -113,6 +120,7 @@ class RetryPolicy:
             deadline=_env_number(
                 RETRY_DEADLINE_ENV, DEFAULT_RETRY_DEADLINE, float, minimum=0
             ),
+            load_wait=_env_number(LOAD_WAIT_ENV, DEFAULT_LOAD_WAIT, float, minimum=0),
         )
 
 
@@ -666,6 +674,28 @@ def current_cancel_check() -> Optional[Callable[[], bool]]:
     return _retry_cancelled.get()
 
 
+def current_retry_listener() -> Optional[Callable[[RetryNotice], None]]:
+    """The listener installed by :func:`model_retry_notices`, if any."""
+    return _retry_listener.get()
+
+
+def sleep_unless_cancelled(
+    sleep: Callable[[float], None],
+    seconds: float,
+    is_cancelled: Optional[Callable[[], bool]],
+) -> bool:
+    """Sleep *seconds* in slices of ``_CANCEL_CHECK_INTERVAL``; False as soon
+    as *is_cancelled* says Stop was pressed."""
+    remaining = seconds
+    while remaining > 0:
+        if is_cancelled is not None and is_cancelled():
+            return False
+        pause = min(_CANCEL_CHECK_INTERVAL, remaining)
+        sleep(pause)
+        remaining -= pause
+    return not (is_cancelled is not None and is_cancelled())
+
+
 class _StallBudget:
     """Stalled attempts of one request. Each already spent a whole idle limit,
     so its time is kept out of the retry deadline (or one stall would rule out
@@ -702,6 +732,113 @@ class _StallBudget:
         return True
 
 
+#: Seconds between checks of a model load in progress, and between notices.
+_LOAD_POLL_INTERVAL = 5.0
+_LOAD_NOTICE_INTERVAL = 30.0
+
+
+class _LoadWait:
+    """Time one request spent behind a model load the server reported.
+
+    A transient failure while the server says it is loading a model is the
+    load's doing, not the endpoint's: the failed attempt and the wait for the
+    load to end are kept out of the retry deadline and bounded by
+    ``policy.load_wait`` instead. Measured by the clock, probes included.
+    """
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def after_failure(
+        self,
+        retrier: "ModelCallRetrier",
+        error: BaseException,
+        state: RetryState,
+        attempt_started: float,
+        what: str,
+    ) -> Optional[bool]:
+        """``None`` when no load is reported (the normal policy applies); True
+        to try again now that it ended; False to give up (*state* says why)."""
+        probe = retrier._server_loading
+        if (
+            probe is None
+            or state.attempts >= retrier.policy.max_attempts
+            or retrier._classify(error) is None
+        ):
+            return None
+        loading = probe()
+        if loading is None:
+            return None
+        state.last_reason = loading
+        clock = retrier._clock
+        is_cancelled = _retry_cancelled.get()
+        listener = _retry_listener.get()
+        max_retries = retrier.policy.max_attempts - 1
+        self.seconds += clock() - attempt_started
+        resumed = clock()
+        last_notice: Optional[float] = None
+        try:
+            while loading is not None:
+                if is_cancelled is not None and is_cancelled():
+                    retrier._log.warning(
+                        "%s failed while %s; cancelled during the wait",
+                        what,
+                        loading,
+                    )
+                    return False
+                remaining = retrier.policy.load_wait - (
+                    self.seconds + clock() - resumed
+                )
+                if remaining <= 0:
+                    state.exhausted = True
+                    state.last_reason = (
+                        f"{loading} for over {retrier.policy.load_wait:.0f}s"
+                    )
+                    retrier._log.warning(
+                        "%s failed while %s; gave up after waiting %.0fs for "
+                        "it. Set %s (seconds) to wait longer.",
+                        what,
+                        loading,
+                        retrier.policy.load_wait - remaining,
+                        LOAD_WAIT_ENV,
+                    )
+                    return False
+                pause = min(_LOAD_POLL_INTERVAL, remaining)
+                if (
+                    last_notice is None
+                    or clock() - last_notice >= _LOAD_NOTICE_INTERVAL
+                ):
+                    retrier._log.warning(
+                        "%s failed while %s; waiting for it (up to %.0fs more)",
+                        what,
+                        loading,
+                        remaining,
+                    )
+                    if listener is not None:
+                        listener(
+                            RetryNotice(
+                                reason=loading,
+                                delay=pause,
+                                retry=min(state.attempts, max_retries),
+                                max_retries=max_retries,
+                            )
+                        )
+                    last_notice = clock()
+                if not sleep_unless_cancelled(retrier._sleep, pause, is_cancelled):
+                    retrier._log.warning(
+                        "%s failed while %s; cancelled during the wait",
+                        what,
+                        loading,
+                    )
+                    return False
+                state.waited += pause
+                # The probe can take a second; Stop is checked again at the top.
+                loading = probe()
+            return True
+        finally:
+            self.seconds += clock() - resumed
+
+
 class ModelCallRetrier:
     """Run a model call under a :class:`RetryPolicy`.
 
@@ -717,15 +854,23 @@ class ModelCallRetrier:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         rng: Optional[random.Random] = None,
+        server_loading: Optional[Callable[[], Optional[str]]] = None,
         log: Optional[logging.Logger] = None,
         classify: Callable[[BaseException], Optional[str]] = classify_exception,
+        hand_off: Callable[[BaseException, str], bool] = lambda error, reason: False,
     ):
         self.policy = policy or RetryPolicy.from_env()
         self._sleep = sleep
         self._clock = clock
         self._rng = rng or random.Random()
+        #: What the server reports it is loading ("Lemonade is loading X"),
+        #: or None. Without it, no wait is excused from the deadline.
+        self._server_loading = server_loading
         self._log = log or logger
         self._classify = classify
+        # True for a transient failure before any output that the caller
+        # recovers itself: given up on at once, without backoff.
+        self._hand_off = hand_off
 
     def _wait_or_give_up(
         self,
@@ -741,6 +886,8 @@ class ModelCallRetrier:
         if reason is None:
             return False
         state.last_reason = reason
+        if self._hand_off(error, reason):
+            return False
         if state.attempts >= self.policy.max_attempts:
             state.exhausted = True
             self._log.warning(
@@ -818,6 +965,7 @@ class ModelCallRetrier:
         state = state if state is not None else RetryState()
         started = self._clock()
         stalls = _StallBudget()
+        loads = _LoadWait()
         while True:
             state.attempts += 1
             attempt_started = self._clock()
@@ -827,8 +975,13 @@ class ModelCallRetrier:
                 if stalls.spent(self, error, state, attempt_started, what):
                     attach_retry_state(error, state)
                     raise
-                if not self._wait_or_give_up(
-                    error, state, started + stalls.seconds, what
+                load_done = loads.after_failure(
+                    self, error, state, attempt_started, what
+                )
+                if load_done:
+                    continue
+                if load_done is False or not self._wait_or_give_up(
+                    error, state, started + stalls.seconds + loads.seconds, what
                 ):
                     attach_retry_state(error, state)
                     raise
@@ -856,6 +1009,7 @@ class ModelCallRetrier:
         state = state if state is not None else RetryState()
         started = self._clock()
         stalls = _StallBudget()
+        loads = _LoadWait()
         while True:
             state.attempts += 1
             attempt_started = self._clock()
@@ -889,8 +1043,13 @@ class ModelCallRetrier:
                 if stalls.spent(self, error, state, attempt_started, what):
                     attach_retry_state(error, state)
                     raise
-                if not self._wait_or_give_up(
-                    error, state, started + stalls.seconds, what
+                load_done = loads.after_failure(
+                    self, error, state, attempt_started, what
+                )
+                if load_done:
+                    continue
+                if load_done is False or not self._wait_or_give_up(
+                    error, state, started + stalls.seconds + loads.seconds, what
                 ):
                     attach_retry_state(error, state)
                     raise
