@@ -1771,8 +1771,7 @@ def _dispatch_sidecar_query(
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
-    a sidecar connection error as a retryable Lemonade error and trigger a
-    bogus model reload.
+    a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
@@ -2255,6 +2254,10 @@ def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     unloaded to make room; otherwise the load fails loudly. A Stop
     (``sse_handler.cancelled``) seen after a wait means nothing is loaded.
 
+    Note: there is a small TOCTOU window between this check and the
+    actual chat request. An eviction in that window fails the turn with an
+    error that says to send it again; the next turn's pre-flight reloads.
+
     Raises:
         InsufficientMemoryError: the model does not fit, even after unloading
             this process's other models.
@@ -2713,40 +2716,6 @@ async def _get_chat_response(
 
         agent._cancel_event = cancel_event
 
-        def _query():
-            # One automatic retry on transient Lemonade failures (model
-            # evicted between turns, network blip).  Mirror of the streaming
-            # path's retry logic so non-streaming clients get the same
-            # recovery behaviour. See _classify_chat_exception for the
-            # detection rules.
-            try:
-                return agent.process_query(request.message)
-            except Exception as first_exc:  # pylint: disable=broad-except
-                classified = _classify_chat_exception(first_exc)
-                if classified is None or not classified.retryable:
-                    raise
-                logger.warning(
-                    "Non-streaming chat hit retryable Lemonade error (%s) — "
-                    "reloading model and retrying once. Original: %s",
-                    type(classified).__name__,
-                    first_exc,
-                )
-                try:
-                    _maybe_load_expected_model(effective, None, cancel_event)
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.warning("Model reload before retry failed: %s", exc)
-                if cancel_event.is_set():
-                    return ""
-                try:
-                    return agent.process_query(request.message)
-                except Exception as second_exc:  # pylint: disable=broad-except
-                    second_classified = _classify_chat_exception(second_exc)
-                    if second_classified is not None:
-                        raise type(second_exc)(
-                            second_classified.user_message
-                        ) from second_exc
-                    raise
-
         activity = _ActivityConsole(agent.console, _time.monotonic)
         agent.console = activity
         activity_box["console"] = activity
@@ -2754,7 +2723,9 @@ async def _get_chat_response(
         if turn_box is not None:
             turn_box["recording"] = recording
         try:
-            result = _query()
+            # Never re-run on failure: tools the turn already ran would run
+            # again. The error says whether sending it again can help.
+            result = agent.process_query(request.message)
         finally:
             agent.console = activity._inner
             warning = recording.close()
@@ -3341,59 +3312,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set() or cancel_event.is_set():
                     return
 
-                # -- Phase 5: Query processing.  One automatic retry on
-                # known-transient Lemonade errors (model evicted between
-                # turns, network blip, etc.). The retry forces a fresh
-                # model reload at our 32K ctx_size before re-issuing the
-                # query so we don't replay against a still-broken backend.
+                # -- Phase 5: Query processing. Never re-run on failure:
+                # tools the turn already ran (writes, shell, email) would run
+                # again. The error event says whether sending it again helps,
+                # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
                 result_holder["agent"] = agent
-                try:
-                    result = agent.process_query(request.message)
-                except Exception as first_exc:  # pylint: disable=broad-except
-                    classified = _classify_chat_exception(first_exc)
-                    if classified is None or not classified.retryable:
-                        raise
-                    logger.warning(
-                        "Chat hit retryable Lemonade error (%s) — reloading "
-                        "model and retrying once. Original: %s",
-                        type(classified).__name__,
-                        first_exc,
-                    )
-                    # Force a reload at the canonical ctx; this is the
-                    # same helper the pre-flight uses but called
-                    # mid-conversation when the model got evicted.
-                    try:
-                        _maybe_load_expected_model(
-                            _effective_model(agent, model_id),
-                            sse_handler,
-                            cancel_event,
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning("Model reload before retry failed: %s", exc)
-                    if sse_handler.cancelled.is_set() or cancel_event.is_set():
-                        return
-                    # Surface a brief status line to the SSE so the user
-                    # sees we're recovering, not silently retrying.
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": "Model reloaded — retrying...",
-                        }
-                    )
-                    # One more attempt. If THIS fails, surface the
-                    # friendlier classified message.
-                    try:
-                        result = agent.process_query(request.message)
-                    except Exception as second_exc:  # pylint: disable=broad-except
-                        second_classified = _classify_chat_exception(second_exc)
-                        msg = (
-                            second_classified.user_message
-                            if second_classified is not None
-                            else str(second_exc)
-                        )
-                        raise type(second_exc)(msg) from second_exc
+                result = agent.process_query(request.message)
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
