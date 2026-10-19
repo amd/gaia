@@ -2047,6 +2047,44 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   </Accordion>
 </AccordionGroup>
 
+### Cloud prices and spending
+
+What cloud models cost before one is picked, what this month's cloud chats
+cost, and an optional monthly limit. Prices are list prices per million
+tokens from GAIA's one rate card, the same one a turn's cost estimate uses. A
+model with no known price reads as unknown, never $0. Cloud models from
+`GET /api/providers/{provider}/models` also carry `price`.
+
+<AccordionGroup>
+  <Accordion title="GET /api/spending/prices/{provider}">
+    List prices for a provider's models before it is connected: `models`
+    (`model`, `name`, `rank`, `note`, `price` with `input_per_million`,
+    `cached_input_per_million`, `output_per_million`), recommended first, and
+    their `source`. `amd` returns no models and a `note`: the gateway's prices
+    are set by the organization that runs it. **404** for another provider.
+  </Accordion>
+
+  <Accordion title="GET /api/spending">
+    This month's cloud chat turns in the Agent UI at list price, without cache
+    discounts. A turn that fails or is stopped before it answers isn't counted,
+    so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
+    known price, counted apart), `by_model`, `limit_usd`, and `state`
+    (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
+    `allowed_over`). **500** when the saved limit is unreadable.
+  </Accordion>
+
+  <Accordion title="PUT /api/spending/limit">
+    Set the monthly limit: `{"limit_usd": 10}`, or `null` for none. **422**
+    for a limit of $0 or less. Once `total_usd` reaches it, a chat turn on a
+    cloud model is refused before anything is sent, with how to go on; models
+    on this PC are never stopped.
+  </Accordion>
+
+  <Accordion title="POST /api/spending/allow-month">
+    Let cloud chats go on past the limit until the month ends.
+  </Accordion>
+</AccordionGroup>
+
 ### Skills
 
 <AccordionGroup>
