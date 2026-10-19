@@ -12,6 +12,8 @@ import json
 import logging
 import os
 import platform
+import queue
+import re
 import signal
 import socket
 import subprocess
@@ -52,14 +54,20 @@ from gaia.llm.lemonade_launcher import (
 from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
     HOSTED_REPLY_TIMEOUT_ENV,
+    LOAD_WAIT_ENV,
     ModelCallRetrier,
+    RetryNotice,
     RetryPolicy,
     RetryState,
+    StreamCancelledError,
     StreamStalledError,
     attach_retry_state,
     classify_exception,
+    current_cancel_check,
+    current_retry_listener,
     hosted_reply_timeout,
     retry_state_of,
+    sleep_unless_cancelled,
     tag_http_failure,
 )
 from gaia.llm.stream_watchdog import (
@@ -76,6 +84,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils import awake_clock
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
@@ -532,6 +541,70 @@ def _local_request_lock(model: str) -> threading.RLock:
         return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
 
 
+#: Time a model-slot lease allows on top of the request budget for the load it
+#: may do first. The broker's fixed TTL, which a load always had before.
+LEASE_LOAD_MARGIN_S = 900
+
+
+@contextmanager
+def _holding_local_request_lock(model: str):
+    """Hold *model*'s lock; a wait for it is reported and cancellable.
+
+    Reported and cancelled like a broker wait (see
+    :func:`gaia.daemon.broker_client.lease_wait_listener`), so a request queued
+    behind another in this process reads as waiting, and a stopped turn stops.
+    """
+    from gaia.daemon import broker_client
+
+    lock = _local_request_lock(model)
+    if not lock.acquire(blocking=False):
+        limit, source = broker_client.current_wait_limit()
+        started = time.monotonic()
+        next_update = started
+        while True:
+            now = time.monotonic()
+            if limit is not None and now - started >= limit:
+                raise broker_client.BrokerUnavailableError(
+                    f"no turn on '{model}' within the {limit:g}s wait limit: "
+                    "another request in this process is still using it. The "
+                    "model is busy, not broken."
+                    + broker_client.wait_limit_hint(source),
+                    status_code=504,
+                )
+            if now >= next_update:
+                broker_client.notify_wait(
+                    {
+                        "event": "queued",
+                        "scope": "process",
+                        "model": model,
+                        "position": 1,
+                        "queue_length": 1,
+                        "waited_s": now - started,
+                        "reason": "another request in this process is using it",
+                    }
+                )
+                next_update = now + broker_client.LOCAL_WAIT_UPDATE_EVERY_S
+            broker_client.check_cancelled(f"'{model}' (in use by this process)")
+            if lock.acquire(timeout=broker_client.LOCAL_WAIT_POLL_S):
+                break
+        try:
+            broker_client.notify_wait(
+                {
+                    "event": "granted",
+                    "scope": "process",
+                    "model": model,
+                    "waited_s": time.monotonic() - started,
+                }
+            )
+        except BaseException:
+            lock.release()
+            raise
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def _slots_in_flags(flags: List[str]) -> Optional[int]:
     """The ``--parallel`` / ``-np`` value in llama-server *flags*, if any."""
     for i, flag in enumerate(flags):
@@ -682,6 +755,66 @@ def _forget_fitted_ctx(url: str, model_id: str) -> None:
     with _CAPACITY_LOCK:
         for key in [k for k in _FITTED_CTX_CACHE if k[:2] == (url, model_id)]:
             del _FITTED_CTX_CACHE[key]
+
+
+def _abort_stream(response: Optional["requests.Response"]) -> None:
+    """End a streaming response's blocked read from another thread.
+
+    ``response.close()`` would wait on the lock the blocked read holds.
+    ``shutdown()`` ends the read on Linux; on Windows only releasing the
+    socket does, which closing the ``SocketIO`` under the reader (not the
+    locked buffer around it) does. The reader then fails with an I/O error.
+    """
+    socket_io = getattr(
+        getattr(getattr(getattr(response, "raw", None), "_fp", None), "fp", None),
+        "raw",
+        None,
+    )
+    sock = getattr(socket_io, "_sock", None)
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass  # already shut down or reset: the close below still applies
+    socket_io.close()
+
+
+def _lines_unless_stopped(
+    response: "requests.Response", is_stopped: Callable[[], bool]
+) -> Iterator[bytes]:
+    """``response.iter_lines()``, read on a worker so Stop is seen within
+    ``_STOP_CHECK_SECONDS`` even where hanging up does not wake a blocked read.
+
+    The worker closes *response* when its read ends; the caller must not,
+    since closing waits on the lock that read holds. Read errors are
+    re-raised here, on the caller's thread.
+    """
+    lines: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
+
+    def read() -> None:
+        try:
+            for line in response.iter_lines():
+                lines.put(("line", line))
+            lines.put(("end", None))
+        except BaseException as e:  # pylint: disable=broad-except
+            lines.put(("error", e))  # re-raised on the caller's thread below
+        finally:
+            response.close()
+
+    threading.Thread(target=read, name="gaia-pull-read", daemon=True).start()
+    while True:
+        try:
+            kind, value = lines.get(timeout=_STOP_CHECK_SECONDS)
+        except queue.Empty:
+            if is_stopped():
+                return
+            continue
+        if kind == "end":
+            return
+        if kind == "error":
+            raise value
+        yield value
 
 
 def fit_ctx_to_free_memory(
@@ -1022,6 +1155,24 @@ def split_backend_spec(spec: str) -> Tuple[str, str]:
 # Increased to accommodate long-running coding and evaluation tasks
 DEFAULT_REQUEST_TIMEOUT = 900
 
+#: ``(connect, read)`` seconds for a status probe. ``/health`` answers in
+#: milliseconds; a server that accepted the connection and is silent this long
+#: is busy (usually loading a model for another app), not worth 900s of waiting.
+PROBE_TIMEOUT = (3.05, 5.0)
+#: ``/system-info`` enumerates devices, which can take seconds on a cold call.
+SYSTEM_INFO_TIMEOUT = (3.05, 15.0)
+#: ``/models``; with ``show_all`` it lists the whole catalog.
+CATALOG_TIMEOUT = (3.05, 30.0)
+#: Shortest timeout ``create_lemonade_client`` gives a load of an on-disk model.
+_MIN_LOAD_SECONDS = 60.0
+#: Seconds between status probes while a busy server is waited for.
+_BUSY_POLL_SECONDS = 5.0
+#: Longest Stop goes unseen while a status probe made during a wait runs.
+_STOP_CHECK_SECONDS = 0.5
+#: ``/health`` per-model ``status`` of a model taking or leaving the LLM slot.
+#: A download holds no slot (and can take hours), so it is not one of them.
+_LOADING_STATES = frozenset({"loading", "evicting", "pending", "queued"})
+
 # Upstream's own per-request default (resources/defaults.json), and the ceiling
 # it uses for long validation legs. A wedged request must still end.
 _UPSTREAM_GLOBAL_TIMEOUT = 600
@@ -1205,6 +1356,9 @@ class LemonadeStatus:
     loaded_models: list = field(default_factory=list)
     health_data: dict = field(default_factory=dict)
     error: Optional[str] = None
+    #: Accepted the connection but did not answer the probe: up and busy (or
+    #: stuck), so neither ready nor down. ``running`` stays False.
+    busy: bool = False
 
 
 # Define available models
@@ -1525,6 +1679,67 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     if requested_thinking(model_id) is None:
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+# A gpt-oss control token (``<|channel|>``, ``<|message|>``, ``<|call|>`` ...).
+_HARMONY_TOKEN_RE = re.compile(r"<\|(?=[A-Za-z0-9_]{1,40}\|>)")
+
+
+def uses_harmony_format(model_id: Optional[str]) -> bool:
+    """Whether *model_id* is a gpt-oss model, which reads text in its channel format."""
+    return "gpt-oss" in (model_id or "").lower()
+
+
+def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*messages* with every gpt-oss control token in their text broken up.
+
+    A tool result holding ``<|channel|>final<|message|>`` (a file, a web page)
+    is read as real channel markup: the reply comes back empty, or llama.cpp
+    500s on output it cannot parse. ``< |`` reads the same and is plain text.
+    """
+
+    def defang(text: Any) -> Any:
+        return _HARMONY_TOKEN_RE.sub("< |", text) if isinstance(text, str) else text
+
+    out = []
+    for message in messages:
+        if not isinstance(message, dict):
+            out.append(message)
+            continue
+        fixed = dict(message)
+        for key in ("content", "reasoning_content"):
+            if key not in fixed:
+                continue
+            content = fixed[key]
+            if isinstance(content, list):
+                fixed[key] = [
+                    (
+                        {**part, "text": defang(part.get("text"))}
+                        if isinstance(part, dict) and "text" in part
+                        else part
+                    )
+                    for part in content
+                ]
+            else:
+                fixed[key] = defang(content)
+        # A file the model wrote comes back in its own call's arguments.
+        if isinstance(fixed.get("tool_calls"), list):
+            fixed["tool_calls"] = [
+                (
+                    {
+                        **call,
+                        "function": {
+                            **call["function"],
+                            "arguments": defang(call["function"].get("arguments")),
+                        },
+                    }
+                    if isinstance(call, dict) and isinstance(call.get("function"), dict)
+                    else call
+                )
+                for call in fixed["tool_calls"]
+            ]
+        out.append(fixed)
+    return out
 
 
 # Define agent profiles with their model requirements
@@ -1995,6 +2210,11 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class LemonadeUnresponsiveError(LemonadeClientError):
+    """Lemonade accepted the connection but sent no answer before the read
+    timeout: it is up and busy (often loading a model), or stuck — not down."""
+
+
 class GaiaLemonadeNotAnsweringError(LemonadeClientError):
     """GAIA's own server is up but not answering yet; the daemon left it be."""
 
@@ -2166,10 +2386,27 @@ CONTEXT_OVERFLOW_PHRASES = (
     "exceeds the available context size",
     "got too long",
     "max length reached",
-    # llama.cpp, when active requests together outgrow a unified KV pool.
+)
+
+#: llama.cpp's words when a decode step found no free cell in the KV cache. It
+#: fails every request running at that moment, and with ``--kv-unified`` one
+#: request alone always fits (a full slot stops with ``finish_reason=length``),
+#: so this means requests running together outgrew the shared pool — not that
+#: any one conversation is too long. It clears once the other request ends.
+KV_CACHE_SHARED_PHRASES = (
     "context size has been exceeded",
     "failed to find free space in the kv cache",
 )
+
+
+def is_kv_cache_shared_error(error_text: str) -> bool:
+    """Whether *error_text* is the KV pool running out under concurrent
+    requests (:data:`KV_CACHE_SHARED_PHRASES`), not a context overflow."""
+    if not error_text:
+        return False
+    message = _extract_backend_error_message(error_text)
+    haystack = (message or error_text).lower()
+    return any(phrase in haystack for phrase in KV_CACHE_SHARED_PHRASES)
 
 
 def _extract_backend_error_message(error_text: str) -> Optional[str]:
@@ -3150,6 +3387,11 @@ class LemonadeClient:
         # never kill a server the user didn't ask to restart.
         try:
             health = self.health_check()
+        except LemonadeUnresponsiveError as e:
+            # Up and busy (often loading another app's model): taking the port
+            # over would kill it mid-load.
+            self.log.warning(f"Not restarting Lemonade on port {self.port}: {e}")
+            return
         except Exception as e:
             self.log.debug(f"No healthy server detected before launch: {e}")
             health = None
@@ -3598,6 +3840,17 @@ class LemonadeClient:
         # Handle string errors
         if isinstance(error, str):
             result["message"] = error
+            # "Request failed with status 404: {...}" carries Lemonade's own body.
+            brace = error.find("{")
+            if brace >= 0:
+                try:
+                    body = json.loads(error[brace:])
+                except ValueError:
+                    return result
+                if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                    result["type"] = body["error"].get("type")
+                    result["code"] = body["error"].get("code")
+                    result["is_structured"] = True
             return result
 
         # Handle dict responses
@@ -3652,6 +3905,8 @@ class LemonadeClient:
             error_type_lower = error_type.lower()
             if error_type_lower in ["not_found", "model_not_found", "model_not_loaded"]:
                 return True
+        if str(error_info.get("code") or "").lower() == "model_not_found":
+            return True
 
         # Fallback to string matching for unstructured errors
         error_message = error_info.get("message") or ""
@@ -3769,7 +4024,9 @@ class LemonadeClient:
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
 
-    def _model_retrier(self, gone_server_waits: bool = False) -> ModelCallRetrier:
+    def _model_retrier(
+        self, model: Optional[str] = None, gone_server_waits: bool = False
+    ) -> ModelCallRetrier:
         """The retry runner every completion path goes through.
 
         The policy is read per request (``GAIA_LLM_RETRY_*``), like the request
@@ -3778,6 +4035,8 @@ class LemonadeClient:
         once rather than after a round of backoff.
 
         Args:
+            model: The request's model. A local one waits out a model load the
+                server reports; a cloud one, which no local load blocks, does not.
             gone_server_waits: The caller recovers a stopped GAIA server itself
                 (:meth:`_survive_gaia_lemonade_stop`), so a failed connection
                 to one, before any output, is handed to that bounded wait
@@ -3803,25 +4062,145 @@ class LemonadeClient:
         return ModelCallRetrier(
             RetryPolicy.from_env(),
             sleep=self._retry_sleep or time.sleep,
-            clock=self._retry_clock or time.monotonic,
+            # A request the PC slept through still has its retry budget.
+            clock=self._retry_clock or awake_clock.monotonic,
             rng=self._retry_rng,
+            server_loading=(
+                self._server_load_in_progress
+                if model
+                and not (self.cloud_model_provider(model) or is_cloud_model(model))
+                else None
+            ),
             log=self.log,
             classify=classify,
             hand_off=hand_off,
         )
+
+    def _server_load_in_progress(self) -> Optional[str]:
+        """What the server says it is loading, for the retrier's load wait.
+
+        ``None`` when it reports no load, or cannot be reached at all (then the
+        ordinary retry policy applies). A server that accepts the probe and
+        does not answer it counts as busy loading.
+        """
+        try:
+            health = self._unless_stopped(self.health_check)
+        except LemonadeUnresponsiveError:
+            return "Lemonade is busy and not answering status checks"
+        except LemonadeClientError as e:
+            self.log.debug(f"No load-state probe at {self.base_url}: {e}")
+            return None
+        entries = health.get("all_models_loaded") if isinstance(health, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or entry.get("recipe") == CLOUD_RECIPE:
+                continue
+            # Only the LLM slot pool's churn can evict or queue a chat request.
+            if entry.get("type") != "llm":
+                continue
+            if str(entry.get("status") or "").lower() in _LOADING_STATES:
+                name = entry.get("model_name") or "a model"
+                return f"Lemonade is loading {name}"
+        return None
+
+    def _wait_while_busy(self, model: str) -> LemonadeStatus:
+        """Poll a server that is up but not answering until it answers.
+
+        Bounded by ``GAIA_LLM_LOAD_WAIT`` (see :class:`RetryPolicy`), said
+        through the retry notice (so a front-end shows it as waiting, not
+        hung), and ended by Stop within half a second, even while a probe is
+        blocked on the server. A probe gets the full ``PROBE_TIMEOUT``, so a
+        server that is slow to answer, not silent, ends the wait.
+
+        Raises:
+            LemonadeUnresponsiveError: It did not answer within that limit.
+            StreamCancelledError: Stop was pressed during the wait.
+        """
+        limit = RetryPolicy.from_env().load_wait
+        clock = self._retry_clock or awake_clock.monotonic
+        sleep = self._retry_sleep or time.sleep
+        is_cancelled = current_cancel_check()
+        listener = current_retry_listener()
+        reason = "Lemonade is busy and not answering status checks"
+        self.log.warning(f"{reason}; '{model}' waits for it, up to {limit:.0f}s.")
+        if listener is not None:
+            listener(
+                RetryNotice(
+                    reason=reason, delay=_BUSY_POLL_SECONDS, retry=0, max_retries=0
+                )
+            )
+        started = clock()
+        while True:
+            waited = clock() - started
+            if waited >= limit:
+                raise LemonadeUnresponsiveError(
+                    f"Lemonade at {self.base_url} has not answered for "
+                    f"{waited:.0f}s, so '{model}' was not loaded. It may be "
+                    "stuck: check the Lemonade server log, or set "
+                    f"{LOAD_WAIT_ENV} (seconds) to wait longer for a slow load."
+                )
+            if not sleep_unless_cancelled(
+                sleep, min(_BUSY_POLL_SECONDS, limit - waited), is_cancelled
+            ):
+                raise StreamCancelledError(
+                    f"Stopped while waiting for a busy Lemonade to load '{model}'."
+                )
+            status = self._unless_stopped(
+                lambda: self.get_status(include_catalog=False)
+            )
+            if not status.busy:
+                return status
+
+    def _unless_stopped(self, probe: Callable[[], Any]) -> Any:
+        """``probe()``, but Stop ends the wait for it within half a second.
+
+        A status probe can block for its whole read timeout on a server that
+        accepted and went quiet; it runs on a worker thread so Stop (see
+        :func:`gaia.llm.retry.model_retry_notices`) is not held up by it. The
+        abandoned probe finishes on its own and is discarded.
+
+        Raises:
+            StreamCancelledError: Stop was pressed while it ran.
+        """
+        is_cancelled = current_cancel_check()
+        if is_cancelled is None:
+            return probe()
+        outcome: Dict[str, Any] = {}
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                outcome["value"] = probe()
+            except BaseException as e:  # pylint: disable=broad-except
+                outcome["error"] = e  # re-raised on the caller's thread below
+            finally:
+                done.set()
+
+        threading.Thread(target=run, name="gaia-lemonade-probe", daemon=True).start()
+        while not done.wait(_STOP_CHECK_SECONDS):
+            if is_cancelled():
+                raise StreamCancelledError(
+                    "Stopped while waiting for Lemonade to answer a status check."
+                )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
 
     def _record_retries(self, state: RetryState) -> None:
         self.last_request_retries = state.retries
         self.total_request_retries += state.retries
 
     def _call_with_retry(
-        self, api_call: Callable[[], Any], what: str, gone_server_waits: bool = False
+        self,
+        api_call: Callable[[], Any],
+        what: str,
+        model: Optional[str] = None,
+        gone_server_waits: bool = False,
     ) -> Any:
         """``api_call()`` with transient failures retried (see
         :class:`gaia.llm.retry.ModelCallRetrier` and :meth:`_model_retrier`)."""
         state = RetryState()
         try:
-            return self._model_retrier(gone_server_waits).call(
+            return self._model_retrier(model, gone_server_waits).call(
                 api_call, what=what, state=state
             )
         finally:
@@ -4075,6 +4454,8 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        if uses_harmony_format(model):
+            messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
             # llama.cpp-only fields; a cloud provider rejects the request (HTTP 400).
             kwargs.pop("repeat_penalty", None)
@@ -4240,7 +4621,7 @@ class LemonadeClient:
         # non-streaming path skipped it, so an embedder warm-up that unloaded the
         # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
         # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(model, request_timeout=timeout):
             if auto_download:
                 self._ensure_model_loaded(model, auto_download=True)
 
@@ -4249,11 +4630,14 @@ class LemonadeClient:
             # a missing model goes to the auto-download recovery instead.
             def _request_with_retry():
                 return self._call_with_retry(
-                    _make_request, "Chat completion", gone_server_waits=True
+                    _make_request,
+                    "Chat completion",
+                    model=model,
+                    gone_server_waits=True,
                 )
 
             try:
-                return _request_with_retry()
+                result = _request_with_retry()
             except StreamStalledError as e:
                 state = retry_state_of(e)
                 message = e.describe(state.attempts if state else 1)
@@ -4269,6 +4653,7 @@ class LemonadeClient:
                 return self._execute_with_auto_download(
                     _request_with_retry, model, auto_download, error=e
                 )
+            return result
 
     def _stream_chat_completions_with_openai(
         self,
@@ -4309,7 +4694,7 @@ class LemonadeClient:
         # Re-entrant per thread, so the load's own inner lease folds into this.
         # As a generator the lease is acquired on first iteration and released
         # when the consumer finishes or closes the stream.
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(model, request_timeout=timeout):
             self._ensure_model_loaded(model, auto_download)
 
             # Known not to stream: go straight to the non-streaming call rather
@@ -4614,7 +4999,7 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier(gone_server_waits=True).stream(
+            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
@@ -4785,19 +5170,29 @@ class LemonadeClient:
             return result
 
         def _request_with_retry():
-            return self._call_with_retry(_make_request, "Text completion")
+            return self._call_with_retry(_make_request, "Text completion", model=model)
 
-        # Execute with auto-download retry logic
-        try:
-            return _request_with_retry()
-        except (requests.exceptions.RequestException, LemonadeClientError) as e:
-            # Use helper to handle auto-download and retry (#2513: only
-            # when *e* is actually the missing-model condition).
-            return self._execute_with_auto_download(
-                _request_with_retry, model, auto_download, error=e
-            )
+        # Same lease as chat: a request beside another one on a unified KV
+        # pool can exhaust it and fail both.
+        with self._model_slot_lease(model):
+            try:
+                return _request_with_retry()
+            except (requests.exceptions.RequestException, LemonadeClientError) as e:
+                # Use helper to handle auto-download and retry (#2513: only
+                # when *e* is actually the missing-model condition).
+                return self._execute_with_auto_download(
+                    _request_with_retry, model, auto_download, error=e
+                )
 
     def _stream_completions_with_openai(
+        self, model: str, **kwargs
+    ) -> Generator[Dict[str, Any], None, None]:
+        """:meth:`_stream_completions_leased`, holding the model's lease for
+        the whole stream, as chat streaming does."""
+        with self._model_slot_lease(model):
+            yield from self._stream_completions_leased(model=model, **kwargs)
+
+    def _stream_completions_leased(
         self,
         model: str,
         prompt: str,
@@ -4866,7 +5261,7 @@ class LemonadeClient:
                         close()
 
             tokens_generated = 0
-            for chunk in self._model_retrier().stream(
+            for chunk in self._model_retrier(model).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming text completion",
@@ -5106,7 +5501,9 @@ class LemonadeClient:
             self.log.error(f"Error listing SD models: {str(e)}")
             raise LemonadeClientError(f"Error listing SD models: {str(e)}")
 
-    def list_models(self, show_all: bool = False) -> Dict[str, Any]:
+    def list_models(
+        self, show_all: bool = False, timeout=CATALOG_TIMEOUT
+    ) -> Dict[str, Any]:
         """
         List available models from the server.
 
@@ -5132,7 +5529,7 @@ class LemonadeClient:
         url = f"{self.base_url}/models"
         if show_all:
             url += "?show_all=true"
-        catalog = self._send_request("get", url)
+        catalog = self._send_request("get", url, timeout=timeout)
         for entry in catalog.get("data", []):
             if entry.get("id"):
                 self._model_metadata.setdefault(entry["id"], {}).update(entry)
@@ -5503,10 +5900,11 @@ class LemonadeClient:
 
         if not checkpoint:
             # A user. model Lemonade has not seen needs its registration on the
-            # first pull; every caller that pulls by name alone gets it here.
+            # first pull, under its user. name even when asked for without it.
             mr = find_model_requirement(model_name)
             registration = mr.pull_kwargs() if mr else {}
             if registration:
+                model_name = mr.model_id
                 checkpoint = registration["checkpoint"]
                 recipe = recipe or registration["recipe"]
                 mmproj = mmproj or registration["mmproj"]
@@ -5539,14 +5937,82 @@ class LemonadeClient:
         connect_timeout = 30
         read_timeout = PULL_IDLE_TIMEOUT_S
 
-        try:
-            response = requests.post(
+        response = None
+        reading = False
+        is_cancelled = current_cancel_check()
+        stopped = threading.Event()
+        finished = threading.Event()
+
+        def stop_watch() -> None:
+            # A silent pull blocks in a read for up to PULL_IDLE_TIMEOUT_S;
+            # closing the response is the only way to end that read early.
+            while not finished.wait(_STOP_CHECK_SECONDS):
+                if is_cancelled():
+                    stopped.set()
+                    _abort_stream(response)
+                    return
+
+        def cancelled() -> ModelDownloadCancelledError:
+            return ModelDownloadCancelledError(
+                f"Download of {model_name} stopped at your request."
+            )
+
+        def send() -> "requests.Response":
+            return requests.post(
                 url,
                 json=request_data,
                 headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=(connect_timeout, read_timeout),
                 stream=True,
             )
+
+        def send_unless_stopped() -> "requests.Response":
+            """``send()`` on a worker, so Stop is not held up while Lemonade
+            sits on the request before sending headers.
+
+            After a Stop in that window the worker's POST stays open until
+            headers arrive (then it is closed at once) or its read timeout
+            (``PULL_IDLE_TIMEOUT_S``) ends it: bounded, and off the caller's
+            thread.
+            """
+            outcome: Dict[str, Any] = {}
+            answered = threading.Event()
+            # Whoever runs second under this lock closes the response: the
+            # worker if Stop came first, the caller if the answer did.
+            handoff = threading.Lock()
+
+            def run() -> None:
+                try:
+                    reply = send()
+                    with handoff:
+                        outcome["response"] = reply
+                        if stopped.is_set():
+                            reply.close()
+                except BaseException as e:  # pylint: disable=broad-except
+                    outcome["error"] = e  # re-raised on the caller's thread
+                finally:
+                    answered.set()
+
+            threading.Thread(target=run, name="gaia-pull-send", daemon=True).start()
+            while not answered.wait(_STOP_CHECK_SECONDS):
+                if is_cancelled():
+                    with handoff:
+                        stopped.set()
+                        if "response" in outcome:
+                            outcome["response"].close()
+                    raise cancelled()
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome["response"]
+
+        try:
+            if is_cancelled is None:
+                response = send()
+            else:
+                response = send_unless_stopped()
+                threading.Thread(
+                    target=stop_watch, name="gaia-pull-stop", daemon=True
+                ).start()
 
             if response.status_code == 401:
                 raise LemonadeAuthError(
@@ -5564,8 +6030,19 @@ class LemonadeClient:
             event_type = None
             received_complete = False
 
+            if is_cancelled is None:
+                lines = response.iter_lines()
+            else:
+                reading = True
+
+                def stop_seen() -> bool:
+                    if is_cancelled():
+                        stopped.set()
+                    return stopped.is_set()
+
+                lines = _lines_unless_stopped(response, stop_seen)
             try:
-                for line_bytes in response.iter_lines():
+                for line_bytes in lines:
                     if not line_bytes:
                         continue
 
@@ -5575,6 +6052,8 @@ class LemonadeClient:
                         event_type = line[6:].strip()
                     elif line.startswith("data:"):
                         data_str = line[5:].strip()
+                        if stopped.is_set() or (is_cancelled and is_cancelled()):
+                            raise cancelled()
                         try:
                             data = json.loads(data_str)
                             data["event"] = event_type or "progress"
@@ -5593,15 +6072,37 @@ class LemonadeClient:
                             self.log.warning(f"Failed to parse SSE data: {data_str}")
                             continue
             except requests.exceptions.ChunkedEncodingError:
+                if stopped.is_set():
+                    raise cancelled() from None
                 if not received_complete:
                     raise
+            except (AttributeError, OSError, ValueError) as e:
+                # What a read raises once the watcher closed the response.
+                if stopped.is_set():
+                    raise cancelled() from None
+                if isinstance(e, OSError):
+                    message = f"Failed to install {model_name}: connection lost ({e})"
+                    self.log.error(message)
+                    raise LemonadeClientError(message) from e
+                raise
+            if stopped.is_set():
+                raise cancelled()
 
             self.log.info(f"Installed {model_name} successfully via streaming")
 
         except requests.exceptions.RequestException as e:
+            if stopped.is_set():
+                raise cancelled() from e
             message = f"Failed to install {model_name}: {e}"
             self.log.error(message)
-            raise LemonadeClientError(message)
+            raise LemonadeClientError(message) from e
+        finally:
+            finished.set()
+            # Also on an early close (Stop): hanging up is what cancels the pull.
+            if reading:
+                _abort_stream(response)  # the reader closes it once its read ends
+            elif response is not None:
+                response.close()
 
     def delete_model(
         self,
@@ -6069,8 +6570,12 @@ class LemonadeClient:
             )
         self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
 
-    def _model_slot_lease(self, model: str):
+    def _model_slot_lease(self, model: str, request_timeout: Optional[float] = None):
         """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
+
+        The lease declares how long its holder may keep the slot: one request
+        of *request_timeout* (the request budget when not given), the retry
+        deadline after which no new attempt starts, and a model load.
 
         Serializes this load against every other process sharing the
         single-tenant Lemonade slot, and every request to a local model against
@@ -6096,10 +6601,12 @@ class LemonadeClient:
         if self.cloud_model_provider(model) or self._is_cloud_model(model):
             return nullcontext()
 
-        from gaia.daemon.broker_client import model_lease
+        from gaia.daemon.broker_client import model_lease, waits_are_listened
 
         def _on_wait(reason: str) -> None:
             self.log.info(f"Model slot busy — {reason}")
+            if waits_are_listened():
+                return  # the turn's own stream shows it
             try:
                 from rich.console import Console
 
@@ -6107,14 +6614,20 @@ class LemonadeClient:
             except ImportError:
                 print(f"⏳ {reason}")
 
-        lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
-        lock = _local_request_lock(model)
+        lease = model_lease(
+            model,
+            priority=self.model_lease_priority,
+            on_wait=_on_wait,
+            max_hold_s=(request_timeout or request_budget_seconds())
+            + RetryPolicy.from_env().deadline
+            + LEASE_LOAD_MARGIN_S,
+        )
 
         @contextmanager
         def _held():
             # Broker first: a thread holding the broker lease must never wait on
             # this lock while its holder waits on the broker.
-            with lease, lock:
+            with lease, _holding_local_request_lock(model):
                 yield
 
         return _held()
@@ -6183,18 +6696,25 @@ class LemonadeClient:
 
         expected_ctx = resolve_ctx_size(model=model, base_url=self.base_url)
 
-        # Best-effort pre-flight probe (#2053): skip a redundant /load when the
-        # model is already loaded at a sufficient ctx. A probe failure here is
-        # NOT fatal — fall through to the actual load below, whose failure DOES
-        # propagate. Only the status/ctx check is swallowed; never the load.
-        status: Optional["LemonadeStatus"] = None
+        # Pre-flight probe (#2053): skip a redundant /load when the model is
+        # already loaded at a sufficient ctx. An unanswered probe is "unknown",
+        # not "absent": fall through to the load, whose failure propagates and
+        # which a busy server answers once it is free.
+        status: Optional["LemonadeStatus"]
         try:
-            # Check current server state. ``status.loaded_models`` carries
-            # health entries enriched with ``id`` + ``recipe_options`` so we
-            # can read ctx_size.
-            status = self.get_status()
-        except Exception as e:  # pylint: disable=broad-except
-            self.log.debug(f"Could not pre-check model status: {e}")
+            status = self.get_status(include_catalog=False)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            status = LemonadeStatus(running=False, error=str(e))
+        if status.busy:
+            status = self._wait_while_busy(model)
+        if not status.running:
+            self.log.info(
+                f"Could not confirm '{model}' is loaded "
+                f"({status.error or 'no answer'}); sending the load request."
+            )
+            status = None
 
         # Best-effort floor-vs-ceiling conflict check (#2992): if the MODELS
         # registry requires more context than the model can actually train
@@ -6374,10 +6894,22 @@ class LemonadeClient:
 
         Raises:
             LemonadeClientError: if the stream emits an ``error`` event.
+            ModelDownloadCancelledError: Stop was pressed (see
+                :func:`gaia.llm.retry.model_retry_notices`).
         """
         download_complete = False
         last_logged_percent = -10  # Log at 0%, 10%, 20%, ...
-        for event in self.pull_model_stream(model_name=model_name):
+        is_cancelled = current_cancel_check()
+        events = self.pull_model_stream(model_name=model_name)
+        for event in events:
+            if is_cancelled is not None and is_cancelled():
+                # Closing the stream hangs up, which cancels Lemonade's pull.
+                close = getattr(events, "close", None)
+                if close is not None:
+                    close()
+                raise ModelDownloadCancelledError(
+                    f"Download of {model_name} stopped at your request."
+                )
             event_type = event.get("event")
             if event_type == "progress":
                 percent = event.get("percent", 0)
@@ -6490,6 +7022,10 @@ class LemonadeClient:
                 "Send chat requests through Lemonade; select its provider in "
                 "the TUI provider settings if it is not connected."
             )
+        mr = find_model_requirement(model_name)
+        if mr and mr.pull_kwargs():
+            # Load under the user. name an auto-download registers it as.
+            model_name = mr.model_id
         with self._model_slot_lease(model_name):
             response = self._load_model_leased(
                 model_name,
@@ -6685,7 +7221,19 @@ class LemonadeClient:
                         self.model = model_name
                         return response
 
+                except ModelDownloadCancelledError:
+                    # Stop is the user's choice, not a failed resume: never
+                    # go on to delete the model.
+                    raise
                 except Exception as resume_error:
+                    # A resume that failed while Stop was pressed (a timeout
+                    # racing it) is still a Stop: check before deleting.
+                    stop_pressed = current_cancel_check()
+                    if stop_pressed is not None and stop_pressed():
+                        raise ModelDownloadCancelledError(
+                            f"Repair of {model_name} stopped at your request; "
+                            "the model was left as it is."
+                        ) from resume_error
                     self.log.warning(
                         f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
                     )
@@ -6735,6 +7283,8 @@ class LemonadeClient:
                             f"Fresh download did not complete for '{model_name}'"
                         )
 
+                    except ModelDownloadCancelledError:
+                        raise
                     except Exception as fresh_error:
                         self.log.error(
                             f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"
@@ -6927,23 +7477,19 @@ class LemonadeClient:
 
         Args:
             timeout: Optional requests-style timeout — a scalar, or a
-                ``(connect, read)`` tuple. Omit it for the client default
-                (``DEFAULT_REQUEST_TIMEOUT``, sized for generation). "Is the
-                server even up?" callers should pass a short one: the scalar
-                default also governs the read, so a socket that ACCEPTS and
-                then never answers (a Lemonade mid-model-load) would block a
-                liveness probe for the full 15 minutes.
+                ``(connect, read)`` tuple. Defaults to ``PROBE_TIMEOUT``, so a
+                server that accepts and then never answers (mid-model-load)
+                fails the probe in seconds instead of blocking it.
 
         Returns:
             Dict containing the server status and loaded model
 
         Raises:
+            LemonadeUnresponsiveError: The server accepted but did not answer.
             LemonadeClientError: If the health check fails
         """
         url = f"{self.base_url}/health"
-        if timeout is None:
-            return self._send_request("get", url)
-        return self._send_request("get", url, timeout=timeout)
+        return self._send_request("get", url, timeout=timeout or PROBE_TIMEOUT)
 
     def get_stats(self) -> Dict[str, Any]:
         """
@@ -6969,7 +7515,7 @@ class LemonadeClient:
         return stats
 
     def get_system_info(
-        self, verbose: bool = False, timeout: int = DEFAULT_REQUEST_TIMEOUT
+        self, verbose: bool = False, timeout=SYSTEM_INFO_TIMEOUT
     ) -> Dict[str, Any]:
         """
         Get system hardware information and device enumeration.
@@ -7077,12 +7623,18 @@ class LemonadeClient:
                 print(f"⚠️  Context validation failed: {e}")
             return True, None  # Don't block on connection errors
 
-    def get_status(self) -> LemonadeStatus:
+    def get_status(self, include_catalog: bool = True) -> LemonadeStatus:
         """
         Get comprehensive Lemonade status.
 
+        Args:
+            include_catalog: Also read ``/models`` to give loaded entries their
+                catalog ``labels`` and ``recipe``. A residency check needs only
+                ``/health``, so it skips the second round trip.
+
         Returns:
-            LemonadeStatus with server status and loaded models
+            LemonadeStatus with server status and loaded models; ``busy`` when
+            the server accepted the probe but did not answer it in time.
         """
         status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
 
@@ -7123,9 +7675,11 @@ class LemonadeClient:
             # and ``model_name`` (health-style) so all known consumers parse
             # correctly.
             try:
-                catalog_by_id = {
-                    m.get("id"): m for m in self.list_models().get("data", [])
-                }
+                catalog_by_id = (
+                    {m.get("id"): m for m in self.list_models().get("data", [])}
+                    if include_catalog
+                    else {}
+                )
             except LemonadeClientError as exc:
                 # Loaded models still report; only their labels/recipe go blank.
                 self.log.warning(
@@ -7162,6 +7716,11 @@ class LemonadeClient:
             status.loaded_models = loaded_enriched
         except LemonadeAuthError:
             raise  # propagate auth errors; don't misreport as "server not running"
+        except LemonadeUnresponsiveError as e:
+            self.log.warning(str(e))
+            status.running = False
+            status.busy = True
+            status.error = str(e)
         except Exception as e:
             self.log.debug(f"Failed to get status: {e}")
             status.running = False
@@ -7355,6 +7914,8 @@ class LemonadeClient:
             health = self.health_check()
             if health.get("status") == "ok":
                 return True
+        except LemonadeUnresponsiveError:
+            return True  # up but busy; initialize() reports it as such
         except Exception as exc:
             get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
@@ -7545,6 +8106,11 @@ class LemonadeClient:
         # Check current status
         status = self.get_status()
 
+        if status.busy:
+            if not quiet:
+                print(f"⏳ {status.error}")
+            return status
+
         if status.running:
             if not quiet:
                 print("✅ Lemonade Server is running")
@@ -7705,12 +8271,22 @@ class LemonadeClient:
 
             return response.json()
 
+        except requests.exceptions.ReadTimeout as e:
+            if method.lower() != "get":
+                raise LemonadeClientError(f"Request failed: {str(e)}") from e
+            read = timeout[1] if isinstance(timeout, tuple) else timeout
+            raise LemonadeUnresponsiveError(
+                f"Request failed: {e}. Lemonade at {self.base_url} accepted the "
+                f"connection but did not answer within {read:g}s: it is busy (for "
+                "example loading a model) or stuck. If it persists, check the "
+                "Lemonade server log."
+            ) from e
         except requests.exceptions.RequestException as e:
-            raise LemonadeClientError(f"Request failed: {str(e)}")
-        except json.JSONDecodeError:
+            raise LemonadeClientError(f"Request failed: {str(e)}") from e
+        except json.JSONDecodeError as e:
             raise LemonadeClientError(
                 f"Failed to parse response as JSON: {response.text}"
-            )
+            ) from e
 
 
 def create_lemonade_client(
@@ -7806,6 +8382,8 @@ def create_lemonade_client(
             try:
                 client.health_check()
                 client.log.info("Lemonade server is already running")
+            except LemonadeUnresponsiveError as e:
+                client.log.warning(f"Lemonade server is running but busy: {e}")
             except LemonadeClientError:
                 # Server not running, start it
                 client.log.info(f"Starting Lemonade server at {client.base_url}")
@@ -7846,53 +8424,41 @@ def create_lemonade_client(
                         f"Attempting to pull model '{model_name}' before loading..."
                     )
 
+                    # Streamed: progress is logged, a silent server ends it after
+                    # PULL_IDLE_TIMEOUT_S, and Stop hangs up (which cancels it).
                     try:
-                        # Try to pull the model first
-                        pull_result = client.pull_model(
-                            model_name, timeout=300
-                        )  # 5 min timeout for download
-                        client.log.info(f"Successfully pulled model: {pull_result}")
-                    except Exception as pull_error:
-                        client.log.warning(
-                            f"Failed to pull model '{model_name}': {pull_error}"
-                        )
-                        client.log.info(
-                            "Proceeding with load anyway - server may auto-install"
+                        finished = client._consume_pull_stream(model_name, "download")
+                    except ModelDownloadCancelledError:
+                        raise
+                    except LemonadeClientError as pull_error:
+                        raise LemonadeClientError(
+                            f"Failed to load {model_name}: could not download it "
+                            f"from {client.base_url} ({pull_error}). Check the "
+                            "model name and your connection, or run `gaia init` "
+                            "to install it."
+                        ) from pull_error
+                    if not finished:
+                        raise LemonadeClientError(
+                            f"Failed to load {model_name}: the download from "
+                            f"{client.base_url} did not finish (the server ended "
+                            "it without reporting completion). Run the command "
+                            "again to resume it, or check the Lemonade server log."
                         )
                 else:
                     client.log.info(
                         f"Model '{model_name}' found in registry, proceeding with load"
                     )
 
-            # Now attempt to load the model
-            client.load_model(model_name, timeout=60)
-        except Exception as e:
-            # Extract detailed error information
-            error_details = str(e)
-            client.log.error(f"Failed to load {model_name}: {error_details}")
-
-            # Try to get more details about available models for debugging
-            try:
-                models_response = client.list_models()
-                available_models = [
-                    model.get("id", "unknown")
-                    for model in models_response.get("data", [])
-                ]
-                client.log.error(f"Available models: {available_models}")
-                client.log.error(f"Attempted to load: {model_name}")
-                if available_models:
-                    client.log.error(
-                        "Consider using one of the available models instead"
-                    )
-            except Exception as list_error:
-                client.log.error(f"Could not list available models: {list_error}")
-
-            # Include both original error and context in the raised exception
-            enhanced_message = f"Failed to load {model_name}: {error_details}"
-            if "available_models" in locals() and available_models:
-                enhanced_message += f" (Available models: {available_models})"
-
-            raise LemonadeClientError(enhanced_message)
+            # GAIA_LLM_LOAD_WAIT, floored at the time a load alone needs: 0
+            # means "don't wait on a busy server", not "no time to load".
+            load_timeout = max(RetryPolicy.from_env().load_wait, _MIN_LOAD_SECONDS)
+            client.load_model(model_name, timeout=load_timeout)
+        except ModelDownloadCancelledError:
+            raise
+        except LemonadeClientError as e:
+            # Re-raised as is: callers branch on its type (auth, memory, disk).
+            client.log.error(f"Failed to load {model_name}: {e}")
+            raise
 
     return client
 

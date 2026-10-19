@@ -255,6 +255,7 @@ python util/lint.py --mypy        # type checking (blocking only on already-clea
 python util/lint.py --bandit      # security scan
 python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
+python util/lint.py --workflow-ancestor-skip # reject job if: conditions an upstream skip silently skips
 python util/lint.py --test-lanes  # reject test files that no CI lane runs
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
@@ -322,7 +323,7 @@ Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
 
-### Verifying the Agent Hub publish pipeline
+### Verifying the download-server publish pipeline
 
 Publishing to the hub is **irreversible** — `hub.amd-gaia.ai` has no unpublish
 route, so a bad release is permanent and public. Before running any
@@ -376,8 +377,8 @@ Client IP Address Filtering passes locally and fails in CI.
 
 ### The flagship agent in a core release
 
-`gaia init`, `gaia hub install gaia`, and the Windows setup install the flagship
-agent's `gaia-agent` binary from the Agent Hub and from the pin in
+`gaia init` and the Windows setup install the flagship
+agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
 `hub/agents/gaia/npm/binaries.lock.json`. Only `release_agent_gaia.yml` (tag
 `agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
 A final core release therefore fails unless that flagship release was cut from
@@ -404,8 +405,8 @@ approval, and keeps the result off every stable channel:
   so, and the run fails.
 - **GAIA agent** — the flagship `gaia-agent` binaries, frozen from the
   candidate's commit and attached to the pre-release with
-  `gaia-agent-release.json`. The candidate's `gaia init`, `gaia hub install gaia`
-  and Windows setup use these, never the Agent Hub's `gaia`, which can be many
+  `gaia-agent-release.json`. The candidate's `gaia init`
+  and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
@@ -414,7 +415,7 @@ approval, and keeps the result off every stable channel:
   does not move.
 - **Website** — a collapsed "Try the release candidate" entry under the stable
   downloads, shown only while the candidate is newer than the latest release.
-- **Not published** — Agent Hub components (the catalog has no pre-release
+- **Not published** — Download-server components (the catalog has no pre-release
   channel) and the terminal's `.pkg`/`.deb`/`.rpm` packages, which need a
   numeric-only version.
 

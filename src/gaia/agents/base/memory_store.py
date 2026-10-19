@@ -2146,40 +2146,56 @@ class MemoryStore:
             for c, _ in self._forgotten_rows(said_before)
         )
 
-    def is_current(self, content: str, category: str) -> bool:
+    def is_current(
+        self, content: str, category: str, context: Optional[str] = None
+    ) -> bool:
         """Whether a current memory in *category* already says *content*.
 
-        Unlike ``store()``'s dedup, this ignores entity and context, so a copy
-        without an entity tag is recognised as the same memory. It matches on
-        content words against the larger of the two, so "User's sister lives
-        in Calgary" is not "User lives in Calgary".
+        Unlike ``store()``'s dedup, this ignores entity, so a copy without an
+        entity tag is recognised as the same memory. *context* limits it to
+        that context plus global (None checks every context), matching what
+        the caller can read back. It matches on content words against the
+        larger of the two, so "User's sister lives in Calgary" is not "User
+        lives in Calgary".
         """
         stems = content_stems(content)
         if not stems:
             return False
+        sql = (
+            "SELECT content FROM knowledge WHERE category = ? "
+            "AND superseded_by IS NULL"
+        )
+        params: tuple = (category,)
+        if context is not None:
+            sql += " AND context IN (?, 'global')"
+            params += (context,)
         with self._locked():
-            rows = self._conn.execute(
-                "SELECT content FROM knowledge WHERE category = ? "
-                "AND superseded_by IS NULL",
-                (category,),
-            ).fetchall()
+            rows = self._conn.execute(sql, params).fetchall()
         return any(_same_memory(stems, content_stems(r[0])) for r in rows)
 
-    def changed_since(self, content: str, since: str) -> bool:
+    def changed_since(
+        self, content: str, since: str, context: Optional[str] = None
+    ) -> bool:
         """Whether *content* is a memory replaced by a newer one after *since*.
 
         Supersession stamps the old row's ``updated_at``, so this finds a value
-        the user changed after an old conversation stated it.
+        the user changed after an old conversation stated it. *context* is as
+        in ``is_current``.
         """
         stems = content_stems(content)
         if not stems:
             return False
         moment = _as_datetime(since)
+        sql = (
+            "SELECT content, updated_at FROM knowledge "
+            "WHERE superseded_by IS NOT NULL"
+        )
+        params: tuple = ()
+        if context is not None:
+            sql += " AND context IN (?, 'global')"
+            params = (context,)
         with self._locked():
-            rows = self._conn.execute(
-                "SELECT content, updated_at FROM knowledge "
-                "WHERE superseded_by IS NOT NULL"
-            ).fetchall()
+            rows = self._conn.execute(sql, params).fetchall()
         return any(
             _as_datetime(updated) >= moment and _same_memory(stems, content_stems(old))
             for old, updated in rows

@@ -94,11 +94,11 @@ def test_load_lock_missing_file_raises(tmp_path):
 
 def test_load_lock_missing_file_message_is_actionable(tmp_path):
     """The missing-lock error must not misdirect users to reinstall the wheel
-    (#2347): the wheel never ships this file. It must name the Agent Hub path."""
+    (#2347): the wheel never ships this file. It must name the installed-agent path."""
     with pytest.raises(PlatformError) as exc_info:
         plat.load_lock(tmp_path / "nope.json")
     msg = str(exc_info.value)
-    assert "Agent Hub" in msg
+    assert "from an installed agent" in msg
     assert "will not create this file" in msg
     # The old misleading phrasing must be gone.
     assert "reinstall/rebuild it if it is missing" not in msg

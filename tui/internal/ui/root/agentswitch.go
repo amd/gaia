@@ -64,8 +64,8 @@ func (m FlagshipModel) switchAgent(id string) (tea.Model, tea.Cmd) {
 	if next == nil {
 		if m.chat != nil {
 			m.chat.AppendStatus(fmt.Sprintf(
-				"%q is not an installed agent GAIA knows about. Run `gaia hub install %s`, then try /agents again.",
-				id, id))
+				"%q is not an installed agent GAIA knows about. Run `%s`, then try /agents again.",
+				id, catalog.InstallCommand(id)))
 		}
 		return m, nil
 	}

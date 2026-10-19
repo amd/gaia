@@ -198,8 +198,6 @@ describe('the drift guard runs on every tree it reads', () => {
     expect(reads, 'a new cross-tree read belongs here AND in website-ci.yml paths').toEqual([
       '.github/workflows/website-ci.yml',
       'docs/spec/gaia-design-language.mdx',
-      'hub/agents/gaia/npm/package.json',
-      'hub/agents/gaia/python/gaia-agent.yaml',
       'src/gaia/apps/webui/src/styles/index.css',
       'tui/internal/ui/theme/theme.go',
     ]);

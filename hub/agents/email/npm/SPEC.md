@@ -157,7 +157,7 @@ Context is **pushed** in the body — the sidecar stays stateless. The response 
 
 | `type` | Payload | Meaning |
 |---|---|---|
-| `status` | `{ message }` | progress narration (also folds `step`/`thinking`/`plan`) |
+| `status` | `{ message, phase?, queue? }` | progress narration (also folds `step`/`thinking`/`plan`). `phase: "model_queue"` means the turn is waiting for the model behind another request: it repeats every ~2 s with `queue` (`event` queued/granted, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`) |
 | `token` | `{ delta }` | an incremental chunk of assistant text |
 | `tool_call` | `{ tool, args }` | the agent is invoking a tool |
 | `tool_result` | `{ tool, render?, data }` | a tool returned; `render` names a typed card |

@@ -2510,12 +2510,20 @@ class MemoryMixin(ProceduralMemoryMixin):
                         # summary must not mint a system/profile/permission row.
                         if ki["category"] not in EXTRACTABLE_CATEGORIES:
                             continue
-                        if store.is_current(str(ki["content"]), ki["category"]):
+                        if store.is_current(
+                            str(ki["content"]),
+                            ki["category"],
+                            context=self._read_scope(),
+                        ):
                             # Already known; storing it again would refresh its
                             # date from an old chat, or file an untagged copy
                             # that a later correction would miss.
                             continue
-                        if store.changed_since(str(ki["content"]), window_start):
+                        if store.changed_since(
+                            str(ki["content"]),
+                            window_start,
+                            context=self._read_scope(),
+                        ):
                             logger.info(
                                 "[MemoryMixin] consolidation: not stored, the user "
                                 "changed it after this chat: %s",

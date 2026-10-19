@@ -159,6 +159,58 @@ def test_install_duplicate_returns_409(client, monkeypatch):
     assert resp.status_code == 409
 
 
+@pytest.fixture
+def slot_held_elsewhere(tmp_path, monkeypatch):
+    """Another GAIA process (`gaia hub install demo`, say) holds demo's slot."""
+    import threading
+
+    from gaia.utils.file_lock import file_lock
+
+    monkeypatch.setattr(installer_mod, "default_install_root", lambda: tmp_path)
+    taken, release = threading.Event(), threading.Event()
+
+    def other_process():
+        with file_lock(tmp_path / ".demo.install"):
+            taken.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=other_process)
+    holder.start()
+    taken.wait(10)
+    yield
+    release.set()
+    holder.join()
+
+
+def test_install_held_by_another_process_returns_409_before_touching_sidecars(
+    client, monkeypatch, slot_held_elsewhere
+):
+    from gaia.ui.routers import hub as hub_router
+
+    stopped = []
+    monkeypatch.setattr(hub_router, "_shutdown_email_sidecar", stopped.append)
+    monkeypatch.setattr(
+        installer_mod.catalog_mod, "fetch_manifest", lambda _id: {"id": "demo"}
+    )
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == 409
+    assert "another GAIA process" in resp.json()["detail"]
+    assert stopped == []
+
+
+def test_worker_losing_the_slot_race_reports_failed_not_queued(slot_held_elsewhere):
+    from gaia.ui.routers import hub as hub_router
+
+    installer_mod.clear_progress("demo")
+    installer_mod._set_progress(  # noqa: SLF001 - as install_agent seeds it
+        "demo", status="queued", phase="queued", percent=0
+    )
+    hub_router._run_install("demo", None, None, trusted=False, manifest={"id": "demo"})
+    status = installer_mod.get_install_status("demo")
+    assert status["status"] == "failed"
+    assert "already in progress" in status["error"]
+
+
 def test_install_requires_ui_header(client_no_ui_header):
     resp = client_no_ui_header.post("/api/agents/install", json={"id": "demo"})
     assert resp.status_code == 403

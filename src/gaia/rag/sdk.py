@@ -50,6 +50,13 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+from gaia.utils.file_lock import (
+    FileLockError,
+    FileLockTimeout,
+    file_lock,
+    write_bytes_atomic,
+    write_text_atomic,
+)
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -116,6 +123,25 @@ def _is_connection_failure(exc: BaseException) -> bool:
     return False
 
 
+class IndexingStopped(Exception):
+    """Raised from an ``index_document`` callback to stop indexing.
+
+    It leaves ``index_document`` as raised: the document is not indexed, and
+    any cache it had is kept.
+    """
+
+
+# The running index_document's ``heartbeat`` on this thread, called once per
+# extracted page, so a long extraction shows progress and can be stopped.
+_HEARTBEAT = threading.local()
+
+
+def _beat() -> None:
+    heartbeat = getattr(_HEARTBEAT, "fn", None)
+    if heartbeat is not None:
+        heartbeat()
+
+
 def _is_read_timeout(exc: BaseException) -> bool:
     """Whether *exc*, or anything it was raised from, is a read timeout."""
     import requests  # pylint: disable=import-outside-toplevel
@@ -161,6 +187,14 @@ class EmbeddingUnavailableError(RuntimeError):
         else:
             what = f"The embedding model {model} failed"
         super().__init__(f"{what}: {cause}")
+
+
+_CACHE_LOCK_NAME = "rag-cache"
+
+
+def _cache_lock_target(cache_path: str) -> Path:
+    """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
+    return Path(cache_path).parent / _CACHE_LOCK_NAME
 
 
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
@@ -485,7 +519,7 @@ class RAGSDK:
 
             return os.fdopen(fd, mode_str)
 
-        except Exception as _e:
+        except Exception:
             os.close(fd)
             raise
 
@@ -506,17 +540,15 @@ class RAGSDK:
         key_dir = Path.home() / ".gaia" / "cache"
         key_path = key_dir / "hmac.key"
 
-        if key_path.exists():
-            self._hmac_key = key_path.read_bytes()
-            return self._hmac_key
+        # Locked so two first-run processes cannot each mint a key and leave
+        # every cache the other signed failing verification.
+        with file_lock(key_path):
+            if key_path.exists():
+                self._hmac_key = key_path.read_bytes()
+                return self._hmac_key
 
-        key_dir.mkdir(parents=True, exist_ok=True)
-        key = secrets.token_bytes(32)
-        key_path.write_bytes(key)
-        try:
-            key_path.chmod(0o600)
-        except (OSError, AttributeError):
-            pass
+            key = secrets.token_bytes(32)
+            write_bytes_atomic(key_path, key, mode=0o600)
         self.log.info("Generated new HMAC key for cache integrity verification")
         self._hmac_key = key
         return self._hmac_key
@@ -537,10 +569,10 @@ class RAGSDK:
         key = self._get_hmac_key()
         signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
 
-        with open(cache_path, "wb") as f:
-            f.write(json_bytes)
-        with open(cache_path + ".sig", "w", encoding="utf-8") as f:
-            f.write(signature)
+        # One lock over both files, so a reader never pairs new JSON with an old .sig.
+        with file_lock(_cache_lock_target(cache_path)):
+            write_bytes_atomic(cache_path, json_bytes)
+            write_bytes_atomic(cache_path + ".sig", signature.encode("utf-8"))
 
         self.log.debug(f"Saved signed cache: {cache_path}")
 
@@ -563,14 +595,17 @@ class RAGSDK:
         """
         sig_path = cache_path + ".sig"
 
-        if not os.path.exists(sig_path):
-            raise ValueError("Cache signature file missing — cannot verify integrity")
+        with file_lock(_cache_lock_target(cache_path)):
+            if not os.path.exists(sig_path):
+                raise ValueError(
+                    "Cache signature file missing — cannot verify integrity"
+                )
 
-        with open(cache_path, "rb") as f:
-            json_bytes = f.read()
+            with open(cache_path, "rb") as f:
+                json_bytes = f.read()
 
-        with open(sig_path, "r", encoding="utf-8") as f:
-            stored_sig = f.read().strip()
+            with open(sig_path, "r", encoding="utf-8") as f:
+                stored_sig = f.read().strip()
 
         key = self._get_hmac_key()
         expected_sig = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
@@ -1118,6 +1153,7 @@ class RAGSDK:
             page_warnings = {}
 
             for i, page in enumerate(reader.pages, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
@@ -1277,9 +1313,9 @@ class RAGSDK:
                 )
 
             return full_text, total_pages, metadata
-        except PDFExtractionError:
-            # Already a well-formed extraction error with actionable guidance —
-            # re-raise without wrapping or re-logging (callers will log).
+        except (PDFExtractionError, IndexingStopped):
+            # Already a well-formed extraction error with actionable guidance,
+            # or a stop — re-raise without wrapping or re-logging.
             raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
@@ -1430,6 +1466,8 @@ class RAGSDK:
                         f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
                     )
                     return pdf_text, pdf_pages, metadata
+                except IndexingStopped:
+                    raise
                 except Exception as pdf_err:
                     self.log.warning(
                         "PDF extraction from converted PPTX failed, falling back: %s",
@@ -1496,6 +1534,7 @@ class RAGSDK:
             total_images_processed = 0
 
             for i, slide in enumerate(prs.slides, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract native text from shapes / tables
@@ -1630,7 +1669,7 @@ class RAGSDK:
             }
 
             return full_text, total_slides, metadata
-        except ValueError:
+        except (ValueError, IndexingStopped):
             raise
         except Exception as e:
             self.log.error(f"Error reading PPTX {pptx_path}: {e}")
@@ -2826,6 +2865,26 @@ These positions indicate where to split the text."""
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
+        heartbeat: Optional[Callable[[], None]] = None,
+    ) -> Dict[str, Any]:
+        """Index a document for retrieval; see :meth:`_index_document`.
+
+        ``heartbeat`` is called once per extracted PDF page. Raising
+        :class:`IndexingStopped` from it, or from ``progress_callback``,
+        stops the index and keeps any cache the document had.
+        """
+        previous = getattr(_HEARTBEAT, "fn", None)
+        _HEARTBEAT.fn = heartbeat
+        try:
+            return self._index_document(file_path, progress_callback, wait_callback)
+        finally:
+            _HEARTBEAT.fn = previous
+
+    def _index_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
@@ -3113,23 +3172,23 @@ These positions indicate where to split the text."""
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
+            except IndexingStopped:
+                raise
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
+            except FileLockError as e:
+                # Busy, not corrupt: re-extracting would redo another process's work.
+                return self._cache_busy(stats, file_path, e)
             except Exception as e:
+                # A miss, not a delete: re-indexing replaces the entry atomically,
+                # and deleting here could destroy a fresh cache another process
+                # just wrote, or leave none at all if re-indexing then fails.
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
                     print(
                         "  ⚠️  Cache outdated or corrupted, will reindex from scratch"
                     )
-                try:
-                    os.remove(cache_path)
-                except OSError:
-                    pass
-                try:
-                    os.remove(md_cache_path)
-                except OSError:
-                    pass
 
         # Extract and process document
         if self.config.show_stats:
@@ -3319,6 +3378,8 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
+        except IndexingStopped:
+            raise
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
         except Exception as e:
@@ -3330,6 +3391,23 @@ These positions indicate where to split the text."""
             )
             stats["error"] = str(e)
             return stats
+
+    def _cache_busy(
+        self, stats: Dict[str, Any], file_path: str, error: FileLockError
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose cache another process holds locked."""
+        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        if isinstance(error, FileLockTimeout):
+            message += (
+                " Another GAIA process is probably indexing into the same cache; "
+                "index the document again once it finishes."
+            )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.error(message)
+        stats["error"] = message
+        stats["error_type"] = "cache_busy"
+        return stats
 
     def _embedding_failed(
         self, stats: Dict[str, Any], file_path: str, error: EmbeddingUnavailableError
@@ -3634,8 +3712,7 @@ Answer:"""
 """
 
             # Write markdown file
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(markdown_content)
+            write_text_atomic(md_path, markdown_content, mode=0o644)
 
             self.log.debug(f"Saved extracted markdown to {md_path}")
 
@@ -3668,7 +3745,7 @@ Answer:"""
                 f"{default_rag_cache_dir()})."
             )
 
-        with self._state_lock:
+        with self._state_lock, file_lock(cache_dir / _CACHE_LOCK_NAME):
             removed = 0
             if cache_dir.is_dir():
                 for entry in cache_dir.iterdir():
