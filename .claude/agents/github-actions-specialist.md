@@ -120,7 +120,8 @@ test-summary:
 ```
 
 ### Custom actions
-- `.github/actions/free-disk-space` — essential for Ubuntu runners before large model downloads
+- `.github/actions/{setup-venv,setup-python,install-lemonade,build-agent-wheel}` — reuse before writing new setup steps
+- Do not add a disk-cleanup step to Ubuntu jobs: nothing they install comes close to the hosted runner's free space, and the cleanup cost ~2 min per run.
 
 ## Required scaffolding for a new workflow
 
