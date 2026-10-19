@@ -524,6 +524,11 @@ jobs:
             echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
             exit 1
           fi
+          # Fail before the immutable Hub upload, not at the npm step.
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "::error::${VERSION} is a prerelease; agent packages publish only final X.Y.Z versions under the npm 'latest' dist-tag. Tag a final version."
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
 
