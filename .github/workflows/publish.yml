@@ -7,13 +7,16 @@
 #
 # Flow:
 #   validate → build (pypi + npm + desktop installers, parallel)
-#     → approve (single manual gate)
+#            → ci-green (the tagged commit passed CI; parallel with the builds)
+#     → approve (single manual gate for a final; none for an RC)
 #       → publish (pypi + npm, parallel)
 #         → post-publish smoke test (PyPI install verification)
 #         → github release (sigstore + desktop installers)
 #
-# Release candidates: a `vX.Y.Z-rcN` tag runs the same pipeline, behind the same
-# approval, with these differences (a `vX.Y.Z` final is untouched by them):
+# Release candidates: a `vX.Y.Z-rcN` tag runs the same pipeline with these
+# differences (a `vX.Y.Z` final is untouched by them):
+#   • no human approval: approve-publish runs in the reviewer-less "publish-rc"
+#     environment, and stops if a newer tag of the same X.Y.Z exists
 #   • version.py must say X.Y.Z; each build stamps X.Y.ZrcN (PyPI) and
 #     X.Y.Z-rc.N (npm, Electron) from the tag — util/release_tag.py
 #   • npm publishes under the `next` dist-tag, so `latest` does not move
@@ -28,7 +31,9 @@
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
-#      This is the single approval gate for all publishing.
+#      This is the single approval gate for a final release.
+#      Create "publish-rc" with NO reviewers and deployments limited to tags
+#      matching v*-rc*; approve-publish uses it for a release candidate.
 #   2. Keep the "pypi" environment for OIDC trusted publishing,
 #      but remove its required reviewers — the "publish" gate handles approval.
 #   3. Update the PyPI trusted publisher config (pypi.org → Manage → Publishing)
@@ -42,9 +47,12 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# One group per tag, never cancelled: a new tag must not kill a release that may
+# be mid-publish. An older RC that a newer tag supersedes stops itself before
+# publishing (approve-publish), and a re-run of the same tag waits its turn.
 concurrency:
-  group: publish-release
-  cancel-in-progress: true
+  group: publish-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -386,21 +394,50 @@ jobs:
   # separate run that reports (job summary + an issue when it does not pass) and
   # never blocks publishing; regressions are reported, not gated (#5172).
 
-  # ── Stage 3: Approve (single manual gate) ───────────────────────────
-  # All builds must pass before the approval prompt appears.
-  # Configure the "publish" GitHub environment with required reviewers.
+  # ── The tagged commit passed CI ─────────────────────────────────────
+  # The test workflows ran when this commit reached main, not on the tag, and
+  # most of those runs were cancelled by the next merge. util/check_release_ci.py
+  # requires a passing run of each required workflow on this exact commit,
+  # dispatches any that has none against the tag, and waits. Parallel with the
+  # builds, so it only adds time when CI is slower than they are.
+  ci-green:
+    name: Tagged commit passed CI
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write   # read the commit's runs; dispatch the missing ones
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: Check the required workflows passed on this commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          python3 util/check_release_ci.py --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --tag "${TAG_NAME}"
+
+  # ── Stage 3: Approve (single manual gate, finals only) ──────────────
+  # All builds and CI must pass before anything publishes. A final waits for a
+  # reviewer in the "publish" environment; an RC runs in "publish-rc", which has
+  # none. pypi and npm keep their own environments: the trusted publishers are
+  # bound to those names.
 
   approve-publish:
     name: Approve Publishing
-    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship]
+    needs: [validate, build-pypi, build-npm, build-desktop-installers, rc-flagship, ci-green]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
+      needs.ci-green.result == 'success' &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
-    environment: publish
+    environment: ${{ needs.validate.outputs.is_rc == 'true' && 'publish-rc' || 'publish' }}
     steps:
       - run: |
           echo "=== Build Results ==="
@@ -408,8 +445,30 @@ jobs:
           echo "  npm:                ${{ needs.build-npm.result }}"
           echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo "  RC flagship agent:  ${{ needs.rc-flagship.result }}"
+          echo "  CI on this commit:  ${{ needs.ci-green.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
+
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      # After the approval, immediately before the first publish: an RC whose
+      # newer sibling was tagged while it built must not overwrite `next`.
+      - name: Stop if a newer tag of this release exists
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          NOTES_TAG: ${{ needs.validate.outputs.notes_tag }}
+        run: |
+          set -euo pipefail
+          tags="$(git ls-remote --tags --refs origin "refs/tags/${NOTES_TAG}*" | sed 's#.*refs/tags/##')"
+          echo "Tags of ${NOTES_TAG}:"
+          echo "${tags}"
+          if ! echo "${tags}" | python3 util/release_tag.py superseded "${TAG_NAME}"; then
+            echo "::error::${TAG_NAME} is superseded by a newer tag of ${NOTES_TAG}; stopped before publishing anything."
+            exit 1
+          fi
 
   # ── Stage 4: Publish (parallel, after single approval) ──────────────
 
@@ -490,24 +549,23 @@ jobs:
         # No silent fallback (see CLAUDE.md "No Silent Fallbacks"). If the
         # lockfile is stale, fail here rather than publish a divergent tree.
         run: npm ci --omit=dev
+      # util/npm_publish_once.py, not a bare `npm publish`: a re-run skips a
+      # version already on npm with the same bytes and fails on different ones.
+      # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
+      # because the dist/ was already built in the build-npm job and
+      # downloaded from the artifact. Dev dependencies are omitted, so
+      # tsc would fail with missing @types/react.
       - name: Publish @amd-gaia/agent-ui
         if: needs.validate.outputs.is_rc != 'true'
         working-directory: src/gaia/apps/webui
-        # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
-        # because the dist/ was already built in the build-npm job and
-        # downloaded from the artifact. Dev dependencies are omitted, so
-        # tsc would fail with missing @types/react.
-        run: npm publish --access public --provenance --ignore-scripts
+        run: python3 ../../../../util/npm_publish_once.py --dist-tag latest -- --access public --provenance --ignore-scripts
       # `next`, never `latest`: `npm install @amd-gaia/agent-ui` must keep
       # resolving to the last final.
       - name: Publish @amd-gaia/agent-ui (release candidate, dist-tag next)
         if: needs.validate.outputs.is_rc == 'true'
         working-directory: src/gaia/apps/webui
-        env:
-          NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
-          npm publish --access public --provenance --ignore-scripts --tag next
-          echo "Published @amd-gaia/agent-ui@$NPM_VERSION under the 'next' dist-tag"
+          python3 ../../../../util/npm_publish_once.py --dist-tag next -- --access public --provenance --ignore-scripts
           echo "Install with: npm install -g @amd-gaia/agent-ui@next"
       - name: Verify publication
         if: needs.validate.outputs.is_rc != 'true'
