@@ -258,22 +258,30 @@ class LemonadeSupervisor:
     def _ensure_embedded(self) -> LemonadeState:
         """Start GAIA's own server through its owner; a failure is never retried
         against a system install."""
+        from gaia.config import GaiaConfigError
         from gaia.daemon.lemonade import LemonadeNotManaged
+        from gaia.llm.lemonade_choice import LemonadeChoiceError
         from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
         started_at = time.monotonic()
         try:
             ensured = self._embedded.ensure()
-        except (LemonadeNotManaged, EmbeddedLemonadeError) as e:
+        except (
+            LemonadeNotManaged,
+            EmbeddedLemonadeError,
+            LemonadeChoiceError,
+            GaiaConfigError,
+        ) as e:
             raise LemonadeStartError(
                 f"GAIA could not start its own Lemonade Server: {e}\n"
                 "Where to look: `gaia lemonade embedded status`"
             ) from e
+        # The daemon owns GAIA's server whoever started it, and stops it.
         return LemonadeState(
             base_url=ensured.base_url,
             started=ensured.started,
-            owned=self._embedded.started_pid is not None,
-            pid=self._embedded.started_pid,
+            owned=True,
+            pid=ensured.pid,
             waited_seconds=time.monotonic() - started_at,
         )
 

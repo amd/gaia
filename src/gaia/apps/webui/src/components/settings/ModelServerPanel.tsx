@@ -150,6 +150,7 @@ export function ModelServerPanel() {
                         : 'None loaded'}
                 />
             </div>
+            {info.embedding_note && <p className="settings-hint">{info.embedding_note}</p>}
             {info.system_info_error && <p className="settings-hint">{info.system_info_error}</p>}
 
             <div className="settings-field model-server-backend">

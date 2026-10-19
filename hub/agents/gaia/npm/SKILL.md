@@ -374,8 +374,7 @@ land is additionally **code-inert**: its instructions load, but any
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
 — runs without asking. A write or edit inside the agent's own scratch
 folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
-and running a script from it carries `always_scope` "Python scripts in GAIA's
-scratch folder".
+so running a script from it asks every time and carries no `always_scope`. So does a shell command run there or naming a path there, and a script handed a scratch path as an argument.
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.
@@ -390,7 +389,7 @@ Design a workflow around the approval path, not around a fixed tool list.
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest","risk":"execute"}
+data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest (runs the test code it finds)","risk":"execute"}
 ```
 
 Answer it on the same run, then keep reading the stream:
@@ -525,7 +524,10 @@ request for every item in a document to it, and it drives
 `extract_document_items` and `save_extracted_items` so a long transcript yields
 a complete, source-quoted inventory rather than a summary. A skill turns that
 inventorying on only by listing `extract_document_items` in `tools_required`;
-wording such as "find every call site" in another skill does not.
+wording such as "find every call site" in another skill does not. Loading it
+registers the tools at once, so `load_skill` never reports them missing; coverage
+is enforced only when the request itself names a source document or asks for
+every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's

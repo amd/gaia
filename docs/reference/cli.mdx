@@ -95,7 +95,7 @@ Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA ag
 
 When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
-The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused still report the failure. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
+The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
@@ -527,6 +527,7 @@ gaia kill [OPTIONS]
 |--------|------|-------------|
 | `--lemonade` | flag | Kill Lemonade Server and child processes |
 | `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
+| `--daemons` | flag | List every running GAIA daemon with its pid, age and home folder, and stop the orphaned ones |
 
 **Examples:**
 
@@ -538,7 +539,15 @@ gaia kill --lemonade
 ```bash Kill Process on Port
 gaia kill --port 8080
 ```
+
+```bash Stop Orphaned Daemons
+gaia kill --daemons
+```
 </CodeGroup>
+
+<Note>
+`--daemons` stops only *orphaned* daemons: ones whose home folder or `instance.json` is gone, so no GAIA command can reach them (test runs used to leave these behind). The daemon of your own home is listed but never stopped; use `gaia daemon stop` for that. Daemons of other homes, such as a `GAIA_HOME` you set elsewhere, are listed and left running. Exits 1 if an orphaned daemon would not stop.
+</Note>
 
 <Note>
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
@@ -761,17 +770,6 @@ and the same SHA-256 verification.
 Running a sidecar agent starts its sidecar automatically on first use;
 `gaia daemon start-agent <id>` is an optional pre-flight to launch and
 health-check it early.
-
-##### Automated PyPI publishing (CI)
-
-`.github/workflows/publish_agents.yml` builds every production agent wheel and
-publishes it to PyPI on a version tag (`v*`). Its matrix is derived from the
-`agents` extra in `setup.py` (via `util/list_agent_packages.py`), so adding an
-agent there is all it takes to start publishing it. The workflow uploads with
-[`pypa/gh-action-pypi-publish`](https://github.com/pypa/gh-action-pypi-publish)
-using the `PYPI_API_TOKEN` secret and `skip-existing: true`, so an unchanged
-agent version is a no-op rather than an error — PyPI enforces version
-immutability natively.
 
 #### Sharing: `export`, `import`
 
@@ -1629,7 +1627,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
-| `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA app or command has used it for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
+| `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA process has held it, and it has served no request, for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
@@ -2019,7 +2017,7 @@ gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_basel
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--component` | `rag` | Pass `code` for the code index behind semantic code search; the default, `rag`, is the [document Q&A benchmark](#retrieval-benchmark) |
-| `--suite` | `pr` | `pr` (~40 min, gates PRs), `nightly` (sampled), `scale` (big repos, hours) |
+| `--suite` | `pr` | `pr` (~40 min), `nightly` (sampled; release tags run it), `scale` (big repos, hours) |
 | `--parts` | the suite's | Comma-separated subset of `quality,incremental,robustness,scale` |
 | `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 on a regression |
 | `--tolerance` | `0.05` | Largest drop in a quality metric that is not a regression |
@@ -3213,9 +3211,22 @@ server's memory when GAIA is not in use:
   still using the server, the daemon unloads all of its models. The server
   stays up, so the next launch only reloads the model. An app that is killed
   rather than closed is noticed within about five seconds.
-- **No GAIA client for 15 minutes stops the server.** Change it with
+- **Every GAIA process holds a lease while it uses the server.** Each client
+  of the server registers on its own: apps, `gaia` commands, sidecar agents,
+  and a process under another `GAIA_HOME` whose `LEMONADE_BASE_URL` names this
+  server (it registers with this daemon too). A lease is renewed every 30
+  seconds and dropped when its process exits or stops renewing for two minutes.
+- **No lease and no request for 15 minutes stops the server.** The daemon also
+  reads the server's own activity, so a request from a process it does not
+  know about restarts the clock, and nothing is stopped or unloaded while a
+  request is in flight. Fifteen minutes balances freeing GPU memory for other
+  apps against the 20 to 60 seconds a cold model load costs. Change it with
   `gaia config set lemonade_idle_timeout_minutes <minutes>`, or turn it off
-  with `0`. The next GAIA app or command starts the server again.
+  with `0`.
+- **A stopped server comes back on the next request.** A GAIA process that
+  finds the server gone mid-request has the daemon start it again and sends
+  the request once more, so the turn still answers. A stream already under way
+  is not replayed.
 - **`gaia daemon stop` stops the server, whoever started it,** including the one
   first-time setup starts. If the daemon is not running, it still stops GAIA's
   server.
@@ -3275,6 +3286,10 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
 | `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
+
+A daemon also shuts down on its own, logging why, within a few seconds of its
+home folder or `instance.json` being deleted, since no GAIA command can reach it
+after that. `gaia kill --daemons` finds and stops any that are still left.
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from
@@ -3763,6 +3778,7 @@ gaia kill [OPTIONS]
 |--------|------|-------------|
 | `--port` | integer | Port number to kill process on |
 | `--lemonade` | flag | Kill Lemonade server (port 13305) |
+| `--daemons` | flag | List running GAIA daemons; stop those whose home folder or `instance.json` is gone |
 
 **Examples:**
 
@@ -3773,6 +3789,10 @@ gaia kill --lemonade
 
 ```bash Kill by Port
 gaia kill --port 13305
+```
+
+```bash Stop Orphaned Daemons
+gaia kill --daemons
 ```
 </CodeGroup>
 

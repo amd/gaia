@@ -172,7 +172,7 @@ func TestATimedOutPromptIsSentAsATimeout(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, issueTestRunCall())
 
-	c2, cmd := m.confirmation.ResolveTimeout(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	c2, cmd := m.confirmation.ResolveTimeout(m.confirmation.ExpiryMsg())
 	m.confirmation = &c2
 	decided := cmd().(components.ConfirmationDecidedMsg)
 	updated, deliver := m.Update(decided)

@@ -151,6 +151,37 @@ def read_command(command: str) -> CommandFacts:
     return CommandFacts(segments=tuple(segments), writes_file=writes_file)
 
 
+def line_words(command: str) -> Optional[List[List[str]]]:
+    """Every word of each simple command, or None when the line is unreadable.
+
+    Unlike :func:`read_command` nothing is dropped: ``NAME=value`` assignments
+    and redirect targets stay, because a path there reaches a folder too. Each
+    simple command carries its words as both shells read them, since a
+    backslash is a path separator on Windows and an escape on POSIX.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return None
+    windows = _lex(command, escape="")
+    posix = _lex(command, escape="\\")
+    if windows is None or posix is None or _operators(windows) != _operators(posix):
+        return None
+    split = [_simple_commands(windows), _simple_commands(posix)]
+    lines = []
+    for words, other in zip(*split):
+        lines.append(words + [w for w in other if w not in words])
+    return [words for words in lines if words]
+
+
+def _simple_commands(tokens: List[str]) -> List[List[str]]:
+    lines: List[List[str]] = [[]]
+    for token in tokens:
+        if token in _SEPARATORS or token == "&":
+            lines.append([])
+        elif token not in _REDIRECTS:
+            lines[-1].append(token)
+    return lines
+
+
 #: Interpreters whose `-m <module>` form runs a named tool.
 PYTHON_BINARIES = frozenset({"python", "python3", "py"})
 
@@ -180,5 +211,6 @@ __all__ = [
     "PYTHON_BINARIES",
     "binary_name",
     "effective_argv",
+    "line_words",
     "read_command",
 ]

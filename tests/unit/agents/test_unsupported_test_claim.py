@@ -647,24 +647,26 @@ def test_an_answer_without_a_claim_is_never_corrected(agent):
     assert _final_text(result) == HONEST
 
 
-def test_a_second_unsupported_answer_is_suppressed(agent):
+def test_a_second_unsupported_answer_is_kept_with_a_caveat(agent):
     repeats = [_answer(FABRICATED)] * (_MAX_TEST_CLAIM_CORRECTIONS + 2)
     sent = _stub_chat(agent, *repeats)
 
     result = agent.process_query("Fix the matrix lookup", max_steps=10)
 
     assert len(sent) == _MAX_TEST_CLAIM_CORRECTIONS + 1
-    assert FABRICATED not in result["result"]
+    assert result["result"].startswith(FABRICATED)
+    assert "No tests were run this turn." in result["result"]
     assert result["status"] == "incomplete"
 
 
-def test_no_step_left_returns_incomplete_without_the_claim(agent):
+def test_no_step_left_keeps_the_claim_and_names_the_gap(agent):
     sent = _stub_chat(agent, _answer(FABRICATED))
 
     result = agent.process_query("Fix the matrix lookup", max_steps=1)
 
     assert len(sent) == 1
-    assert FABRICATED not in result["result"]
+    assert result["result"].startswith(FABRICATED)
+    assert "No tests were run this turn." in result["result"]
     assert result["status"] == "incomplete"
     assert "No tests were run this turn." in result["result"]
 

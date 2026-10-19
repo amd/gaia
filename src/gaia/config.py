@@ -36,6 +36,12 @@ def gaia_home() -> Path:
         if not raw:
             continue
         return Path(os.path.expandvars(os.path.expanduser(raw)))
+    return default_gaia_home()
+
+
+def default_gaia_home() -> Path:
+    """``~/.gaia``: the home of a process with no ``GAIA_HOME``, and so of the
+    machine's default daemon and its Lemonade Server."""
     return Path.home() / ".gaia"
 
 
@@ -146,9 +152,9 @@ class GaiaConfig:
         lemonade_api_key_stored: Its API key is in the OS credential store.
             The key itself is never written here.
         lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
-            GAIA app or command has used it for this many minutes, so its
-            memory goes back to the system. 0 keeps it running until
-            ``gaia daemon stop``. Never applies to a server
+            GAIA process has held it, and it has served no request, for this
+            many minutes, so its memory goes back to the system. 0 keeps it
+            running until ``gaia daemon stop``. Never applies to a server
             ``LEMONADE_BASE_URL`` names.
         llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
