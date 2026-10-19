@@ -71,7 +71,8 @@
 # Atomic + idempotent: POST /publish is immutable per filename (re-publishing
 # the same bytes is a verified no-op; different bytes under a published name
 # fail loudly); the post-upload fetch-verify is the release's real integrity
-# gate; npm publish is skipped if that exact version already exists.
+# gate; npm publish (util/npm_publish_once.py) skips a version already on npm
+# with the same tarball and fails if the registry holds different bytes.
 #
 # Tag namespace: `agent-pkg-gaia-*` (NOT `v*`). This is the established Agent
 # Hub package-share namespace and deliberately does NOT fire publish.yml (v*
@@ -1114,15 +1115,19 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          if npm view "${NPM_PKG}@${VERSION}" version >/dev/null 2>&1; then
-            echo "${NPM_PKG}@${VERSION} already on npm — skipping (idempotent)."
-            exit 0
+          # Agents ship no release candidates: a prerelease under `latest` would
+          # become what `npm install` resolves, so refuse it.
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "::error::${VERSION} is a prerelease; agent packages publish only final X.Y.Z versions under the npm 'latest' dist-tag. Tag a final version."
+            exit 1
           fi
+          # npm_publish_once.py: a re-run skips a version already on npm with the
+          # same tarball and fails on different bytes (same helper as publish.yml).
           # --ignore-scripts: dist/ was already built by the "Build npm package"
           # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs
           # to run here — and we don't want any package/dependency script
-          # executing in this OIDC-privileged job. Matches publish.yml.
-          npm publish --access public --provenance --ignore-scripts
+          # executing in this OIDC-privileged job.
+          python3 "${GITHUB_WORKSPACE}/util/npm_publish_once.py" --dist-tag latest -- --access public --provenance --ignore-scripts
 
       - name: Redeploy the website to publish the new catalog entry
         shell: bash

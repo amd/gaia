@@ -136,8 +136,12 @@ matching `CHANGELOG.md` entry too if the agent keeps one (recommended, not requi
    object** against the lock → `npm publish` via OIDC (provenance) → trigger
    `deploy_website.yml` so the new catalog entry appears.
 
-Monitor with `gh run watch`. `npm publish` skips if that exact version already
-exists; `/publish` is a verified 409 no-op for identical bytes.
+Monitor with `gh run watch`. The npm step goes through `util/npm_publish_once.py`,
+the same helper as the core release: it skips a version already on npm with the
+same tarball, fails if npm holds different bytes under that version, and refuses a
+prerelease version (agents publish finals under `latest` only). `/publish` is a
+verified 409 no-op for identical bytes. So a failed run is safe to re-run with
+`gh run rerun <run-id> --failed`.
 
 ## Onboarding a NEW sidecar agent (one-time)
 

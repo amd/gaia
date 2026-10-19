@@ -79,7 +79,7 @@ jobs:
 
   build-apps:
     needs: discover-apps
-    if: needs.discover-apps.outputs.has_apps == 'true'
+    if: "!cancelled() && needs.discover-apps.result == 'success' && needs.discover-apps.outputs.has_apps == 'true'"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
