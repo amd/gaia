@@ -190,13 +190,9 @@ async def _refresh_locked(
         )
     except ConnectorsError as e:
         if isinstance(e, ConnectionRevokedError) and not await asyncio.to_thread(
-            _delete_if_unchanged, provider_id, stored["refresh_token"]
+            _delete_if_unchanged, provider_id, account_email, stored["refresh_token"]
         ):
-            raise ConnectorsError(
-                f"The {provider_id} connection was replaced (reconnected, or "
-                "refreshed by another GAIA process) while this refresh was in "
-                "flight; the new connection is intact. Retry the request."
-            ) from e
+            raise _replaced_error(provider_id) from e
         # A5: enrich with split-related guidance ONLY for a genuine
         # OAuth-protocol rejection — ConnectionRevokedError (400
         # invalid_grant) or the generic-400/non-200 bare ConnectorsError
@@ -239,6 +235,11 @@ async def _refresh_locked(
     # forever (which would keep re-triggering the A5 split-language
     # guess on every future unrelated failure).
     if new_refresh and new_refresh != stored["refresh_token"]:
+        # A reconnect or disconnect during the POST must not be overwritten.
+        if not await asyncio.to_thread(
+            _still_holds, provider_id, account_email, stored["refresh_token"]
+        ):
+            raise _replaced_error(provider_id)
         await asyncio.to_thread(
             save_connection,
             provider=provider_id,
@@ -382,18 +383,34 @@ async def _refresh_token(
     return access, new_refresh, int(expires_in)
 
 
-def _delete_if_unchanged(provider_id: str, sent_refresh_token: str) -> bool:
+def _still_holds(provider_id: str, account_email: str, refresh_token: str) -> bool:
+    """Whether the stored connection still holds ``refresh_token``."""
+    current = peek_connection(provider_id, account_email=account_email)
+    return current is not None and current.get("refresh_token") == refresh_token
+
+
+def _delete_if_unchanged(
+    provider_id: str, account_email: str, sent_refresh_token: str
+) -> bool:
     """Delete the connection only if it still holds the rejected refresh token.
 
     A reconnect, or a process outside the refresh lock (an older GAIA), may
     have stored a new one meanwhile; deleting that would lose a working
     connection.
     """
-    current = peek_connection(provider_id)
+    current = peek_connection(provider_id, account_email=account_email)
     if current is not None and current.get("refresh_token") != sent_refresh_token:
         return False
-    delete_connection(provider_id)
+    delete_connection(provider_id, account_email=account_email)
     return True
+
+
+def _replaced_error(provider_id: str) -> ConnectorsError:
+    return ConnectorsError(
+        f"The {provider_id} connection was replaced (reconnected, disconnected, "
+        "or refreshed by another GAIA process) while this refresh was in "
+        "flight; the stored connection was left as is. Retry the request."
+    )
 
 
 def get_or_refresh_sync(

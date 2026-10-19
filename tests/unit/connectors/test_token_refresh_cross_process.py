@@ -160,7 +160,7 @@ async def test_invalid_grant_after_a_reconnect_keeps_the_new_connection(google):
 
     respx.post(TOKEN_URL).mock(side_effect=reconnect_mid_refresh)
 
-    with pytest.raises(ConnectorsError, match="intact") as exc:
+    with pytest.raises(ConnectorsError, match="replaced") as exc:
         await get_or_refresh("google")
 
     assert not isinstance(exc.value, ConnectionRevokedError)
@@ -207,3 +207,39 @@ async def test_keyring_calls_run_off_the_event_loop(monkeypatch, google):
 
     assert set(seen) == {"load", "save"}
     assert loop_thread not in seen.values(), "keyring call blocked the event loop"
+
+
+def _rotated():
+    return httpx.Response(
+        200, json={"access_token": "a", "expires_in": 3600, "refresh_token": "r2"}
+    )
+
+
+@respx.mock
+async def test_rotation_after_a_reconnect_does_not_overwrite_it(google):
+    def reconnect_then_rotate(request):
+        _save(google, "reconnected")
+        return _rotated()
+
+    respx.post(TOKEN_URL).mock(side_effect=reconnect_then_rotate)
+
+    with pytest.raises(ConnectorsError, match="replaced"):
+        await get_or_refresh("google")
+
+    assert _stored_refresh_token(google) == "reconnected"
+
+
+@respx.mock
+async def test_rotation_after_a_disconnect_does_not_resurrect_it(google):
+    from gaia.connectors.store import delete_connection
+
+    def disconnect_then_rotate(request):
+        delete_connection("google")
+        return _rotated()
+
+    respx.post(TOKEN_URL).mock(side_effect=disconnect_then_rotate)
+
+    with pytest.raises(ConnectorsError, match="replaced"):
+        await get_or_refresh("google")
+
+    assert _stored_refresh_token(google) is None

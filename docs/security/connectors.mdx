@@ -99,9 +99,10 @@ processes running as the same user (e.g. `gaia chat --ui` and
 token cache and share the keyring. A refresh holds a per-provider file
 lock (`~/.gaia/connectors/<provider>.refresh.lock`, per user like the
 keyring) and re-reads the stored refresh token after taking it, so two
-processes never refresh with the same token. On `invalid_grant` the
-connection is deleted only if it still holds the rejected token, so a
-reconnect that lands while a refresh is in flight is kept.
+processes never refresh with the same token. A refresh that finishes
+after the user reconnected or disconnected leaves the stored connection
+alone: `invalid_grant` deletes it, and a rotated token replaces it, only
+if it still holds the refresh token that was sent.
 
 ## Threats considered
 
