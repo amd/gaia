@@ -16,6 +16,7 @@ import re
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
@@ -77,26 +78,30 @@ _HEADER_READS: Dict[int, socket.socket] = {}
 _HEADER_READS_LOCK = threading.Lock()
 
 
-class _HeaderReadTracking:
-    """Connection mixin that registers its socket while headers are read."""
-
-    def getresponse(self, *args, **kwargs):
-        thread_id = threading.get_ident()
+@contextmanager
+def _header_read(sock):
+    """Register ``sock`` as this thread's header read for its duration."""
+    thread_id = threading.get_ident()
+    with _HEADER_READS_LOCK:
+        _HEADER_READS[thread_id] = sock
+    try:
+        yield
+    finally:
         with _HEADER_READS_LOCK:
-            _HEADER_READS[thread_id] = self.sock
-        try:
+            _HEADER_READS.pop(thread_id, None)
+
+
+class _TrackedHTTPConnection(HTTPConnection):
+    def getresponse(self, *args, **kwargs):
+        with _header_read(self.sock):
             return super().getresponse(*args, **kwargs)
-        finally:
-            with _HEADER_READS_LOCK:
-                _HEADER_READS.pop(thread_id, None)
 
 
-class _TrackedHTTPConnection(_HeaderReadTracking, HTTPConnection):
-    pass
-
-
-class _TrackedHTTPSConnection(_HeaderReadTracking, HTTPSConnection):
-    pass
+class _TrackedHTTPSConnection(HTTPSConnection):
+    def getresponse(self, *args, **kwargs):
+        with _header_read(self.sock):
+            # Inherited from urllib3's HTTPConnection; pylint misses it here.
+            return super().getresponse(*args, **kwargs)  # pylint: disable=no-member
 
 
 class _TrackedHTTPConnectionPool(HTTPConnectionPool):
