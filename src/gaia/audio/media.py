@@ -19,6 +19,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
@@ -35,6 +37,8 @@ TARGET_CODEC = "pcm_s16le"
 
 _INSTALL_TIMEOUT_SECONDS = 900
 _PROBE_TIMEOUT_SECONDS = 60
+# ffmpeg reports progress about twice a second; this much silence means stuck.
+_DECODE_STALL_SECONDS = 120.0
 
 # (package manager executable, install argv). First manager present on PATH wins.
 _INSTALL_COMMANDS: dict[str, Sequence[tuple[str, Sequence[str]]]] = {
@@ -325,11 +329,8 @@ def to_wav16k_mono(
         str(out_path),
     ]
 
-    if progress_callback is None:
-        _run_ffmpeg(cmd, path)
-    else:
-        total = probe_duration(path)
-        _run_ffmpeg_with_progress(cmd, path, total, progress_callback)
+    total = probe_duration(path) if progress_callback is not None else 0.0
+    _run_ffmpeg(cmd, path, total, progress_callback)
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise MediaError(
@@ -350,28 +351,19 @@ def _decode_failure(src: Path, returncode: int, stderr: str) -> MediaError:
     )
 
 
-def _run_ffmpeg(cmd: List[str], src: Path) -> None:
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=child_env(),
-        )
-    except OSError as e:
-        raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e
-    if result.returncode != 0:
-        raise _decode_failure(src, result.returncode, result.stderr or "")
-
-
-def _run_ffmpeg_with_progress(
+def _run_ffmpeg(
     cmd: List[str],
     src: Path,
-    total_seconds: float,
-    progress_callback: Callable[[float], None],
+    total_seconds: float = 0.0,
+    progress_callback: Optional[Callable[[float], None]] = None,
 ) -> None:
+    """Run a decode, stopping it if ffmpeg reports no progress for a while.
+
+    A decode's length scales with the file, so there is no fixed total limit.
+    ffmpeg writes a progress block about twice a second while it works; one
+    that goes silent for ``_DECODE_STALL_SECONDS`` is stuck (a drive or share
+    that stopped answering, a stream that stopped sending) and is killed.
+    """
     # -loglevel error keeps stderr small enough that reading it after stdout
     # cannot deadlock on a full pipe.
     progress_cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
@@ -387,13 +379,30 @@ def _run_ffmpeg_with_progress(
     except OSError as e:
         raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e
 
+    stall_seconds = _DECODE_STALL_SECONDS
+    last_output = [time.monotonic()]
+    finished = threading.Event()
+    stalled = threading.Event()
+
+    def watchdog() -> None:
+        while not finished.wait(min(1.0, stall_seconds / 4)):
+            if time.monotonic() - last_output[0] >= stall_seconds:
+                stalled.set()
+                proc.kill()
+                return
+
+    threading.Thread(target=watchdog, name="ffmpeg-stall-watchdog", daemon=True).start()
+
     assert proc.stdout is not None
     try:
-        for line in proc.stdout:
-            elapsed = _parse_progress_seconds(line)
-            if elapsed is None or total_seconds <= 0:
+        # readline, not iteration: the iterator's read-ahead holds lines back.
+        for line in iter(proc.stdout.readline, ""):
+            last_output[0] = time.monotonic()
+            if progress_callback is None or total_seconds <= 0:
                 continue
-            progress_callback(min(elapsed / total_seconds, 1.0))
+            elapsed = _parse_progress_seconds(line)
+            if elapsed is not None:
+                progress_callback(min(elapsed / total_seconds, 1.0))
         stderr = proc.stderr.read() if proc.stderr else ""
         returncode = proc.wait()
     except BaseException:
@@ -403,11 +412,20 @@ def _run_ffmpeg_with_progress(
         proc.wait()
         raise
     finally:
+        finished.set()
         if proc.stdout:
             proc.stdout.close()
         if proc.stderr:
             proc.stderr.close()
 
+    if stalled.is_set():
+        raise MediaError(
+            f"ffmpeg made no progress decoding {src} for {stall_seconds:.0f}s, so "
+            "it was stopped. The file may be on a drive or network share that "
+            "stopped responding. Copy it to a local disk and retry. "
+            f"See {DOCS_URL}"
+        )
     if returncode != 0:
         raise _decode_failure(src, returncode, stderr)
-    progress_callback(1.0)
+    if progress_callback is not None:
+        progress_callback(1.0)

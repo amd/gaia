@@ -14,6 +14,7 @@ Two things these tests deliberately do NOT mock:
 
 import os
 import subprocess
+import time
 import sys
 import wave
 from pathlib import Path
@@ -366,3 +367,45 @@ class TestNoSubprocessInheritsStdin:
         assert (
             not offenders
         ), f"{diarize.__file__} spawns without stdin= at line(s) {offenders}"
+
+
+class TestDecodeStall:
+    """A decode that stops making progress is stopped, not waited on forever.
+
+    ffmpeg had no deadline at all: reading from a drive or share that stopped
+    answering, it held the transcription tool, and the turn, indefinitely. It
+    reports progress about twice a second, so silence is the signal; a long
+    file that keeps progressing is never cut off.
+    """
+
+    def _fake_ffmpeg(self, monkeypatch, script):
+        real_popen = subprocess.Popen
+
+        def popen(cmd, **kwargs):
+            return real_popen([sys.executable, "-c", script], **kwargs)
+
+        monkeypatch.setattr(media.subprocess, "Popen", popen)
+        monkeypatch.setattr(media, "_DECODE_STALL_SECONDS", 1.0)
+
+    def test_silent_ffmpeg_is_killed_with_an_actionable_error(self, monkeypatch):
+        self._fake_ffmpeg(monkeypatch, "import time; time.sleep(60)")
+
+        started = time.monotonic()
+        with pytest.raises(media.MediaError, match="made no progress") as excinfo:
+            media._run_ffmpeg(["ffmpeg", "-i", "in.mp4"], Path("in.mp4"))
+        assert time.monotonic() - started < 20
+        assert "local disk" in str(excinfo.value)
+
+    def test_ffmpeg_that_keeps_reporting_progress_is_not_stopped(self, monkeypatch):
+        # Runs 3x the stall window, reporting every 0.2 s.
+        self._fake_ffmpeg(
+            monkeypatch,
+            "import sys, time\n"
+            "for i in range(15):\n"
+            "    print(f'out_time=00:00:{i:02d}.000000', flush=True)\n"
+            "    time.sleep(0.2)\n",
+        )
+        seen = []
+        media._run_ffmpeg(["ffmpeg"], Path("in.mp4"), 15.0, seen.append)
+        assert seen[-1] == pytest.approx(1.0)
+        assert seen == sorted(seen)
