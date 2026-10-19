@@ -243,9 +243,8 @@ async def test_turn_waiting_on_the_user_lets_other_chats_run(
         await _start_detached(await _send(rt, a, "do it"))
         run_a = rt.manager.get(a)
         await _until(lambda: run_a.handler is not None and run_a.handler.waiting_on())
-        assert (
-            rt.queue.holder is None
-        ), "a turn waiting on the user must not hold the model"
+        # The prompt is posted just before the slot is handed back on the loop.
+        await _until(lambda: rt.queue.holder is None)
 
         await _start_detached(await _send(rt, b, "quick question"))
         run_b = rt.manager.get(b)
