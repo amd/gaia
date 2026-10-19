@@ -162,8 +162,8 @@ func TestBinaryRowTellsAnUnfinishedInstallApartFromAMissingOne(t *testing.T) {
 	if !strings.Contains(row.Detail, catalog.SentinelName) {
 		t.Errorf("the row does not name the missing sentinel:\n%s", row.Detail)
 	}
-	if !strings.Contains(row.Remedy.Command, "install") {
-		t.Errorf("remedy command = %q, want a reinstall", row.Remedy.Command)
+	if row.Remedy.Command != "gaia init" {
+		t.Errorf("remedy command = %q, want `gaia init`, which reinstalls a flagship with no sentinel", row.Remedy.Command)
 	}
 	// Saying "not on this machine" here sends the user chasing a download that
 	// already happened.

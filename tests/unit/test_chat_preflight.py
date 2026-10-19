@@ -549,3 +549,71 @@ def test_a_load_refused_for_memory_tells_the_user_what_to_close():
 
     assert raised.value is refusal
     assert "Lemonade is running" not in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# A custom (user.) model is listed by Lemonade without its namespace
+# ---------------------------------------------------------------------------
+
+#: Lemonade reports ``user.X`` in /health as ``X`` (seen on v2026.40.0).
+_CUSTOM = "user.Qwen3.8-Flash-Next-GGUF"
+_CUSTOM_AS_LISTED = "Qwen3.8-Flash-Next-GGUF"
+
+
+def _preflight(*health_replies):
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, side_effect=list(health_replies)),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+        patch("gaia.llm.lemonade_client.resolve_ctx_size", return_value=65536),
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model(_CUSTOM)
+        return mock_cls
+
+
+def test_a_resident_custom_model_is_not_reloaded_every_turn():
+    """It was: every gpt-oss-20b turn paid a ~20 s unload and reload."""
+    resident = _health_ok([_model("llm", name=_CUSTOM_AS_LISTED, ctx_size=65536)])
+    # Both /health reads answered, so a wrong verdict reaches load_model.
+    mock_cls = _preflight(resident, resident)
+    mock_cls.return_value.load_model.assert_not_called()
+    mock_cls.return_value.unload_model.assert_not_called()
+
+
+def test_a_custom_model_loaded_by_another_thread_is_recognised_after_the_lock():
+    empty = _health_ok([])
+    loaded = _health_ok([_model("llm", name=_CUSTOM_AS_LISTED, ctx_size=65536)])
+    _preflight(empty, loaded).assert_not_called()
+
+
+def test_a_resident_custom_model_with_too_small_a_window_is_still_reloaded():
+    small = _health_ok([_model("llm", name=_CUSTOM_AS_LISTED, ctx_size=4096)])
+    mock_cls = _preflight(small, small)
+    mock_cls.return_value.load_model.assert_called_once()
+    assert mock_cls.return_value.load_model.call_args.args[0] == _CUSTOM
+    # The too-small copy is unloaded under its listed name, not loaded twice.
+    mock_cls.return_value.unload_model.assert_called_once_with(
+        _CUSTOM_AS_LISTED, ignore_if_not_loaded=True
+    )
+
+
+def test_a_different_model_sharing_the_custom_name_as_a_prefix_is_still_replaced():
+    other = _health_ok([_model("llm", name=f"{_CUSTOM_AS_LISTED}-v2", ctx_size=65536)])
+    mock_cls = _preflight(other, other)
+    assert mock_cls.return_value.load_model.call_args.args[0] == _CUSTOM
+
+
+def test_a_built_in_model_is_still_matched_when_listed_with_a_namespace():
+    listed = _health_ok(
+        [_model("llm", name="user.Gemma-4-E4B-it-GGUF", ctx_size=65536)]
+    )
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, side_effect=[listed, listed]),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+        patch("gaia.llm.lemonade_client.resolve_ctx_size", return_value=65536),
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model("Gemma-4-E4B-it-GGUF")
+    mock_cls.return_value.load_model.assert_not_called()

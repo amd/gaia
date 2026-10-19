@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,6 +26,7 @@ from gaia.agents.base.tool_grants import grant_scope
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .._chat_helpers import _spawn_background, stuck_producer
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
@@ -86,7 +88,8 @@ async def send_message(
     Concurrency is controlled at two levels:
     1. Every turn waits in one visible line for the model (``turn_queue``).
        A streamed turn waits inside its detached run and reports its place
-       in line; a non-streamed one waits here for up to 60 s.
+       in line; a non-streamed one waits here, its message already saved,
+       until it reaches the model or is stopped with ``/api/chat/cancel``.
     2. A per-session lock (session_locks) prevents the same session
        from having overlapping requests that would corrupt conversation
        state.
@@ -111,6 +114,13 @@ async def send_message(
     #
     # The session lock and run registry cover the entire producer lifetime,
     # including detached runs, to protect the cached agent's conversation state.
+    if stuck_producer(sid) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="GAIA is still stopping the previous reply in this chat: "
+            "a tool it was running has not returned yet. Send your message "
+            "again in a moment; other chats are not affected.",
+        )
     if session_lock.locked() or run_manager.is_running(sid):
         raise HTTPException(
             status_code=409,
@@ -120,27 +130,28 @@ async def send_message(
     await session_lock.acquire()
 
     # A streamed turn takes its place in line inside the run, so leaving the
-    # chat while it waits doesn't drop it.
+    # chat while it waits doesn't drop it. A non-streamed one is saved first,
+    # so a long wait never loses it.
     holds_turn = False
     if not request.stream:
         try:
-            await asyncio.wait_for(turn_queue.acquire(sid), timeout=60.0)
+            db.add_message(sid, "user", request.message)
+            await turn_queue.acquire(sid)
             holds_turn = True
-        except asyncio.TimeoutError:
-            session_lock.release()
-            raise HTTPException(
-                status_code=429,
-                detail="The model is busy with another chat. Try again when it "
-                "finishes, or use streaming to wait in line.",
-            )
         except TurnCancelled:
+            db.add_message(sid, "assistant", "Cancelled.")
             session_lock.release()
             raise HTTPException(
                 status_code=409,
                 detail="This message was stopped while it waited for another "
-                "chat to finish. Send it again to retry.",
+                "chat to finish. It is saved in the chat; send it again to retry.",
             )
         except asyncio.CancelledError:
+            # The client left while waiting: close the turn it saved.
+            db.add_message(sid, "assistant", "Cancelled.")
+            session_lock.release()
+            raise
+        except BaseException:
             session_lock.release()
             raise
 
@@ -162,6 +173,11 @@ async def send_message(
                 if stream_resources_released:
                     return
                 stream_resources_released = True
+                stuck = stuck_producer(sid)
+                if stuck is not None:
+                    # The stopped turn's thread still drives this chat's agent.
+                    _spawn_background(_release_after(stuck, session_lock))
+                    return
                 session_lock.release()
 
             async def _release_stream_resources():
@@ -200,7 +216,6 @@ async def send_message(
 
             run_status = "failed"
             try:
-                db.add_message(request.session_id, "user", request.message)
                 model_messages = []
                 turn_box: dict = {}
                 response_text = await srv._get_chat_response(
@@ -235,10 +250,7 @@ async def send_message(
                 # _maybe_update_session_title for the rules. We pass
                 # model_id from the loaded session so the title call uses
                 # whichever LLM is actually live in Lemonade.
-                from gaia.ui._chat_helpers import (
-                    _maybe_update_session_title,
-                    _spawn_background,
-                )
+                from gaia.ui._chat_helpers import _maybe_update_session_title
 
                 _spawn_background(
                     _maybe_update_session_title(
@@ -261,6 +273,23 @@ async def send_message(
     finally:
         if holds_turn:
             turn_queue.release()
+
+
+async def _release_after(thread: threading.Thread, session_lock: asyncio.Lock):
+    """Free a chat once the agent thread of its stopped turn has exited."""
+    # Polled, not joined: a join would hold a worker of the shared executor.
+    # No limit: the thread still drives this chat's agent until it exits.
+    waited = 0.0
+    while thread.is_alive():
+        await asyncio.sleep(0.5)
+        waited += 0.5
+        if waited % 300 == 0:
+            logger.warning(
+                "A stopped chat's agent thread is still running after %.0f s; "
+                "the chat stays busy until it returns",
+                waited,
+            )
+    session_lock.release()
 
 
 # A late answer to a turn that already ended: say so, not "no session".

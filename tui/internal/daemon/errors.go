@@ -149,7 +149,7 @@ func (e *StartError) Brief() string {
 // about the daemon. Reporting the first as the second sends the user to check a
 // remote service over a local restart.
 type RouteMissingError struct {
-	// Op is what the caller was trying to do, e.g. "read the Agent Hub catalog".
+	// Op is what the caller was trying to do, e.g. "read the agent catalog".
 	Op string
 	// Path is the route the daemon does not have.
 	Path string

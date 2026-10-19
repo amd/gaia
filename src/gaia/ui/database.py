@@ -1349,6 +1349,33 @@ class ChatDatabase:
                 ),
             )
 
+    def claim_scheduled_run(
+        self, task_id: str, expected_next_run_at: str | None, next_run_at: str
+    ) -> bool:
+        """Take the run due at *expected_next_run_at*, moving the task on to
+        *next_run_at*. False when another server sharing this database
+        already took it (the stored time no longer matches), or paused or
+        cancelled the task."""
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE scheduled_tasks SET next_run_at = ? "
+                "WHERE id = ? AND next_run_at IS ? AND status = 'active'",
+                (next_run_at, task_id, expected_next_run_at),
+            )
+            return cursor.rowcount == 1
+
+    def scheduled_task_timing(self, task_id: str) -> Dict[str, Any]:
+        """The task's stored ``status`` and ``next_run_at``, as another server
+        may have set them."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT status, next_run_at FROM scheduled_tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"No scheduled task {task_id!r} in the chat database")
+        return dict(row)
+
     def delete_scheduled_task(self, task_id: str) -> None:
         """Delete a scheduled task and its results."""
         with self._transaction():

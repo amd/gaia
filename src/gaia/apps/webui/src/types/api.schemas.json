@@ -2983,6 +2983,56 @@
     "title": "RetryWithRequest",
     "type": "object"
   },
+  "RunningAnswer": {
+    "description": "A chat whose answer is still being written.",
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "title": "RunningAnswer",
+    "type": "object"
+  },
+  "RunningIndexJob": {
+    "description": "A document still being indexed.",
+    "properties": {
+      "document_id": {
+        "title": "Document Id",
+        "type": "string"
+      },
+      "filename": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Filename"
+      }
+    },
+    "required": [
+      "document_id"
+    ],
+    "title": "RunningIndexJob",
+    "type": "object"
+  },
   "ScheduleListResponse": {
     "description": "List of scheduled tasks.",
     "properties": {
@@ -4315,6 +4365,34 @@
     "title": "UndoSettings",
     "type": "object"
   },
+  "UnloadModelRequest": {
+    "properties": {
+      "model_name": {
+        "minLength": 1,
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "UnloadModelRequest",
+    "type": "object"
+  },
+  "UnloadModelResponse": {
+    "description": "The model server dropped its models from memory.",
+    "properties": {
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status"
+    ],
+    "title": "UnloadModelResponse",
+    "type": "object"
+  },
   "UpdateScheduleRequest": {
     "description": "Request to update a scheduled task.",
     "properties": {
@@ -4578,6 +4656,31 @@
       "state"
     ],
     "title": "WarmUpStatus",
+    "type": "object"
+  },
+  "WorkInProgress": {
+    "description": "Work that quitting or unloading the model would cut short.",
+    "properties": {
+      "answers": {
+        "items": {
+          "$ref": "#/components/schemas/RunningAnswer"
+        },
+        "title": "Answers",
+        "type": "array"
+      },
+      "indexing": {
+        "items": {
+          "$ref": "#/components/schemas/RunningIndexJob"
+        },
+        "title": "Indexing",
+        "type": "array"
+      }
+    },
+    "required": [
+      "answers",
+      "indexing"
+    ],
+    "title": "WorkInProgress",
     "type": "object"
   }
 }

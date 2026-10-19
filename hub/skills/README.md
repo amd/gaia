@@ -62,5 +62,4 @@ the tier.
 
 Contributing your own skill? It goes in
 [`skills/community/`](../../skills/community/), not here. Full route in the
-[publishing guide](https://amd-gaia.ai/docs/guides/hub-publishing) and the
 [skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).

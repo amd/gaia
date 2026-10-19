@@ -509,7 +509,9 @@ def _validate_host_ip(hostname: str) -> None:
 | Download size | 100 MB | Prevent disk fill |
 | Text extraction | 20,000 chars max | Prevent context overflow |
 | Rate limit | 1 req/sec | Prevent accidental DoS |
-| Timeout | 30 seconds | Prevent hanging |
+| Read timeout | 30 seconds | Bound each socket read |
+| Fetch deadline | 120 seconds | Bound a whole page fetch (every redirect, the connection, headers and body), so a server that trickles bytes cannot hold it |
+| Download deadline | 30 minutes | Bound a whole download the same way |
 | Max redirects | 5 | Prevent redirect loops |
 
 ### 8.3 Download Path Validation
