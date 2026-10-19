@@ -45,7 +45,8 @@ API_KEY_SECRET_NAME = "lemonade_api_key"
 #: the pre-10.1 one. Same list the TUI's preflight probes.
 DETECT_PORTS = (13305, 8000)
 
-_DETECT_TIMEOUT = (0.5, 3.0)
+# A busy server accepts the connection at once but can take seconds to answer.
+_DETECT_TIMEOUT = (0.5, 10.0)
 _PROBE_TIMEOUT = (3.0, 10.0)
 
 #: Where a user who wants GAIA's own server back is pointed, in one line.
@@ -239,6 +240,8 @@ class ProbeResult:
     version: Optional[str] = None
     minimum: Optional[str] = None
     detail: str = ""
+    #: Something accepted the connection but did not answer in time.
+    timed_out: bool = False
 
     @property
     def usable(self) -> bool:
@@ -314,7 +317,13 @@ def probe(
             f"{base}/health", headers=headers, timeout=timeout, allow_redirects=False
         )
     except requests.exceptions.RequestException as e:
-        return ProbeResult(base, UNREACHABLE, minimum=minimum, detail=_short(e))
+        return ProbeResult(
+            base,
+            UNREACHABLE,
+            minimum=minimum,
+            detail=_short(e),
+            timed_out=isinstance(e, requests.exceptions.ReadTimeout),
+        )
     if response.status_code in (401, 403):
         return ProbeResult(base, BAD_KEY if api_key else NEEDS_KEY, minimum=minimum)
     if response.status_code != 200:
@@ -346,7 +355,21 @@ def _short(error: Exception) -> str:
     return text[:160]
 
 
+@dataclass(frozen=True)
+class Detection:
+    """What :func:`detect_lemonade` found, and the ports it could not judge."""
+
+    found: Optional[ProbeResult]
+    #: URLs where something accepted the connection but never answered.
+    unchecked: Tuple[str, ...] = ()
+
+
 def detect_running_lemonade() -> Optional[ProbeResult]:
+    """A Lemonade the user runs on this machine's default ports, if any."""
+    return detect_lemonade().found
+
+
+def detect_lemonade() -> Detection:
     """A Lemonade the user runs on this machine's default ports, if any.
 
     Only offered when it really is Lemonade: a ``/health`` answer that says so,
@@ -354,8 +377,10 @@ def detect_running_lemonade() -> Optional[ProbeResult]:
     :func:`~gaia.llm.lemonade_launcher.resolve_lemonade` finds one). GAIA's own
     private server is never offered back to it.
 
-    Returns the first usable or key-protected server, else a too-old one so
-    the caller can say why it was not offered, else None.
+    ``found`` is the first usable or key-protected server, else a too-old one
+    so the caller can say why it was not offered, else None. ``unchecked``
+    names ports that did not answer in time, so "none found" is not claimed
+    when the answer is "could not tell".
     """
     from gaia.llm.lemonade_client import running_embedded_lemonade_url
     from gaia.llm.lemonade_launcher import resolve_lemonade
@@ -363,21 +388,24 @@ def detect_running_lemonade() -> Optional[ProbeResult]:
     own = running_embedded_lemonade_url()
     too_old: Optional[ProbeResult] = None
     installed: Optional[bool] = None
+    unchecked = []
     for port in DETECT_PORTS:
         url = f"http://localhost:{port}/api/v1"
         if own and urlparse(own).port == port:
             continue
         result = probe(url, timeout=_DETECT_TIMEOUT)
         if result.status == OK:
-            return result
+            return Detection(result)
         if result.status == NEEDS_KEY:
             if installed is None:
                 installed = resolve_lemonade().found
             if installed:
-                return result
+                return Detection(result)
         if result.status == TOO_OLD and too_old is None:
             too_old = result
-    return too_old
+        if result.timed_out:
+            unchecked.append(result.url)
+    return Detection(too_old, tuple(unchecked))
 
 
 # ---------------------------------------------------------------------------

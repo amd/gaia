@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re as _re
+import sqlite3
 import threading
 import time as _time
 from pathlib import Path
@@ -33,6 +34,7 @@ from gaia.agents.install_hints import (
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -48,8 +50,10 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.turn_changes import TurnRecording
 
 from . import permissions as session_permissions
+from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -60,6 +64,7 @@ from .sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
@@ -223,8 +228,8 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
 # even when nothing has changed.  Caching the agent per session_id lets us skip
 # all of that on follow-up turns.
 #
-# Thread-safety: the global chat_semaphore(1) in server.py serialises all chat
-# requests, and the per-session session_lock prevents concurrent turns within
+# Thread-safety: the global turn queue (turn_queue.py) serialises all chat
+# turns, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
 _agent_cache: dict[str, dict] = (
@@ -288,6 +293,174 @@ _mcp_status_lock = threading.Lock()
 # path (_maybe_load_expected_model) and the boot-time preload task in server.py.
 # Public (no underscore) because it is intentionally accessed cross-module.
 model_load_lock = threading.Lock()
+
+# Chat models the Agent UI loaded. Only these may be unloaded to make room: a
+# model another app (or another GAIA process) loaded is never taken from under
+# it. Kept on disk so a restart still knows them; None until first read.
+_models_loaded_here: Optional[set] = None
+
+
+def _model_key(model_id: str) -> str:
+    return (
+        model_id[len("user.") :].lower()
+        if model_id.startswith("user.")
+        else model_id.lower()
+    )
+
+
+def _owned_models_path() -> Path:
+    from gaia.config import gaia_home
+
+    return gaia_home() / "ui" / "loaded_models.json"
+
+
+def _owned_models() -> set:
+    """The models the Agent UI has loaded, read from its record on first use."""
+    global _models_loaded_here  # pylint: disable=global-statement
+    if _models_loaded_here is None:
+        path = _owned_models_path()
+        names: list = []
+        try:
+            if path.exists():
+                names = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # Unknown ownership is the safe direction: nothing gets unloaded.
+            logger.warning(
+                "Could not read which models the Agent UI loaded (%s): %s; "
+                "none will be unloaded to make room",
+                path,
+                exc,
+            )
+        _models_loaded_here = (
+            {str(n) for n in names} if isinstance(names, list) else set()
+        )
+    return _models_loaded_here
+
+
+def _auto_load_windows() -> set:
+    """Windows a model has when a request made Lemonade load it, unasked.
+
+    Lemonade's own default, and the window GAIA's supervisor starts the server
+    with (``LEMONADE_CTX_SIZE``, the machine's profile window).
+    """
+    from gaia.llm.lemonade_client import active_profile_ctx_size
+
+    return {4096, active_profile_ctx_size()}
+
+
+class ModelInUseError(RuntimeError):
+    """The model is loaded by another app in a way this turn can't use."""
+
+
+# Guards the record: the pre-flight and Settings loads run on different threads.
+_owned_models_lock = threading.Lock()
+
+
+def _save_owned_models() -> None:
+    """Write the record whole: a crash mid-write never leaves half a file."""
+    path = _owned_models_path()
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(sorted(_owned_models())), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.warning("Could not record the Agent UI's loaded models: %s", exc)
+
+
+def note_model_loaded(model_id: str) -> None:
+    """Record a chat model the Agent UI loaded (pre-flight, preload, Settings)."""
+    key = _model_key(model_id)
+    with _owned_models_lock:
+        if key not in _owned_models():
+            _owned_models().add(key)
+            _save_owned_models()
+
+
+# Loads by this process's own agents (a mid-turn reload) count as the UI's.
+_lemonade_client_mod.add_model_load_listener(note_model_loaded)
+
+
+def _forget_model(model_id: str) -> None:
+    with _owned_models_lock:
+        _owned_models().discard(_model_key(model_id))
+        _save_owned_models()
+
+
+def _forget_models_not_loaded(resident: list) -> None:
+    """Drop recorded models Lemonade no longer has loaded.
+
+    Once a model is gone, a later copy of it may be another app's load.
+    """
+    loaded = {_model_key(m["model_name"]) for m in resident if m.get("model_name")}
+    with _owned_models_lock:
+        gone = _owned_models() - loaded
+        if gone:
+            _owned_models().difference_update(gone)
+            _save_owned_models()
+
+
+def _loaded_here(model_id: str) -> bool:
+    return _model_key(model_id) in _owned_models()
+
+
+def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
+    """Take ``model_load_lock``; False when the turn is stopped while waiting."""
+    shown = False
+    while not model_load_lock.acquire(timeout=0.2):
+        if stopped is not None and stopped():
+            return False
+        if sse_handler is None:
+            continue
+        if not shown:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "working",
+                    "message": "Waiting for another chat to finish loading its model",
+                }
+            )
+            shown = True
+    return True
+
+
+def _load_making_room(
+    client, model_id: str, ctx: int, resident: list, may_unload: bool, sse_handler
+) -> None:
+    """Load *model_id*, unloading only this process's other models if it won't fit."""
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
+    try:
+        client.load_model(
+            model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
+        )
+    except InsufficientMemoryError:
+        wanted = _model_key(model_id)
+        ours = [
+            m["model_name"]
+            for m in resident
+            if m.get("model_name")
+            and _loaded_here(m["model_name"])
+            and _model_key(m["model_name"]) != wanted
+        ]
+        if not may_unload or not ours:
+            raise
+        for name in ours:
+            logger.info("Pre-flight: unloading %s to make room for %s", name, model_id)
+            if sse_handler is not None:
+                sse_handler._emit(
+                    {
+                        "type": "status",
+                        "status": "info",
+                        "message": f"Unloading {name} to make room for {model_id}",
+                    }
+                )
+            client.unload_model(name, ignore_if_not_loaded=True)
+            _forget_model(name)
+        client.load_model(
+            model_id, ctx_size=ctx, prompt=False, timeout=_PREFLIGHT_LOAD_TIMEOUT_S
+        )
+    note_model_loaded(model_id)
 
 
 # ── Lemonade error classification ──────────────────────────────────────────
@@ -392,20 +565,30 @@ async def _generate_session_title(
     user_msg: str,
     assistant_msg: str,
 ) -> Optional[str]:
-    """Call Lemonade chat completions to produce a short tab-style title.
+    """Ask the chat's model for a short tab-style title.
+
+    Runs like any other model request in this process: through the model
+    client, so it takes the broker lease (at background priority, behind any
+    turn) and the per-model request lock, and on the model's side slot when it
+    has one, so the conversation's cache stays put. A title never loads a
+    model: when *model_id* is not loaded, the first question is the title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on an HTTP or parse failure.  An empty reply or a
-    classifier verdict ("safe", "unsafe S1") yields the first question instead,
-    with a warning.  Times out at 30 s so a hung
-    LLM doesn't keep the background task alive forever.
+    punctuation), the first question for an empty reply or a classifier
+    verdict ("safe", "unsafe S1"), or None when the request fails. The
+    request itself times out at 30 s; the wait for the model slot before it
+    is the broker's.
     """
-    import httpx  # pylint: disable=import-outside-toplevel
+    from contextlib import nullcontext
 
+    from gaia.daemon.broker_client import model_lease
     from gaia.llm.lemonade_client import (
-        find_model_requirement,
-        lemonade_auth_headers,
-        resolve_lemonade_api_key,
+        SIDE_SLOT,
+        LemonadeClient,
+        LemonadeClientError,
+        _model_ids_match,
+        cloud_model_provider,
+        no_thinking_kwargs,
     )
 
     prompt = (
@@ -416,56 +599,70 @@ async def _generate_session_title(
         f"Assistant: {(assistant_msg or '')[:200]}\n"
         "Title:"
     )
-    body = {
-        "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 24,
-        # Low temperature: titles should be deterministic-ish
-        # for the same conversation.
-        "temperature": 0.3,
-    }
-    mr = find_model_requirement(model_id)
-    if mr is not None and mr.thinking is not None:
+
+    def _ask() -> Optional[dict]:
+        client = LemonadeClient(
+            base_url=base_url, verbose=False, model_lease_priority="background"
+        )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
-        body["chat_template_kwargs"] = {"enable_thinking": False}
+        kwargs = dict(no_thinking_kwargs(model_id))
+        local = not cloud_model_provider(model_id)
+        # One lease over the residency check and the call, so the model can't
+        # be swapped out between them; the call's own lease folds into it.
+        lease = model_lease(model_id, priority="background") if local else nullcontext()
+        with lease:
+            if local:
+                loaded = client.health_check().get("all_models_loaded", [])
+                if not any(
+                    _model_ids_match(m.get("model_name"), model_id) for m in loaded
+                ):
+                    return None
+                if client.slot_count(model_id) > SIDE_SLOT:
+                    kwargs["id_slot"] = SIDE_SLOT
+            return client.chat_completions(
+                model_id,
+                [{"role": "user", "content": prompt}],
+                max_tokens=24,
+                # Low temperature: titles should be deterministic-ish
+                # for the same conversation.
+                temperature=0.3,
+                timeout=30,
+                auto_download=False,
+                **kwargs,
+            )
+
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                json=body,
-                headers=lemonade_auth_headers(
-                    resolve_lemonade_api_key(base_url=base_url)
-                ),
-            )
-            if resp.status_code != 200:
-                logger.debug(
-                    "Auto-title HTTP %d: %s", resp.status_code, resp.text[:200]
-                )
-                return None
-            data = resp.json()
-            content = (
-                data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-            )
-            title = content.strip().split("\n")[0].strip()
-            # Strip wrapping quotes and trailing punctuation that some
-            # models always add despite the instruction.
-            title = title.strip("\"'`").rstrip(".!?;:,").strip()
-            # Strip stock prefixes models sometimes emit anyway.
-            for prefix in ("title:", "tab:", "summary:"):
-                if title.lower().startswith(prefix):
-                    title = title[len(prefix) :].strip()
-            if not title or _CLASSIFIER_VERDICT_RE.match(title):
-                logger.warning(
-                    "Auto-title: %s replied %r, not a title; "
-                    "titling from the first question instead",
-                    model_id,
-                    content[:80],
-                )
-                return _title_from_question(user_msg)
-            return title[:64]
-    except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
-        logger.debug("Auto-title LLM call failed: %s", exc)
+        data = await asyncio.to_thread(_ask)
+    except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
+        logger.warning("Auto-title request to %s failed: %s", model_id, exc)
         return None
+    if data is None:
+        logger.info(
+            "Auto-title: %s is not loaded; titling from the first question", model_id
+        )
+        return _title_from_question(user_msg)
+    try:
+        content = data["choices"][0]["message"].get("content") or ""
+    except (LookupError, TypeError, AttributeError) as exc:
+        logger.warning("Auto-title: unreadable reply from %s: %s", model_id, exc)
+        return None
+    title = content.strip().split("\n")[0].strip()
+    # Strip wrapping quotes and trailing punctuation that some
+    # models always add despite the instruction.
+    title = title.strip("\"'`").rstrip(".!?;:,").strip()
+    # Strip stock prefixes models sometimes emit anyway.
+    for prefix in ("title:", "tab:", "summary:"):
+        if title.lower().startswith(prefix):
+            title = title[len(prefix) :].strip()
+    if not title or _CLASSIFIER_VERDICT_RE.match(title):
+        logger.warning(
+            "Auto-title: %s replied %r, not a title; "
+            "titling from the first question instead",
+            model_id,
+            content[:80],
+        )
+        return _title_from_question(user_msg)
+    return title[:64]
 
 
 def _first_exchange(
@@ -1574,8 +1771,7 @@ def _dispatch_sidecar_query(
     Every exception the sidecar manager/proxy can raise is caught HERE and
     turned into a terminal SSE error — never left to reach
     ``_classify_chat_exception``, whose substring matching would misclassify
-    a sidecar connection error as a retryable Lemonade error and trigger a
-    bogus model reload.
+    a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
@@ -1913,8 +2109,92 @@ def _turn_inference_stats(
     return stats or None
 
 
+def _agent_location(agent) -> InferenceLocation | None:
+    """Where *agent*'s turn was answered, or None when it cannot say.
+
+    Only the agent's live client knows its backend; a bare model id would call
+    an agent on a remote backend local.
+    """
+    locate = getattr(agent, "_inference_location", None)
+    return locate() if callable(locate) else None
+
+
+def _turn_summary(
+    sse_handler, agent, message: str, answer_event: Optional[dict]
+) -> dict:
+    """The side rail's account of this turn (see :mod:`gaia.ui.turn_summary`).
+
+    A failure here becomes an ``error`` the rail shows, so it never costs the
+    user the answer it describes.
+    """
+    try:
+        evidence = getattr(agent, "_completion_evidence", None)
+        return sse_handler.turn_ledger.summary(
+            location=_agent_location(agent) if agent is not None else None,
+            written_files=evidence.written_files() if evidence is not None else (),
+            display_names=upload_display_names(message),
+            usage=answer_event,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Could not build this turn's summary: %s", exc, exc_info=True)
+        return {"error": f"{type(exc).__name__}: {exc}", "cost": {"kind": "unknown"}}
+
+
+def _undo_link_warning_event(message: str) -> str:
+    """SSE line telling the user this answer will not offer Undo."""
+    payload = {"type": "status", "status": "warning", "message": message}
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+#: Lemonade ``device`` substrings, in the order the footer names them.
+_DEVICE_NAMES = (("npu", "NPU"), ("gpu", "GPU"), ("cpu", "CPU"))
+
+
+def _turn_location(model_id: str) -> InferenceLocation:
+    """Where a turn with *model_id* was answered; needs no Lemonade."""
+    provider_kwargs = _eval_provider_kwargs()
+    if provider_kwargs.get("use_claude"):
+        return resolve_inference_location(
+            provider_kwargs["claude_model"], use_claude=True
+        )
+    return resolve_inference_location(
+        model_id, cloud_provider_lookup=_ui_cloud_provider
+    )
+
+
+def _cloud_place(loc: InferenceLocation) -> Optional[str]:
+    """A cloud turn's place, e.g. "via Fireworks AI"; None for a local one."""
+    return f"via {loc.display}" if loc.remote else None
+
+
+async def _local_place(model_id: str, client, base_url: str, headers: dict) -> str:
+    """Where a local turn ran: the device Lemonade reports for the model.
+
+    "on your GPU", or "on this PC" when Lemonade names no device for it.
+    """
+    from .routers.system import _norm_model_id
+
+    device = ""
+    resp = await client.get(f"{base_url}/health", headers=headers)
+    if resp.status_code == 200:
+        wanted = _norm_model_id(model_id)
+        for entry in resp.json().get("all_models_loaded") or []:
+            if (
+                isinstance(entry, dict)
+                and _norm_model_id(entry.get("model_name")) == wanted
+            ):
+                device = str(entry.get("device") or "").lower()
+                break
+    chips = [name for key, name in _DEVICE_NAMES if key in device]
+    return f"on your {' and '.join(chips)}" if chips else "on this PC"
+
+
 def _done_event(
-    msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
+    msg_id: int,
+    content: str,
+    turn_cancelled: bool,
+    stats: Optional[dict] = None,
+    turn_summary: Optional[dict] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -1927,6 +2207,8 @@ def _done_event(
         event["cancelled"] = True
     if stats:
         event["stats"] = stats
+    if turn_summary:
+        event["turn_summary"] = turn_summary
     return event
 
 
@@ -1939,7 +2221,7 @@ def _done_event(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+def _preflight_load(model_id: str, sse_handler, stopped) -> None:
     """Ensure a text-generation LLM is active *with the expected model
     name and a 32K+ context window* before issuing a chat completion.
 
@@ -1967,9 +2249,21 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     VLMs (``type="vlm"``) count as valid chat models for the model-name
     check, since the multimodal backbone serves text completions.
 
+    The model server is shared: a model another process loaded is never
+    unloaded. When the model won't fit, only models this process loaded are
+    unloaded to make room; otherwise the load fails loudly. A Stop
+    (``sse_handler.cancelled``) seen after a wait means nothing is loaded.
+
     Note: there is a small TOCTOU window between this check and the
-    actual chat request.  An eviction in that window is handled by
-    the one-shot retry in the streaming worker (see ``_run_agent``).
+    actual chat request. An eviction in that window fails the turn with an
+    error that says to send it again; the next turn's pre-flight reloads.
+
+    Raises:
+        InsufficientMemoryError: the model does not fit, even after unloading
+            this process's other models.
+        BrokerUnavailableError: the daemon's broker did not grant the model
+            slot (a lease timeout included).
+        RuntimeError: any other failure to check or load the model.
     """
     if not model_id:
         return
@@ -2002,7 +2296,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
-            return
+            raise RuntimeError(f"its /health check returned HTTP {resp.status_code}")
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
@@ -2058,6 +2352,10 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         from gaia.daemon.broker_client import model_lease
         from gaia.llm.lemonade_client import LemonadeClient
 
+        def _slot_was_busy(reason: str) -> None:
+            # Called after the grant; the wait itself is the broker's to show.
+            logger.info("Pre-flight for %s: %s", model_id, reason)
+
         # Interactive priority: this pre-flight is on the user's turn, so it
         # must jump ahead of queued background loads (embedder warm-ups,
         # autonomous briefs). The lease spans the re-check and the unload→load
@@ -2069,76 +2367,125 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         # and this interactive request would then queue behind it on the lock —
         # where the broker's priority ordering has no say, silently defeating
         # the priority it just asked for.
-        with model_lease(model_id, priority="interactive"), model_load_lock:
-            # Re-check after acquiring the lock: another thread may have
-            # already loaded the expected model with sufficient context.
-            resident_chat_models = []
-            resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
-            if resp2.status_code == 200:
-                resident_chat_models = [
-                    m
-                    for m in resp2.json().get("all_models_loaded", [])
-                    if m.get("type") in ("llm", "vlm") and m.get("recipe") != "cloud"
-                ]
-                if any(
-                    _model_ids_match(m.get("model_name"), model_id)
-                    and (m.get("recipe_options", {}).get("ctx_size") or 0)
-                    >= required_ctx
-                    for m in resident_chat_models
-                ):
-                    logger.debug(
-                        "Expected model loaded with sufficient ctx by concurrent "
-                        "thread; skipping load"
-                    )
+        with model_lease(model_id, priority="interactive", on_wait=_slot_was_busy):
+            if stopped() or not _take_model_load_lock(sse_handler, stopped):
+                return
+            try:
+                if stopped():
                     return
+                # Re-check after acquiring the lock: another thread may have
+                # already loaded the expected model with sufficient context.
+                resident_chat_models = []
+                resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
+                if resp2.status_code == 200:
+                    resident_chat_models = [
+                        m
+                        for m in resp2.json().get("all_models_loaded", [])
+                        if m.get("type") in ("llm", "vlm")
+                        and m.get("recipe") != "cloud"
+                    ]
+                    _forget_models_not_loaded(resident_chat_models)
+                    if any(
+                        _model_ids_match(m.get("model_name"), model_id)
+                        and (m.get("recipe_options", {}).get("ctx_size") or 0)
+                        >= required_ctx
+                        for m in resident_chat_models
+                    ):
+                        logger.debug(
+                            "Expected model loaded with sufficient ctx by "
+                            "concurrent thread; skipping load"
+                        )
+                        return
 
-            client = LemonadeClient(verbose=False)
-            # Lemonade does not evict the resident model on a new /load, so
-            # unload the stale local chat models first — by name, so the
-            # embedder that memory and RAG need stays resident. A server the
-            # user runs keeps its models: GAIA only loads there.
-            if not is_users_server(base_url):
-                for stale in resident_chat_models:
-                    client.unload_model(stale["model_name"], ignore_if_not_loaded=True)
-            client.load_model(
-                model_id,
-                ctx_size=required_ctx,
-                prompt=False,
-                timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
-            )
+                client = LemonadeClient(verbose=False)
+                # A server the user runs keeps its models: GAIA only loads there.
+                may_unload = not is_users_server(base_url)
+                if may_unload:
+                    # The same model at too small a window is reloaded, not
+                    # loaded twice: a copy this UI loaded, or one Lemonade
+                    # auto-loaded at its default window (#1030), which no app
+                    # chose. Another app's chosen window may be answering, so
+                    # that copy stays. Other resident models stay.
+                    for m in resident_chat_models:
+                        if not _model_ids_match(m.get("model_name"), model_id):
+                            continue
+                        window = (m.get("recipe_options") or {}).get("ctx_size") or 0
+                        # No window reported is the broken state #1030 needs
+                        # a reload for, whoever loaded it.
+                        nobody_chose = window == 0 or window in _auto_load_windows()
+                        if not (_loaded_here(m["model_name"]) or nobody_chose):
+                            raise ModelInUseError(
+                                f"{model_id} is loaded by another app with a "
+                                f"{window}-token window, smaller "
+                                f"than the {required_ctx} tokens this chat "
+                                "needs; reloading it would cut that app off. "
+                                "Let it finish (or close it), then send the "
+                                "message again, or reload the model from "
+                                "Settings -> Load."
+                            )
+                        client.unload_model(m["model_name"], ignore_if_not_loaded=True)
+                _load_making_room(
+                    client,
+                    model_id,
+                    required_ctx,
+                    resident_chat_models,
+                    may_unload,
+                    sse_handler,
+                )
+            finally:
+                model_load_lock.release()
     except InsufficientMemoryError as exc:
         # The fix is closing apps, not checking Lemonade: pass the reason on.
         logger.error("Pre-flight model load refused: %s", exc)
-        if sse_handler is not None:
-            sse_handler._emit(
-                {"type": "status", "status": "warning", "message": str(exc)}
-            )
+        raise
+    except ModelInUseError as exc:
+        logger.error("Pre-flight model load refused: %s", exc)
+        raise
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
         # the user at the wrong subsystem costs them the debugging session.
         logger.error("Pre-flight model load could not lease the model slot: %s", exc)
-        if sse_handler is not None:
-            sse_handler._emit(
-                {
-                    "type": "status",
-                    "status": "warning",
-                    "message": (
-                        "Could not reserve the model slot from the GAIA daemon. "
-                        "Check `gaia daemon status`."
-                    ),
-                }
-            )
+        raise BrokerUnavailableError(
+            f"Could not reserve the model slot for {model_id} from the GAIA "
+            f"daemon, so this turn did not start: {exc} Check `gaia daemon "
+            "status`; send the message again once the other app's turn is done.",
+            status_code=exc.status_code,
+        ) from exc
     except Exception as exc:
-        logger.warning("Pre-flight model check failed: %s", exc)
-        if sse_handler is not None:
-            sse_handler._emit(
-                {
-                    "type": "status",
-                    "status": "warning",
-                    "message": "Could not auto-load LLM. Check that Lemonade is running.",
-                }
-            )
+        if stopped():
+            raise  # The caller reads it as the stop, not as a failure.
+        logger.error("Pre-flight model load failed for %s: %s", model_id, exc)
+        raise RuntimeError(
+            f"Could not load {model_id} before answering: {exc}. Check that "
+            "Lemonade is running (`gaia init --check`), then send the message "
+            "again."
+        ) from exc
+
+
+def _maybe_load_expected_model(
+    model_id: str, sse_handler=None, cancel_event=None
+) -> None:
+    """Load *model_id* at the window a turn needs before it is queried.
+
+    See :func:`_preflight_load` for what is checked, loaded and raised. A
+    turn stopped while this waits (``sse_handler.cancelled`` for Stop, or the
+    turn's own *cancel_event*, which teardown and the idle stop set) loads
+    nothing: whatever the wait raised then, the stop is why, so this returns
+    and the caller sees the turn as stopped.
+    """
+
+    def stopped() -> bool:
+        return (sse_handler is not None and sse_handler.cancelled.is_set()) or (
+            cancel_event is not None and cancel_event.is_set()
+        )
+
+    try:
+        _preflight_load(model_id, sse_handler, stopped)
+    except Exception as exc:
+        if not stopped():
+            raise
+        logger.info("Pre-flight for %s ended by Stop: %s", model_id, exc)
 
 
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
@@ -2150,6 +2497,7 @@ async def _get_chat_response(
     request: ChatRequest,
     *,
     model_messages: list | None = None,
+    turn_box: dict | None = None,
 ) -> str:
     """Get a non-streaming chat response from the ChatAgent.
 
@@ -2226,6 +2574,9 @@ async def _get_chat_response(
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            return refusal
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -2359,50 +2710,36 @@ async def _get_chat_response(
         # a value invisible pre-construction. Using _effective_model preserves
         # the existing 100-900s silent-hang protection for all code paths.
         effective = _effective_model(agent, model_id)
-        _maybe_load_expected_model(effective)
+        _maybe_load_expected_model(effective, None, cancel_event)
+        if cancel_event.is_set():
+            return ""  # Stopped (idle) while waiting for the model.
 
         agent._cancel_event = cancel_event
-
-        def _query():
-            # One automatic retry on transient Lemonade failures (model
-            # evicted between turns, network blip).  Mirror of the streaming
-            # path's retry logic so non-streaming clients get the same
-            # recovery behaviour. See _classify_chat_exception for the
-            # detection rules.
-            try:
-                return agent.process_query(request.message)
-            except Exception as first_exc:  # pylint: disable=broad-except
-                classified = _classify_chat_exception(first_exc)
-                if classified is None or not classified.retryable:
-                    raise
-                logger.warning(
-                    "Non-streaming chat hit retryable Lemonade error (%s) — "
-                    "reloading model and retrying once. Original: %s",
-                    type(classified).__name__,
-                    first_exc,
-                )
-                try:
-                    _maybe_load_expected_model(effective)
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.warning("Model reload before retry failed: %s", exc)
-                try:
-                    return agent.process_query(request.message)
-                except Exception as second_exc:  # pylint: disable=broad-except
-                    second_classified = _classify_chat_exception(second_exc)
-                    if second_classified is not None:
-                        raise type(second_exc)(
-                            second_classified.user_message
-                        ) from second_exc
-                    raise
 
         activity = _ActivityConsole(agent.console, _time.monotonic)
         agent.console = activity
         activity_box["console"] = activity
+        recording = TurnRecording(session_id)
+        if turn_box is not None:
+            turn_box["recording"] = recording
         try:
-            result = _query()
+            # Never re-run on failure: tools the turn already ran would run
+            # again. The error says whether sending it again can help.
+            result = agent.process_query(request.message)
         finally:
             agent.console = activity._inner
+            warning = recording.close()
+            if warning:
+                # The non-streaming response has no channel for a notice.
+                logger.error(warning)
 
+        # Without counts the turn is still recorded, as one of unknown cost.
+        counts = (
+            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            if isinstance(result, dict)
+            else {}
+        )
+        spending.record_turn(db, model_id, counts)
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -2466,10 +2803,8 @@ async def _get_chat_response(
         classified = _classify_chat_exception(e)
         if classified is not None:
             return _agent_ui_wording(classified.user_message)
-        return (
-            "I'm having trouble connecting to the language model right now. "
-            "Please make sure Lemonade Server is running and try again."
-        )
+        # Same as the streamed path: the real reason, not a guess at one.
+        return _agent_ui_wording(f"Agent error: {e}")
 
 
 # ── Streaming Chat ───────────────────────────────────────────────────────────
@@ -2640,12 +2975,23 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        # Stop before a cloud turn once this month's spending reached the limit.
+        refusal = spending.limit_refusal(db, model_id)
+        if refusal:
+            # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
+            msg_id = db.add_message(session_id, "assistant", refusal)
+            yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
+            yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
+            return
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None}
+        turn_box: dict = {}
 
         def _run_agent():
+            recording = TurnRecording(session_id)
+            turn_box["recording"] = recording
             try:
                 t0 = _time.monotonic()
 
@@ -2959,57 +3305,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # invisible pre-construction. Using agent.model_id preserves the existing
                 # 100-900s silent-hang protection for all code paths including setdefault.
                 _maybe_load_expected_model(
-                    _effective_model(agent, model_id), sse_handler
+                    _effective_model(agent, model_id), sse_handler, cancel_event
                 )
+                # Stopped while waiting for the model: nothing was loaded,
+                # so the turn must not send its query either.
+                if sse_handler.cancelled.is_set() or cancel_event.is_set():
+                    return
 
-                # -- Phase 5: Query processing.  One automatic retry on
-                # known-transient Lemonade errors (model evicted between
-                # turns, network blip, etc.). The retry forces a fresh
-                # model reload at our 32K ctx_size before re-issuing the
-                # query so we don't replay against a still-broken backend.
+                # -- Phase 5: Query processing. Never re-run on failure:
+                # tools the turn already ran (writes, shell, email) would run
+                # again. The error event says whether sending it again helps,
+                # and the next turn's pre-flight reloads an evicted model.
                 t_query = _time.monotonic()
-                try:
-                    result = agent.process_query(request.message)
-                except Exception as first_exc:  # pylint: disable=broad-except
-                    classified = _classify_chat_exception(first_exc)
-                    if classified is None or not classified.retryable:
-                        raise
-                    logger.warning(
-                        "Chat hit retryable Lemonade error (%s) — reloading "
-                        "model and retrying once. Original: %s",
-                        type(classified).__name__,
-                        first_exc,
-                    )
-                    # Force a reload at the canonical ctx; this is the
-                    # same helper the pre-flight uses but called
-                    # mid-conversation when the model got evicted.
-                    try:
-                        _maybe_load_expected_model(
-                            _effective_model(agent, model_id), sse_handler
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning("Model reload before retry failed: %s", exc)
-                    # Surface a brief status line to the SSE so the user
-                    # sees we're recovering, not silently retrying.
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": "Model reloaded — retrying...",
-                        }
-                    )
-                    # One more attempt. If THIS fails, surface the
-                    # friendlier classified message.
-                    try:
-                        result = agent.process_query(request.message)
-                    except Exception as second_exc:  # pylint: disable=broad-except
-                        second_classified = _classify_chat_exception(second_exc)
-                        msg = (
-                            second_classified.user_message
-                            if second_classified is not None
-                            else str(second_exc)
-                        )
-                        raise type(second_exc)(msg) from second_exc
+                result_holder["agent"] = agent
+                result = agent.process_query(request.message)
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
@@ -3035,6 +3344,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 else:
                     result_holder["error"] = str(e)
             finally:
+                warning = recording.close()
+                if warning:
+                    sse_handler._emit(
+                        {"type": "status", "status": "warning", "message": warning}
+                    )
                 sse_handler.signal_done()
 
         # The limit is on going without progress, not on total time: a long
@@ -3053,7 +3367,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
-        _stream_start = _time.time()
+        last_event_at = _time.monotonic()
 
         def _blocked_policy_steps():
             return [
@@ -3113,7 +3427,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
-                _idle.progressed(_time.monotonic())
+                last_event_at = _time.monotonic()
+                _idle.progressed(last_event_at)
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -3164,6 +3479,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": f"Using {event.get('tool', 'tool')}",
                             "tool": event.get("tool"),
                             "detail": event.get("detail"),
+                            "narration": event.get("narration"),
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                             "mcpServer": event.get("mcp_server"),
@@ -3175,6 +3491,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     tool_step = _find_last_tool_step(captured_steps)
                     if tool_step is not None:
                         tool_step["detail"] = event.get("detail", "")
+                        if event.get("narration"):
+                            tool_step["narration"] = event["narration"]
                 elif event_type == "tool_end" and captured_steps:
                     tool_step = _find_last_tool_step(captured_steps)
                     if tool_step is not None:
@@ -3211,20 +3529,45 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             tool_step["render"] = event["render"]
                             tool_step["data"] = event.get("data")
                 elif event_type == "plan":
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "plan",
-                            "label": "Created plan",
-                            "planSteps": event.get("steps"),
-                            "active": False,
-                            "success": True,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
+                    # The agent re-sends its plan before every step; keep one row
+                    # and move its current step. A replan still gets its own row.
+                    last_plan = next(
+                        (
+                            s
+                            for s in reversed(captured_steps)
+                            if s.get("type") == "plan"
+                        ),
+                        None,
                     )
+                    same_plan = (
+                        last_plan
+                        if last_plan is not None
+                        and last_plan.get("planSteps") == event.get("steps")
+                        else None
+                    )
+                    if same_plan is not None:
+                        same_plan["currentStep"] = event.get("current_step")
+                        if event.get("step_narrations"):
+                            same_plan["planNarrations"] = event["step_narrations"]
+                    else:
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "plan",
+                                "label": "Created plan",
+                                "planSteps": event.get("steps"),
+                                "planNarrations": event.get("step_narrations"),
+                                "currentStep": event.get("current_step"),
+                                "active": False,
+                                "success": True,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                            }
+                        )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
                 ):
@@ -3296,9 +3639,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # Every 15s (75 cycles) emit a visible status so the user knows
                 # the model is still processing (prompt prefill is silent).
                 # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend.
-                if idle_cycles % 75 == 0:
-                    elapsed = int(_time.time() - _stream_start)
+                # into a single updating step on the frontend. A running tool
+                # shows its own timer, so the model is not the one being waited on.
+                if idle_cycles % 75 == 0 and not sse_handler.tool_running():
+                    elapsed = int(_time.monotonic() - last_event_at)
                     status_evt = json.dumps(
                         {
                             "type": "status",
@@ -3406,6 +3750,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # cases where Lemonade is on a non-default port and the env var
             # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
+            # Named before any Lemonade call: a cloud turn may run with it stopped.
+            turn_location = _turn_location(model_id)
+            turn_place = _cloud_place(turn_location)
             try:
                 import httpx
 
@@ -3443,6 +3790,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             stats_resp.status_code,
                             base_url,
                         )
+                    if not turn_location.remote:
+                        turn_place = await _local_place(
+                            model_id, stats_client, base_url, _auth
+                        )
             except Exception as exc:  # pylint: disable=broad-except
                 # Don't fail the user's response if stats fetching breaks; log
                 # at debug so eval-time gaps are diagnosable without spamming
@@ -3453,6 +3804,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
             inference_stats = _turn_inference_stats(inference_stats, answer_event)
+            if turn_place:
+                inference_stats = {**(inference_stats or {}), "place": turn_place}
+            turn_summary = _turn_summary(
+                sse_handler, result_holder.get("agent"), request.message, answer_event
+            )
 
             msg_id = db.upsert_message(
                 request.session_id,
@@ -3462,7 +3818,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
+                turn_summary=turn_summary,
             )
+            link_warning = (
+                turn_box["recording"].link_message(msg_id)
+                if "recording" in turn_box
+                else None
+            )
+            if link_warning:
+                yield _undo_link_warning_event(link_warning)
+            spending.record_turn(db, model_id, inference_stats)
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -3483,7 +3848,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 )
             )
             done_event = _done_event(
-                msg_id, full_response, turn_cancelled, stats=inference_stats
+                msg_id,
+                full_response,
+                turn_cancelled,
+                stats=inference_stats,
+                turn_summary=turn_summary,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -3515,14 +3884,27 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db.add_message(request.session_id, "assistant", content)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                turn_summary = _turn_summary(
+                    sse_handler, result_holder.get("agent"), request.message, None
+                )
                 msg_id = db.add_message(
                     request.session_id,
                     "assistant",
                     content,
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
+                    turn_summary=turn_summary,
                 )
-                done_event = _done_event(msg_id, content, turn_cancelled)
+                done_event = _done_event(
+                    msg_id, content, turn_cancelled, turn_summary=turn_summary
+                )
+                link_warning = (
+                    turn_box["recording"].link_message(msg_id)
+                    if "recording" in turn_box
+                    else None
+                )
+                if link_warning:
+                    yield _undo_link_warning_event(link_warning)
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
@@ -3539,6 +3921,72 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         await _cleanup_stream()
 
 
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
+# A waiting turn re-sends its place this often, so clients never see a silent stream.
+_QUEUE_HEARTBEAT_SECONDS = 10.0
+
+
+def _queued_status_event(position: int, ordinal, waited_s: int = 0) -> dict:
+    """The status a turn shows while another chat has the model (#5226)."""
+    return {
+        "type": "status",
+        "status": "working",
+        "phase": "queued",
+        "queue_position": position,
+        "queue_waited_s": waited_s,
+        "message": f"Waiting for the GPU — {ordinal(position)} in line",
+    }
+
+
+class _RunOutcome:
+    """How a turn ended, read off the SSE events it emitted (#5221)."""
+
+    def __init__(self) -> None:
+        self._error = False
+        self._done = False
+        self._cancelled = False
+
+    def observe(self, data: str) -> None:
+        # A frame may carry ": padding" lines after its data line.
+        line = data.split("\n", 1)[0]
+        if not line.startswith("data: "):
+            return
+        try:
+            event = json.loads(line[len("data: ") :])
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Chat run emitted a malformed SSE frame: {line[:200]!r}"
+            ) from exc
+        kind = event.get("type") if isinstance(event, dict) else None
+        if kind == "error":
+            self._error = True
+        elif kind == "done":
+            self._done = True
+            self._cancelled = bool(event.get("cancelled"))
+
+    def status(self) -> str:
+        if self._error or not self._done:
+            return "failed"
+        return "stopped" if self._cancelled else "done"
+
+
+def _record_run_outcome(db: ChatDatabase, session_id: str, status: str) -> None:
+    """Persist the turn's outcome and mark the chat unread for the list."""
+    try:
+        db.finish_session_run(session_id, status)
+    except sqlite3.Error as exc:
+        # The turn already ended and was persisted; only the list status is lost.
+        logger.error(
+            "Could not record the %s outcome of session %s: %s",
+            status,
+            session_id[:8],
+            exc,
+        )
+
+
 async def _run_chat_lifecycle(
     run, db: ChatDatabase, session: dict, request: ChatRequest
 ):
@@ -3550,8 +3998,45 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
-    async for data in _stream_chat_impl(run, db, session, request):
+    from gaia.ui.turn_queue import TurnCancelled, ordinal, turn_queue
+
+    session_id = request.session_id
+    outcome = _RunOutcome()
+
+    def _emit(data: str) -> None:
+        outcome.observe(data)
         run.emit(data)
+
+    queued_at = _time.monotonic()
+
+    def _announce_place(position: int) -> None:
+        waited = int(_time.monotonic() - queued_at)
+        _emit(_sse(_queued_status_event(position, ordinal, waited)))
+
+    async def _heartbeat() -> None:
+        while True:
+            await asyncio.sleep(_QUEUE_HEARTBEAT_SECONDS)
+            position = turn_queue.position(session_id)
+            if position:
+                _announce_place(position)
+
+    try:
+        heartbeat = asyncio.create_task(_heartbeat())
+        try:
+            await turn_queue.acquire(session_id, on_position=_announce_place)
+        except TurnCancelled:
+            msg_id = db.add_message(session_id, "assistant", "Cancelled.")
+            _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
+            return
+        finally:
+            heartbeat.cancel()
+        try:
+            async for data in _stream_chat_impl(run, db, session, request):
+                _emit(data)
+        finally:
+            turn_queue.release()
+    finally:
+        _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather
     # than on subscriber detach.

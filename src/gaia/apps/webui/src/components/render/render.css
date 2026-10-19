@@ -211,6 +211,21 @@
     color: var(--text-secondary);
 }
 
+.render-diff__badge {
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    padding: 0 5px;
+    margin-right: 6px;
+}
+
+.render-diff__note {
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
 /* ── needs_confirmation (#2109, stateless D1) ────────────────────────── */
 
 .render-confirmation {

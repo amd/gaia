@@ -259,6 +259,8 @@ class GrantScope:
 
     keys: Tuple[str, ...]
     label: str
+    #: The file or skill the grant names, for a front-end to phrase in its own words.
+    subject: str = ""
 
     @property
     def key(self) -> str:
@@ -641,7 +643,9 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     normalised = posixpath.normpath(raw.replace("\\", "/"))
     display = posixpath.basename(normalised) or normalised
     return GrantScope(
-        keys=(f"{tool_name}:{normalised}",), label=f"{tool_name} on {display}"
+        keys=(f"{tool_name}:{normalised}",),
+        label=f"{tool_name} on {display}",
+        subject=display,
     )
 
 
@@ -651,7 +655,9 @@ def _named_scope(
     value = _first_str(args, names)
     if not value:
         return None
-    return GrantScope(keys=(f"{tool_name}:{value}",), label=f"{tool_name} {value}")
+    return GrantScope(
+        keys=(f"{tool_name}:{value}",), label=f"{tool_name} {value}", subject=value
+    )
 
 
 __all__ = [

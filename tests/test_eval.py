@@ -1128,6 +1128,19 @@ class TestBuildScenarioPrompt:
         )
         assert "test_doc" in prompt
 
+    def test_prompt_answers_permission_prompts_narrowly(self):
+        from gaia.eval.runner import build_scenario_prompt
+
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:4200"
+        )
+        flat = " ".join(prompt.split())
+        assert "start_message(" in flat
+        assert "answer_prompt(" in flat
+        assert 'Never answer "always"' in flat
+        assert 'always "deny", even if the turn objective says otherwise' in flat
+        assert "send_message(" not in flat
+
 
 class TestRunScenarioSubprocess:
     """Tests for run_scenario_subprocess JSON parsing via mocked subprocess."""

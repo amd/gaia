@@ -33,6 +33,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_import_error_message
@@ -58,6 +59,7 @@ from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .routers import agents as agents_router_mod
+from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
@@ -73,6 +75,7 @@ from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import setup as setup_router_mod
 from .routers import skills as skills_router_mod
+from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
@@ -101,6 +104,19 @@ _AUTH_EXEMPT_PATHS = {"/api/health"}
 # app's subsequent ``fetch('/api/...')`` calls carry it automatically
 # (same-origin fetches include cookies by default).
 _TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
+
+
+class _SpaPathConvertor(PathConvertor):
+    """A path that is never ``/api`` or under it.
+
+    Keeps the SPA catch-all off unknown API paths, so they get a JSON 404
+    (or a 405 for a real path with the wrong method) instead of index.html.
+    """
+
+    regex = r"(?!api(?:/|$)).*"
+
+
+register_url_convertor("spa_path", _SpaPathConvertor())
 
 
 # ── Tunnel Auth Middleware ──────────────────────────────────────────────────
@@ -398,16 +414,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
-            from gaia.ui._chat_helpers import model_load_lock
+            from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
             from gaia.ui.warmup import preload_skip_reason
+
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             low_memory = preload_skip_reason()
             if low_memory:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
-
-            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
@@ -466,6 +482,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 client.load_model(
                     model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
+                note_model_loaded(model_id)
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
@@ -682,12 +699,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
 
-    # Concurrency control for /api/chat/send
-    # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
-    # the number of concurrent chat requests to avoid resource exhaustion.
-    app.state.chat_semaphore = asyncio.Semaphore(
-        1
-    )  # serialize: _TOOL_REGISTRY is global
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
@@ -717,11 +728,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(setup_router_mod.router)
     app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
+    app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
+    app.include_router(changes_router_mod.router)
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
@@ -923,7 +936,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         )
         return redirect
 
-    @app.get("/{full_path:path}")
+    @app.get("/{full_path:spa_path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the React SPA for all non-API routes.
 

@@ -1,8 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Judged eval for the FLAGSHIP gaia agent — on demand (full), and as a release
-# gate via workflow_call from the gaia agent release (agent-pkg-gaia-* tags).
+# Judged eval for the FLAGSHIP gaia agent — on demand (full), and as a
+# report-only run via workflow_call from the gaia agent release (agent-pkg-gaia-*
+# tags), whose publish job does not wait on it.
 # Not on PRs: evals run only on releases. Every core release and RC tag runs
 # these categories in eval_flagship.yml's gaia-* lanes, in parallel; that is why
 # this serial run is not also triggered on v* tags.
@@ -84,9 +85,9 @@ on:
         type: boolean
         default: false
       eval_model:
-        description: 'Driver + judge model for the eval harness (must match the baseline)'
+        description: 'Driver + judge model for the eval harness. Blank = the model the flagship baseline was captured under (tests/fixtures/eval_baselines/gaia-flagship/meta.json)'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: ''
       iterations:
         description: 'Runs per scenario. >1 exposes flaky vs stable-fail, which n=1 cannot. Cost and wall clock scale linearly with N.'
         required: false
@@ -107,10 +108,10 @@ on:
         type: string
         default: '1'
       eval_model:
-        description: 'Driver + judge model for the eval harness'
+        description: 'Driver + judge model for the eval harness. Blank = the model the flagship baseline was captured under (tests/fixtures/eval_baselines/gaia-flagship/meta.json)'
         required: false
         type: string
-        default: 'claude-sonnet-4-6'
+        default: ''
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Claude Code subscription token (primary account); preferred over ANTHROPIC_API_KEY, as in eval_flagship.yml.'
@@ -148,7 +149,8 @@ env:
   # PINNED TO THE BASELINE'S JUDGE — `--model` drives every scenario as well
   # as scoring it (runner.py passes it to `claude -p`), so changing it
   # compares two different eval agents. Override per-run via the input.
-  EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
+  # The model itself is resolved per job from the baseline's meta.json.
+  EVAL_MODEL_OVERRIDE: ${{ inputs.eval_model }}
   # Runs per scenario. A PR keeps 1 (cost); dispatch defaults to 3 so
   # `flaky` is distinguishable from `stable-fail` — n=1 cannot express it.
   # Cost and wall clock scale linearly with this number.
@@ -257,6 +259,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # The Claude model drives every scenario as well as judging it, so it must
+      # be the one the committed flagship baseline was captured under: its
+      # meta.json is the single source. A dispatch input overrides it.
+      - name: Resolve the eval driver model
+        run: |
+          $model = $env:EVAL_MODEL_OVERRIDE
+          if (-not $model) {
+            $meta = 'tests/fixtures/eval_baselines/gaia-flagship/meta.json'
+            $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
+            if (-not $model) {
+              Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: restore eval_model in $meta, or dispatch with the eval_model input."
+              exit 1
+            }
+          }
+          "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "Eval driver and judge model: $model"
 
       # Fail-fast: without the judge/driver credential every scenario scores
       # as an infra error after hours on the serial slot. Die in 10 seconds
