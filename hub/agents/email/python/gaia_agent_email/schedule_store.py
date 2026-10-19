@@ -25,8 +25,8 @@ Status lifecycle::
 
 ``claim_job`` is an atomic ``pending -> firing`` transition (single UPDATE
 guarded on status), so a job fires exactly once even if two drivers poll the
-same store. It records ``claimed_at``; ``fail_stale_firing`` marks a claim that
-never finished ``failed`` instead of leaving it ``firing`` forever.
+same store. It records ``claimed_at``, so ``recover_stale_firing`` can move
+on a claim that never finished instead of leaving it ``firing`` forever.
 
 All public helpers are pure functions taking a ``DatabaseMixin``-typed first
 argument, mirroring ``action_store``. They never reach into the agent class.
@@ -192,20 +192,29 @@ def mark_failed(db, *, job_id: str, error: str) -> None:
     )
 
 
-def fail_stale_firing(db, *, now: float, stale_after: float) -> List[str]:
-    """Mark ``failed`` every ``firing`` job claimed more than ``stale_after`` ago.
+#: Kinds that are safe to run a second time. A snooze restore only puts a
+#: message back in the inbox; a scheduled send would send twice.
+RERUNNABLE_KINDS = frozenset({KIND_SNOOZE})
+
+
+def recover_stale_firing(db, *, now: float, stale_after: float) -> Dict[str, List[str]]:
+    """Move on every ``firing`` job claimed more than ``stale_after`` ago.
 
     A claim stays ``firing`` forever when its process dies mid-fire, or when the
-    outcome write hits a locked DB. The job is never run again, because a
-    scheduled send may already have gone out, but it surfaces as a failure the
-    user can see and reschedule. A row with no ``claimed_at`` was claimed before
-    claim times were recorded, so it is stale on sight. Returns the failed ids.
+    outcome write hits a locked DB. A snooze goes back to ``pending`` and fires
+    on the next pass. Any other kind, a scheduled send above all, is marked
+    ``failed`` with the reason and never run again: the send may already have
+    gone out. A row with no ``claimed_at`` was claimed before claim times were
+    recorded, so it is stale on sight.
+
+    Returns ``{"requeued": [...], "failed": [...]}`` job ids.
     """
     rows = db.query(
         "SELECT * FROM email_scheduled_jobs WHERE status = :firing "
         "AND (claimed_at IS NULL OR claimed_at <= :cutoff)",
         {"firing": STATUS_FIRING, "cutoff": now - stale_after},
     )
+    requeued: List[str] = []
     failed: List[str] = []
     for row in rows or ():
         claimed = row["claimed_at"]
@@ -214,9 +223,11 @@ def fail_stale_firing(db, *, now: float, stale_after: float) -> List[str]:
         guard = "job_id = :id AND status = :firing AND " + (
             "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed"
         )
-        affected = db.update(
-            "email_scheduled_jobs",
-            {
+        if row["kind"] in RERUNNABLE_KINDS:
+            values = {"status": STATUS_PENDING, "claimed_at": None}
+            target = requeued
+        else:
+            values = {
                 "status": STATUS_FAILED,
                 "fired_at": now,
                 "error": (
@@ -224,13 +235,17 @@ def fail_stale_firing(db, *, now: float, stale_after: float) -> List[str]:
                     "Not run again because it may already have taken effect; "
                     "check the mailbox and schedule it again if it did not."
                 ),
-            },
+            }
+            target = failed
+        affected = db.update(
+            "email_scheduled_jobs",
+            values,
             guard,
             {"id": row["job_id"], "firing": STATUS_FIRING, "claimed": claimed},
         )
         if affected == 1:
-            failed.append(row["job_id"])
-    return failed
+            target.append(row["job_id"])
+    return {"requeued": requeued, "failed": failed}
 
 
 def cancel_job(db, *, job_id: str) -> bool:
@@ -251,6 +266,7 @@ __all__ = [
     "EMAIL_SCHEDULED_JOBS_DDL",
     "KIND_SCHEDULED_SEND",
     "KIND_SNOOZE",
+    "RERUNNABLE_KINDS",
     "STATUS_CANCELLED",
     "STATUS_FAILED",
     "STATUS_FIRED",
@@ -259,11 +275,11 @@ __all__ = [
     "cancel_job",
     "claim_job",
     "create_job",
-    "fail_stale_firing",
     "fetch_due",
     "get_job",
     "init_schema",
     "list_jobs",
     "mark_fired",
     "mark_failed",
+    "recover_stale_firing",
 ]

@@ -13,9 +13,10 @@ contract version is tracked separately as
   A crash, or a locked database when the result was written, left the job in
   `firing` forever: never retried, and never reported as a failure. The
   scheduler now records when it claims a job (`claimed_at`, added to
-  `email_scheduled_jobs` on startup) and marks a claim that has gone an hour
-  without an outcome `failed`, with the reason. The job is still never run a
-  second time, because the send may already have gone out.
+  `email_scheduled_jobs` on startup) and moves on a claim that has gone an
+  hour without an outcome. A scheduled send is marked `failed` with the reason
+  and never run a second time, because it may already have gone out. A snooze
+  is re-queued, since putting a message back in the inbox twice is harmless.
 
 - **A batch organize that failed for every message is reported as a failure.**
   `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,

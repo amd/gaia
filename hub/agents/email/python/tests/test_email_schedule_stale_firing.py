@@ -44,7 +44,8 @@ def _scheduler(path: Path, calls: list) -> EmailJobScheduler:
     return EmailJobScheduler(
         str(path),
         executors={
-            schedule_store.KIND_SCHEDULED_SEND: lambda job, _db: calls.append(job)
+            schedule_store.KIND_SCHEDULED_SEND: lambda job, _db: calls.append(job),
+            schedule_store.KIND_SNOOZE: lambda job, _db: calls.append(job),
         },
         stale_firing_seconds=STALE,
     )
@@ -73,6 +74,22 @@ def test_send_left_firing_by_a_crash_is_failed_not_resent(tmp_path):
     assert "interrupted while firing" in job["error"]
 
 
+def test_snooze_left_firing_is_requeued_and_restored(tmp_path):
+    """Putting a message back in the inbox twice is harmless; hiding it is not."""
+    path = tmp_path / "state.db"
+    db = _db(path)
+    job_id = schedule_store.create_job(
+        db, kind=schedule_store.KIND_SNOOZE, due_at=100.0, payload={}
+    )
+    assert schedule_store.claim_job(db, job_id=job_id, now=100.0) is True
+
+    calls: list = []
+    out = _scheduler(path, calls).fire_due_jobs(now=100.0 + STALE + 1)
+    assert out == {"fired": [job_id], "failed": []}
+    assert [job["job_id"] for job in calls] == [job_id]
+    assert schedule_store.get_job(db, job_id=job_id)["status"] == "fired"
+
+
 def test_store_created_before_the_claim_column_is_migrated(tmp_path):
     """A row stuck by an older build has no claim time; it is stale on sight."""
     path = tmp_path / "old.db"
@@ -88,8 +105,6 @@ def test_store_created_before_the_claim_column_is_migrated(tmp_path):
         "INSERT INTO email_scheduled_jobs (job_id, kind, due_at, payload_json,"
         " status, created_at) VALUES ('old', 'scheduled_send', 1, '{}', 'firing', 0)"
     )
-    # The agent runs this on startup, before it starts the scheduler.
-    schedule_store.init_schema(db)
     db.close_db()
 
     calls: list = []

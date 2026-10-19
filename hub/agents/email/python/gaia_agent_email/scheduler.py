@@ -38,9 +38,10 @@ executor is likewise marked failed, never quietly skipped.
 
 At-most-once trade-off (deliberate): a process crash, or a locked DB, between
 ``claim_job`` and ``mark_fired``/``mark_failed`` leaves the row in ``firing``.
-It never re-fires, which is the safe side for email (no double-send). Once the
-claim is older than ``stale_firing_seconds`` a pass marks it ``failed`` with the
-reason, so it shows up as a failure to check instead of sitting in ``firing``.
+A send never re-fires, which is the safe side for email (no double-send):
+once the claim is older than ``stale_firing_seconds`` a pass marks it ``failed``
+with the reason, so it shows up as a failure to check. A snooze restore is safe
+to repeat, so it goes back to ``pending`` and fires again.
 """
 
 from __future__ import annotations
@@ -102,6 +103,7 @@ class EmailJobScheduler:
         self._executors = dict(executors)
         self._poll_seconds = poll_seconds
         self._stale_firing_seconds = stale_firing_seconds
+        self._schema_ready = False
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -112,30 +114,43 @@ class EmailJobScheduler:
 
         The atomic ``claim_job`` guard makes each job fire exactly once even
         when two drivers (thread + external dispatcher) poll the same store.
-        Claims left ``firing`` past ``stale_firing_seconds`` are failed first
-        and reported in ``failed``.
+        Claims left ``firing`` past ``stale_firing_seconds`` are recovered
+        first: a failed send is reported in ``failed``, and a re-queued snooze
+        fires in this same pass.
         """
         db = _SchedulerDB()
         db.init_db(self._db_path)
         try:
+            if not self._schema_ready:
+                # A driver other than the agent may call this first.
+                schedule_store.init_schema(db)
+                self._schema_ready = True
             return self._fire_due_jobs_on(db, now=now)
         finally:
             db.close_db()
 
     def _fire_due_jobs_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
-        failed = schedule_store.fail_stale_firing(
+        recovered = schedule_store.recover_stale_firing(
             db,
             now=now if now is not None else time.time(),
             stale_after=self._stale_firing_seconds,
         )
-        for job_id in failed:
+        for job_id in recovered["requeued"]:
+            log.warning(
+                "email scheduler: snooze %s was left firing with no outcome for "
+                "over %.0fs; re-queued it",
+                job_id,
+                self._stale_firing_seconds,
+            )
+        for job_id in recovered["failed"]:
             log.error(
                 "email scheduler: job %s was left firing with no outcome for "
                 "over %.0fs; marked it failed instead of running it twice",
                 job_id,
                 self._stale_firing_seconds,
             )
+        failed: List[str] = list(recovered["failed"])
         for job in schedule_store.fetch_due(db, now=now):
             job_id = job["job_id"]
             if not schedule_store.claim_job(db, job_id=job_id, now=now):
