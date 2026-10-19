@@ -189,18 +189,21 @@ def _serve():
 
 
 class _RecordingLogger:
-    """Stands in for the bridge's logger and keeps every warning it gets."""
+    """Stands in for the bridge's logger and keeps what it is told."""
 
     def __init__(self):
         self.warnings = []
+        self.infos = []
 
     def warning(self, msg, *args):
         self.warnings.append(msg % args if args else msg)
 
-    def info(self, *_args, **_kwargs):
+    def info(self, msg, *args):
+        self.infos.append(msg % args if args else msg)
+
+    def debug(self, *_args, **_kwargs):
         pass
 
-    debug = info
     error = warning
 
 
@@ -323,18 +326,159 @@ def test_an_invalid_content_length_is_answered_400(serve, length):
 def test_a_tool_call_longer_than_the_read_timeout_succeeds(serve, monkeypatch):
     monkeypatch.setattr(MCPHTTPHandler, "timeout", 0.5)
 
+    passed = []
+
     class _SlowLLM:
-        def generate(self, prompt, **_kwargs):
+        def generate(self, prompt, **kwargs):
+            passed.append(kwargs)
             time.sleep(1.5)
             return f"echo: {prompt}"
 
-    monkeypatch.setattr(mcp_bridge, "create_client", lambda *_a, **_k: _SlowLLM())
+    def _make_client(*_args, **kwargs):
+        passed.append(kwargs)
+        return _SlowLLM()
+
+    monkeypatch.setattr(mcp_bridge, "create_client", _make_client)
     base = serve(GAIAMCPBridge(port=0))
 
     status, body = _post_json(f"{base}/llm", {"query": "hi"}, 10)
 
     assert status == 200
     assert body["result"] == "echo: hi"
+    # The read timeout is for the client socket; the LLM keeps its own budget.
+    timeouts = [
+        value
+        for kwargs in passed
+        for key, value in kwargs.items()
+        if "timeout" in key.lower()
+    ]
+    assert all(
+        value is None or value > mcp_bridge.REQUEST_READ_TIMEOUT_SECONDS
+        for value in timeouts
+    ), timeouts
+
+
+def test_a_rejected_oversized_request_gets_its_401_without_a_read(serve):
+    base = serve(GAIAMCPBridge(port=0, auth_token="secret"))
+
+    # Only the headers are sent; draining the declared body would wait for it.
+    reply = _raw_exchange(
+        base,
+        b"POST /llm HTTP/1.1\r\nHost: x\r\n"
+        b"Content-Type: application/json\r\nContent-Length: 99999999\r\n\r\n",
+        timeout=3,
+    )
+
+    assert reply.startswith(b"HTTP/1.0 401")
+
+
+def test_a_chunked_body_is_refused_411_instead_of_run_empty(serve, monkeypatch):
+    calls = []
+
+    class _LLM:
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return "ran"
+
+    monkeypatch.setattr(mcp_bridge, "create_client", lambda *_a, **_k: _LLM())
+    base = serve(GAIAMCPBridge(port=0))
+
+    reply = _raw_exchange(
+        base,
+        b"POST /llm HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+        b"Transfer-Encoding: chunked\r\n\r\n"
+        b'10\r\n{"query": "hi"}\r\n0\r\n\r\n',
+    )
+
+    assert reply.startswith(b"HTTP/1.0 411")
+    assert calls == []
+
+
+def test_conflicting_content_lengths_are_answered_400(serve):
+    base = serve(GAIAMCPBridge(port=0))
+
+    reply = _raw_exchange(
+        base,
+        b"POST /llm HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+        b'Content-Length: 2\r\nContent-Length: 15\r\n\r\n{"query": "hi"}',
+    )
+
+    assert reply.startswith(b"HTTP/1.0 400")
+    assert b"Conflicting Content-Length" in reply
+
+
+def test_an_invalid_content_length_is_not_echoed_in_full(serve):
+    base = serve(GAIAMCPBridge(port=0))
+    junk = b"x" * 5000
+
+    reply = _raw_exchange(
+        base,
+        b"POST /llm HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+        b"Content-Length: " + junk + b"\r\n\r\n",
+    )
+
+    assert reply.startswith(b"HTTP/1.0 400")
+    assert junk not in reply
+
+
+def test_a_query_waiting_for_the_shared_client_is_logged_as_queued(serve, monkeypatch):
+    log = _RecordingLogger()
+    monkeypatch.setattr(mcp_bridge, "logger", log)
+    release = threading.Event()
+    entered = threading.Event()
+
+    class _LLM:
+        def generate(self, prompt, **_kwargs):
+            if prompt == "first":
+                entered.set()
+                release.wait(10)
+            return prompt
+
+    monkeypatch.setattr(mcp_bridge, "create_client", lambda *_a, **_k: _LLM())
+    base = serve(GAIAMCPBridge(port=0))
+    results = []
+
+    def _query(text):
+        results.append(_post_json(f"{base}/llm", {"query": text}, 15))
+
+    first = threading.Thread(target=_query, args=("first",))
+    first.start()
+    assert entered.wait(5)
+    second = threading.Thread(target=_query, args=("second",))
+    second.start()
+    deadline = time.monotonic() + 5
+    while not any("queued" in m for m in log.infos):
+        assert time.monotonic() < deadline, log.infos
+        time.sleep(0.05)
+    release.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert sorted(body["result"] for _, body in results) == ["first", "second"]
+    assert [m for m in log.infos if "queued" in m] == [
+        "MCP query queued behind another request on the bridge"
+    ]
+
+
+def test_a_chat_waiting_for_the_conversation_is_logged_as_queued(serve, monkeypatch):
+    log = _RecordingLogger()
+    monkeypatch.setattr(mcp_bridge, "logger", log)
+    bridge = GAIAMCPBridge(port=0)
+    bridge.chat_sdk = _CountingChatSDK()
+    base = serve(bridge)
+
+    threads = [
+        threading.Thread(
+            target=_post_json, args=(f"{base}/chat", {"query": f"q{i}"}, 10)
+        )
+        for i in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert "MCP chat queued behind another request on the bridge" in log.infos
 
 
 def test_each_connection_gets_the_30_second_read_timeout(serve, monkeypatch):

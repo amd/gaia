@@ -14,6 +14,7 @@ import os
 import secrets
 import sys
 import threading
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
@@ -89,6 +90,18 @@ def resolve_max_body_bytes():
             f"{MAX_BODY_BYTES_ENV_VAR} must be greater than 0; got {limit}."
         )
     return limit
+
+
+@contextmanager
+def _in_turn(lock, what):
+    """Hold *lock*, logging when the caller has to queue for it."""
+    if not lock.acquire(blocking=False):
+        logger.info("MCP %s queued behind another request on the bridge", what)
+        lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 class GAIAMCPBridge:
@@ -186,7 +199,7 @@ class GAIAMCPBridge:
 
     def _execute_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute LLM query."""
-        with self._llm_lock:
+        with _in_turn(self._llm_lock, "query"):
             if not self.llm_client:
                 self.llm_client = create_client("lemonade", base_url=self.base_url)
             response = self.llm_client.generate(
@@ -204,7 +217,7 @@ class GAIAMCPBridge:
 
             query = args.get("query", "")
 
-            with self._chat_lock:
+            with _in_turn(self._chat_lock, "chat"):
                 if self.chat_sdk is None:
                     # AgentSDK uses the global LLM configuration, not a base_url
                     self.chat_sdk = AgentSDK(config=AgentConfig())
@@ -253,19 +266,38 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             return False
 
     def _content_length(self):
-        """The declared body size, or None after replying 400/413."""
-        raw = self.headers.get("Content-Length", 0)
+        """The declared body size, or None after replying 400/411/413."""
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            self.send_json(
+                411,
+                {
+                    "error": (
+                        "Chunked or other Transfer-Encoding bodies are not "
+                        "supported. Send the body with a Content-Length header."
+                    )
+                },
+            )
+            return None
+        values = {v.strip() for v in self.headers.get_all("Content-Length", [])}
+        if len(values) > 1:
+            self.close_connection = True
+            self.send_json(400, {"error": "Conflicting Content-Length headers"})
+            return None
+        raw = values.pop() if values else "0"
         try:
             length = int(raw)
-        except (TypeError, ValueError):
+        except ValueError:
             length = -1
         if length < 0:
             self.close_connection = True
-            self.send_json(400, {"error": f"Invalid Content-Length header: {raw!r}"})
+            self.send_json(
+                400, {"error": f"Invalid Content-Length header: {raw[:32]!r}"}
+            )
             return None
         if length > self.max_body_bytes:
             logger.warning(
-                "Rejected oversized MCP request: %s %s (Content-Length %d > %d)",
+                "Rejected oversized MCP request: %s %r (Content-Length %d > %d)",
                 self.command,
                 self.path,
                 length,
@@ -381,7 +413,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 length -= len(chunk)
         except TimeoutError:
             logger.warning(
-                "Rejected MCP request's body not received within %ss: %s %s",
+                "Rejected MCP request's body not received within %ss: %s %r",
                 self.timeout,
                 self.command,
                 self.path,
@@ -492,7 +524,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(content_length)
             except TimeoutError:
                 logger.warning(
-                    "MCP request body not received within %ss: %s %s",
+                    "MCP request body not received within %ss: %s %r",
                     self.timeout,
                     self.command,
                     self.path,
