@@ -183,7 +183,7 @@
 .setup-progress {
     width: 100%;
     height: 6px;
-    accent-color: var(--accent-fill);
+    accent-color: var(--accent-solid);
 }
 
 .setup-log {
