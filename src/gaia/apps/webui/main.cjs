@@ -635,9 +635,9 @@ async function loadApp() {
              * src/styles/index.css, so the dark theme's role values are
              * mirrored here. Keep them in step with that file. */
             :root {
-              --bg-primary: #17161C;
-              --text-primary: #F0EDE7;
-              --text-secondary: #AAA5B0;
+              --bg-primary: #1A1917;
+              --text-primary: #EFECE6;
+              --text-secondary: #B3ADA5;
             }
             body {
               font-family: -apple-system, BlinkMacSystemFont, sans-serif;

@@ -56,6 +56,7 @@ class PrefixWarmer:
         self._result: Dict[str, Any] = {}
         self._error: Optional[str] = None
         self._phase: Optional[str] = None
+        self._target: Dict[str, Optional[str]] = {}
         self._busy: Callable[[], bool] = lambda: False
 
     def set_busy_check(self, busy: Callable[[], bool]) -> None:
@@ -83,6 +84,7 @@ class PrefixWarmer:
             self._result = {}
             self._error = None
             self._phase = None
+            self._target = {}
             self._done.clear()
         threading.Thread(
             target=self._run, args=(reason,), name="gaia-prefix-warmup", daemon=True
@@ -113,6 +115,11 @@ class PrefixWarmer:
             result.get("prompt_tokens", "?"),
         )
         self._finish(READY, result, None)
+
+    def set_target(self, model: str, device: Optional[str]) -> None:
+        """Name what the running warm-up loads, so the UI can say so."""
+        with self._lock:
+            self._target = {"model": model, "device": device}
 
     def _finish(self, state: str, result: Dict[str, Any], error: Optional[str]):
         with self._lock:
@@ -147,6 +154,8 @@ class PrefixWarmer:
                 "prompt_tokens": self._result.get("prompt_tokens"),
                 "cached_tokens": self._result.get("cached_tokens"),
                 "error": self._error,
+                "model": self._target.get("model"),
+                "device": self._target.get("device"),
             }
 
 
@@ -172,7 +181,48 @@ def preload_skip_reason() -> Optional[str]:
     )
 
 
-def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
+def _device_for(client, model: str) -> Optional[str]:
+    """``npu``, ``gpu`` or ``cpu``: where Lemonade runs *model*; None if unknown.
+
+    A llama.cpp model runs where its backend does: the user's choice, else the
+    one Lemonade picks. Any other recipe is left unnamed rather than guessed.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import (
+        LemonadeClientError,
+        _model_ids_match,
+        preferred_llamacpp_backend,
+        runs_on_npu,
+    )
+    from gaia.llm.model_server_info import default_llamacpp_backend
+
+    if runs_on_npu(model):
+        return "npu"
+    try:
+        recipe = next(
+            (
+                m.get("recipe")
+                for m in client.list_models(show_all=True).get("data", [])
+                if _model_ids_match(m.get("id"), model)
+            ),
+            None,
+        )
+        if recipe != "llamacpp":
+            return None
+        backend = preferred_llamacpp_backend() or default_llamacpp_backend(
+            client.get_system_info(timeout=5)
+        )
+    except (LemonadeClientError, GaiaConfigError) as e:
+        logger.warning("Warm-up can't say where %s runs: %s", model, e)
+        return None
+    if not backend:
+        return None
+    return "cpu" if backend == "cpu" else "gpu"
+
+
+def _warm_new_chat_prefix(
+    db, note_target: Optional[Callable[[str, Optional[str]], None]] = None
+) -> Optional[Dict[str, Any]]:
     """Build the flagship exactly as a new chat's first turn does, and warm it.
 
     Returns None when there is nothing to warm locally: a cloud model, a model
@@ -260,6 +310,8 @@ def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
             if reason:
                 logger.info("Warm-up skipped: %s %s", effective, reason)
                 return None
+        if note_target is not None:
+            note_target(effective, _device_for(client, effective))
         # The turn's own pre-flight: load at the ctx a turn expects, or the
         # first turn reloads the model and the primed cache goes with it.
         _set_phase("loading")
@@ -280,14 +332,25 @@ def configure(db) -> PrefixWarmer:
     global _warmer
     from gaia.ui import _chat_helpers as chat
 
-    _warmer = PrefixWarmer(lambda: _warm_new_chat_prefix(db))
+    _warmer = PrefixWarmer(lambda: _warm_new_chat_prefix(db, _warmer.set_target))
     _warmer.set_busy_check(lambda: bool(chat._active_sse_handlers))
     return _warmer
 
 
 def request_warm_up(reason: str) -> bool:
-    """Ask for a warm-up; a no-op before :func:`configure` or while one runs."""
-    return _warmer.request(reason) if _warmer is not None else False
+    """Ask for a warm-up; a no-op before :func:`configure`, while one runs, or
+    before first-run setup has finished (it would load a model setup didn't pick).
+    """
+    from gaia.ui.setup_runner import is_initialized
+
+    if _warmer is None:
+        return False
+    if not is_initialized():
+        logger.info(
+            "Warm-up (%s) not started: first-run setup has not finished", reason
+        )
+        return False
+    return _warmer.request(reason)
 
 
 def _set_phase(phase: str) -> None:

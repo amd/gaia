@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
+from gaia.agents.base.file_snapshots import before_change
+
 logger = logging.getLogger(__name__)
 
 #: Characters of context kept on each side of a ``find`` match.
@@ -375,13 +377,13 @@ class BrowserToolsMixin:
             # file, so a blocked download leaves the filesystem untouched.
             def _screen_destination(dest_path: Path) -> None:
                 validator = getattr(mixin, "_path_validator", None)
-                if not validator:
-                    return
-                is_blocked, reason = validator.is_write_blocked(str(dest_path))
-                if is_blocked:
-                    raise ValueError(
-                        f"Downloaded file blocked by security policy: {reason}"
-                    )
+                if validator:
+                    is_blocked, reason = validator.is_write_blocked(str(dest_path))
+                    if is_blocked:
+                        raise ValueError(
+                            f"Downloaded file blocked by security policy: {reason}"
+                        )
+                before_change(dest_path, "download_file")
 
             try:
                 result = mixin._web_client.download(

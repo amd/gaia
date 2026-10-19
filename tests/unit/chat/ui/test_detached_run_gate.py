@@ -198,3 +198,40 @@ async def test_stop_on_a_waiting_non_streamed_turn_frees_the_chat(runtime):
     assert "stopped while it waited" in stopped.value.detail
     assert not http_request.app.state.session_locks[sid].locked()
     assert queue.holder == "another-chat"
+
+
+async def test_a_waiting_turn_keeps_announcing_its_place(runtime):
+    db, manager, queue, http_request = runtime
+    sid = db.create_session()["id"]
+    await queue.acquire("another-chat")
+    impl_started = asyncio.Event()
+
+    async def impl(run, _db, _session, _request):
+        impl_started.set()
+        yield 'data: {"type":"done","message_id":1,"content":"ok"}\n\n'
+
+    with (
+        patch.object(helpers, "_QUEUE_HEARTBEAT_SECONDS", 0.02),
+        patch.object(helpers, "_stream_chat_impl", impl),
+    ):
+        response = await _send(db, http_request, sid, "queued")
+        await _start_detached(response)
+        run = manager.get(sid)
+        await asyncio.sleep(0.15)
+
+        queued = [e for e in _events(run) if e.get("phase") == "queued"]
+        # The first announcement plus several heartbeats, never a silent stream.
+        assert len(queued) >= 4
+        assert all(e["queue_position"] == 1 for e in queued)
+        assert all(e["message"] == "Waiting for the GPU — 1st in line" for e in queued)
+        assert queued[-1]["queue_waited_s"] >= queued[0]["queue_waited_s"]
+
+        queue.release()
+        await impl_started.wait()
+        await run.task
+        await response.background()
+        after = len([e for e in _events(run) if e.get("phase") == "queued"])
+        await asyncio.sleep(0.1)
+        # Once the turn has the GPU the heartbeat stops.
+        assert len([e for e in _events(run) if e.get("phase") == "queued"]) == after
+        assert _events(run)[-1]["type"] == "done"

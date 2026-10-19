@@ -211,10 +211,18 @@ async def send_message(
                 background=BackgroundTask(_release_stream_resources),
             )
         else:
+            from .._chat_helpers import _record_run_outcome
+
+            run_status = "failed"
             try:
                 model_messages = []
+                turn_box: dict = {}
                 response_text = await srv._get_chat_response(
-                    db, session, agent_request, model_messages=model_messages
+                    db,
+                    session,
+                    agent_request,
+                    model_messages=model_messages,
+                    turn_box=turn_box,
                 )
                 # Clean LLM output artifacts (same pipeline as streaming path)
                 if response_text:
@@ -230,6 +238,8 @@ async def send_message(
                     response_text,
                     model_messages=model_messages or None,
                 )
+                if "recording" in turn_box:
+                    turn_box["recording"].link_message(msg_id)
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 
@@ -250,12 +260,14 @@ async def send_message(
                         model_id=session.get("model"),
                     )
                 )
+                run_status = "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,
                     sources=[],
                 )
             finally:
+                _record_run_outcome(db, request.session_id, run_status)
                 session_lock.release()
     finally:
         if holds_turn:
