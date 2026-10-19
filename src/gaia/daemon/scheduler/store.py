@@ -26,6 +26,7 @@ import json
 import sqlite3
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from gaia.daemon.scheduler.models import (
@@ -329,6 +330,21 @@ def find_stale_firing(db, *, now: float, stale_after: float) -> List[Dict[str, A
     return [_row_to_job(r) for r in rows or ()]
 
 
+def _describe_heartbeat(claimed: Optional[float], now: float) -> str:
+    """``at 14:05 on 2026-10-18 (3 hours ago)``, in local time."""
+    if claimed is None:
+        return "at an unknown time"
+    stamp = datetime.fromtimestamp(claimed).strftime("%H:%M on %Y-%m-%d")
+    minutes = max(0, int((now - claimed) // 60))
+    if minutes >= 120:
+        ago = f"{minutes // 60} hours ago"
+    elif minutes >= 1:
+        ago = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    else:
+        ago = "under a minute ago"
+    return f"at {stamp} ({ago})"
+
+
 def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
     """Move on from an abandoned lease. Returns ``"requeued"``, ``"failed"``,
     or None if the lease changed since ``job`` was read (it is alive).
@@ -346,7 +362,7 @@ def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
             "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed",
         )
     )
-    when = "at an unknown time" if claimed is None else f"at {claimed:.0f}"
+    when = _describe_heartbeat(claimed, now)
     recurring = job["kind"] == KIND_RECURRING and job["interval_seconds"]
     if recurring or job["payload"].get("rerunnable") is True:
         values: Dict[str, Any] = {
@@ -364,8 +380,9 @@ def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
             "fired_at": now,
             "error": (
                 f"interrupted while firing (last heartbeat {when}). Not run "
-                "again because it may already have taken effect; check its "
-                "result and schedule it again if it did not."
+                "again because it may already have taken effect. Check its "
+                "result before scheduling it again: if it did run, this job "
+                "may still change to fired."
             ),
         }
         outcome = "failed"

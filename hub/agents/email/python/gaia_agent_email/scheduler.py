@@ -98,6 +98,7 @@ class EmailJobScheduler:
         poll_seconds: float = 30.0,
         stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
@@ -121,6 +122,9 @@ class EmailJobScheduler:
         self._poll_seconds = poll_seconds
         self._stale_firing_seconds = stale_firing_seconds
         self._heartbeat_seconds = heartbeat_seconds
+        # One wall clock for claims, heartbeats and recovery, injectable
+        # so a test can move it the way a sleep/resume does.
+        self._clock = clock
         self._stale_leases = StaleLeases(confirm_after=2 * heartbeat_seconds)
         self._schema_ready = False
         self._stop_event = threading.Event()
@@ -176,7 +180,7 @@ class EmailJobScheduler:
         db.init_db(self._db_path, quiet=True)
         try:
             return schedule_store.renew_claim(
-                db, job_id=job_id, claim_id=claim_id, now=time.time()
+                db, job_id=job_id, claim_id=claim_id, now=self._clock()
             )
         finally:
             db.close_db()
@@ -192,8 +196,9 @@ class EmailJobScheduler:
             )
 
     def _fire_due_jobs_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
+        now = now if now is not None else self._clock()
         fired: List[str] = []
-        failed = self._recover_abandoned(db, now if now is not None else time.time())
+        failed = self._recover_abandoned(db, now)
         for job in schedule_store.fetch_due(db, now=now):
             job_id = job["job_id"]
             claim_id = schedule_store.claim_job(db, job_id=job_id, now=now)

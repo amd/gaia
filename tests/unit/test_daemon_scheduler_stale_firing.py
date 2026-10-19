@@ -257,3 +257,35 @@ def test_bad_lease_settings_rejected(tmp_path):
             stale_firing_seconds=60,
             heartbeat_seconds=60,
         )
+
+
+@pytest.mark.parametrize("kind", [KIND_ONE_SHOT, KIND_RECURRING])
+def test_a_lease_renewed_after_it_was_read_is_not_recovered(tmp_path, kind):
+    """The holder's heartbeat lands between the stale scan and the recovery
+    write: the recovery must lose, or a live job is failed or run twice."""
+    db = _db(tmp_path / "clock.db")
+    jid = store.register_job(
+        db, source="t", kind=kind, fire_at=1.0, interval_seconds=60
+    )
+    claim = store.claim_job(db, job_id=jid, now=1.0)
+    [stale] = store.find_stale_firing(db, now=STALE + 2, stale_after=STALE)
+    assert store.renew_claim(db, job_id=jid, claim_id=claim, now=STALE + 2)
+
+    assert store.recover_claim(db, stale, now=STALE + 2) is None
+    job = store.get_job(db, job_id=jid)
+    assert job["status"] == STATUS_FIRING and job["claim_id"] == claim
+
+
+def test_the_recovery_error_names_a_local_time(tmp_path):
+    from datetime import datetime
+
+    db = _db(tmp_path / "clock.db")
+    claimed = datetime(2026, 10, 18, 14, 5).timestamp()
+    jid = store.register_job(db, source="t", kind=KIND_ONE_SHOT, fire_at=claimed)
+    store.claim_job(db, job_id=jid, now=claimed)
+    later = claimed + 45 * 60
+    [stale] = store.find_stale_firing(db, now=later, stale_after=STALE)
+    store.recover_claim(db, stale, now=later)
+    error = store.get_job(db, job_id=jid)["error"]
+    assert "14:05 on 2026-10-18 (45 minutes ago)" in error
+    assert str(int(claimed)) not in error

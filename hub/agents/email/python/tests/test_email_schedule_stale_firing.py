@@ -42,6 +42,20 @@ class _DB(DatabaseMixin):
     pass
 
 
+class _FakeClock:
+    def __init__(self, now: float) -> None:
+        self._now = now
+        self._lock = threading.Lock()
+
+    def __call__(self) -> float:
+        with self._lock:
+            return self._now
+
+    def advance(self, seconds: float) -> None:
+        with self._lock:
+            self._now += seconds
+
+
 def _db(path: Path) -> _DB:
     db = _DB()
     db.init_db(str(path))
@@ -100,8 +114,10 @@ def test_snooze_left_firing_is_requeued_and_restored(tmp_path):
 
 @pytest.mark.parametrize("kind", [SEND, SNOOZE])
 def test_a_fire_still_in_flight_is_not_taken_over_after_a_wake_up(tmp_path, kind):
-    """Driver A is mid-fire when driver B's first pass after a long sleep sees
-    its lease hours old. A's heartbeat lands before B is sure; B leaves it."""
+    """Driver A is mid-fire when the machine sleeps for three hours. On waking,
+    driver B's first pass sees A's lease hours old; A's next heartbeat lands
+    before B is sure, so B leaves the job alone. One clock drives both."""
+    clock = _FakeClock(100.0)
     path = tmp_path / "state.db"
     db = _db(path)
     job_id = schedule_store.create_job(db, kind=kind, due_at=100.0, payload={})
@@ -115,17 +131,33 @@ def test_a_fire_still_in_flight_is_not_taken_over_after_a_wake_up(tmp_path, kind
             raise RuntimeError("message already moved")
 
     a = EmailJobScheduler(
-        str(path), {kind: slow}, stale_firing_seconds=STALE, heartbeat_seconds=0.1
+        str(path),
+        {kind: slow},
+        stale_firing_seconds=STALE,
+        heartbeat_seconds=0.05,
+        clock=clock,
     )
-    b = _scheduler(path, lambda job, _db: runs.append("B"))
-    thread = threading.Thread(target=lambda: a.fire_due_jobs(now=100.0))
+    b = EmailJobScheduler(
+        str(path),
+        {kind: lambda job, _db: runs.append("B")},
+        stale_firing_seconds=STALE,
+        heartbeat_seconds=BEAT,
+        clock=clock,
+    )
+    thread = threading.Thread(target=a.fire_due_jobs)
     thread.start()
     try:
         assert entered.wait(5)
-        woke = 100.0 + 3 * 3600
-        assert b.fire_due_jobs(now=woke) == {"fired": [], "failed": []}
-        time.sleep(0.5)  # A's heartbeats renew the lease with the real clock
-        assert b.fire_due_jobs(now=woke + CONFIRM + 1) == {"fired": [], "failed": []}
+        clock.advance(3 * 3600)  # the sleep
+        woke = clock()
+        assert b.fire_due_jobs() == {"fired": [], "failed": []}
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if schedule_store.get_job(db, job_id=job_id)["claimed_at"] >= woke:
+                break  # A's first heartbeat after waking
+            time.sleep(0.02)
+        clock.advance(CONFIRM + 1)
+        assert b.fire_due_jobs() == {"fired": [], "failed": []}
         assert schedule_store.get_job(db, job_id=job_id)["status"] == "firing"
     finally:
         gate.set()
@@ -133,6 +165,51 @@ def test_a_fire_still_in_flight_is_not_taken_over_after_a_wake_up(tmp_path, kind
     job = schedule_store.get_job(db, job_id=job_id)
     assert runs == ["A"]
     assert job["status"] == ("fired" if kind == SEND else "failed")
+
+
+@pytest.mark.parametrize("kind", [SEND, SNOOZE])
+def test_a_lease_renewed_after_it_was_read_is_not_recovered(tmp_path, kind):
+    """The holder's heartbeat lands between the stale scan and the recovery
+    write: the recovery must lose, or a live send is marked failed."""
+    db = _db(tmp_path / "state.db")
+    job_id = schedule_store.create_job(db, kind=kind, due_at=1.0, payload={})
+    claim = schedule_store.claim_job(db, job_id=job_id, now=1.0)
+    [stale] = schedule_store.find_stale_firing(db, now=STALE + 2, stale_after=STALE)
+    assert schedule_store.renew_claim(db, job_id=job_id, claim_id=claim, now=STALE + 2)
+
+    assert schedule_store.recover_claim(db, stale, now=STALE + 2) is None
+    job = schedule_store.get_job(db, job_id=job_id)
+    assert job["status"] == "firing" and job["claim_id"] == claim
+    assert job["error"] is None
+
+
+def test_a_send_that_went_out_after_recovery_failed_it_is_recorded_as_sent(tmp_path):
+    db = _db(tmp_path / "state.db")
+    job_id = schedule_store.create_job(db, kind=SEND, due_at=1.0, payload={})
+    holder = schedule_store.claim_job(db, job_id=job_id, now=1.0)
+    [stale] = schedule_store.find_stale_firing(db, now=STALE + 2, stale_after=STALE)
+    assert schedule_store.recover_claim(db, stale, now=STALE + 2) == "failed"
+    assert schedule_store.get_job(db, job_id=job_id)["status"] == "failed"
+
+    assert schedule_store.mark_fired(db, job_id=job_id, claim_id=holder)
+    job = schedule_store.get_job(db, job_id=job_id)
+    assert job["status"] == "fired" and job["error"] is None
+
+
+def test_the_recovery_error_names_a_local_time_and_says_to_check_sent(tmp_path):
+    from datetime import datetime
+
+    db = _db(tmp_path / "state.db")
+    claimed = datetime(2026, 10, 18, 14, 5).timestamp()
+    job_id = schedule_store.create_job(db, kind=SEND, due_at=claimed, payload={})
+    schedule_store.claim_job(db, job_id=job_id, now=claimed)
+    later = claimed + 3 * 3600
+    [stale] = schedule_store.find_stale_firing(db, now=later, stale_after=STALE)
+    schedule_store.recover_claim(db, stale, now=later)
+    error = schedule_store.get_job(db, job_id=job_id)["error"]
+    assert "14:05 on 2026-10-18 (3 hours ago)" in error
+    assert "Sent folder" in error
+    assert str(int(claimed)) not in error
 
 
 def test_a_late_error_never_overwrites_the_rerun_that_succeeded(tmp_path):

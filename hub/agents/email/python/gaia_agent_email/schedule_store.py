@@ -30,7 +30,7 @@ the firing driver renews ``claimed_at`` with ``renew_claim`` while the send
 runs, and ``mark_fired`` / ``mark_failed`` succeed only for the holder of the
 token. ``find_stale_firing`` + ``recover_claim`` let another driver move on a
 lease that stopped being renewed instead of leaving it ``firing`` forever (the
-confirmation timing lives in :mod:`gaia.daemon.scheduler.lease`).
+confirmation timing lives in :mod:`gaia_agent_email.lease`).
 
 All public helpers are pure functions taking a ``DatabaseMixin``-typed first
 argument, mirroring ``action_store``. They never reach into the agent class.
@@ -42,6 +42,7 @@ import json
 import sqlite3
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,21 @@ def mark_failed(db, *, job_id: str, claim_id: str, error: str) -> bool:
     return affected == 1
 
 
+def _describe_heartbeat(claimed: Optional[float], now: float) -> str:
+    """``at 14:05 on 2026-10-18 (3 hours ago)``, in local time."""
+    if claimed is None:
+        return "at an unknown time"
+    stamp = datetime.fromtimestamp(claimed).strftime("%H:%M on %Y-%m-%d")
+    minutes = max(0, int((now - claimed) // 60))
+    if minutes >= 120:
+        ago = f"{minutes // 60} hours ago"
+    elif minutes >= 1:
+        ago = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    else:
+        ago = "under a minute ago"
+    return f"at {stamp} ({ago})"
+
+
 #: Kinds that are safe to run a second time. A snooze restore only puts a
 #: message back in the inbox; a scheduled send would send twice.
 RERUNNABLE_KINDS = frozenset({KIND_SNOOZE})
@@ -313,7 +329,7 @@ def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
             "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed",
         )
     )
-    when = "at an unknown time" if claimed is None else f"at {claimed:.0f}"
+    when = _describe_heartbeat(claimed, now)
     if job["kind"] in RERUNNABLE_KINDS:
         values = {"status": STATUS_PENDING, "claimed_at": None}
         outcome = "requeued"
@@ -323,8 +339,9 @@ def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
             "fired_at": now,
             "error": (
                 f"interrupted while firing (last heartbeat {when}). Not run "
-                "again because it may already have taken effect; check the "
-                "mailbox and schedule it again if it did not."
+                "again because it may already have gone out. Check the Sent "
+                "folder before scheduling it again: if it was sent, this job "
+                "may still change to fired."
             ),
         }
         outcome = "failed"

@@ -25,7 +25,8 @@ contract version is tracked separately as
   last 7 days, with the error, so the user hears about a send that did not go
   out. A driver that was alive after all (two schedulers on one database, a
   laptop waking from sleep) keeps its job, and its own outcome replaces the
-  recovery's guess.
+  recovery's guess. The failure names the last heartbeat in local time and
+  tells the user to check the Sent folder before scheduling the mail again.
 
 - **A batch organize that failed for every message is reported as a failure.**
   `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,
