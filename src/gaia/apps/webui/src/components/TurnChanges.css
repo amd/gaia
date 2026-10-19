@@ -1,0 +1,120 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Always visible, unlike .msg-stats: undo is a safety net, not a detail. */
+.turn-changes {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.turn-changes-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.turn-changes-summary {
+    color: var(--text-muted);
+}
+
+.turn-changes-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.turn-changes-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+}
+
+.turn-changes-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.turn-changes-btn.is-primary {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.turn-changes-btn.is-danger {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.turn-changes-confirm {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.turn-changes-warning,
+.turn-changes.is-error {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    margin-top: 6px;
+    color: var(--accent-yellow);
+}
+
+.turn-changes-warning ul {
+    margin: 2px 0 0;
+    padding-left: 16px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    word-break: break-all;
+}
+
+.turn-changes-message {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.turn-changes-message.is-ok {
+    color: var(--text-secondary);
+}
+
+.turn-changes-message.is-error {
+    color: var(--danger);
+}
+
+.changes-review.modal-panel {
+    width: 860px;
+}
+
+.changes-review-body {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.changes-review-file .render-diff__title {
+    word-break: break-all;
+}
+
+.changes-review-loading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+}
+
+.undo-history-input {
+    max-width: 120px;
+}

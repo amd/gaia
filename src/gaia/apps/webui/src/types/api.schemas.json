@@ -281,6 +281,17 @@
           }
         ]
       },
+      "currentStep": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Currentstep"
+      },
       "data": {
         "anyOf": [
           {},
@@ -351,6 +362,31 @@
           }
         ],
         "title": "Mcpserver"
+      },
+      "narration": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Narration"
+      },
+      "planNarrations": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Plannarrations"
       },
       "planSteps": {
         "anyOf": [
@@ -4084,6 +4120,40 @@
       "cost"
     ],
     "title": "TurnSummaryResponse",
+    "type": "object"
+  },
+  "UndoRequest": {
+    "properties": {
+      "force": {
+        "default": false,
+        "description": "Undo even files changed after the turn, losing those changes.",
+        "title": "Force",
+        "type": "boolean"
+      }
+    },
+    "title": "UndoRequest",
+    "type": "object"
+  },
+  "UndoSettings": {
+    "properties": {
+      "max_mb": {
+        "maximum": 100000.0,
+        "minimum": 10.0,
+        "title": "Max Mb",
+        "type": "integer"
+      },
+      "retention_days": {
+        "maximum": 365.0,
+        "minimum": 1.0,
+        "title": "Retention Days",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "retention_days",
+      "max_mb"
+    ],
+    "title": "UndoSettings",
     "type": "object"
   },
   "UpdateScheduleRequest": {
