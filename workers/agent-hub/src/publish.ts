@@ -21,6 +21,7 @@ import { parseManifest } from "./manifest";
 import {
   ARTIFACT_FILENAME_RE,
   maxBytes,
+  maxReferencedBytes,
   optionalTextPart,
   sha256Hex,
 } from "./multipart";
@@ -235,11 +236,9 @@ async function verifyUploadedArtifact(
     );
   }
 
-  // The inline lane enforces this before storing; the by-reference lane must
-  // too, or MAX_ARTIFACT_BYTES silently stops being the artifact size cap the
-  // README says it is. The 250 MiB default clears the 135 MiB installers, so
-  // this costs nothing today and keeps one ceiling rather than two.
-  const limit = maxBytes(env);
+  // Its own ceiling, not MAX_ARTIFACT_BYTES: these bytes never pass through the
+  // Worker, so the inline cap would only block the largest installers.
+  const limit = maxReferencedBytes(env);
   if (head.size > limit) {
     throw new HttpError(
       413,

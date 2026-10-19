@@ -51,7 +51,7 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
     This is the shipping entry point: it resolves your platform, fetches and SHA-256-verifies the agent binary and the terminal UI, starts the GAIA daemon plus the agent, and drops you at a chat prompt. A hash mismatch is a hard failure — there is no "continue anyway" path.
 
-    `@amd-gaia/gaia` is published on the [Agent Hub](https://amd-gaia.ai/hub), and the [terminal UI](/guides/terminal-hub) (`gaia tui`) now boots straight into this agent — there is nothing to browse or pick.
+    `@amd-gaia/gaia` is published on the [Agent Hub](https://amd-gaia.ai/hub), and the [terminal UI](/guides/tui) (`gaia tui`) now boots straight into this agent — there is nothing to browse or pick.
   </Tab>
   <Tab title="From source">
     Run the agent from your own checkout, so prompt and tool edits take effect without a freeze-and-publish cycle.
