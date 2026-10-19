@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import platform
+import re
 import signal
 import socket
 import subprocess
@@ -537,6 +538,70 @@ def _local_request_lock(model: str) -> threading.RLock:
     key = model[len("user.") :] if model.startswith("user.") else model
     with _LOCAL_REQUEST_LOCKS_GUARD:
         return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
+
+
+#: Time a model-slot lease allows on top of the request budget for the load it
+#: may do first. The broker's fixed TTL, which a load always had before.
+LEASE_LOAD_MARGIN_S = 900
+
+
+@contextmanager
+def _holding_local_request_lock(model: str):
+    """Hold *model*'s lock; a wait for it is reported and cancellable.
+
+    Reported and cancelled like a broker wait (see
+    :func:`gaia.daemon.broker_client.lease_wait_listener`), so a request queued
+    behind another in this process reads as waiting, and a stopped turn stops.
+    """
+    from gaia.daemon import broker_client
+
+    lock = _local_request_lock(model)
+    if not lock.acquire(blocking=False):
+        limit, source = broker_client.current_wait_limit()
+        started = time.monotonic()
+        next_update = started
+        while True:
+            now = time.monotonic()
+            if limit is not None and now - started >= limit:
+                raise broker_client.BrokerUnavailableError(
+                    f"no turn on '{model}' within the {limit:g}s wait limit: "
+                    "another request in this process is still using it. The "
+                    "model is busy, not broken."
+                    + broker_client.wait_limit_hint(source),
+                    status_code=504,
+                )
+            if now >= next_update:
+                broker_client.notify_wait(
+                    {
+                        "event": "queued",
+                        "scope": "process",
+                        "model": model,
+                        "position": 1,
+                        "queue_length": 1,
+                        "waited_s": now - started,
+                        "reason": "another request in this process is using it",
+                    }
+                )
+                next_update = now + broker_client.LOCAL_WAIT_UPDATE_EVERY_S
+            broker_client.check_cancelled(f"'{model}' (in use by this process)")
+            if lock.acquire(timeout=broker_client.LOCAL_WAIT_POLL_S):
+                break
+        try:
+            broker_client.notify_wait(
+                {
+                    "event": "granted",
+                    "scope": "process",
+                    "model": model,
+                    "waited_s": time.monotonic() - started,
+                }
+            )
+        except BaseException:
+            lock.release()
+            raise
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def _slots_in_flags(flags: List[str]) -> Optional[int]:
@@ -1551,6 +1616,67 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     if requested_thinking(model_id) is None:
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+# A gpt-oss control token (``<|channel|>``, ``<|message|>``, ``<|call|>`` ...).
+_HARMONY_TOKEN_RE = re.compile(r"<\|(?=[A-Za-z0-9_]{1,40}\|>)")
+
+
+def uses_harmony_format(model_id: Optional[str]) -> bool:
+    """Whether *model_id* is a gpt-oss model, which reads text in its channel format."""
+    return "gpt-oss" in (model_id or "").lower()
+
+
+def defang_harmony_tokens(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*messages* with every gpt-oss control token in their text broken up.
+
+    A tool result holding ``<|channel|>final<|message|>`` (a file, a web page)
+    is read as real channel markup: the reply comes back empty, or llama.cpp
+    500s on output it cannot parse. ``< |`` reads the same and is plain text.
+    """
+
+    def defang(text: Any) -> Any:
+        return _HARMONY_TOKEN_RE.sub("< |", text) if isinstance(text, str) else text
+
+    out = []
+    for message in messages:
+        if not isinstance(message, dict):
+            out.append(message)
+            continue
+        fixed = dict(message)
+        for key in ("content", "reasoning_content"):
+            if key not in fixed:
+                continue
+            content = fixed[key]
+            if isinstance(content, list):
+                fixed[key] = [
+                    (
+                        {**part, "text": defang(part.get("text"))}
+                        if isinstance(part, dict) and "text" in part
+                        else part
+                    )
+                    for part in content
+                ]
+            else:
+                fixed[key] = defang(content)
+        # A file the model wrote comes back in its own call's arguments.
+        if isinstance(fixed.get("tool_calls"), list):
+            fixed["tool_calls"] = [
+                (
+                    {
+                        **call,
+                        "function": {
+                            **call["function"],
+                            "arguments": defang(call["function"].get("arguments")),
+                        },
+                    }
+                    if isinstance(call, dict) and isinstance(call.get("function"), dict)
+                    else call
+                )
+                for call in fixed["tool_calls"]
+            ]
+        out.append(fixed)
+    return out
 
 
 # Define agent profiles with their model requirements
@@ -4252,6 +4378,8 @@ class LemonadeClient:
             # device profile can change between calls, and the budget follows them.
             timeout = request_budget_seconds()
 
+        if uses_harmony_format(model):
+            messages = defang_harmony_tokens(messages)
         if self.cloud_model_provider(model):
             # llama.cpp-only fields; a cloud provider rejects the request (HTTP 400).
             kwargs.pop("repeat_penalty", None)
@@ -4417,7 +4545,7 @@ class LemonadeClient:
         # non-streaming path skipped it, so an embedder warm-up that unloaded the
         # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
         # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(model, request_timeout=timeout):
             if auto_download:
                 self._ensure_model_loaded(model, auto_download=True)
 
@@ -4490,7 +4618,7 @@ class LemonadeClient:
         # Re-entrant per thread, so the load's own inner lease folds into this.
         # As a generator the lease is acquired on first iteration and released
         # when the consumer finishes or closes the stream.
-        with self._model_slot_lease(model):
+        with self._model_slot_lease(model, request_timeout=timeout):
             self._ensure_model_loaded(model, auto_download)
 
             # Known not to stream: go straight to the non-streaming call rather
@@ -6262,8 +6390,12 @@ class LemonadeClient:
             )
         self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
 
-    def _model_slot_lease(self, model: str):
+    def _model_slot_lease(self, model: str, request_timeout: Optional[float] = None):
         """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
+
+        The lease declares how long its holder may keep the slot: one request
+        of *request_timeout* (the request budget when not given), the retry
+        deadline after which no new attempt starts, and a model load.
 
         Serializes this load against every other process sharing the
         single-tenant Lemonade slot, and every request to a local model against
@@ -6289,10 +6421,12 @@ class LemonadeClient:
         if self.cloud_model_provider(model) or self._is_cloud_model(model):
             return nullcontext()
 
-        from gaia.daemon.broker_client import model_lease
+        from gaia.daemon.broker_client import model_lease, waits_are_listened
 
         def _on_wait(reason: str) -> None:
             self.log.info(f"Model slot busy — {reason}")
+            if waits_are_listened():
+                return  # the turn's own stream shows it
             try:
                 from rich.console import Console
 
@@ -6300,14 +6434,20 @@ class LemonadeClient:
             except ImportError:
                 print(f"⏳ {reason}")
 
-        lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
-        lock = _local_request_lock(model)
+        lease = model_lease(
+            model,
+            priority=self.model_lease_priority,
+            on_wait=_on_wait,
+            max_hold_s=(request_timeout or request_budget_seconds())
+            + RetryPolicy.from_env().deadline
+            + LEASE_LOAD_MARGIN_S,
+        )
 
         @contextmanager
         def _held():
             # Broker first: a thread holding the broker lease must never wait on
             # this lock while its holder waits on the broker.
-            with lease, lock:
+            with lease, _holding_local_request_lock(model):
                 yield
 
         return _held()

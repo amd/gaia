@@ -564,3 +564,51 @@ class TestPptxPdfConversion:
         assert "Exception Slide" in text
         assert "Safe content" in text
         assert "conversion" not in metadata
+
+
+class TestPptxStop:
+    """A stopped index stops a PowerPoint too, on either extraction path."""
+
+    def test_a_stop_during_the_converted_pdf_is_not_retried_slide_by_slide(
+        self, rag, tmp_path
+    ):
+        from gaia.rag.sdk import IndexingStopped
+
+        pptx_path = tmp_path / "deck.pptx"
+        _create_pptx(pptx_path, [{"title": "One"}, {"title": "Two"}])
+        with (
+            patch(
+                "gaia.rag.pptx_utils.convert_pptx_to_pdf",
+                return_value="/fake/output.pdf",
+            ),
+            patch.object(
+                rag, "_extract_text_from_pdf", side_effect=IndexingStopped("deck")
+            ),
+            patch(
+                "gaia.rag.pptx_utils.extract_text_from_slide",
+                side_effect=AssertionError("fell back to reading every slide"),
+            ),
+        ):
+            with pytest.raises(IndexingStopped):
+                rag._extract_text_from_pptx(str(pptx_path))
+
+    def test_the_slide_by_slide_reader_stops_between_slides(
+        self, rag, tmp_path, monkeypatch
+    ):
+        from gaia.rag import sdk
+        from gaia.rag.sdk import IndexingStopped
+
+        pptx_path = tmp_path / "deck.pptx"
+        _create_pptx(pptx_path, [{"title": t} for t in ("One", "Two", "Three")])
+        beats = []
+
+        def heartbeat():
+            beats.append(1)
+            if len(beats) == 2:
+                raise IndexingStopped("deck")
+
+        monkeypatch.setattr(sdk._HEARTBEAT, "fn", heartbeat, raising=False)
+        with patch("gaia.rag.pptx_utils.convert_pptx_to_pdf", return_value=None):
+            with pytest.raises(IndexingStopped):
+                rag._extract_text_from_pptx(str(pptx_path))
+        assert len(beats) == 2

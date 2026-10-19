@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A `/query` run waiting for the model streams that it is waiting.** The run
+  thread runs as the user's turn: `status` events with `phase: "model_queue"`
+  and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and
+  `/query/{run_id}/cancel` ends the wait. The translator keeps `phase` and
+  `queue` on those events only.
 - **A scheduled send or snooze cut off mid-fire no longer stays stuck, and a
   failed send is listed.** A crash, or a locked database when the result was
   written, left the job in `firing` forever, never retried and never reported.
