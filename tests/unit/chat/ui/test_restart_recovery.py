@@ -664,7 +664,7 @@ async def test_a_turn_withdrawn_from_the_queue_is_closed_by_its_cancel(tmp_path)
         db.begin_turn(sid, "hi")
 
         class _WithdrawnQueue:
-            async def acquire(self, owner, on_position=None):
+            async def acquire(self, owner, *_args, **_kwargs):
                 raise TurnCancelled(owner)
 
             def position(self, _owner):
@@ -716,3 +716,45 @@ async def test_a_spending_refusal_is_the_turns_one_reply(tmp_path):
     finally:
         db.close()
     assert contents == ["hi", "Over limit."]
+
+
+@pytest.mark.parametrize("withdrawn_by", ["stop", "client_left", "queue_error"])
+async def test_a_non_streamed_turn_ended_while_queued_leaves_no_marker(
+    runtime, withdrawn_by
+):
+    """A non-streamed question is saved before it waits for the model; however
+    that wait ends, no marker is left for a restart to call interrupted."""
+    from gaia.ui.turn_queue import TurnCancelled
+
+    db, _db_path, _manager, http_request = runtime
+    sid = _seed(db, _StreamingAgent())
+    waiting = asyncio.Event()
+
+    async def acquire(owner, **_kwargs):
+        if withdrawn_by == "stop":
+            raise TurnCancelled(owner)
+        if withdrawn_by == "queue_error":
+            raise RuntimeError("queue broke")
+        waiting.set()
+        await asyncio.Event().wait()
+
+    with patch.object(chat.turn_queue, "acquire", acquire):
+        task = asyncio.create_task(
+            chat.send_message(
+                ChatRequest(session_id=sid, message="hi", stream=False),
+                http_request,
+                db,
+            )
+        )
+        if withdrawn_by == "client_left":
+            await asyncio.wait_for(waiting.wait(), 5)
+            task.cancel()
+        results = await asyncio.gather(task, return_exceptions=True)
+
+    assert isinstance(results[0], BaseException)
+    assert db.turns_in_progress() == []
+    contents = [m["content"] for m in db.get_messages(sid)]
+    expected = ["hi"] if withdrawn_by == "queue_error" else ["hi", "Cancelled."]
+    assert contents == expected
+    # The chat is free for the next message.
+    assert not http_request.app.state.session_locks[sid].locked()

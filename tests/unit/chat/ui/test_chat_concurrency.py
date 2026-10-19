@@ -3,7 +3,7 @@
 
 """Unit tests for GAIA Agent UI chat endpoint concurrency control.
 
-Tests the per-session lock (409) and turn-queue timeout (429) mechanisms
+Tests the per-session lock (409) and the turn-queue release
 in the /api/chat/send endpoint, as well as lock release on error paths.
 """
 
@@ -96,46 +96,12 @@ class TestSessionLockConflict:
             assert r2.status_code == 200
 
 
-class TestGlobalSemaphore429:
-    """Tests for global concurrency semaphore returning 429 Too Many Requests."""
+class TestTurnQueueRelease:
+    """The turn slot is given back after every non-streamed turn.
 
-    def test_semaphore_exhausted_returns_429(self):
-        """A non-streamed turn that can't reach the model in time gets 429.
-
-        ``asyncio.wait_for`` is patched to a tiny timeout so the test runs in
-        <1 s instead of the production 60 s.
-        """
-        from unittest.mock import patch as _patch
-
-        from gaia.ui.turn_queue import TurnQueue
-
-        app = create_app(db_path=":memory:")
-        db = app.state.db
-        sid = db.create_session(title="Test")["id"]
-
-        queue = TurnQueue()
-        asyncio.run(queue.acquire("another-chat"))
-
-        real_wait_for = asyncio.wait_for
-
-        async def _fast_wait_for(awaitable, timeout):  # noqa: ARG001
-            return await real_wait_for(awaitable, timeout=0.2)
-
-        with (
-            _patch("gaia.ui.routers.chat.asyncio.wait_for", _fast_wait_for),
-            _patch("gaia.ui.routers.chat.turn_queue", queue),
-        ):
-            client = TestClient(app)
-            resp = client.post(
-                "/api/chat/send",
-                json={"session_id": sid, "message": "blocked", "stream": False},
-            )
-
-        assert resp.status_code == 429
-        assert "busy" in resp.json()["detail"]
-        # The timed-out request left the line; only the holder remains.
-        assert queue.waiting() == []
-        assert queue.holder == "another-chat"
+    A busy model queues a non-streamed turn instead of refusing it; see
+    ``test_turn_slot_reliability.py``.
+    """
 
     def test_semaphore_released_after_non_streaming_request(self, client, session_id):
         """After a non-streaming request completes, the semaphore is released."""
