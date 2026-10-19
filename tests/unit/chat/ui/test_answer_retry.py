@@ -273,43 +273,34 @@ async def test_context_for_an_unknown_chat_is_a_404(db):
     assert exc.value.status_code == 404
 
 
-class _Resp:
-    def __init__(self, status, body):
-        self.status_code = status
-        self._body = body
-        self.text = str(body)
+def _ask(post_body, stats_error=None, loaded=("other-gguf",), ask_error=None):
+    from gaia.llm.lemonade_client import LemonadeClient
 
-    def json(self):
-        return self._body
-
-    def raise_for_status(self):
-        if self.status_code != 200:
-            import httpx
-
-            raise httpx.HTTPStatusError("bad", request=None, response=None)
-
-
-def _ask(post_body, stats_status=200, loaded=("other-gguf",)):
     sent = {}
 
-    def post(url, json, headers, timeout):
-        sent.update(url=url, body=json)
-        return _Resp(200, post_body)
+    def chat_completions(self, model, messages, **kwargs):
+        sent.update(base_url=self.base_url, model=model, messages=messages, **kwargs)
+        if ask_error is not None:
+            raise ask_error
+        return post_body
 
-    def get(url, headers, timeout):
-        if url.endswith("/health"):
-            models = [{"model_name": m, "type": "llm"} for m in loaded]
-            return _Resp(200, {"all_models_loaded": models})
-        stats = {"tokens_per_second": 41.26, "time_to_first_token": 0.31}
-        return _Resp(stats_status, stats)
+    def health_check(self, timeout=None):
+        sent["health_timeout"] = timeout
+        return {"all_models_loaded": [{"model_name": m, "type": "llm"} for m in loaded]}
+
+    def get_stats(self):
+        if stats_error is not None:
+            raise stats_error
+        return {"tokens_per_second": 41.26, "time_to_first_token": 0.31}
 
     with (
-        patch("httpx.post", side_effect=post),
-        patch("httpx.get", side_effect=get),
+        patch.object(LemonadeClient, "chat_completions", chat_completions),
+        patch.object(LemonadeClient, "health_check", health_check),
+        patch.object(LemonadeClient, "get_stats", get_stats),
         patch.object(helpers, "_maybe_load_expected_model") as load,
         patch(
             "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
-            return_value="http://lem/api/v1",
+            return_value="http://lem:8000/api/v1",
         ),
     ):
         result = answer_retry.answer_with(
@@ -326,10 +317,14 @@ async def test_answer_with_loads_the_model_then_asks_it():
         }
     )
     load.assert_called_once_with("Other-GGUF")
-    assert sent["url"] == "http://lem/api/v1/chat/completions"
-    assert sent["body"]["model"] == "Other-GGUF"
-    assert sent["body"]["messages"] == [{"role": "user", "content": "q"}]
-    assert sent["body"]["stream"] is False
+    assert sent["base_url"] == "http://lem:8000/api/v1"
+    assert sent["model"] == "Other-GGUF"
+    assert sent["messages"] == [{"role": "user", "content": "q"}]
+    assert sent["stream"] is False
+    assert sent["max_completion_tokens"] == answer_retry.RETRY_MAX_TOKENS
+    # Never let the client auto-load the model at Lemonade's own, smaller window.
+    assert sent["auto_download"] is False
+    assert sent["health_timeout"] == 5.0
     assert result["content"] == "An answer."
     assert result["stats"]["tokens_per_second"] == 41.3
     assert result["stats"]["output_tokens"] == 3
@@ -348,6 +343,73 @@ async def test_a_model_that_failed_to_load_is_an_error_not_a_smaller_window():
         _ask({"choices": [{"message": {"content": "x"}}]}, loaded=("someone-else",))
     assert exc.value.status == 503
     assert "could not be loaded" in str(exc.value)
+
+
+async def test_a_model_server_error_is_a_retry_error_not_a_500():
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    with pytest.raises(answer_retry.RetryError) as exc:
+        _ask(None, ask_error=LemonadeClientError("status 500: boom"))
+    assert exc.value.status == 503
+    assert "Other-GGUF did not answer" in str(exc.value)
+    assert "boom" in str(exc.value)
+
+
+async def test_a_dropped_connection_is_a_retry_error_not_a_500():
+    import requests
+
+    with pytest.raises(answer_retry.RetryError) as exc:
+        _ask(None, ask_error=requests.ConnectionError("refused"))
+    assert exc.value.status == 503
+
+
+async def test_an_unreachable_server_while_checking_the_load_says_so():
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+    def down(self, timeout=None):
+        raise LemonadeClientError("Request failed: refused")
+
+    with (
+        patch.object(LemonadeClient, "health_check", down),
+        patch.object(LemonadeClient, "chat_completions") as asked,
+        patch.object(helpers, "_maybe_load_expected_model"),
+    ):
+        with pytest.raises(answer_retry.RetryError) as exc:
+            answer_retry.answer_with("Other-GGUF", [{"role": "user", "content": "q"}])
+    assert exc.value.status == 503
+    assert "Could not reach the model server" in str(exc.value)
+    asked.assert_not_called()
+
+
+async def test_missing_speed_stats_still_return_the_answer():
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    result, _, _ = _ask(
+        {"choices": [{"message": {"content": "An answer."}}]},
+        stats_error=LemonadeClientError("Request failed with status 404"),
+    )
+    assert result["content"] == "An answer."
+    assert result["stats"]["tokens_per_second"] == 0
+    assert result["stats"]["time_to_first_token"] == 0
+
+
+async def test_the_model_is_loaded_and_asked_under_one_slot_lease():
+    from contextlib import contextmanager
+
+    events = []
+
+    @contextmanager
+    def lease(model, **kwargs):
+        events.append(("lease", model, kwargs.get("priority")))
+        yield None
+        events.append(("release", model))
+
+    with patch("gaia.daemon.broker_client.model_lease", lease):
+        _ask({"choices": [{"message": {"content": "An answer."}}]})
+    assert events == [
+        ("lease", "Other-GGUF", "interactive"),
+        ("release", "Other-GGUF"),
+    ]
 
 
 async def test_retry_waits_while_another_chat_is_answering(db):

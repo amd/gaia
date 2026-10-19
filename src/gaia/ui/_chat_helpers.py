@@ -3350,10 +3350,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         )
                     except Exception as exc:  # pylint: disable=broad-except
                         logger.warning("Model reload before retry failed: %s", exc)
-                    if sse_handler.cancelled.is_set() or cancel_event.is_set():
-                        return
                     if "inbox" in inbox_holder:
                         inbox_holder["inbox"].requeue_taken()
+                    if sse_handler.cancelled.is_set() or cancel_event.is_set():
+                        return
                     # Surface a brief status line to the SSE so the user
                     # sees we're recovering, not silently retrying.
                     sse_handler._emit(

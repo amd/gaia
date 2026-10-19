@@ -580,10 +580,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                             {message.stats?.retried && message.stats.model && (
                                 <span title="This answer was kept from Retry with…">{message.stats.model}</span>
                             )}
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
                     )}
                 </div>

@@ -206,7 +206,7 @@ interface SendOptions {
     attach?: boolean;
     /** A message from the queue: already composed, and the composer stays as the user left it. */
     queued?: boolean;
-    /** Re-attach a stream that went silent, replacing the dead one still marked live. */
+    /** Re-attach attempt number for a stream that went silent. */
     reconnect?: number;
 }
 
