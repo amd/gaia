@@ -7,6 +7,7 @@ import datetime
 import logging
 import mimetypes
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -174,7 +175,10 @@ class FileSystemIndexService(DatabaseMixin):
         # first startup after a bad shutdown.
         try:
             self._db.execute("PRAGMA journal_mode=WAL")
-        except Exception as exc:  # pylint: disable=broad-except
+        except sqlite3.OperationalError:
+            # Locked, or an AV/backup tool holding the file: not corruption.
+            raise
+        except sqlite3.DatabaseError as exc:
             logger.warning(
                 "PRAGMA journal_mode=WAL failed on %s (%s); rebuilding DB",
                 resolved_path,
@@ -240,12 +244,19 @@ class FileSystemIndexService(DatabaseMixin):
 
         Returns:
             True if the database is healthy, False if it was rebuilt.
+
+        Raises:
+            sqlite3.OperationalError: the file is locked or unreadable. That is
+                not corruption, so the file is left alone.
         """
         try:
             result = self.query("PRAGMA integrity_check", one=True)
             if result and result.get("integrity_check") == "ok":
                 return True
-        except Exception as exc:
+        except sqlite3.OperationalError:
+            # Locked or I/O failure — deleting would destroy a healthy index.
+            raise
+        except sqlite3.DatabaseError as exc:
             logger.error("Integrity check failed: %s", exc)
 
         logger.warning("Database corruption detected, rebuilding...")
