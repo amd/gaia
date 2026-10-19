@@ -17,6 +17,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from gaia.messaging.bridge import (
     CONTROL_CANCEL,
     CONTROL_KEY,
@@ -257,8 +259,6 @@ def test_after_its_restarts_run_out_the_channel_fails_fast_with_the_hint():
 
 
 def test_gaia_stream_timeout_sets_the_window(monkeypatch):
-    import pytest
-
     from gaia.messaging import bridge
 
     monkeypatch.setenv("GAIA_STREAM_TIMEOUT", "120")
@@ -271,7 +271,5 @@ def test_gaia_stream_timeout_sets_the_window(monkeypatch):
 
 
 def test_idle_limit_must_be_positive():
-    import pytest
-
     with pytest.raises(ValueError, match="idle_limit"):
         AgentChannel(on_event=lambda e, t: None, spawn=FakeProc, idle_limit=0)
