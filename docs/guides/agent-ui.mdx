@@ -258,6 +258,26 @@ and where that model runs.
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
+- **The side rail** beside the latest answer shows what that turn used and
+  where its data went:
+  - **Sources:** the web pages it read and the document passages it drew on,
+    named by file and page.
+  - **Files:** what it created or changed, with **Open** and **Show in
+    folder**. Scripts, programs and web pages offer only Show in folder,
+    because opening them would run code. A file deleted since the turn shows
+    as no longer on disk, and one changed since then says so.
+  - **This turn:** where the model ran (**This PC**, or the cloud provider
+    such as Fireworks AI or the AMD LLM Gateway), whether your documents
+    stayed here, which websites GAIA's web tools contacted, and the cost (a
+    list-price estimate for Fireworks models).
+
+  While a new turn runs, the rail says the answer is in progress rather than
+  showing the previous one. When every web lookup in a turn failed, the rail
+  says **Couldn't get live data**, so you know the answer isn't based on
+  current information. The rail
+  appears once a turn has a summary; hide it with the button in its corner. On
+  windows narrower than about 1,100 px it folds into a **Sources & details**
+  button that opens it on top of the chat.
 - **A new chat** greets you, shows the folder GAIA works in, and offers up to
   four tasks from the skills you have and what you've set up (indexed
   documents, a connected mail account). A task with a subject to fill in is
