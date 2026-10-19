@@ -10446,6 +10446,9 @@ Do NOT wrap conversational replies in JSON.
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
+                    )
                     continue
 
                 # Otherwise fall through to stats / answer / next iter.
