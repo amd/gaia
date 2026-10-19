@@ -1121,6 +1121,24 @@ class TestSessionTitleRequest:
         assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
         assert sent["max_tokens"] > 24
 
+    @pytest.mark.parametrize("content", [None, "", "  \n "])
+    def test_reasoning_that_eats_the_budget_still_names_the_chat(self, content):
+        """If gpt-oss reasons past the budget, the reply carries no title text."""
+        from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client(GPT_OSS_20B_MODEL_NAME, content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    GPT_OSS_20B_MODEL_NAME,
+                    "plan a trip to Lisbon",
+                    "ok",
+                )
+            )
+        assert title == "plan a trip to Lisbon"
+
 
 class TestGuardModelTitles:
     """A safety classifier must never name a chat "safe" (the name now sticks)."""

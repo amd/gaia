@@ -79,11 +79,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     FileSearchToolsMixin,
     FileToolsMixin,
     RAGToolsMixin,
+    ReasoningEffortToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
     WaitToolsMixin,
 )
-from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.env import child_env
@@ -1936,7 +1936,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     handle.write(code)
                     snippet = Path(handle.name)
                 cmd = python_command(snippet)
-                note_untracked("run_python", code.strip().splitlines()[0] if code.strip() else "")
+                note_untracked(
+                    "run_python", code.strip().splitlines()[0] if code.strip() else ""
+                )
                 start = time.monotonic()
                 try:
                     job = run_python_job(
