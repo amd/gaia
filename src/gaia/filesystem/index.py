@@ -209,7 +209,11 @@ class FileSystemIndexService(DatabaseMixin):
 
         # Before the schema: damaged table pages fail there, before a rebuild.
         self._check_integrity()
-        self._ensure_schema()
+        try:
+            self._ensure_schema()
+        except sqlite3.Error:
+            self.close_db()
+            raise
 
         logger.info("FileSystemIndexService initialized: %s", resolved_path)
 

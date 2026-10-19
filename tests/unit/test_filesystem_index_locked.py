@@ -76,7 +76,10 @@ def test_operational_error_on_open_keeps_the_index(
     assert _bookmarks(index_with_bookmark) == ["keep me"]
 
 
-@pytest.mark.parametrize("prefix", ["PRAGMA journal_mode", "PRAGMA integrity_check"])
+@pytest.mark.parametrize(
+    "prefix",
+    ["PRAGMA journal_mode", "PRAGMA integrity_check", "SELECT 1 FROM sqlite_master"],
+)
 def test_a_lock_error_closes_the_connection_before_raising(
     monkeypatch, index_with_bookmark, prefix
 ):

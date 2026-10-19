@@ -260,7 +260,7 @@ class FileSystemToolsMixin:
         # sentinel being shared across agents in the same process.
         if self._bookmarks is None:
             self._bookmarks = {}
-        if self._fs_index_open_lock is None:
+        if getattr(self, "_fs_index_open_lock", None) is None:
             self._fs_index_open_lock = threading.Lock()
 
         mixin = self  # Capture self for nested functions
