@@ -551,6 +551,24 @@ class TestAdversarialEdges:
         assert not store.is_current(new, "fact")
         assert store.is_current(current, "fact")
 
+    @pytest.mark.parametrize(
+        "reworded",
+        [
+            "User's dentist appointment is on 2026-10-19",
+            "User has a dentist appointment 2026-10-19",
+        ],
+    )
+    def test_a_forgotten_dated_fact_stays_forgotten_when_reworded(
+        self, store, reworded
+    ):
+        kid = store.store(
+            category="fact", content="User has a dentist appointment on 2026-10-19"
+        )
+        store.forget(kid)
+
+        assert store.is_forgotten(reworded)
+        assert not store.is_forgotten("User has a dentist appointment on 2026-11-02")
+
     def test_a_change_made_before_the_chat_does_not_block_it(self, store):
         old = store.store(category="fact", content="User lives in Calgary")
         new = store.store(category="fact", content="User lives in Toronto")
