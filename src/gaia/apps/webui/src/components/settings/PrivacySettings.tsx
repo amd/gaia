@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useInferencePlace } from '../../stores/modelStore';
+import { UndoHistorySettings } from './UndoHistorySettings';
 
 /** Where data lives and goes, and how to delete it. */
 export function PrivacySettings() {
@@ -54,6 +55,7 @@ export function PrivacySettings() {
                     <code className="setting-path">{dataDir}</code>
                 </div>
             )}
+            <UndoHistorySettings />
             <div className="danger-divider" />
             <p className="danger-warning">Deletes every chat and its messages. Documents and memory are kept.</p>
             <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>

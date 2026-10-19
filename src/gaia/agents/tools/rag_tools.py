@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
     missing_file_error,
@@ -2082,6 +2083,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 {full_text}
 """
 
+                before_change(output_path, "dump_document")
                 # Ensure output directory exists
                 os.makedirs(
                     (

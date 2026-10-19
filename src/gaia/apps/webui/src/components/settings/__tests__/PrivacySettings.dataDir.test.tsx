@@ -8,6 +8,7 @@ import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
+vi.mock('../UndoHistorySettings', () => ({ UndoHistorySettings: () => null }));
 
 describe('PrivacySettings data folder', () => {
     it('shows the folder the backend reports, not a guessed default', () => {

@@ -376,6 +376,28 @@ too, from agent contract 2.14. It stops asking, but its shell guardrails stay
 on. If the mode can't be passed on when a turn starts, that turn stops with an
 error, so it never runs with full access you turned off.
 
+## Undo a turn
+
+Before GAIA changes a file, it saves a copy. When a turn changed files, its
+answer shows **Review changes** and **Undo this turn**:
+
+- **Review changes** shows what the turn did to each file, as a diff.
+- **Undo this turn** puts every file back as it was before the turn: edited
+  and deleted files get their old contents, new files are removed. It works
+  after GAIA restarts too.
+
+Undo is all or nothing. If you, or a later turn, changed one of those files
+since, GAIA names it and changes nothing; you can then undo anyway and lose
+that later change. Undo the later turn first to keep it.
+
+GAIA can't copy what a shell command, a Python snippet or a connected (MCP)
+tool is about to change. When a turn ran one that could have changed files,
+the answer says **Undo may be incomplete** and lists it.
+
+**Settings → Privacy → Undo history** sets how long copies are kept (7 days by
+default) and how much space they may use (500 MB, oldest first), and shows how
+much they use now.
+
 ## Settings
 
 One window with General (appearance: Light, Dark, Match system; shortcuts),
