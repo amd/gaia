@@ -363,7 +363,7 @@ def relay_query(
     This matters: the caller's surrounding retry/reload logic
     (``_classify_chat_exception``) is tuned for local-Lemonade failure
     substrings and would misclassify a sidecar connection error as a
-    retryable Lemonade error, triggering a bogus model reload. Sidecar
+    Lemonade error and show the wrong remedy. Sidecar
     exceptions must never reach it.
 
     Never calls ``handler.signal_done()`` — the turn-level done sentinel is

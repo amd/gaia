@@ -5110,6 +5110,10 @@ Do NOT wrap conversational replies in JSON.
                     prop["description"] = desc
                 if param_info.get("enum"):
                     prop["enum"] = list(param_info["enum"])
+                if prop["type"] == "array":
+                    # gpt-oss's chat template reads ``items`` on every array;
+                    # without it Lemonade answers every request with HTTP 500.
+                    prop["items"] = dict(param_info.get("items") or {})
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
