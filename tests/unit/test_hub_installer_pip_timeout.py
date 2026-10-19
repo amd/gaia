@@ -126,6 +126,90 @@ def test_a_uv_cache_lock_failure_names_the_lock_and_stops_there(monkeypatch):
     assert len(calls) == 1
 
 
+def test_a_finished_lock_wait_then_an_unrelated_failure_is_not_a_lock_error(
+    monkeypatch, tmp_path
+):
+    """uv carries on once it gets the lock; a later resolver error is that error."""
+    waited_then_failed = _script(
+        tmp_path,
+        "resolver.py",
+        "import sys\n"
+        "sys.stderr.write('Waiting to acquire lock for `cache` (lockfile: x)\\n')\n"
+        "sys.stderr.write('error: No solution found when resolving dependencies\\n')\n"
+        "sys.exit(1)\n",
+    )
+    fallback = _script(tmp_path, "fallback.py", "import sys; sys.exit(3)\n")
+    calls = []
+    real = installer._run_frontend
+
+    def recording(cmd, timeout):
+        calls.append(cmd)
+        return real(cmd, timeout)
+
+    monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(
+        installer, "_pip_frontends", lambda: [waited_then_failed, fallback]
+    )
+    monkeypatch.setattr(installer, "_run_frontend", recording)
+
+    with pytest.raises(InstallError) as excinfo:
+        installer._default_run_pip(["pkg"])
+    message = str(excinfo.value)
+    assert "another install is using it" not in message
+    assert "No solution found when resolving dependencies" in message
+    assert len(calls) == 2
+
+
+def test_stopped_while_still_waiting_for_the_lock_is_a_lock_error(
+    monkeypatch, tmp_path
+):
+    """Older uv never gives up; stopped mid-wait, the lock is still the cause."""
+    parked = _script(
+        tmp_path,
+        "parked.py",
+        "import sys, time\n"
+        "sys.stderr.write('Waiting to acquire lock for `cache` (lockfile: x)\\n')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(60)\n",
+    )
+    monkeypatch.setattr(installer, "_pip_frontends", lambda: [parked, _IDLE])
+
+    error = _run_in_thread(lambda: installer._default_run_pip(["pkg"]), 30)
+
+    assert isinstance(error, InstallError), error
+    assert "another install is using it" in str(error)
+
+
+@pytest.mark.parametrize(
+    "output, still_running, expected",
+    [
+        ("error: Could not acquire lock", False, True),
+        ("ERROR: COULD NOT ACQUIRE LOCK", False, True),
+        ("Waiting to acquire lock for `cache`", False, False),
+        ("Waiting to acquire lock for `cache`", True, True),
+        ("acquired lock; error: build failed", True, False),
+        ("", True, False),
+    ],
+)
+def test_only_a_given_up_or_ongoing_wait_counts_as_a_lock_failure(
+    output, still_running, expected
+):
+    assert installer._mentions_uv_lock(output, still_running=still_running) is expected
+
+
+def test_a_job_object_failure_is_never_read_as_a_missing_frontend(monkeypatch):
+    """Windows error 2 as an OSError errno would become FileNotFoundError, which
+    the runner treats as "not on PATH" and silently skips."""
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 2, raising=False)
+    error = installer._job_error("AssignProcessToJobObject")
+    assert isinstance(error, InstallError)
+    assert not isinstance(error, OSError)
+    assert "AssignProcessToJobObject" in str(error)
+    assert "Windows error 2" in str(error)
+
+
 def test_an_orphaned_grandchild_is_killed_too(monkeypatch, tmp_path):
     """Its parent exits first, so it is no longer anyone's descendant."""
     monkeypatch.setattr(installer, "PIP_TIMEOUT_SECONDS", 3.0)

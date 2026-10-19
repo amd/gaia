@@ -449,7 +449,7 @@ _PIP_PIPE_WAIT_SECONDS = 10.0
 #: What uv prints when another uv holds its package-cache lock: while waiting,
 #: and when it gives up.
 _UV_WAITING_MARKER = "waiting to acquire lock"
-_UV_LOCK_MARKERS = ("could not acquire lock", _UV_WAITING_MARKER)
+_UV_GAVE_UP_MARKER = "could not acquire lock"
 
 # The agent whose install is running on this thread, so the pip runner can say
 # in its progress that it is waiting for another install.
@@ -484,9 +484,15 @@ def _pip_frontends() -> List[List[str]]:
     ]
 
 
-def _mentions_uv_lock(output: str) -> bool:
+def _mentions_uv_lock(output: str, *, still_running: bool = False) -> bool:
+    """True when uv gave up on its lock, or was stopped while still waiting.
+
+    A finished wait is not a lock failure: uv carries on once it gets the lock.
+    """
     text = output.lower()
-    return any(marker in text for marker in _UV_LOCK_MARKERS)
+    if _UV_GAVE_UP_MARKER in text:
+        return True
+    return still_running and _UV_WAITING_MARKER in text
 
 
 def _uv_lock_timeout(window: float) -> str:
@@ -572,6 +578,17 @@ def _tree_activity(root, seen: Dict[int, Any]) -> float:
     return total
 
 
+def _job_error(call: str) -> InstallError:
+    # Not OSError: errno 2 would make it a FileNotFoundError, read as "not on PATH".
+    import ctypes
+
+    return InstallError(
+        f"Could not set up the process group for the pip install: {call} failed "
+        f"(Windows error {ctypes.get_last_error()}). Retry; if it keeps failing, "
+        "report it at https://github.com/amd/gaia/issues with `gaia diagnostics`."
+    )
+
+
 class _ProcessGroup:
     """Everything an install starts, so it can all be killed together.
 
@@ -639,19 +656,17 @@ class _ProcessGroup:
         try:
             job = kernel32.CreateJobObjectW(None, None)
             if not job:
-                raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+                raise _job_error("CreateJobObjectW")
             limits = _ExtendedLimits()
             limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
             if not kernel32.SetInformationJobObject(
                 job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
             ):
-                raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+                raise _job_error("SetInformationJobObject")
             if not kernel32.AssignProcessToJobObject(
                 job, wintypes.HANDLE(int(proc._handle))
             ):
-                raise OSError(
-                    ctypes.get_last_error(), "AssignProcessToJobObject failed"
-                )
+                raise _job_error("AssignProcessToJobObject")
             self._job = job
         finally:
             # Always resumed: a child left suspended would never run.
@@ -825,7 +840,7 @@ def _default_run_pip(args: List[str]) -> None:
             attempts.append(f"{frontend[0]} (not found on PATH)")
             continue
         except _PipStuck as e:
-            if _mentions_uv_lock(e.output):
+            if _mentions_uv_lock(e.output, still_running=True):
                 raise _uv_lock_error(frontend, e.output) from e
             if e.reason == "ceiling":
                 raise InstallError(
