@@ -116,6 +116,8 @@ GAIA_LEMONADE_RECONNECT_SECONDS = 60.0
 GAIA_LEMONADE_RECONNECT_POLL_SECONDS = 2.0
 #: What a front-end shows while it waits.
 RECONNECTING_MESSAGE = "Reconnecting to the model server…"
+#: Retry reasons that mean nothing answered at all (see ``classify_exception``).
+_CONNECT_FAILURES = frozenset({"connection error", "connect timeout"})
 
 
 def _embedded_lemonade_url() -> str:
@@ -2889,6 +2891,15 @@ class LemonadeClient:
         except OSError:
             return True
 
+    def _gone_handoff(self) -> threading.local:
+        """Per-thread: the retrier handed this thread's failure to the
+        reconnect wait because GAIA's server was gone."""
+        # Lazy: tests build clients with ``__new__``, skipping ``__init__``.
+        state = self.__dict__.get("_gone_handoff_state")
+        if state is None:
+            state = self.__dict__.setdefault("_gone_handoff_state", threading.local())
+        return state
+
     def _recover_stopped_gaia_lemonade(self, error: Exception, model: str) -> bool:
         """Bring GAIA's server back after it stopped under a request.
 
@@ -2901,7 +2912,14 @@ class LemonadeClient:
             LemonadeClientError: It stopped and the daemon could not start it,
                 or it did not answer again within the reconnect wait.
         """
-        if not self.follows_gaia_lemonade or not self._gaia_lemonade_gone():
+        handoff = self._gone_handoff()
+        handed_off = getattr(handoff, "pending", False)
+        handoff.pending = False
+        if not self.follows_gaia_lemonade:
+            return False
+        # Handed off as gone, it is resent even if it is back by now: the
+        # retries that would have covered a quick restart were skipped.
+        if not handed_off and not self._gaia_lemonade_gone():
             return False
         self.log.warning(
             f"GAIA's Lemonade Server stopped during this request "
@@ -2990,6 +3008,7 @@ class LemonadeClient:
 
     def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
         """``call()``, sent once more if GAIA's server stopped under it."""
+        self._gone_handoff().pending = False
         try:
             return call()
         except (
@@ -3019,7 +3038,11 @@ class LemonadeClient:
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise
-        yield from start()
+        try:
+            yield from start()
+        finally:
+            # The resend bypasses _survive_*, so clear a hand-off it left set.
+            self._gone_handoff().pending = False
 
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
@@ -3806,7 +3829,9 @@ class LemonadeClient:
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
 
-    def _model_retrier(self, model: Optional[str] = None) -> ModelCallRetrier:
+    def _model_retrier(
+        self, model: Optional[str] = None, gone_server_waits: bool = False
+    ) -> ModelCallRetrier:
         """The retry runner every completion path goes through.
 
         The policy is read per request (``GAIA_LLM_RETRY_*``), like the request
@@ -3817,12 +3842,27 @@ class LemonadeClient:
         Args:
             model: The request's model. A local one waits out a model load the
                 server reports; a cloud one, which no local load blocks, does not.
+            gone_server_waits: The caller recovers a stopped GAIA server itself
+                (:meth:`_survive_gaia_lemonade_stop`), so a failed connection
+                to one, before any output, is handed to that bounded wait
+                instead of backed off here.
         """
 
         def classify(error: BaseException) -> Optional[str]:
             if self._is_model_error(error):
                 return None
             return classify_exception(error)
+
+        def hand_off(_error: BaseException, reason: str) -> bool:
+            if not (
+                gone_server_waits
+                and reason in _CONNECT_FAILURES
+                and self.follows_gaia_lemonade
+                and self._gaia_lemonade_gone()
+            ):
+                return False
+            self._gone_handoff().pending = True
+            return True
 
         return ModelCallRetrier(
             RetryPolicy.from_env(),
@@ -3837,6 +3877,7 @@ class LemonadeClient:
             ),
             log=self.log,
             classify=classify,
+            hand_off=hand_off,
         )
 
     def _server_load_in_progress(self) -> Optional[str]:
@@ -3953,13 +3994,19 @@ class LemonadeClient:
         self.total_request_retries += state.retries
 
     def _call_with_retry(
-        self, api_call: Callable[[], Any], what: str, model: Optional[str] = None
+        self,
+        api_call: Callable[[], Any],
+        what: str,
+        model: Optional[str] = None,
+        gone_server_waits: bool = False,
     ) -> Any:
         """``api_call()`` with transient failures retried (see
-        :class:`gaia.llm.retry.ModelCallRetrier`)."""
+        :class:`gaia.llm.retry.ModelCallRetrier` and :meth:`_model_retrier`)."""
         state = RetryState()
         try:
-            return self._model_retrier(model).call(api_call, what=what, state=state)
+            return self._model_retrier(model, gone_server_waits).call(
+                api_call, what=what, state=state
+            )
         finally:
             self._record_retries(state)
 
@@ -4385,7 +4432,10 @@ class LemonadeClient:
             # a missing model goes to the auto-download recovery instead.
             def _request_with_retry():
                 return self._call_with_retry(
-                    _make_request, "Chat completion", model=model
+                    _make_request,
+                    "Chat completion",
+                    model=model,
+                    gone_server_waits=True,
                 )
 
             try:
@@ -4751,7 +4801,7 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier(model).stream(
+            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
@@ -5053,14 +5103,24 @@ class LemonadeClient:
         Returns:
             Dict with 'data' containing list of embedding vectors
         """
+        embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
+        # Memory and RAG embed first in a session: a restart of GAIA's server
+        # under them is waited out like a chat turn's.
+        return self._survive_gaia_lemonade_stop(
+            lambda: self._embeddings_once(input_texts, embedding_model, timeout),
+            embedding_model,
+        )
+
+    def _embeddings_once(
+        self, input_texts: Union[str, List[str]], embedding_model: str, timeout: int
+    ) -> Dict[str, Any]:
+        """One :meth:`embeddings` call, without the restart guard."""
         self._follow_gaia_lemonade()
         try:
             # Ensure input is a list
             if isinstance(input_texts, str):
                 input_texts = [input_texts]
 
-            # Use specified model or default
-            embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
             self._pin_llamacpp_backend(embedding_model)
 
             payload = {"model": embedding_model, "input": input_texts}
@@ -5072,7 +5132,7 @@ class LemonadeClient:
 
         except Exception as e:
             self.log.error(f"Error generating embeddings: {str(e)}")
-            raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
+            raise LemonadeClientError(f"Error generating embeddings: {str(e)}") from e
 
     def _pin_llamacpp_backend(self, model_name: str) -> None:
         """Load *model_name* once per process on its backend, saving the choice.

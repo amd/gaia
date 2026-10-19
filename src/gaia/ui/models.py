@@ -406,6 +406,20 @@ class SessionResponse(BaseModel):
     inference_provider: Optional[str] = None
     inference_provider_name: Optional[str] = None
     inference_description: Optional[str] = None
+    # The chat list as a queue (#5221).
+    pinned: bool = False
+    # A turn finished since the user last opened the chat.
+    unread: bool = False
+    # How the last turn ended: "done", "failed" or "stopped"; None before any.
+    last_run_status: Optional[str] = None
+    # "chat" for a person's chats; "eval" and "scheduled" are hidden by default.
+    kind: str = "chat"
+
+
+class SessionPinRequest(BaseModel):
+    """Pin or unpin a chat."""
+
+    pinned: bool
 
 
 class SessionListResponse(BaseModel):
@@ -523,6 +537,72 @@ class InferenceStatsResponse(BaseModel):
     place: Optional[str] = None
 
 
+class TurnSummaryPage(BaseModel):
+    """A web page the turn read, or a search hit when it read none."""
+
+    url: str
+    title: Optional[str] = None
+    kind: str  # page | search_result
+
+
+class TurnSummaryDocument(BaseModel):
+    """A document the turn's answer drew passages from."""
+
+    name: str
+    path: str
+    pages: List[int] = Field(default_factory=list)
+    passages: int = 0
+
+
+class TurnSummaryFile(BaseModel):
+    """A file the turn created or changed."""
+
+    path: str
+    name: str
+    # False for a script or program, which the default app would run.
+    openable: bool = False
+    # Modification time when the turn ended, to tell a later change or undo.
+    mtime: Optional[float] = None
+
+
+class TurnSummaryModel(BaseModel):
+    """Where the turn's model ran."""
+
+    remote: bool
+    provider: str
+    provider_name: str
+    name: str
+
+
+class TurnSummaryLiveData(BaseModel):
+    """How the turn's internet tools fared."""
+
+    attempted: int = 0
+    failed: int = 0
+
+
+class TurnSummaryCost(BaseModel):
+    """What the turn cost."""
+
+    kind: str  # local | estimate | unknown
+    usd: Optional[float] = None
+
+
+class TurnSummaryResponse(BaseModel):
+    """Sources, files and data flow of one turn, for the side rail (#5222)."""
+
+    pages: List[TurnSummaryPage] = Field(default_factory=list)
+    documents: List[TurnSummaryDocument] = Field(default_factory=list)
+    files: List[TurnSummaryFile] = Field(default_factory=list)
+    sites: List[str] = Field(default_factory=list)
+    live_data: TurnSummaryLiveData = Field(default_factory=TurnSummaryLiveData)
+    cost: TurnSummaryCost
+    # Absent when the turn's model location could not be determined.
+    model: Optional[TurnSummaryModel] = None
+    # Why the summary could not be built; the rest is then empty.
+    error: Optional[str] = None
+
+
 class MessageResponse(BaseModel):
     """A single message."""
 
@@ -534,6 +614,7 @@ class MessageResponse(BaseModel):
     rag_sources: Optional[List[SourceInfo]] = None
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
+    turn_summary: Optional[TurnSummaryResponse] = None
 
 
 class MessageListResponse(BaseModel):
@@ -677,6 +758,29 @@ class OpenFileRequest(BaseModel):
 
     path: str
     reveal: bool = True
+    # Open the file itself in its default app; documents and images only.
+    launch: bool = False
+
+
+class FileStatusRequest(BaseModel):
+    """Paths whose current state the side rail re-checks."""
+
+    paths: List[str] = Field(..., max_length=50)
+
+
+class FileStatusEntry(BaseModel):
+    """Whether a file exists now, and when it last changed."""
+
+    path: str
+    # None when the path is outside the home folder and was not checked.
+    exists: Optional[bool] = None
+    mtime: Optional[float] = None
+
+
+class FileStatusResponse(BaseModel):
+    """Current state of each requested path, in request order."""
+
+    files: List[FileStatusEntry]
 
 
 class FilePreviewResponse(BaseModel):

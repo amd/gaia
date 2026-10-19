@@ -24,6 +24,22 @@ class DaemonStartError(DaemonError):
     """The daemon subprocess could not be launched or never became healthy."""
 
 
+class DaemonBusyError(DaemonError):
+    """The daemon's process is alive and accepts connections but did not answer.
+
+    Distinct from a dead daemon: it is never killed for this, because a daemon
+    under load (many queued model leases) looks exactly like this for a while.
+    """
+
+
+class DaemonHungError(DaemonBusyError):
+    """A daemon has not answered its status check for :data:`HUNG_AFTER_S`.
+
+    Status waits on nothing else, so this long a silence is not load: the next
+    ``start_or_attach`` replaces the daemon, and other callers are told to.
+    """
+
+
 class DaemonVersionError(DaemonError):
     """The running daemon speaks a different MAJOR host-API version than this client.
 
