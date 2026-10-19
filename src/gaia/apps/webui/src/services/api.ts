@@ -199,8 +199,30 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
-export async function loadModel(modelName: string, ctxSize?: number): Promise<{ status: string; model: string; ctx_size: number }> {
-    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize });
+export async function loadModel(modelName: string, ctxSize?: number, force = false): Promise<{ status: string; model: string; ctx_size: number }> {
+    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize, force });
+}
+
+/**
+ * Load a model, asking first when a chat is answering: loading then can cut
+ * that answer off. Resolves false when the user chose to wait.
+ */
+export async function loadModelAskingFirst(
+    modelName: string,
+    ctxSize?: number,
+    confirmLoad: (question: string) => boolean = (q) => window.confirm(q),
+): Promise<boolean> {
+    try {
+        await loadModel(modelName, ctxSize);
+        return true;
+    } catch (err) {
+        if (!(err instanceof ApiError) || err.httpStatus !== 409) throw err;
+        if (!confirmLoad(`${err.detail}
+
+Load ${modelName} anyway?`)) return false;
+        await loadModel(modelName, ctxSize, true);
+        return true;
+    }
 }
 
 export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {

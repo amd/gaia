@@ -583,6 +583,7 @@ export interface KnowledgeUpdate {
 }
 export interface LoadModelRequest {
   ctx_size?: number | null;
+  force?: boolean;
   model_name: string;
 }
 /**
