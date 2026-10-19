@@ -1,10 +1,11 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""download_file asks permission for the file it writes, not its folder (#5301).
+"""download_file asks about a folder it may grant, else the one file (#5301).
 
 The home folder is never grantable as a whole, so asking about ``~`` itself made
-every "save it in my home folder" download fail without a prompt. These tests
+every "save it in my home folder" download fail without a prompt. A grantable
+folder such as ``~/Downloads`` is still asked about once for the session. These tests
 drive the real tool, a real ``WebClient`` and a real ``PathValidator`` against a
 fake home; only the network is stubbed.
 """
@@ -130,12 +131,16 @@ class TestDownloadAsksForTheFile:
         assert harness.asked == [home / "tent.pdf", home / "stove.pdf"]
         assert "Downloaded: stove.pdf" in result
 
-    def test_default_destination_succeeds_after_approval(self, harness, home):
+    def test_default_destination_asks_for_the_folder_once(self, harness, home):
         result = harness.download()
+        harness.next_response = _response('attachment; filename="stove.pdf"')
+        second = harness.download()
 
-        assert harness.asked == [home / "Downloads" / "tent.pdf"]
+        assert harness.asked == [home / "Downloads"]
         assert (home / "Downloads" / "tent.pdf").read_bytes() == BODY
         assert "Downloaded: tent.pdf" in result
+        assert "Downloaded: stove.pdf" in second
+        assert not harness.validator.is_path_allowed(str(home), prompt_user=False)
 
     def test_already_allowed_folder_is_not_asked_about(self, harness, tmp_path):
         result = harness.download(save_to=str(tmp_path / "workspace"))
@@ -159,9 +164,10 @@ class TestRefusedDestinationSaysWhy:
     def test_declined_new_folder_is_not_created(self, harness, home):
         harness.answer = False
 
-        harness.download(save_to="~/Gear")
+        result = harness.download(save_to="~/Gear")
 
-        assert harness.asked == [home / "Gear" / "tent.pdf"]
+        assert harness.asked == [home / "Gear"]
+        assert str(home / "Gear" / "tent.pdf") in result, result
         assert not (home / "Gear").exists()
 
     def test_unaskable_destination_gives_the_reason(self, home, tmp_path, monkeypatch):

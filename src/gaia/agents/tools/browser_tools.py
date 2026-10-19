@@ -34,7 +34,7 @@ _NEAR_EMPTY_NOTE = (
 def _download_denied(validator, dest_path: Path) -> str:
     """Why *dest_path* may not be written, and where a download can go instead."""
     message = validator.access_denied_message(str(dest_path))
-    if not validator._unaskable_reason(Path(os.path.realpath(dest_path))):
+    if not validator.grant_refusal_reason(str(dest_path)):
         return message
     downloads = Path(os.path.realpath(os.path.expanduser("~/Downloads")))
     if Path(os.path.realpath(dest_path.parent)) == downloads:
@@ -383,8 +383,13 @@ class BrowserToolsMixin:
                     raise ValueError(
                         f"Downloaded file blocked by security policy: {reason}"
                     )
-                # Ask about the one file: a folder like ~ is never grantable whole.
-                if not validator.is_path_allowed(str(dest_path), prompt_user=True):
+                # Ask about the folder when it can be granted whole, so one
+                # approval covers later downloads; else (e.g. ~) the one file.
+                # The response stays open while the user answers.
+                target = dest_path.parent
+                if validator.grant_refusal_reason(str(target)):
+                    target = dest_path
+                if not validator.is_path_allowed(str(target), prompt_user=True):
                     raise ValueError(_download_denied(validator, dest_path))
 
             try:
