@@ -75,7 +75,7 @@
 #
 # Tag namespace: `agent-pkg-gaia-*` (NOT `v*`). This is the established Agent
 # Hub package-share namespace and deliberately does NOT fire publish.yml (v*
-# only) or the paused publish_agents.yml (no tag trigger). Example:
+# only). Example:
 #   git tag agent-pkg-gaia-v0.1.0 && git push origin --tags
 #
 # Maintainer setup (one-time):
@@ -88,7 +88,7 @@
 #                              gate and the release hangs). The publish job is
 #                              bound to it, so a release pauses for human
 #                              approval before any hub/npm publish. Shared with
-#                              release_agent_email.yml / release_agent_chat.yml.
+#                              release_agent_email.yml.
 #   Secrets:
 #     GAIA_HUB_TOKEN         — Agent Hub Bearer publish token; must match an
 #                              entry in the Worker's PUBLISH_TOKENS secret,

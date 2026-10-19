@@ -48,12 +48,12 @@ gaia-tui
 
 Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
-two binaries on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
-the hub runs) — so there is nothing to unzip and nothing to `chmod`.
+two binaries on disk and on your PATH — `gaia-tui` (this app) and `gaia-agent` (the flagship agent
+it runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **Terminal** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
@@ -93,13 +93,13 @@ To remove it, close Windows Terminal, then go to **Settings → Personalization 
 
 <Note>
   There is no installer for Windows on Arm or Linux on Arm. The flagship agent
-  publishes no build for either, so an installer there would set up the hub with no
-  agent behind it. The raw `gaia-tui` binary is still published for all six targets
-  if you want to run the hub against an agent you build yourself.
+  publishes no build for either, so an installer there would set up the terminal app
+  with no agent behind it. The raw `gaia-tui` binary is still published for all six targets
+  if you want to run it against an agent you build yourself.
 </Note>
 
 Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
-you say otherwise. On Windows, the terminal is its own **GAIA Terminal Hub** entry
+you say otherwise. On Windows, the terminal is its own **GAIA Terminal UI** entry
 in Installed apps, separate from the desktop app's, and its uninstaller offers to delete it; on Linux,
 `apt remove` and `rpm -e` keep it. Lemonade Server is never removed with GAIA,
 because other things may be using it — see `gaia uninstall --purge-lemonade`.
@@ -538,7 +538,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
-needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-hub-memory)).
+needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 
 Selecting a different agent from `/agents` reconnects in place and re-runs the
