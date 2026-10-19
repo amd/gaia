@@ -343,11 +343,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 	row.Disposition = status.DispositionHalt
 	row.Line = "not installed"
 	row.Detail = fmt.Sprintf("The background service has no agent registered as %q.", cfg.AgentID)
-	row.Remedy = Remedy{
-		Action:  "Install it, then re-check.",
-		Command: catalog.InstallCommand(cfg.AgentID),
-		Where:   daemonLog(),
-	}
+	row.Remedy = unregisteredAgentRemedy(cfg.AgentID)
 	return row.commit(rep)
 }
 
