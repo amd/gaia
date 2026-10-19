@@ -1,7 +1,7 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
 /* GAIA Agent UI - Global Styles
- * Implements the shared graphite / ivory / copper design language.
+ * Implements the warm-gray / brass design language of the Agent UI.
  * Spec: docs/spec/gaia-design-language.mdx — that page is the contract;
  * the role tokens below are its Agent UI implementation and are held to
  * its contrast floors by src/styles/__tests__/contrast.test.ts.
@@ -15,21 +15,21 @@
 /* ── Self-hosted Fonts (privacy-first, no external CDN) ──────────── */
 
 @font-face {
-    font-family: 'DM Sans';
-    src: url('../assets/fonts/dm-sans-latin.woff2') format('woff2');
-    font-weight: 300 700;
+    font-family: 'Inter';
+    src: url('../assets/fonts/inter-latin.woff2') format('woff2');
+    font-weight: 100 900;
     font-style: normal;
     font-display: swap;
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-    font-family: 'Space Mono';
-    src: url('../assets/fonts/space-mono-400.woff2') format('woff2');
-    font-weight: 400;
+    font-family: 'Inter';
+    src: url('../assets/fonts/inter-latin-ext.woff2') format('woff2');
+    font-weight: 100 900;
     font-style: normal;
     font-display: swap;
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    unicode-range: U+0100-02AF, U+0304, U+0308, U+0329, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 @font-face {
@@ -43,141 +43,162 @@
 
 :root {
     /* ── Light theme (the default) ──────────────────────────────────
-     * Near-neutral: white canvas, faintly cool greys for raised surfaces,
-     * rules and hover. The Agent UI departs from the shared porcelain/stone
-     * here on purpose (see docs/spec/gaia-design-language.mdx); the accent
-     * and the status hues are the shared ones. */
+     * Warm gray: a paper-white canvas, a slightly deeper sidebar, and
+     * white raised surfaces that separate by shadow rather than by line. */
 
-    /* Accent — Burnished copper. Marks the prompt, focus, selection, and the
-     * single primary action. Nothing else on the screen is copper. */
-    --accent: #9A4930;
-    --accent-light: #B25E3C;         /* chrome only: borders, hover emphasis */
-    /* A tint chip carries its own hue as text, so the wash has to stay thin
-     * enough to leave 4.5:1 against it -- 0.12 here read 4.22:1 on --bg-card.
-     * The light alphas are lower than the dark ones for that reason alone. */
-    --accent-dim: rgba(154, 73, 48, 0.07);
-    --accent-dim2: rgba(154, 73, 48, 0.035);
-    --accent-selection: rgba(154, 73, 48, 0.20);
+    /* Accent — Muted brass. Marks only what can be acted on: actions,
+     * links, focus, an on switch, a chosen option. Status keeps its own
+     * hues, and nothing decorative is brass. The light value is the
+     * deeper brass that reads as text; the raw brass is --accent-solid. */
+    --accent: #7A5A22;
+    --accent-light: #9C7A43;         /* chrome only: borders, hover emphasis */
+    --accent-dim: rgba(176, 141, 87, 0.16);
+    --accent-dim2: rgba(176, 141, 87, 0.08);
+    --accent-selection: rgba(176, 141, 87, 0.28);
+    /* Raw brass for marks that carry no text: an on switch track, a
+     * native checkbox, the chosen radio. Chrome, held to 1.5:1. */
+    --accent-solid: #B08D57;
+    /* The soft focus halo drawn outside a focused field. A spread ring
+     * with no blur, so it is a ring and never a glow. */
+    --accent-ring: rgba(176, 141, 87, 0.40);
 
-    /* Accent as a filled button. One literal in both themes, carrying white
-     * at 6.23:1 — the pair covers its own background, so it is judged
-     * against itself rather than against the canvas behind it. */
-    --accent-fill: #9A4930;
-    --accent-fill-text: #ffffff;
-    --accent-fill-hover: #7A3824;    /* pressed/hover; shared like the fill */
+    /* Accent as a button. Buttons are soft tinted: a brass wash carrying
+     * brass text, judged against itself. */
+    --accent-fill: #EEE8DD;
+    --accent-fill-text: #7A5A22;
+    --accent-fill-hover: #E6DCCB;
 
-    /* Semantic status. The brand motif moved off green; status did not.
-     * Success stays green, warning amber, danger red, information blue —
-     * a failed check painted copper to stay on-brand is a worse UI.
-     *
-     * Each one is a shade darker than the hue it started from: the status
-     * roles also label badges and pills on --bg-tertiary, where the lighter
-     * originals read 4.29-4.34:1. --accent cannot follow them down -- it is
-     * pinned to #9A4930 across all three surfaces -- which is why
-     * --bg-active is absent from the contrast matrix. */
+    /* Semantic status keeps its conventional hues. Warning amber sits next
+     * to brass in hue, so every warning also carries an icon and a word. */
     --accent-green: #296D32;
-    --accent-green-dim: rgba(41, 109, 50, 0.07);
+    --accent-green-dim: rgba(41, 109, 50, 0.08);
     --accent-yellow: #845600;
-    --accent-yellow-dim: rgba(132, 86, 0, 0.07);
+    --accent-yellow-dim: rgba(132, 86, 0, 0.08);
     --accent-blue: #1A5DBA;
-    --accent-blue-dim: rgba(26, 93, 186, 0.07);
+    --accent-blue-dim: rgba(26, 93, 186, 0.08);
     --accent-cyan: #0D677E;
     --accent-purple: #6B3FBF;
 
     --danger: #B4292E;
-    --danger-dim: rgba(180, 41, 46, 0.07);
-    --danger-dim2: rgba(180, 41, 46, 0.035);
+    --danger-dim: rgba(180, 41, 46, 0.08);
+    --danger-dim2: rgba(180, 41, 46, 0.04);
 
     /* Code surfaces stay dark in both themes — a code block is its own
      * canvas, so its text is judged against it, not against the page. */
-    --bg-code: #131218;
-    --bg-code-raised: #1E1C24;       /* a panel nested inside a code surface */
-    --border-code: #3E3B47;
-    --text-code: #D6D2CC;
-    --text-code-dim: #9A96A0;        /* timestamps, cwd, "no output" */
+    --bg-code: #161513;
+    --bg-code-raised: #211F1C;       /* a panel nested inside a code surface */
+    --border-code: #45413B;
+    --text-code: #E2DED8;
+    --text-code-dim: #9F9890;        /* timestamps, cwd, "no output" */
     /* Status ON a code surface. Not --accent-yellow/--danger: those flip to
      * their light-theme variants, which are unreadable on a pane that stays
      * dark in both themes. */
-    --code-accent: #EBA474;          /* the `$` prompt, focus */
+    --code-accent: #D4B47E;          /* the `$` prompt, focus */
     --code-success: #5CC96E;
     --code-warning: #E5B567;
     --code-danger: #F2787C;
 
-    --bg-primary: #FFFFFF;           /* canvas */
-    --bg-secondary: #F8F9FA;         /* header / composer band */
-    --bg-tertiary: #EEF0F2;          /* badges, tool panels */
-    --bg-sidebar: #F6F7F8;           /* raised */
+    --bg-primary: #FAF9F7;           /* canvas */
+    --bg-secondary: #F6F4F1;         /* header / composer band */
+    --bg-tertiary: #EEECE8;          /* badges, tool panels */
+    --bg-sidebar: #F3F1ED;           /* sidebar, one step deeper than the canvas */
     --bg-input: #FFFFFF;             /* raised */
-    --bg-card: #F6F7F8;              /* raised */
-    --bg-hover: #ECEEF1;
-    --bg-active: #E2E5E9;
-    --bg-user-msg: #F1F3F5;
-    --bg-modal-overlay: rgba(15, 17, 20, 0.45);
-    --bg-recessed: #F1F3F5;          /* sunk below the canvas: log + detail panes */
-    --switch-knob: #ffffff;          /* rides both the off (--border) and on track */
+    --bg-card: #FFFFFF;              /* raised, separated by --shadow-sm */
+    --bg-hover: #EFEDE9;
+    --bg-active: #E7E4DF;
+    --bg-user-msg: #FFFFFF;          /* your message: a raised bubble */
+    --bg-modal-overlay: rgba(31, 29, 26, 0.32);
+    --bg-recessed: #F0EEEA;          /* sunk below the canvas: log + detail panes */
+    --switch-knob: #FFFFFF;          /* rides both the off (--border) and on track */
 
-    /* Theme-aware overlay tints (visible on light backgrounds) */
-    --tint-subtle: rgba(31, 35, 40, 0.03);
-    --tint-hover: rgba(31, 35, 40, 0.05);
+    /* Theme-aware overlay tints */
+    --tint-subtle: rgba(31, 29, 26, 0.03);
+    --tint-hover: rgba(31, 29, 26, 0.05);
 
-    --text-primary: #1F2328;
-    --text-secondary: #555D66;
-    --text-muted: #5F6770;
+    --text-primary: #1F1D1A;
+    --text-secondary: #5C5650;
+    --text-muted: #6E6862;
     --text-inverse: #FFFFFF;
 
     /* Rules, one per surface they are drawn on: --border against the
      * canvas, --border-light against a raised surface, --border-recessed
      * against a sunk one. Each clears the 1.5:1 chrome floor on its own
-     * background -- a sunk pane cannot reach it on fill alone, because
-     * even pure black is 1.17:1 against the dark canvas. */
-    --border: #C3C9D0;
-    --border-light: #BBC2CA;
-    --border-recessed: #B6BDC5;
+     * background. */
+    --border: #C4BEB6;
+    --border-light: #C4BEB6;
+    --border-recessed: #BDB7AF;
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
+    /* Elevation. Layered: a 1px light rim on top, a hairline edge, then
+     * stacked soft shadows. sm rests, md is hover or a popover, lg is a
+     * dialog; press flattens below rest. */
+    --shadow-sm: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(52, 40, 24, 0.07), 0 1px 2px rgba(52, 40, 24, 0.05), 0 3px 8px rgba(52, 40, 24, 0.04);
+    --shadow-md: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(52, 40, 24, 0.07), 0 2px 4px rgba(52, 40, 24, 0.06), 0 10px 24px rgba(52, 40, 24, 0.09);
+    --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(52, 40, 24, 0.07), 0 4px 10px rgba(52, 40, 24, 0.07), 0 28px 64px rgba(52, 40, 24, 0.18);
+    --shadow-press: 0 0 0 1px rgba(52, 40, 24, 0.07), 0 1px 1px rgba(52, 40, 24, 0.04);
 
-    --radius-xs: 3px;
+    --radius-xs: 4px;
     --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 10px;
-    --radius-xl: 14px;
+    --radius-xl: 12px;
     --radius-full: 9999px;
 
     /* Left inset that keeps top-row content clear of the floating .sidebar-toggle. */
     --sidebar-toggle-clearance: 58px;
 
-    --font-sans: 'DM Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
-    --font-display: 'Space Mono', 'JetBrains Mono', monospace;
+    --font-display: var(--font-sans);
+
+    /* Type scale; sans for everything a person reads, mono only for
+     * machine text (paths, code, commands). Page and greeting sizes join
+     * when their screens adopt the scale. */
+    --fs-caption: 11px;   /* badges, times */
+    --fs-label: 12px;     /* section labels, help text */
+    --fs-ui: 13px;        /* rows, buttons, menus */
+    --fs-body: 14px;      /* UI emphasis, card titles */
+    --fs-prose: 15px;     /* answers and your messages */
+    --fs-title: 18px;     /* dialog titles */
 
     --sidebar-w: 260px;
     --content-w: 760px;
-    --ease: cubic-bezier(0.22, 1, 0.36, 1);
-    --duration: 200ms;
-    --duration-fast: 120ms;
+    /* Motion — every animation and transition takes its timing from here
+       (enforced by styles/__tests__/motion.test.ts). */
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);       /* things arriving or settling */
+    --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1); /* loops: pulse, shimmer */
+    --ease-linear: linear;                         /* spinners */
+    --ease-step: steps(2, start);                  /* cursor blink */
+    --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1); /* meaningful moments: a slight overshoot */
+    --duration-fast: 120ms;   /* hover, press, small state changes */
+    --duration: 200ms;        /* rows, popovers, toasts */
+    --duration-slow: 320ms;   /* panels and height changes */
+    --duration-spring: 440ms; /* step done, needs you, an answer arriving */
+    --duration-press: 80ms;   /* a press settles faster than it rose */
+    --duration-spin: 900ms;   /* one spinner turn */
+    --duration-blink: 1s;
+    --duration-pulse: 1.6s;   /* breathing dots, skeletons */
+    --duration-shimmer: 2.4s; /* the live status sweep */
+    --stagger: 80ms;          /* gap between siblings entering together */
+    --toast-hold: 2.5s;
 }
 
 [data-theme="dark"] {
     /* ── Dark theme ─────────────────────────────────────────────────
-     * Canvas Graphite #17161C, raised surface Warm slate #222128.
-     * The neutrals are warm on purpose: a cool near-black next to a warm
-     * canvas reads as two different products. */
+     * Warm charcoal: canvas #1A1917, a darker sidebar, and raised
+     * surfaces that step lighter and catch a faint top rim, because a
+     * shadow alone disappears on a dark ground. */
 
-    /* Accent — Copper, the identity colour. Deliberately NOT the light
-     * value: the light accent is constrained by 256-colour terminals
-     * (see the spec), so the two themes carry different coppers. */
-    --accent: #EBA474;
-    --accent-light: #F4C39F;
-    --accent-dim: rgba(235, 164, 116, 0.12);
-    --accent-dim2: rgba(235, 164, 116, 0.06);
-    --accent-selection: rgba(235, 164, 116, 0.24);
+    --accent: #D4B47E;
+    --accent-light: #E0C596;
+    --accent-dim: rgba(212, 180, 126, 0.16);
+    --accent-dim2: rgba(212, 180, 126, 0.08);
+    --accent-selection: rgba(212, 180, 126, 0.26);
+    --accent-solid: #D4B47E;
+    --accent-ring: rgba(212, 180, 126, 0.36);
 
-    /* Accent fill is the one value shared with light — see :root. */
-    --accent-fill: #9A4930;
-    --accent-fill-text: #ffffff;
-    --accent-fill-hover: #7A3824;
+    --accent-fill: #383227;
+    --accent-fill-text: #D4B47E;
+    --accent-fill-hover: #443B2C;
 
     --accent-green: #5CC96E;
     --accent-green-dim: rgba(92, 201, 110, 0.14);
@@ -192,37 +213,38 @@
     --danger-dim: rgba(242, 120, 124, 0.14);
     --danger-dim2: rgba(242, 120, 124, 0.07);
 
-    --bg-primary: #17161C;       /* canvas */
-    --bg-secondary: #1C1B22;     /* header / composer band */
-    --bg-tertiary: #2A2831;      /* badges, tool panels */
-    --bg-sidebar: #222128;       /* raised */
-    --bg-input: #222128;         /* raised */
-    --bg-card: #222128;          /* raised */
-    --bg-hover: #2A2831;
-    --bg-active: #33313B;
-    --bg-user-msg: rgba(240, 237, 231, 0.02);
-    --bg-modal-overlay: rgba(12, 11, 15, 0.86);
-    --bg-recessed: #121117;      /* sunk below the canvas */
-    --switch-knob: #F0EDE7;
+    --bg-primary: #1A1917;       /* canvas */
+    --bg-secondary: #1C1B19;     /* header / composer band */
+    --bg-tertiary: #2C2B27;      /* badges, tool panels */
+    --bg-sidebar: #161513;       /* sidebar, one step below the canvas */
+    --bg-input: #24231F;         /* raised */
+    --bg-card: #24231F;          /* raised */
+    --bg-hover: #2A2925;
+    --bg-active: #33312C;
+    --bg-user-msg: #24231F;
+    --bg-modal-overlay: rgba(8, 8, 7, 0.62);
+    --bg-recessed: #141311;      /* sunk below the canvas */
+    --switch-knob: #EFECE6;
 
-    --text-primary: #F0EDE7;
-    --text-secondary: #AAA5B0;
-    --text-muted: #8C8794;
+    --text-primary: #EFECE6;
+    --text-secondary: #B3ADA5;
+    --text-muted: #958F87;
     /* Sits on a surface of the opposite polarity, so it flips with the theme:
      * pairing it with a semantic token (--danger, --accent-yellow) stays
      * legible in both, because those tokens flip too. */
-    --text-inverse: #17161C;
+    --text-inverse: #1A1917;
 
-    --border: #3A3842;           /* against the canvas */
-    --border-light: #403E49;     /* against a raised surface */
-    --border-recessed: #403E49;  /* against a sunk one */
+    --border: #4A4740;           /* against the canvas */
+    --border-light: #4A4740;     /* against a raised surface */
+    --border-recessed: #45423C;  /* against a sunk one */
 
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.6);
-    --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.7);
-    --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.8);
+    --shadow-sm: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(255, 255, 255, 0.04), 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 10px rgba(0, 0, 0, 0.25);
+    --shadow-md: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.4);
+    --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(255, 255, 255, 0.06), 0 6px 14px rgba(0, 0, 0, 0.45), 0 32px 72px rgba(0, 0, 0, 0.6);
+    --shadow-press: 0 0 0 1px rgba(255, 255, 255, 0.04);
 
-    --tint-subtle: rgba(240, 237, 231, 0.03);
-    --tint-hover: rgba(240, 237, 231, 0.06);
+    --tint-subtle: rgba(239, 236, 230, 0.03);
+    --tint-hover: rgba(239, 236, 230, 0.06);
 }
 
 /* Reset */
@@ -233,12 +255,12 @@ html, body, #root {
     height: 100%;
     overflow: hidden;
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: var(--fs-body);
     color: var(--text-primary);
     background: var(--bg-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    line-height: 1.72;
+    line-height: 1.55;
 }
 
 /* Subtle grain texture overlay — dark mode only.
@@ -305,87 +327,81 @@ textarea:focus-visible {
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
 
-.btn-primary {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 7px 14px;
-    background: var(--accent-fill); color: var(--accent-fill-text);
-    border-radius: var(--radius-md);
-    font-weight: 500; font-size: 13.5px;
-    font-family: var(--font-sans);
-    transition: all var(--duration) var(--ease);
-    position: relative;
-    overflow: hidden;
-}
-.btn-primary:hover {
-    background: var(--accent-fill-hover);
-    transform: translateY(-1px);
-}
-.btn-primary:active {
-    transform: translateY(0);
-}
-
-.btn-secondary {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 12px;
-    border: 1px solid var(--border); border-radius: var(--radius-md);
-    font-weight: 500; font-size: 13px;
-    font-family: var(--font-sans);
-    transition: all var(--duration) var(--ease);
-}
-.btn-secondary:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--accent-dim2);
-}
-.btn-secondary:active {
-    transform: translateY(0) scale(0.98);
-}
-
+/* Soft tinted, and they answer the hand: a hover lifts 1px onto the resting
+ * shadow, a press settles below rest faster than it rose. Brass marks the
+ * action you would most likely take; neutral marks the rest. */
+.btn-primary,
+.btn-secondary,
 .btn-danger {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 18px;
-    border: 1px solid var(--danger); border-radius: var(--radius-md);
-    color: var(--danger); font-weight: 500; font-size: 13px;
-    font-family: var(--font-mono);
-    transition: all var(--duration) var(--ease);
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 12px;
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: 600;
+    white-space: nowrap;
+    transition:
+        background var(--duration-fast) var(--ease),
+        color var(--duration-fast) var(--ease),
+        box-shadow var(--duration) var(--ease),
+        transform var(--duration) var(--ease-spring);
 }
-.btn-danger:hover { background: var(--danger); color: var(--text-inverse); }
-.btn-danger:active { transform: scale(0.98); }
-
-.btn-icon {
-    display: flex; align-items: center; justify-content: center;
-    width: 34px; height: 34px; border-radius: var(--radius-md);
-    color: var(--text-secondary);
-    transition: all var(--duration) var(--ease);
+.btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
+.btn-primary:hover { background: var(--accent-fill-hover); }
+.btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
+.btn-secondary:hover { background: var(--bg-active); }
+.btn-danger { background: var(--danger-dim); color: var(--danger); }
+.btn-primary:hover,
+.btn-secondary:hover,
+.btn-danger:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
-.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
-.btn-icon:active { transform: scale(0.94); }
+.btn-primary:active,
+.btn-secondary:active,
+.btn-danger:active {
+    transform: translateY(0) scale(0.97);
+    box-shadow: var(--shadow-press);
+    transition-duration: var(--duration-press);
+}
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
 
+.btn-icon,
 .btn-icon-sm {
     display: flex; align-items: center; justify-content: center;
-    width: 30px; height: 30px; border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     color: var(--text-secondary);
-    transition: all var(--duration) var(--ease);
+    transition:
+        background var(--duration-fast) var(--ease),
+        color var(--duration-fast) var(--ease),
+        transform var(--duration-fast) var(--ease);
 }
+.btn-icon { width: 32px; height: 32px; }
+.btn-icon-sm { width: 28px; height: 28px; }
+.btn-icon:hover,
 .btn-icon-sm:hover { background: var(--bg-hover); color: var(--text-primary); }
-.btn-icon-sm:active { transform: scale(0.94); }
+.btn-icon:active,
+.btn-icon-sm:active { transform: scale(0.94); transition-duration: var(--duration-press); }
 
 /* ── Beta Badge ─────────────────────────────────────────────────── */
 
 .beta-badge {
-    display: inline-block;
-    font-size: 9px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    background: var(--accent-yellow-dim);
-    color: var(--accent-yellow);
-    border: 1px solid var(--accent-yellow-dim);
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    font-family: var(--font-sans);
+    font-size: var(--fs-caption);
+    font-weight: 600;
+    border-radius: var(--radius-xs);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
     vertical-align: middle;
-    line-height: 1.3;
 }
 
 /* ── Modal Base ──────────────────────────────────────────────────── */
@@ -403,27 +419,26 @@ textarea:focus-visible {
     position: relative;
     width: 560px; max-width: 92%; max-height: 85vh;
     background: var(--bg-card);
-    border: 1px solid var(--border);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-lg);
     display: flex; flex-direction: column;
     overflow: hidden;
-    animation: slideUp 250ms var(--ease);
+    animation: slideUp var(--duration) var(--ease);
 }
 
 .modal-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    padding: 20px 18px 8px 24px;
     flex-shrink: 0;
 }
 .modal-header h3 {
-    font-size: 14px; font-weight: 600; font-family: var(--font-mono);
-    text-transform: uppercase; letter-spacing: 1.5px;
-    color: var(--text-secondary);
+    font-size: var(--fs-title); font-weight: 600; font-family: var(--font-sans);
+    letter-spacing: -0.015em;
+    color: var(--text-primary);
 }
 
 .modal-body {
-    padding: 24px;
+    padding: 12px 24px 24px;
     overflow-y: auto;
     flex: 1;
     scrollbar-width: thin;
@@ -496,7 +511,7 @@ textarea:focus-visible {
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
 /* ── Toast Notification ──────────────────────────────────────────── */
@@ -507,18 +522,16 @@ textarea:focus-visible {
     left: 50%;
     transform: translateX(-50%);
     z-index: 200;
-    padding: 12px 24px;
+    padding: 12px 16px;
     background: var(--bg-card);
     color: var(--text-primary);
-    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    font-size: 13px;
+    font-size: var(--fs-ui);
     font-weight: 500;
     font-family: var(--font-sans);
-    box-shadow: var(--shadow-lg);
-    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 2.5s forwards;
+    box-shadow: var(--shadow-md);
+    animation: toastIn var(--duration-spring) var(--ease-spring), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
-    backdrop-filter: blur(12px);
 }
 
 /* ── Animations ──────────────────────────────────────────────────── */
@@ -543,13 +556,13 @@ textarea:focus-visible {
 }
 /* Traveling wave for the "Thinking..." dots (used globally). */
 .thinking-dots span {
-    animation: loadingDotGlow 2.4s ease-in-out infinite;
+    animation: loadingDotGlow var(--duration-shimmer) var(--ease-in-out) infinite;
     opacity: 0.15;
     color: var(--accent);
 }
 .thinking-dots span:nth-child(1) { animation-delay: 0s; }
-.thinking-dots span:nth-child(2) { animation-delay: 0.5s; }
-.thinking-dots span:nth-child(3) { animation-delay: 1.0s; }
+.thinking-dots span:nth-child(2) { animation-delay: calc(var(--duration-shimmer) * 0.2); }
+.thinking-dots span:nth-child(3) { animation-delay: calc(var(--duration-shimmer) * 0.4); }
 
 @keyframes loadingDotGlow {
     0%, 15% { opacity: 0.15; }
@@ -566,10 +579,13 @@ textarea:focus-visible {
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
+    /* Near-zero, not none: elements still land on their final frame, and delays
+       still hold (a toast's fade-out waits its turn). */
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
     [data-theme="dark"] #root::after {
         display: none;
@@ -577,7 +593,7 @@ textarea:focus-visible {
 }
 
 /* ── Small shared pieces ────────────────────────────────────────── */
-.spin { animation: spin 0.9s linear infinite; }
+.spin { animation: spin var(--duration-spin) var(--ease-linear) infinite; }
 
 .link-btn {
     color: var(--accent);
@@ -592,15 +608,27 @@ textarea:focus-visible {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    font-size: 13px;
+    margin: 8px 12px 0;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: var(--fs-ui);
 }
 
+/* Warning amber sits next to brass in hue, so a warning always carries its
+ * icon as well as its words. Drawn here so the markup stays as it is. */
 .app-notice.is-warning {
-    color: var(--accent-yellow);
+    background: var(--accent-yellow-dim);
+}
+.app-notice.is-warning::before {
+    content: '';
+    flex: none;
+    width: 16px;
+    height: 16px;
+    background: var(--accent-yellow);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.5M12 16.5v.01'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.5M12 16.5v.01'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .app-notice > span {
@@ -624,7 +652,7 @@ textarea:focus-visible {
 @media (max-width: 768px) {
     .sidebar-toggle { display: flex; }
     .sidebar-overlay.visible { display: block; }
-    .app-notice { padding-left: var(--sidebar-toggle-clearance); }
+    .app-notice { margin: 0; border-radius: 0; padding-left: var(--sidebar-toggle-clearance); }
 
     .modal-panel {
         max-width: 96%;
@@ -648,4 +676,24 @@ textarea:focus-visible {
         max-height: 100vh;
         border-radius: 0;
     }
+}
+
+.startup {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--bg-primary);
+}
+
+.startup-text {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.startup .loading-spinner {
+    flex: none;
+    padding: 0;
 }

@@ -56,9 +56,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
         with:
@@ -92,8 +89,8 @@ jobs:
   test-examples-integration:
     name: Example Agents Integration Tests (stx)
     needs: test-examples-unit
-    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
-    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    # Strix Point: its models fit there, and the 128 GB Halo pool stays free for the evals.
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 30
 
