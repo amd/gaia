@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
+from gaia.agents.base.file_snapshots import before_change
+
 logger = logging.getLogger(__name__)
 
 #: Characters of context kept on each side of a ``find`` match.
@@ -376,21 +378,21 @@ class BrowserToolsMixin:
             # WebClient calls this with the final file path before creating
             # anything, so a refusal leaves the filesystem untouched.
             def _screen_destination(dest_path: Path) -> None:
-                if not validator:
-                    return
-                is_blocked, reason = validator.is_write_blocked(str(dest_path))
-                if is_blocked:
-                    raise ValueError(
-                        f"Downloaded file blocked by security policy: {reason}"
-                    )
-                # Ask about the folder when it can be granted whole, so one
-                # approval covers later downloads; else (e.g. ~) the one file.
-                # The response stays open while the user answers.
-                target = dest_path.parent
-                if validator.grant_refusal_reason(str(target)):
-                    target = dest_path
-                if not validator.is_path_allowed(str(target), prompt_user=True):
-                    raise ValueError(_download_denied(validator, dest_path))
+                if validator:
+                    is_blocked, reason = validator.is_write_blocked(str(dest_path))
+                    if is_blocked:
+                        raise ValueError(
+                            f"Downloaded file blocked by security policy: {reason}"
+                        )
+                    # Ask about the folder when it can be granted whole, so one
+                    # approval covers later downloads; else (e.g. ~) the one file.
+                    # The response stays open while the user answers.
+                    target = dest_path.parent
+                    if validator.grant_refusal_reason(str(target)):
+                        target = dest_path
+                    if not validator.is_path_allowed(str(target), prompt_user=True):
+                        raise ValueError(_download_denied(validator, dest_path))
+                before_change(dest_path, "download_file")
 
             try:
                 result = mixin._web_client.download(

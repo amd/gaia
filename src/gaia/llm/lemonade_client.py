@@ -103,6 +103,14 @@ DEFAULT_LEMONADE_URL = (
     f"http://{DEFAULT_HOST}:{DEFAULT_PORT}/api/{LEMONADE_API_VERSION}"
 )
 
+#: How long a request waits for GAIA's own server to answer again once it has
+#: stopped answering, before it fails.
+GAIA_LEMONADE_RECONNECT_SECONDS = 60.0
+#: How often that wait asks the daemon for the server again.
+GAIA_LEMONADE_RECONNECT_POLL_SECONDS = 2.0
+#: What a front-end shows while it waits.
+RECONNECTING_MESSAGE = "Reconnecting to the model server…"
+
 
 def _embedded_lemonade_url() -> str:
     """The embedded server's base URL, or the packaged default.
@@ -1985,6 +1993,10 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class GaiaLemonadeNotAnsweringError(LemonadeClientError):
+    """GAIA's own server is up but not answering yet; the daemon left it be."""
+
+
 class CloudModelUnavailableError(LemonadeClientError):
     """A cloud provider answered 404 for the requested model.
 
@@ -2520,6 +2532,8 @@ class LemonadeClient:
     _retry_sleep: Optional[Callable[[float], None]] = None
     _retry_clock: Optional[Callable[[], float]] = None
     _retry_rng: Any = None
+    _reconnect_sleep: Optional[Callable[[float], None]] = None
+    _reconnect_clock: Optional[Callable[[], float]] = None
 
     #: True while this client is aimed at GAIA's own server, so it follows that
     #: server to whatever port and key the daemon last started it with.
@@ -2649,7 +2663,8 @@ class LemonadeClient:
 
         # Called as (model, state) around a load this client actually performs:
         # "downloading" or "loading" before it, "loaded" after it succeeds. A
-        # cold load is the longest silent wait a chat turn has.
+        # cold load is the longest silent wait a chat turn has. Also called
+        # with "reconnecting" while a request waits for GAIA's server to return.
         self.model_load_listener: Optional[Callable[[str, str], None]] = None
 
         # Set logging level based on verbosity
@@ -2828,20 +2843,95 @@ class LemonadeClient:
             when *error* had another cause.
 
         Raises:
-            LemonadeClientError: It stopped and the daemon could not start it.
+            LemonadeClientError: It stopped and the daemon could not start it,
+                or it did not answer again within the reconnect wait.
         """
         if not self.follows_gaia_lemonade or not self._gaia_lemonade_gone():
             return False
         self.log.warning(
             f"GAIA's Lemonade Server stopped during this request "
-            f"({type(error).__name__}); restarting it and retrying once."
+            f"({type(error).__name__}); waiting for it and retrying once."
         )
-        self._follow_gaia_lemonade(model)
-        if self._gaia_lemonade_gone():
-            self._start_gaia_lemonade()
-            self._replay_cloud_key(model)
-        self.log.info(f"GAIA's Lemonade Server is back at {self.base_url}")
+        listener = self.model_load_listener
+        self.wait_for_gaia_lemonade(
+            model,
+            on_status=(
+                (lambda _message: listener(model, "reconnecting")) if listener else None
+            ),
+        )
         return True
+
+    def wait_for_gaia_lemonade(
+        self,
+        model: Optional[str] = None,
+        *,
+        timeout: float = GAIA_LEMONADE_RECONNECT_SECONDS,
+        on_status: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """Wait, up to *timeout* seconds, for GAIA's own server to answer again.
+
+        Asks the daemon for the server it runs now, every
+        :data:`GAIA_LEMONADE_RECONNECT_POLL_SECONDS`, and follows it there. The
+        daemon starts one only when none is running and never stops one, so a
+        server another process is using is never restarted from here. A server
+        the user runs, or a remote ``LEMONADE_BASE_URL``, is never waited on.
+
+        Args:
+            model: The model the caller is about to use; a cloud model's kept
+                key is handed to a restarted server.
+            timeout: The bound on the wait.
+            on_status: Called once with :data:`RECONNECTING_MESSAGE` when the
+                wait begins, so a front-end can show it.
+
+        Returns:
+            True if this client now reaches the server after waiting for it or
+            following it to a new address; False when it is not GAIA's own
+            server, or that server answered where this client already pointed.
+
+        Raises:
+            LemonadeClientError: The daemon could not start the server, or it
+                did not answer within *timeout*; the message names what to do.
+        """
+        if not self.follows_gaia_lemonade:
+            return False
+        was = (self.base_url, self.api_key)
+        if self._gaia_lemonade_state() is not None:
+            self._follow_gaia_lemonade(model)
+        if not self._gaia_lemonade_gone():
+            return (self.base_url, self.api_key) != was
+        clock = self._reconnect_clock or time.monotonic
+        sleep = self._reconnect_sleep or time.sleep
+        deadline = clock() + timeout
+        self.log.warning(
+            f"GAIA's Lemonade Server at {self.base_url} is not answering; waiting "
+            f"up to {timeout:.0f}s for the GAIA daemon to bring it back."
+        )
+        if on_status is not None:
+            on_status(RECONNECTING_MESSAGE)
+        last: Optional[GaiaLemonadeNotAnsweringError] = None
+        while True:
+            try:
+                self._follow_gaia_lemonade(model)
+                if self._gaia_lemonade_gone():
+                    self._start_gaia_lemonade()
+                    self._replay_cloud_key(model)
+                if not self._gaia_lemonade_gone():
+                    self.log.info(f"GAIA's Lemonade Server is back at {self.base_url}")
+                    return True
+            except GaiaLemonadeNotAnsweringError as e:
+                last = e
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            sleep(min(GAIA_LEMONADE_RECONNECT_POLL_SECONDS, remaining))
+        from gaia.daemon.paths import log_path
+
+        reason = f" The daemon reports: {str(last).rstrip('.')}." if last else ""
+        raise LemonadeClientError(
+            f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
+            f"was not back within {timeout:.0f}s.{reason} Run `gaia daemon "
+            f"status`, and read the daemon log at {log_path()} for why it stopped."
+        ) from last
 
     def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
         """``call()``, sent once more if GAIA's server stopped under it."""
@@ -2880,11 +2970,12 @@ class LemonadeClient:
         """Have the daemon start GAIA's own server, then point this client at it.
 
         Raises:
+            GaiaLemonadeNotAnsweringError: it is running but not answering yet.
             LemonadeClientError: the daemon could not start it. There is no
                 retry against a system install.
         """
         from gaia.daemon.client import ensure_lemonade
-        from gaia.daemon.errors import DaemonError
+        from gaia.daemon.errors import DaemonError, LemonadeNotAnsweringError
 
         self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
         try:
@@ -2893,6 +2984,8 @@ class LemonadeClient:
                 if self._gaia_daemon_dir
                 else ensure_lemonade()
             )
+        except LemonadeNotAnsweringError as e:
+            raise GaiaLemonadeNotAnsweringError(str(e)) from e
         except DaemonError as e:
             raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
@@ -2930,9 +3023,11 @@ class LemonadeClient:
             return
         state = self._gaia_lemonade_state()
         if state is None:
+            # base_url may be the default port and never GAIA's: a client built
+            # while no server was recorded has no other address to hold.
             self.log.warning(
-                f"GAIA's Lemonade Server at {self.base_url} has stopped; asking "
-                "the GAIA daemon for the server it runs now."
+                "No GAIA Lemonade Server is running (this client last used "
+                f"{self.base_url}); asking the GAIA daemon for the one it runs now."
             )
             self._start_gaia_lemonade()
             self.log.info(f"Now using GAIA's Lemonade Server at {self.base_url}")
