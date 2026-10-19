@@ -337,6 +337,54 @@ class TestItFailsLoudlyWithinTheBound:
         assert world.now == pytest.approx(5.0)
 
 
+@pytest.mark.embedded_start
+class TestANewSessionWaitsToo:
+    """Startup (``ensure_ready``) meets the same gap a running session does."""
+
+    @pytest.fixture
+    def startup(self, world, monkeypatch):
+        monkeypatch.setattr(
+            EmbeddedLemonade,
+            "status",
+            lambda self: EmbeddedStatus(installed=True, running=False, version="v"),
+        )
+        monkeypatch.setattr(
+            lc.LemonadeClient,
+            "get_status",
+            lambda self: lc.LemonadeStatus(running=True, url=self.base_url),
+        )
+        return world
+
+    def test_a_session_opened_in_the_gap_waits_and_starts(self, startup, capsys):
+        startup.daemon_answers = [startup.not_answering, startup.restarted]
+
+        assert LemonadeManager.ensure_ready(quiet=False, preload=False)
+
+        assert lc.RECONNECTING_MESSAGE in capsys.readouterr().err
+        assert len(startup.daemon_posts) >= 2
+        for post in startup.daemon_posts:
+            _assert_ensure_shape(post)
+
+    def test_a_session_whose_server_never_returns_fails_loudly(self, startup, capsys):
+        startup.daemon_answers = [startup.not_answering]
+
+        assert not LemonadeManager.ensure_ready(quiet=False, preload=False)
+
+        err = capsys.readouterr().err
+        assert "was not back within" in err
+        assert "gaia daemon status" in err
+        assert startup.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_SECONDS)
+
+    def test_a_failed_start_is_still_reported_at_once(self, startup, capsys):
+        startup.daemon_answers = [startup.cannot_start]
+
+        assert not LemonadeManager.ensure_ready(quiet=False, preload=False)
+
+        assert "Could not start GAIA's Lemonade Server" in capsys.readouterr().err
+        assert len(startup.daemon_posts) == 1
+        assert startup.now == 0.0
+
+
 class TestNotGaiasServer:
     def test_a_users_own_server_is_never_waited_on_or_restarted(
         self, world, monkeypatch
