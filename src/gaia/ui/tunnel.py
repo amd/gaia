@@ -689,7 +689,11 @@ class TunnelManager:
                 )
 
     def _find_stale_gaia_ngrok(self) -> list:
-        """ngrok processes whose arguments are exactly this tunnel's."""
+        """ngrok processes whose arguments are exactly this tunnel's.
+
+        A GAIA agent for another port or domain is left alone: it may belong
+        to another live GAIA server.
+        """
         expected = self._ngrok_args()
         stale = []
         self._uninspectable = []
