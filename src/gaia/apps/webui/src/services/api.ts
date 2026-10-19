@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -19,7 +19,7 @@ const API_BASE = getApiBase();
  * error objects* for request-validation failures (422) — interpolating one of
  * those into a message renders "[object Object]" in the UI.
  */
-function parseErrorDetail(errorText: string): string {
+export function parseErrorDetail(errorText: string): string {
     try {
         const parsed = JSON.parse(errorText).detail;
         if (Array.isArray(parsed)) {
@@ -199,8 +199,30 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
-export async function loadModel(modelName: string, ctxSize?: number): Promise<{ status: string; model: string; ctx_size: number }> {
-    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize });
+export async function loadModel(modelName: string, ctxSize?: number, force = false): Promise<{ status: string; model: string; ctx_size: number }> {
+    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize, force });
+}
+
+/**
+ * Load a model, asking first when a chat is answering: loading then can cut
+ * that answer off. Resolves false when the user chose to wait.
+ */
+export async function loadModelAskingFirst(
+    modelName: string,
+    ctxSize?: number,
+    confirmLoad: (question: string) => boolean = (q) => window.confirm(q),
+): Promise<boolean> {
+    try {
+        await loadModel(modelName, ctxSize);
+        return true;
+    } catch (err) {
+        if (!(err instanceof ApiError) || err.httpStatus !== 409) throw err;
+        if (!confirmLoad(`${err.detail}
+
+Load ${modelName} anyway?`)) return false;
+        await loadModel(modelName, ctxSize, true);
+        return true;
+    }
 }
 
 export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
@@ -232,6 +254,21 @@ export async function getSetupStatus(): Promise<SetupRunStatus> {
     return apiFetch('GET', '/setup/status');
 }
 
+/** The Lemonade, chat model and download setup will use. Loads nothing. */
+export async function getSetupPlan(): Promise<SetupPlan> {
+    return apiFetch('GET', '/setup/plan');
+}
+
+/** Pick setup's chat model before it starts; returns the new plan. */
+export async function chooseSetupChatModel(modelId: string): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/chat-model', { model_id: modelId });
+}
+
+/** A new chat's task cards and working folder. */
+export async function getStartScreen(): Promise<StartScreen> {
+    return apiFetch('GET', '/onboarding/start');
+}
+
 // -- Which Lemonade Server GAIA uses ---------------------------------------------
 
 export async function getLemonadeTarget(): Promise<LemonadeTarget> {
@@ -239,7 +276,8 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
 }
 
 /** A Lemonade the user already runs on this PC, or null. */
-export async function detectLemonade(): Promise<{ found: LemonadeFound | null }> {
+/** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
+export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
     return apiFetch('GET', '/lemonade/detect');
 }
 
@@ -382,6 +420,8 @@ export interface StreamCallbacks {
     onError: (error: Error) => void;
     /** A new agent was created and registered — refresh the agent list. */
     onAgentCreated?: (event: StreamEvent) => void;
+    /** The backend answered the request; a wait shown before this is over. */
+    onConnected?: () => void;
 }
 
 /** Agent event types that represent activity rather than content. */
@@ -418,6 +458,7 @@ export function sendMessageStream(
 
     log.stream.info(`Starting SSE stream for session=${sessionId}`, { messageLength: message.length });
 
+    const headers = watchHeaders(controller, callbacks, SEND_HEADER_TIMEOUT_MS, SEND_WAITING_NOTICE_MS);
     fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
         headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
@@ -430,9 +471,17 @@ export function sendMessageStream(
         }),
         signal: controller.signal,
     })
-        .then((res) => consumeSSEResponse(res, callbacks, t, { silentCloseIsError: true }))
+        .then((res) => {
+            headers.received();
+            headers.connected();
+            return consumeSSEResponse(res, callbacks, t, { silentCloseIsError: true });
+        })
         .catch((err) => {
-            if (err.name === 'AbortError') {
+            headers.received();
+            if (headers.timedOut()) {
+                log.stream.error(`No answer to /chat/send within ${SEND_HEADER_TIMEOUT_MS / 1000}s`);
+                callbacks.onError(new StreamTimeoutError('send', SEND_HEADER_TIMEOUT_MS));
+            } else if (err.name === 'AbortError') {
                 log.stream.warn('Stream aborted by user');
             } else {
                 log.stream.error('Stream fetch error', err);
@@ -441,6 +490,93 @@ export function sendMessageStream(
         });
 
     return controller;
+}
+
+/** The backend sends a keepalive every 5 s, so this much silence means the connection is gone. */
+export const STREAM_IDLE_MS = 30_000;
+/** A turn waiting for the model hears nothing until its place in line changes. */
+export const QUEUED_IDLE_MS = 10 * 60_000;
+/** The backend may hold a send for 60 s while another chat has the model, then answers 429. */
+export const SEND_HEADER_TIMEOUT_MS = 90_000;
+/** When a send not yet started by the backend begins showing as waiting. */
+export const SEND_WAITING_NOTICE_MS = 3_000;
+export const SEND_WAITING_NOTICE_TEXT = 'Waiting for GAIA to start this answer…';
+/** An attach replays at once; a slower answer means the backend is stuck or unreachable. */
+export const ATTACH_HEADER_TIMEOUT_MS = 30_000;
+
+/** The stream went silent past STREAM_IDLE_MS; the run may still be going server-side. */
+export class StreamStalledError extends Error {
+    constructor(readonly idleMs: number) {
+        super(`The connection to GAIA went silent for ${Math.round(idleMs / 1000)} s.`);
+        this.name = 'StreamStalledError';
+    }
+}
+
+/** The connection broke after the run started (network switch, proxy reset, restart). */
+export class StreamDroppedError extends Error {
+    constructor(readonly cause: unknown) {
+        super(`The connection to GAIA was cut: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'StreamDroppedError';
+    }
+}
+
+/** The backend never started answering the request. */
+export class StreamTimeoutError extends Error {
+    constructor(readonly endpoint: 'send' | 'attach', readonly timeoutMs: number) {
+        super(`GAIA did not start answering within ${Math.round(timeoutMs / 1000)} s.`);
+        this.name = 'StreamTimeoutError';
+    }
+}
+
+/** Bound the wait for response headers, and say so when it runs long. */
+function watchHeaders(
+    controller: AbortController,
+    callbacks: StreamCallbacks,
+    timeoutMs: number,
+    noticeMs?: number,
+): { received: () => void; connected: () => void; timedOut: () => boolean } {
+    let timedOut = false;
+    const notice = noticeMs === undefined ? undefined : setTimeout(() => {
+        callbacks.onAgentEvent({
+            type: 'status',
+            status: 'working',
+            phase: 'waiting',
+            message: SEND_WAITING_NOTICE_TEXT,
+        } as StreamEvent);
+    }, noticeMs);
+    const limit = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, timeoutMs);
+    let settled = false;
+    return {
+        received: () => {
+            clearTimeout(notice);
+            clearTimeout(limit);
+        },
+        connected: () => {
+            if (settled) return;
+            settled = true;
+            callbacks.onConnected?.();
+        },
+        timedOut: () => timedOut,
+    };
+}
+
+/** The next chunk, or StreamStalledError after `idleMs` of silence. */
+async function readWithin(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    idleMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new StreamStalledError(idleMs)), idleMs);
+    });
+    try {
+        return await Promise.race([reader.read(), stalled]);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /**
@@ -479,11 +615,33 @@ async function consumeSSEResponse(
     let chunkCount = 0;
     let totalChars = 0;
     let agentEventCount = 0;
+    let queued = false;
+    // An `error` event already closed the turn through onError.
     let errorReceived = false;
+    // A fatal agent_error ends the turn; the closing `done` may never come.
+    let fatalAgentError = false;
 
     try {
         while (true) {
-            const { done, value } = await reader.read();
+            let next: ReadableStreamReadResult<Uint8Array>;
+            try {
+                next = await readWithin(reader, queued ? QUEUED_IDLE_MS : STREAM_IDLE_MS);
+            } catch (err) {
+                if ((err as Error)?.name === 'AbortError') throw err;
+                if (!(err instanceof StreamStalledError)) {
+                    log.stream.error('SSE connection cut mid-stream', err);
+                    if (doneReceived || errorReceived) return;
+                    if (fatalAgentError) break;
+                    throw new StreamDroppedError(err);
+                }
+                log.stream.error(`SSE stream silent for ${err.idleMs / 1000}s; dropping the connection`);
+                await reader.cancel().catch((cancelErr) => log.stream.warn('Could not cancel the stalled stream', cancelErr));
+                // The turn already ended for the caller; a dead connection after that changes nothing.
+                if (doneReceived || errorReceived) return;
+                if (fatalAgentError) break;
+                throw err;
+            }
+            const { done, value } = next;
             if (done) {
                 log.stream.debug('SSE reader done (stream ended)');
                 break;
@@ -499,6 +657,7 @@ async function consumeSSEResponse(
                     if (!raw) continue;
                     try {
                         const event: StreamEvent = JSON.parse(raw);
+                        queued = event.type === 'status' && event.phase === 'queued';
 
                         if (event.type === 'chunk') {
                             chunkCount++;
@@ -532,6 +691,9 @@ async function consumeSSEResponse(
                             }
                         } else if (AGENT_EVENT_TYPES.has(event.type)) {
                             agentEventCount++;
+                            if (event.type === 'agent_error' && !(event as { recoverable?: boolean }).recoverable) {
+                                fatalAgentError = true;
+                            }
                             log.stream.debug(`Agent event: ${event.type}`, event);
                             callbacks.onAgentEvent(event);
                         } else {
@@ -582,14 +744,34 @@ export function attachToRun(
 
     log.stream.info(`Attaching to background run for session=${sessionId}`);
 
+    const headers = watchHeaders(controller, callbacks, ATTACH_HEADER_TIMEOUT_MS);
     fetch(`${API_BASE}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'GET',
         signal: controller.signal,
     })
-        .then((res) => consumeSSEResponse(res, callbacks, t))
+        .then((res) => {
+            headers.received();
+            headers.connected();
+            // The run ended between the active-runs poll and this attach: its
+            // answer is already saved, so close the view like any finished turn.
+            if (res.status === 404) {
+                log.stream.info(`Run for session=${sessionId} finished before the attach`);
+                callbacks.onDone({ type: 'done', content: '' } as StreamEvent);
+                return;
+            }
+            return consumeSSEResponse(res, callbacks, t);
+        })
         .catch((err) => {
-            if (err.name === 'AbortError') {
+            headers.received();
+            if (headers.timedOut()) {
+                log.stream.error(`No answer to /chat/attach within ${ATTACH_HEADER_TIMEOUT_MS / 1000}s`);
+                callbacks.onError(new StreamTimeoutError('attach', ATTACH_HEADER_TIMEOUT_MS));
+            } else if (err.name === 'AbortError') {
                 log.stream.warn('Run attach detached by client');
+            } else if (err instanceof TypeError) {
+                // The run lives server-side; a failed attach is a connection problem, not a lost run.
+                log.stream.error('Run attach could not connect', err);
+                callbacks.onError(new StreamDroppedError(err));
             } else {
                 log.stream.error('Run attach fetch error', err);
                 callbacks.onError(err);

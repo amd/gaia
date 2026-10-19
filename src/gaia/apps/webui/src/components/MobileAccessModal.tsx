@@ -135,12 +135,12 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
         : '';
 
     return (
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile Access">
+        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile access">
             <div className="modal-panel mobile-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Smartphone size={18} />
-                        Mobile Access
+                        Mobile access
                     </h3>
                     <button className="btn-icon" onClick={onClose} aria-label="Close">
                         <X size={18} />
@@ -212,7 +212,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {status?.active && status?.publicIp && status?.url &&
                      !status.url.includes('ngrok-free.app') && (
                         <div className="tunnel-password-hint">
-                            <label>Tunnel Password</label>
+                            <label>Tunnel password</label>
                             <div className="tunnel-password-value">{status.publicIp}</div>
                             <span className="tunnel-password-note">
                                 Enter this when the tunnel page asks for a password

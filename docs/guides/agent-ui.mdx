@@ -186,9 +186,12 @@ Pick the install path that fits you best:
     </Note>
 
     **First run:** no separate setup command is needed. When the app opens on a
-    PC that is not set up yet, it shows the same steps `gaia init` runs (install
-    the local model server, download the models, check they load) and runs them
-    for you. Running `gaia init` yourself beforehand also works.
+    PC that is not set up yet, it checks the PC (device, memory, disk), asks
+    where GAIA runs, names the chat model it will download and its size (you
+    can pick a smaller one first), then runs the same steps `gaia init` runs and
+    ends on a few tasks to start with. If you choose a Lemonade Server you
+    already run, setup uses it instead of installing GAIA's own. Running
+    `gaia init` yourself beforehand also works.
   </Tab>
 </Tabs>
 
@@ -246,13 +249,21 @@ and where that model runs.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail. "Steps" is the agent's own count, the same figure the TUI and
   evals report.
-- **The line under an answer** shows its time and the tokens the whole turn
-  read and wrote, across every model call. Files the answer names by full path,
+- **The line under an answer** says how long it took, where it ran and when
+  the first word came ("Answered in 40 s on your GPU · first word in 1 s", or
+  "via Fireworks AI" for a cloud model). Click it for the exact numbers,
+  including the tokens the whole turn read and wrote across every model call.
+  Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
-- **"Getting GAIA ready… 12s"** under the message box means a local model is
-  reading GAIA's instructions ahead of your first message, so that message
-  gets a quick answer. You can type and send meanwhile; a message sent early
-  waits for it to finish rather than starting over.
+- **A new chat** greets you, shows the folder GAIA works in, and offers up to
+  four tasks from the skills you have and what you've set up (indexed
+  documents, a connected mail account). A task with a subject to fill in is
+  typed into the message box; the others start straight away.
+- **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
+  the model is loading and reading GAIA's instructions ahead of your first
+  message, so that message gets a quick answer. You can type and send
+  meanwhile; a message sent early waits for it to finish rather than starting
+  over.
 
 Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
 `file` agents stay readable but can't be continued; start a new chat instead.
@@ -348,7 +359,7 @@ The question appears above the message box with three answers:
 
 - **Allow once**
 - **Always allow** *this exact action* in this chat (offered only when the action
-  is narrow enough to name, e.g. `write_file on notes.md`)
+  is narrow enough to name, e.g. *writing notes.md*)
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says

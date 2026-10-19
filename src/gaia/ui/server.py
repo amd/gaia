@@ -33,6 +33,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_import_error_message
@@ -101,6 +102,19 @@ _AUTH_EXEMPT_PATHS = {"/api/health"}
 # app's subsequent ``fetch('/api/...')`` calls carry it automatically
 # (same-origin fetches include cookies by default).
 _TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
+
+
+class _SpaPathConvertor(PathConvertor):
+    """A path that is never ``/api`` or under it.
+
+    Keeps the SPA catch-all off unknown API paths, so they get a JSON 404
+    (or a 405 for a real path with the wrong method) instead of index.html.
+    """
+
+    regex = r"(?!api(?:/|$)).*"
+
+
+register_url_convertor("spa_path", _SpaPathConvertor())
 
 
 # ── Tunnel Auth Middleware ──────────────────────────────────────────────────
@@ -398,16 +412,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
-            from gaia.ui._chat_helpers import model_load_lock
+            from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
             from gaia.ui.warmup import preload_skip_reason
+
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             low_memory = preload_skip_reason()
             if low_memory:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
-
-            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
@@ -466,6 +480,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 client.load_model(
                     model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
+                note_model_loaded(model_id)
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
@@ -923,7 +938,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         )
         return redirect
 
-    @app.get("/{full_path:path}")
+    @app.get("/{full_path:spa_path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the React SPA for all non-API routes.
 

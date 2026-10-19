@@ -4,9 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +28,68 @@ const (
 	defaultReadTimeout    = 300 * time.Second
 	// A cancel POST must never wait out a stream read timeout.
 	cancelTimeout = 10 * time.Second
+	// The relay gives the sidecar the read budget to start answering, then
+	// reports why it did not; waiting this much longer lets that report through.
+	relayHeaderGrace = 30 * time.Second
+	// agentToolTimeoutEnv and agentToolTimeoutGrace mirror src/gaia/daemon/timeouts.py.
+	agentToolTimeoutEnv   = "GAIA_AGENT_TOOL_TIMEOUT"
+	agentToolTimeoutGrace = 60 * time.Second
+	maxAgentReadTimeout   = 100 * 365 * 24 * time.Hour
 )
+
+// agentReadTimeout is the relay's idle-read budget read from this process's
+// environment, the way timeouts.py's agent_read_timeout() reads it. It is the
+// fallback for a daemon too old to report its own budget on /status.
+func agentReadTimeout() (time.Duration, error) {
+	raw := os.Getenv(agentToolTimeoutEnv)
+	if raw == "" {
+		return defaultReadTimeout, nil
+	}
+	secs, ok := parsePythonFloat(raw)
+	if !ok || secs <= 0 {
+		return 0, fmt.Errorf("%s must be a positive number of seconds, got %q. "+
+			"Unset it to use the default relay read budget (%s)",
+			agentToolTimeoutEnv, raw, defaultReadTimeout)
+	}
+	return relayBudget(secs), nil
+}
+
+// relayBudget is max(300 s, configured + 60 s), as timeouts.py computes it. NaN
+// compares false there, so it yields the default; past a century the duration is
+// capped ("inf" is no limit), which keeps it from overflowing into a short one.
+func relayBudget(secs float64) time.Duration {
+	if math.IsNaN(secs) {
+		return defaultReadTimeout
+	}
+	d := time.Duration(math.Min(secs*float64(time.Second), float64(maxAgentReadTimeout)))
+	return max(defaultReadTimeout, d+agentToolTimeoutGrace)
+}
+
+// parsePythonFloat accepts what Python's float() accepts: surrounding
+// whitespace, a sign, inf/infinity/nan in any case, and single underscores
+// between digits — but not Go's hex floats.
+func parsePythonFloat(raw string) (float64, bool) {
+	s := strings.TrimSpace(raw)
+	body := strings.ToLower(strings.TrimLeft(s, "+-"))
+	if strings.HasPrefix(body, "0x") || strings.HasPrefix(body, "0b") || strings.HasPrefix(body, "0o") {
+		return 0, false
+	}
+	if strings.Contains(s, "_") {
+		for i, r := range s {
+			if r == '_' && (i == 0 || i == len(s)-1 || !isDigit(s[i-1]) || !isDigit(s[i+1])) {
+				return 0, false
+			}
+		}
+		s = strings.ReplaceAll(s, "_", "")
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return 0, false
+	}
+	return v, true
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 // Turn is one entry of the host-owned transcript.
 //
@@ -44,10 +109,16 @@ type SSEOptions struct {
 	Model string
 	// MaxSteps overrides the agent-loop step ceiling. Zero means "sidecar default".
 	MaxSteps int
-	// ConnectTimeout / ReadTimeout default to 10s / 300s. ReadTimeout is an
-	// idle timeout: it fires only if no byte of the stream arrives within it.
+	// ConnectTimeout defaults to 10s. ReadTimeout is an idle timeout: it fires
+	// only if no byte of the stream arrives within it. Unset, it is the relay's
+	// own budget as the daemon reports it, so both ends give up together.
 	ConnectTimeout time.Duration
 	ReadTimeout    time.Duration
+	// HeaderTimeout bounds the wait for the relay's response headers. Unset, it
+	// is the read budget plus a grace period: the relay waits that budget for
+	// the sidecar, so a model switch queued behind another app's lease is
+	// reported by the relay rather than cut short here.
+	HeaderTimeout time.Duration
 	// Interactive declares that a human is watching and this client will render
 	// a `needs_input` question and POST the answer. Default false: an agent that
 	// asks a question nobody can answer parks the run until it times out, which
@@ -108,6 +179,8 @@ type SSEClient struct {
 type runHandle struct {
 	runID  string
 	cancel context.CancelFunc
+	// readTimeout is this turn's idle budget (see turnReadTimeout).
+	readTimeout time.Duration
 	// followUps are the mid-turn messages accepted against THIS run, in the
 	// order they were delivered. The sidecar folds them into the turn's own
 	// context, but /query is stateless (§2.4) — the host pushes the whole
@@ -124,9 +197,6 @@ func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient
 	if opts.ConnectTimeout <= 0 {
 		opts.ConnectTimeout = defaultConnectTimeout
 	}
-	if opts.ReadTimeout <= 0 {
-		opts.ReadTimeout = defaultReadTimeout
-	}
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
 	}
@@ -136,7 +206,6 @@ func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient
 		opts:       opts,
 		model:      opts.Model,
 		done:       make(chan struct{}),
-		stream:     daemon.StreamHTTPClient(opts.ConnectTimeout, opts.ReadTimeout),
 		cancelHTTP: &http.Client{Timeout: cancelTimeout},
 	}
 }
@@ -173,7 +242,6 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	if closed {
 		return nil, fmt.Errorf("the %s agent connection is closed; relaunch the agent from the hub", s.agentID)
 	}
-
 	runID, err := newRunID()
 	if err != nil {
 		return nil, err
@@ -184,6 +252,14 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
 	if err != nil {
 		return nil, err
+	}
+	readTimeout, err := s.turnReadTimeout(inst)
+	if err != nil {
+		return nil, err
+	}
+	headerTimeout := s.opts.HeaderTimeout
+	if headerTimeout <= 0 {
+		headerTimeout = readTimeout + relayHeaderGrace
 	}
 
 	s.mu.Lock()
@@ -242,7 +318,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 			"Content-Type": []string{"application/json"},
 			"Accept":       []string{"text/event-stream"},
 		},
-		HTTPClient: s.stream,
+		HTTPClient: daemon.StreamHTTPClient(s.opts.ConnectTimeout, headerTimeout),
 		Op:         fmt.Sprintf("stream the '%s' query through the daemon relay", s.agentID),
 	})
 	if err != nil {
@@ -287,7 +363,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		}
 	}
 
-	handle := &runHandle{runID: runID, cancel: cancel}
+	handle := &runHandle{runID: runID, cancel: cancel, readTimeout: readTimeout}
 	s.mu.Lock()
 	s.inst = inst
 	// Close() may have landed while the request was in flight; registering the
@@ -355,7 +431,7 @@ func (s *SSEClient) consume(
 	// including a heartbeat comment — resets it; if it fires, the request is
 	// cancelled and the run surfaces an error rather than hanging forever.
 	var timedOut atomic.Bool
-	watchdog := time.AfterFunc(s.opts.ReadTimeout, func() {
+	watchdog := time.AfterFunc(handle.readTimeout, func() {
 		timedOut.Store(true)
 		handle.cancel()
 	})
@@ -374,7 +450,7 @@ func (s *SSEClient) consume(
 		}
 	}
 
-	reader := newSSEFrameReader(resp.Body, func() { watchdog.Reset(s.opts.ReadTimeout) })
+	reader := newSSEFrameReader(resp.Body, func() { watchdog.Reset(handle.readTimeout) })
 
 	var (
 		terminal string
@@ -448,7 +524,7 @@ func (s *SSEClient) consume(
 	case timedOut.Load():
 		emit(event.CanonicalErrorEvent{
 			Type:   event.CanonicalTypeError,
-			Detail: s.readTimeoutDetail(),
+			Detail: s.readTimeoutDetail(handle.readTimeout),
 			Status: http.StatusGatewayTimeout,
 			Source: "tui",
 		})
@@ -492,11 +568,31 @@ func (s *SSEClient) consume(
 	go s.cancelRun(handle)
 }
 
-func (s *SSEClient) readTimeoutDetail() string {
+func (s *SSEClient) readTimeoutDetail(d time.Duration) string {
 	return fmt.Sprintf(
 		"the '%s' query stream sent nothing for %s and was abandoned. "+
 			"The sidecar may be stuck loading a model — check `gaia daemon status`",
-		s.agentID, s.opts.ReadTimeout)
+		s.agentID, d)
+}
+
+// turnReadTimeout is the idle budget for one turn: the caller's, else the one
+// the daemon's relay uses, else (a daemon too old to say) this shell's setting.
+func (s *SSEClient) turnReadTimeout(inst *daemon.Instance) (time.Duration, error) {
+	if s.opts.ReadTimeout > 0 {
+		return s.opts.ReadTimeout, nil
+	}
+	b := inst.RelayBudget
+	switch {
+	case b.Err != "":
+		return 0, fmt.Errorf("the daemon cannot relay the '%s' query: %s. The daemon reads this setting "+
+			"from its own environment, so fix it there, then run `gaia daemon restart`", s.agentID, b.Err)
+	case b.Known && b.Seconds == 0:
+		return maxAgentReadTimeout, nil
+	case b.Known:
+		return time.Duration(math.Min(b.Seconds*float64(time.Second), float64(maxAgentReadTimeout))), nil
+	}
+	s.opts.Logf("sse: the daemon does not report its relay budget; using this shell's %s", agentToolTimeoutEnv)
+	return agentReadTimeout()
 }
 
 // Respond answers the question the in-flight run is paused on.
@@ -521,7 +617,7 @@ func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error 
 		return fmt.Errorf("could not encode the answer for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/respond",
 			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
@@ -531,6 +627,7 @@ func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error 
 		},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("answer the '%s' agent's question", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -593,7 +690,7 @@ func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) er
 		return fmt.Errorf("could not encode the confirmation decision for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/confirm",
 			url.PathEscape(s.agentID), url.PathEscape(runID)),
@@ -603,6 +700,7 @@ func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) er
 		},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver the '%s' agent's confirmation decision", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -631,17 +729,32 @@ type confirmRequest struct {
 	Approved bool `json:"approved"`
 }
 
+// do sends r through the daemon and keeps the instance that answered, so after
+// a daemon restart on a new port every later call goes straight to it.
+func (s *SSEClient) do(ctx context.Context, inst *daemon.Instance, r daemon.Request) (*http.Response, error) {
+	resp, used, err := s.daemon.Do(ctx, inst, r)
+	if used != nil && used != inst {
+		s.mu.Lock()
+		if s.inst == inst {
+			s.inst = used
+		}
+		s.mu.Unlock()
+	}
+	return resp, err
+}
+
 // postCancel POSTs /v1/<agent>/query/{runID}/cancel and returns the response,
 // or an error if the request itself could not be delivered. Shared by
 // cancelRun (best-effort, fire-and-forget) and Cancel (the caller-facing,
 // error-reporting seam — #2901).
 func (s *SSEClient) postCancel(ctx context.Context, inst *daemon.Instance, runID string) (*http.Response, error) {
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
 			url.PathEscape(s.agentID), url.PathEscape(runID)),
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
+		RunScoped:  true,
 	})
 	return resp, err
 }
@@ -779,7 +892,7 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		return fmt.Errorf("could not encode the '%s' follow-up: %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+	resp, err := s.do(ctx, inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/followup",
 			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
@@ -787,6 +900,7 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver a follow-up to the '%s' run", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("could not deliver the follow-up to the '%s' agent: %w", s.agentID, err)
@@ -1136,7 +1250,7 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 		return fmt.Errorf("could not encode the permission decision for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+	resp, err := s.do(context.Background(), inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/query/%s/tool_decision",
 			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
@@ -1144,6 +1258,7 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("deliver the '%s' agent's permission decision", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err
@@ -1197,7 +1312,7 @@ func (s *SSEClient) SetFullAccess(enabled bool) error {
 		return fmt.Errorf("could not encode the full-access setting for '%s': %w", s.agentID, err)
 	}
 
-	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+	resp, err := s.do(context.Background(), inst, daemon.Request{
 		Method: http.MethodPost,
 		Path: fmt.Sprintf("/v1/%s/sessions/%s/bypass",
 			url.PathEscape(s.agentID), url.PathEscape(sessionID)),
@@ -1205,6 +1320,7 @@ func (s *SSEClient) SetFullAccess(enabled bool) error {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
 		Op:         fmt.Sprintf("change the '%s' agent's full-access setting", s.agentID),
+		RunScoped:  true,
 	})
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    _is_local_url,
     cloud_model_provider,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
@@ -198,33 +199,23 @@ async def _auto_load_after_download(model_name: str) -> None:
     Lemonade falls back to its own much smaller default and the next
     chat hits the "ctx too small" reload branch.
 
-    Errors are swallowed: a load failure here surfaces via the existing
-    ``/api/system/status`` health check; logging is enough.
+    Skipped while a chat is answering, so a download never cuts an answer
+    off. A failed load is logged and shows in ``/api/system/status``.
     """
-    from gaia.config import GaiaConfigError
-    from gaia.llm.lemonade_client import LemonadeClientError
-
-    try:
-        payload = await _with_chosen_backend(
-            {"model_name": model_name, "ctx_size": DEFAULT_CONTEXT_SIZE}
-        )
-    except (GaiaConfigError, LemonadeClientError) as exc:
-        logger.error("Auto-load %s skipped: %s", model_name, exc)
-        return
     logger.info(
         "Auto-load after download: %s (ctx_size=%d)",
         model_name,
         DEFAULT_CONTEXT_SIZE,
     )
-    # 600 s ceiling is generous on purpose: cold mmap + KV-cache alloc
-    # for a fresh GGUF can take 30–60 s on consumer hardware, more on
-    # cold disks. Better to wait than to fire a 30 s timeout that then
-    # makes the user wonder why "model loaded" never flips.
-    await _lemonade_post(
-        "load",
-        payload,
-        timeout=600.0,
-        log_context=f"Auto-load {model_name}",
+    # A chat answering on another model keeps it: the new one loads next turn.
+    if _chats_answering():
+        logger.info("Auto-load of %s skipped: a chat is answering", model_name)
+        return
+    await asyncio.to_thread(
+        _load_through_the_slot,
+        model_name,
+        DEFAULT_CONTEXT_SIZE,
+        f"Auto-load {model_name}",
     )
 
 
@@ -499,6 +490,10 @@ def _loaded_chat_entry(
     return chat[0] if chat else None
 
 
+# Most the Lemonade probes in /api/system/status may take together.
+_STATUS_PROBE_BUDGET_S = 20.0
+
+
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
@@ -547,12 +542,12 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         cloud_model_provider(status.default_model_name)
     )
 
-    # Check Lemonade Server
-    # Use a generous timeout (10s) because when the LLM is handling many
-    # parallel requests it may take a while to respond to the health check.
-    try:
-        import httpx
+    # Check Lemonade Server. Each call has a generous timeout (the health
+    # check 10 s: a busy LLM answers it slowly); _STATUS_PROBE_BUDGET_S
+    # bounds them all together.
+    import httpx
 
+    async def _probe_lemonade() -> None:
         # Failures of the supplementary probes below: transport, bad JSON, or
         # an unexpected payload shape.
         probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
@@ -788,17 +783,64 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             break
                 else:
                     status.lemonade_error = "Lemonade health query failed"
+
+    # The probes run one after another, each with its own timeout; this
+    # bounds them together so the endpoint always answers.
+    try:
+        await asyncio.wait_for(_probe_lemonade(), _STATUS_PROBE_BUDGET_S)
+        status.lemonade_probe = "ok" if status.lemonade_running else "error"
+        if status.lemonade_running:
+            _probe_ok("lemonade")
+    except asyncio.TimeoutError:
+        if status.lemonade_running:
+            # Health answered; only the extra probes ran out of time.
+            status.lemonade_probe = "ok"
+            _probe_failed(
+                status,
+                "lemonade",
+                f"Some model-server details took over {_STATUS_PROBE_BUDGET_S:g} s "
+                "and were skipped",
+            )
+        else:
+            logger.warning(
+                "system status: Lemonade did not answer within %gs",
+                _STATUS_PROBE_BUDGET_S,
+            )
+            status.lemonade_probe = "timed_out"
+            status.lemonade_error = (
+                f"Lemonade did not answer within {_STATUS_PROBE_BUDGET_S:g} s; "
+                "it may be busy loading a model."
+            )
     except httpx.ConnectError as exc:
-        # Nothing listening is a confirmed outage; preserve the actionable
-        # "not responding" banner rather than calling it an ambiguous probe.
+        # Refused: nothing is listening, a confirmed outage, so keep the
+        # actionable "not responding" banner rather than an ambiguous probe.
         logger.debug("system status: Lemonade is not running: %s", exc)
         status.lemonade_running = False
+        status.lemonade_probe = "down"
+    except httpx.ConnectTimeout as exc:
+        status.lemonade_running = False
+        if _is_local_url(resolve_lemonade_base_url()):
+            # A local server that is up but not accepting (full backlog,
+            # wedged) times out the same way; say busy, never "start it".
+            logger.warning("system status: local Lemonade is not accepting: %s", exc)
+            status.lemonade_probe = "timed_out"
+            status.lemonade_error = "Lemonade is not accepting connections right now"
+        else:
+            logger.debug("system status: remote Lemonade is not reachable: %s", exc)
+            status.lemonade_probe = "down"
+    except httpx.TimeoutException as exc:
+        # Connected, then no answer in time: busy, not down.
+        logger.warning("system status: Lemonade did not answer in time: %s", exc)
+        status.lemonade_running = False
+        status.lemonade_probe = "timed_out"
+        status.lemonade_error = "Lemonade did not answer in time"
     except config_errors as exc:
         # Which server to probe is unknown until the config is fixed.
         status.config_error = str(exc)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("system status: Lemonade health query failed: %s", exc)
         status.lemonade_running = False
+        status.lemonade_probe = "error"
         status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
@@ -810,6 +852,12 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     except GaiaConfigError as exc:
         logger.warning("system status: %s", exc)
         status.config_error = str(exc)
+
+    # The last Settings or post-download load, if it failed.
+    if _last_load_failure:
+        _probe_failed(status, "load", _last_load_failure)
+    else:
+        _probe_ok("load")
 
     # Disk space
     # Access shutil through gaia.ui.server so test patches on
@@ -1220,25 +1268,64 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
         raise _config_http_error(exc) from exc
 
 
-async def _with_chosen_backend(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Add the user's llama.cpp backend choice to a raw ``/load`` payload."""
-    from gaia.llm.lemonade_client import LemonadeClient
-
-    def _lookup() -> Optional[str]:
-        return LemonadeClient(verbose=False).chosen_backend_for(payload["model_name"])
-
-    backend = await asyncio.to_thread(_lookup)
-    if backend:
-        return {**payload, "llamacpp_backend": backend}
-    return payload
-
-
 class LoadModelRequest(BaseModel):
     model_name: str
     # ctx_size must be positive. Lemonade silently accepts 0 or negative values
     # and then fails deep in the backend with no actionable error — enforce at
     # the boundary so callers get a 422 immediately.
     ctx_size: Optional[int] = Field(None, gt=0)
+    # Load even while a chat is answering (the user confirmed the interruption).
+    force: bool = False
+
+
+# The last background model load's failure, until a load succeeds.
+_last_load_failure: Optional[str] = None
+
+
+def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> None:
+    """Load a model the way a chat turn does: broker lease, then the load lock.
+
+    ``LemonadeClient.load_model`` takes the lease, checks free memory and adds
+    the chosen llama.cpp backend; ``model_load_lock`` keeps it from racing a
+    chat's own pre-flight load in this process.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+    from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
+
+    try:
+        # The order every load in this process uses: lease, then the lock.
+        with model_lease(model_name, priority="interactive"), model_load_lock:
+            LemonadeClient(verbose=False).load_model(
+                model_name, ctx_size=ctx_size, prompt=False, timeout=600
+            )
+            note_model_loaded(model_name)
+    except (
+        LemonadeClientError,
+        BrokerUnavailableError,
+        GaiaConfigError,
+        OSError,
+    ) as exc:
+        global _last_load_failure  # pylint: disable=global-statement
+        logger.error("%s failed: %s", log_context, exc)
+        # Shown by /api/system/status until a load succeeds.
+        _last_load_failure = f"{log_context} failed: {exc}"
+        return
+    _clear_load_failure()
+    logger.info("%s succeeded", log_context)
+
+
+def _clear_load_failure() -> None:
+    global _last_load_failure  # pylint: disable=global-statement
+    _last_load_failure = None
+
+
+def _chats_answering() -> list:
+    """Chats with a turn in flight in this server right now."""
+    from gaia.ui.run_manager import run_manager
+
+    return run_manager.active_sessions()
 
 
 @router.post("/api/system/load-model", status_code=202)
@@ -1253,17 +1340,21 @@ async def load_model_endpoint(body: LoadModelRequest):
         raise HTTPException(status_code=400, detail="model_name must not be empty")
 
     ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
-    from gaia.config import GaiaConfigError
-    from gaia.llm.lemonade_client import LemonadeClientError
-
-    try:
-        payload = await _with_chosen_backend(
-            {"model_name": model_name, "ctx_size": ctx_size}
+    answering = _chats_answering()
+    if answering and not body.force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(answering)} chat(s) are answering right now. Loading "
+                f"{model_name} now competes with them for memory and the "
+                "model, and can slow or stop their answers. Wait for them to "
+                "finish, or load anyway (force=true)."
+            ),
         )
-    except (GaiaConfigError, LemonadeClientError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
     task = asyncio.create_task(
-        _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
+        asyncio.to_thread(
+            _load_through_the_slot, model_name, ctx_size, f"Load {model_name}"
+        )
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)

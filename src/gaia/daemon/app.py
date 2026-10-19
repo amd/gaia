@@ -13,6 +13,7 @@ where to look — no silent fallback to an unauthenticated response.
 
 from __future__ import annotations
 
+import math
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ from gaia.daemon.constants import (
     SERVICE_ID,
 )
 from gaia.daemon.paths import instance_path
+from gaia.daemon.timeouts import agent_read_timeout
 
 
 def build_require_token(token: str):
@@ -164,6 +166,13 @@ def create_app(
             "started_at": started_at,
             "uptime_seconds": max(0.0, now - started_at),
         }
+        # Thin clients wait on the relay; they need its budget, not their own shell's.
+        try:
+            budget = agent_read_timeout()
+            # null is "no limit": JSON has no infinity.
+            payload["agent_read_timeout_s"] = None if math.isinf(budget) else budget
+        except ValueError as exc:
+            payload["agent_read_timeout_error"] = str(exc)
         if clock is not None:
             counts = clock.job_counts()
             payload["clock"] = {
@@ -200,8 +209,14 @@ def create_app(
         app.include_router(build_lemonade_router(token, lemonade))
 
     if lemonade_owner is not None:
-        from gaia.daemon.lemonade import LemonadeNotManaged
-        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+        from gaia.daemon.lemonade import (
+            LEMONADE_RETRY_AFTER_SECONDS,
+            LemonadeNotManaged,
+        )
+        from gaia.llm.lemonade_embedded import (
+            EmbeddedLemonadeError,
+            EmbeddedLemonadeNotAnswering,
+        )
 
         @app.post(f"{API_PREFIX}/lemonade/ensure")
         def ensure_lemonade(_: None = Depends(require_token)) -> dict:
@@ -212,6 +227,13 @@ def create_app(
                 return lemonade_owner.ensure().to_dict()
             except (LemonadeNotManaged, LemonadeChoiceError, GaiaConfigError) as e:
                 raise HTTPException(status_code=409, detail=str(e)) from e
+            except EmbeddedLemonadeNotAnswering as e:
+                # Retry-After marks it transient: the caller may wait and ask again.
+                raise HTTPException(
+                    status_code=503,
+                    detail=str(e),
+                    headers={"Retry-After": str(LEMONADE_RETRY_AFTER_SECONDS)},
+                ) from e
             except EmbeddedLemonadeError as e:
                 raise HTTPException(status_code=503, detail=str(e)) from e
 

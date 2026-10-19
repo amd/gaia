@@ -243,6 +243,8 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
+    /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
+    place?: string | null;
 }
 
 export interface Message {
@@ -356,12 +358,18 @@ export interface WarmUpStatus {
     prompt_tokens?: number | null;
     cached_tokens?: number | null;
     error?: string | null;
+    /** The model the warm-up loads, once it is resolved. */
+    model?: string | null;
+    /** Where that model runs; null when Lemonade did not say. */
+    device?: 'npu' | 'gpu' | 'cpu' | null;
 }
 
 export interface SystemStatus {
     lemonade_running: boolean;
     /** Present when the Lemonade health/catalog query failed. */
     lemonade_error?: string | null;
+    /** How the probe ended: nothing answered ("down"), connected but no answer in time ("timed_out"), an error answer ("error"), or "ok". */
+    lemonade_probe?: 'ok' | 'down' | 'timed_out' | 'error' | null;
     /** How to start Lemonade on this host, resolved server-side. */
     start_instruction?: string | null;
     /** Shell command, or null on hosts started from a GUI (tray / app). */
@@ -680,6 +688,10 @@ export interface StreamEvent {
     confirm_id?: string;
     /** What "always allow" would grant for this call; absent means it is not offered. */
     always_scope?: string;
+    /** `always_scope` in plain words, e.g. "editing notes.txt" (for permission_request events). */
+    always_label?: string;
+    /** The tool in plain words, e.g. "writing file" (for permission_request events). */
+    tool_label?: string;
     /** What the call does: read, write, execute, or destructive (for permission_request events). */
     risk?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
@@ -770,6 +782,40 @@ export interface SetupRunStatus {
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+    /** The chat model setup chose, once it has said. */
+    chat_model?: string | null;
+}
+
+/** GET /api/setup/plan: what setup will use and download, before it starts. */
+export interface SetupPlan {
+    lemonade: { mode: 'gaia' | 'external'; url: string; reachable: boolean };
+    chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
+    recommended_model: string | null;
+    /** GAIA's own server isn't running yet, so the final pick comes once it is. */
+    decided_after_server: boolean;
+    memory_gb: number | null;
+    memory_source: string | null;
+    options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
+    models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
+    download_gb: number | null;
+}
+
+/** A task a new chat offers, from an installed skill and what is set up. */
+export interface StartCard {
+    skill: string;
+    title: string;
+    note: string;
+    prompt: string;
+    /** The prompt ends where the user types the subject, so it fills the box instead of sending. */
+    needs_input: boolean;
+}
+
+/** GET /api/onboarding/start */
+export interface StartScreen {
+    cards: StartCard[];
+    working_folder: { path: string; name: string; gaia_folder: boolean };
+    /** Why there are no cards: the agent couldn't list its skills. */
+    skills_error?: string | null;
 }
 
 // ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────

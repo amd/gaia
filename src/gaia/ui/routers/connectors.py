@@ -1178,7 +1178,10 @@ async def forward_connection(
         required.update(scopes)
 
     try:
-        summary = connections.import_forwarded_connection(
+        # Off the loop: it waits on the connection lock, which a refresh on
+        # this same loop may hold.
+        summary = await asyncio.to_thread(
+            connections.import_forwarded_connection,
             provider=provider,
             client_id=body.client_id,
             client_secret=body.client_secret,
