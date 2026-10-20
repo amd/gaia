@@ -252,7 +252,7 @@ def _fetch_stays_local(program: str, args: List[str]) -> bool:
             continue
         lowered = arg.lower()
         if family == "ps" and arg.startswith("-") and len(arg) > 1:
-            name, colon, value = lowered.partition(":")
+            name, colon, _ = lowered.partition(":")
             if name.startswith("-pr"):  # -Proxy / -ProxyCredential, abbreviated
                 return False
             if name in long_values:
