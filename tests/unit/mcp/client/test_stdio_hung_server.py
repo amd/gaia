@@ -793,20 +793,33 @@ def test_a_server_ping_gets_an_empty_result(tmp_path):
     }
 
 
-def test_a_ping_reply_cannot_outlast_the_request_deadline(tmp_path):
-    # Pings late with an id bigger than any pipe buffer, then stops reading,
-    # so the reply to the ping can't be written.
+def test_a_ping_reply_cannot_outlast_the_request_deadline(tmp_path, monkeypatch):
+    # Pings with an id bigger than any pipe buffer, then stops reading, so the
+    # reply to the ping can't be written.
     script = _stub(
         tmp_path,
         """
-        time.sleep(2.5)
+        if req["method"] == "warm-up":
+            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            continue
         send({"jsonrpc": "2.0", "id": "p" * 2_000_000, "method": "ping"})
         time.sleep(3600)
         """,
     )
     transport = _transport(script, timeout=3)
+    deadlines = {}
+    real_write = transport._write
+
+    def recording_write(proc, message, deadline=None, honour_cancel=True):
+        kind = message.get("method") or ("ping reply" if "result" in message else "")
+        deadlines[kind] = deadline
+        return real_write(proc, message, deadline, honour_cancel)
+
+    monkeypatch.setattr(transport, "_write", recording_write)
     try:
-        box, elapsed = _call_with_watchdog(
+        # A booting stub must not eat into the window under test.
+        transport.send_request("warm-up", timeout=60)
+        box, _ = _call_with_watchdog(
             lambda: transport.send_request("tools/list"), limit=15
         )
     finally:
@@ -814,8 +827,8 @@ def test_a_ping_reply_cannot_outlast_the_request_deadline(tmp_path):
 
     assert isinstance(box.get("exc"), TimeoutError), box
     assert "stopped reading" in str(box["exc"])
-    # The request's own 3 s, not 2.5 s more for the ping reply on top.
-    assert elapsed < 4.8, elapsed
+    # The request's own deadline, not a fresh timeout for the ping reply.
+    assert deadlines["ping reply"] == deadlines["tools/list"], deadlines
     assert not transport.is_connected()
 
 
