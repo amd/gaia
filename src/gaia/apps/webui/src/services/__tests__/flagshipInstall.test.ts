@@ -28,10 +28,29 @@ describe('installFlagshipAgent', () => {
         expect(progress.mock.calls.map(([s]) => s.percent)).toEqual([50, 100]);
     });
 
-    it('waits on an install already running (409) instead of failing', async () => {
+    it('waits on an install this backend is already running (409) instead of failing', async () => {
         mocked.installAgent.mockRejectedValue(Object.assign(new Error('already in progress'), { httpStatus: 409 }));
-        mocked.getAgentInstallStatus.mockResolvedValue(status({ status: 'completed' }));
+        mocked.getAgentInstallStatus
+            .mockResolvedValueOnce(status({ status: 'running', percent: 40 }))
+            .mockResolvedValueOnce(status({ status: 'completed', percent: 100 }));
         await expect(installFlagshipAgent({ pollMs: 0 })).resolves.toBeUndefined();
+    });
+
+    it('a 409 this backend has no status for (another process installing) reports the 409', async () => {
+        mocked.installAgent.mockRejectedValue(
+            Object.assign(new Error('in progress in another GAIA process'), { httpStatus: 409 }),
+        );
+        mocked.getAgentInstallStatus.mockRejectedValue(
+            Object.assign(new Error("No install status for 'gaia'."), { httpStatus: 404 }),
+        );
+        await expect(installFlagshipAgent({ pollMs: 0 })).rejects.toThrow('in progress in another GAIA process');
+    });
+
+    it.each(['completed', 'failed'])('a 409 with a stale %s status (core too old) reports the 409', async (stale) => {
+        mocked.installAgent.mockRejectedValue(Object.assign(new Error('needs a newer GAIA'), { httpStatus: 409 }));
+        mocked.getAgentInstallStatus.mockResolvedValue(status({ status: stale }));
+        await expect(installFlagshipAgent({ pollMs: 0 })).rejects.toThrow('needs a newer GAIA');
+        expect(mocked.getAgentInstallStatus).toHaveBeenCalledOnce();
     });
 
     it('fails with the backend reason', async () => {

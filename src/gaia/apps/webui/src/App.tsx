@@ -55,6 +55,9 @@ function Loading() {
     return <div className="loading-spinner" role="status" aria-label="Loading" />;
 }
 
+// First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
+const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
+
 function App() {
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
@@ -143,10 +146,10 @@ function App() {
         void checkSetup();
         const loads = [
             retryUntilOk(loadAgents, {
-                onError: (err, n) => { if (n === 1) log.api.warn('Agent list unavailable; retrying', err); },
+                onError: (err, n) => { if (shouldLogRetry(n)) log.api.warn(`Agent list unavailable (attempt ${n}); retrying`, err); },
             }),
             retryUntilOk(loadDefaultPermissionMode, {
-                onError: (err, n) => { if (n === 1) log.api.warn('Default permission mode unavailable; retrying', err); },
+                onError: (err, n) => { if (shouldLogRetry(n)) log.api.warn(`Default permission mode unavailable (attempt ${n}); retrying`, err); },
             }),
         ];
         startupLoads.current = loads;

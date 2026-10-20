@@ -13,7 +13,7 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /**
  * Start the install and wait for it to finish. Resolves on `completed`,
  * throws with the backend's reason on `failed` or a refused start. An install
- * already running (409) is waited on rather than reported as a failure.
+ * this backend is already running (409) is waited on; any other 409 is reported.
  */
 export async function installFlagshipAgent({
     onProgress,
@@ -28,6 +28,9 @@ export async function installFlagshipAgent({
         await api.installAgent(FLAGSHIP_AGENT_ID);
     } catch (err) {
         if ((err as { httpStatus?: unknown })?.httpStatus !== 409) throw err;
+        // 409 also means "core too old" or "another process is installing"; wait only on an install this backend tracks.
+        const first = await api.getAgentInstallStatus(FLAGSHIP_AGENT_ID).catch(() => null);
+        if (!first || first.status === 'completed' || first.status === 'failed') throw err;
     }
     while (!isCancelled()) {
         const status = await api.getAgentInstallStatus(FLAGSHIP_AGENT_ID);
