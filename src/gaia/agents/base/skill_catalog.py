@@ -3,8 +3,10 @@
 """The installed-skill catalogue the model reads, and which skill grants which CLI.
 
 Every installed skill's name and description sit in the system prompt, and the
-model calls ``load_skill`` when one fits the work — at the start of a task or
-halfway through it. The model has read the whole request, so it is a better judge
+model calls ``load_skill`` for each one that fits the work — at the start of a
+task or halfway through it. Skills combine: a deck built from a folder of
+documents needs both the documents skill and the deck skill, and a model told
+"when the work matches a skill" loaded one, or none when several fit. The model has read the whole request, so it is a better judge
 of fit than a matcher scoring the user's words. The per-turn lexical matcher this
 replaces loaded a skill on 0 of 24 benchmark tasks: the repo names, issue numbers
 and output formats that make a request precise counted against every match (#3764).
@@ -18,10 +20,13 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Dict, List, Optional
 
+from gaia.logger import get_logger
 from gaia.skills.manager import ROOT_CLAUDE_IMPORT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from gaia.skills.format import Skill
+
+log = get_logger(__name__)
 
 #: Env override for the whole feature. Unset = on for agents that opt in.
 CATALOG_ENV = "GAIA_SKILL_DISCOVERY"
@@ -48,23 +53,73 @@ GROUNDING_RULE = (
 
 CATALOG_HEADER = (
     "==== SKILLS ====\n"
-    "Installed skills. Each one carries instructions for a kind of work, and some "
-    "unlock a CLI (such as gh) that is refused until the skill is loaded. When the "
-    "work matches a skill, call load_skill with its name before doing that work — "
-    "also when you realise it partway through a task. A skill whose instructions "
-    "already appear under LOADED SKILLS is loaded; do not load it again."
+    "Installed skills. Each carries instructions for a kind of work; some unlock "
+    "a CLI (such as gh) that is refused until the skill is loaded. Skills combine: "
+    "call load_skill for EVERY skill whose description matches any part of the "
+    "request — what it reads (files, data, logs, notes, the web) and what it "
+    "produces (a deck, workbook, document, report). When several match, load "
+    "each one before starting, even if they overlap — also when you realise it "
+    "partway through. A skill under LOADED SKILLS is loaded; do not load it again."
 )
 
 #: Above every starter-pack description (longest 443), so the cap only bites on
 #: an outlier; the 1,024-char format limit would otherwise set the block's size.
+#: A line's "(pairs with: …)" note counts against the same budget.
 CATALOG_DESCRIPTION_CHARS = 480
 
 
-def _catalog_description(description: str) -> str:
+def _catalog_description(description: str, budget: int) -> str:
     text = " ".join((description or "").split())
-    if len(text) <= CATALOG_DESCRIPTION_CHARS:
+    if len(text) <= budget:
         return text
-    return text[:CATALOG_DESCRIPTION_CHARS].rstrip() + "…"
+    return text[:budget].rstrip() + "…"
+
+
+def _listed(skill: "Skill") -> bool:
+    return skill.root != ROOT_CLAUDE_IMPORT
+
+
+def companions(skills: Dict[str, "Skill"], name: str) -> List[str]:
+    """Listed skills that pair with *name*, sorted.
+
+    Pairing is mutual: a skill pairs with every name in its own
+    ``metadata.gaia.pairs_with`` and with every skill that names it, so one side
+    declaring the pair is enough. Names that are not installed are skipped —
+    a skill may name a companion the user has not installed.
+    """
+    skill = skills.get(name)
+    if skill is None:
+        return []
+    found = set()
+    for other in skill.gaia.pairs_with:
+        target = skills.get(other)
+        if target is None or not _listed(target):
+            log.debug(
+                "Skill '%s' pairs with '%s', which is not installed; ignoring.",
+                name,
+                other,
+            )
+            continue
+        found.add(other)
+    found.update(
+        other.name
+        for other in skills.values()
+        if _listed(other) and name in other.gaia.pairs_with
+    )
+    found.discard(name)
+    return sorted(found)
+
+
+def _catalog_line(skills: Dict[str, "Skill"], skill: "Skill") -> str:
+    """``- name: description (pairs with: a, b)``, within the description budget.
+
+    The pairs note comes out of the description's budget rather than adding to
+    it, so a pair never makes a line longer than an uncut description could be.
+    """
+    paired = companions(skills, skill.name)
+    suffix = f" (pairs with: {', '.join(paired)})" if paired else ""
+    budget = max(CATALOG_DESCRIPTION_CHARS - len(suffix), 0)
+    return f"- {skill.name}: {_catalog_description(skill.description, budget)}{suffix}"
 
 
 def render_catalog(skills: Dict[str, "Skill"]) -> str:
@@ -74,9 +129,9 @@ def render_catalog(skills: Dict[str, "Skill"]) -> str:
     another host's skills for working on a repo, not answers to a user's request.
     """
     lines = [
-        f"- {skill.name}: {_catalog_description(skill.description)}"
+        _catalog_line(skills, skill)
         for skill in sorted(skills.values(), key=lambda s: s.name)
-        if skill.root != ROOT_CLAUDE_IMPORT
+        if _listed(skill)
     ]
     if not lines:
         return ""
@@ -103,6 +158,7 @@ __all__ = [
     "CATALOG_HEADER",
     "GROUNDING_RULE",
     "catalog_env_override",
+    "companions",
     "render_catalog",
     "skills_granting",
 ]

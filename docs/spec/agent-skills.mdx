@@ -403,8 +403,33 @@ GAIA's permissions come from `metadata.gaia`.
 
 A user should never have to know a skill's name. The flagship lists every
 installed skill in its system prompt, one line each (name and `description`), and
-the model loads a skill when the work matches it — at the start of a task or
+the model loads every skill whose description matches any part of the request —
+what it reads (files, data, logs, notes, the web) and what it produces (a deck,
+workbook, document, report). Skills are meant to combine: a deck built from a
+folder of documents needs the documents skill *and* the deck skill, and when
+several match the model loads each one before starting. It can also load one
 partway through, for example after a command the skill grants was refused.
+
+#### Companion skills
+
+A skill can name the skills it is usually combined with in
+`metadata.gaia.pairs_with`:
+
+```yaml
+metadata:
+  gaia:
+    pairs_with: [office-docs]
+```
+
+Pairing is mutual — declaring it on one side is enough, and both lines in the
+catalogue end with the note, e.g.
+`- data-explore: … (pairs with: office-docs)`. The note counts against the
+480-character description budget. `load_skill` names any companion that is
+installed but not loaded yet (`companion_skills`, plus a one-line
+`companion_hint`), so a model that loaded one half of a pair learns about the
+other. A name that is not installed is ignored and logged at debug level, never
+an error: a skill may name a companion the user has not installed. Use it only
+for pairs that are true in general, not for one task.
 
 <Note>
 **Write the `description` for this.** The model decides from it. Say what the
