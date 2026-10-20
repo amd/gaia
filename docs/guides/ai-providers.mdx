@@ -106,8 +106,9 @@ The Agent UI offers each in Settings for download only on a PC that holds it. Or
 choose one with `gaia config set default_model <id>`.
 
 GAIA registers the 20B by its exact file rather than using Lemonade's built-in
-`gpt-oss-20b-mxfp4-GGUF`: as of Lemonade 2026.40.0 that entry starts the repository's
-EAGLE3 draft model instead of gpt-oss and fails to load.
+`gpt-oss-20b-mxfp4-GGUF`: on Lemonade 2026.40.0 that entry started the repository's
+EAGLE3 draft model instead of gpt-oss and failed to load, and the entry is unchanged
+in 2026.42.1.
 
 Both read up to 131,072 tokens. Half of their layers attend over a 128-token
 window, so the context cache grows only with the other half: 24 KiB per token on
