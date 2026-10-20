@@ -27,7 +27,8 @@ permissions:
 jobs:
   test-gaia-cli-linux:
     name: Test GAIA CLI on Linux (Full Integration)
-    runs-on: ubuntu-latest
+    # Pinned: the Lemonade PPA has no 26.04 build, so apt there installs Ubuntu's stale lemonade-server.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
