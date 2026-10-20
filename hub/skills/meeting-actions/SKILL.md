@@ -11,6 +11,8 @@ metadata:
       - read_file
       - run_python
       - write_file
+    pairs_with:
+      - transcribe-meeting
     provenance:
       source: starter-pack
 ---

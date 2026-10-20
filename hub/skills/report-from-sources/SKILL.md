@@ -10,6 +10,9 @@ metadata:
       - list_files
       - read_file
       - run_python
+    pairs_with:
+      - office-docs
+      - data-explore
     provenance:
       source: starter-pack
 ---
