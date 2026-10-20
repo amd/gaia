@@ -105,6 +105,61 @@ def test_window_that_crosses_midnight_runs_inside_it(text, now, expected):
     assert compute_next_run(_config(text, "UTC"), after=_utc(now)) == _utc(expected)
 
 
+@pytest.mark.parametrize(
+    "text,now,expected",
+    [
+        # Starting at midnight does not wrap: 06:30 is past the window.
+        ("every hour from midnight to 6am", "2026-10-15T05:30", "2026-10-16T00:00"),
+        ("every hour from midnight to 6am", "2026-10-15T23:30", "2026-10-16T00:30"),
+        # Midnight to midnight is a full day.
+        (
+            "every hour from midnight to midnight",
+            "2026-10-15T23:30",
+            "2026-10-16T00:30",
+        ),
+        # An interval longer than the window waits for the next opening.
+        ("every 3h from 11pm to 1am", "2026-10-15T23:00", "2026-10-16T23:00"),
+        # A same-hour window on Monday runs until Tuesday 9am, then waits a week.
+        ("every hour from 9am to 9am on mon", "2026-10-20T07:00", "2026-10-20T08:00"),
+        ("every hour from 9am to 9am on mon", "2026-10-20T08:30", "2026-10-26T09:00"),
+        # Monday 1am belongs to Sunday night's window, which is not on the list.
+        ("every hour from 10pm to 2am on mon", "2026-10-19T00:30", "2026-10-19T22:00"),
+        # A window that does not wrap is unchanged.
+        ("every hour from 8am to 6pm", "2026-10-15T17:30", "2026-10-16T08:00"),
+        ("every hour from 8am to 6pm", "2026-10-15T06:00", "2026-10-15T08:00"),
+    ],
+)
+def test_window_edges(text, now, expected):
+    assert compute_next_run(_config(text, "UTC"), after=_utc(now)) == _utc(expected)
+
+
+@pytest.mark.parametrize(
+    "start", ["2026-03-01T00:00", "2026-10-25T00:00"], ids=["spring", "fall"]
+)
+def test_wrapping_window_holds_across_a_dst_change(start):
+    """Walk two weeks of a 10pm-2am window through a DST change in LA."""
+    zone = ZoneInfo(LA)
+    config = _config("every hour from 10pm to 2am", LA)
+    after = _utc(start)
+    nights = set()
+    hours = set()
+    previous = None
+    for _ in range(80):
+        run = compute_next_run(config, after=after)
+        local = run.astimezone(zone)
+        assert local.hour in (22, 23, 0, 1), local
+        assert previous is None or run > previous
+        hours.add(local.hour)
+        if local.hour == 22:
+            nights.add(local.date())
+        previous = after = run
+    # Every night opened its window: no night skipped across the change.
+    first, last = min(nights), max(nights)
+    assert len(nights) == (last - first).days + 1
+    assert len(nights) >= 14
+    assert hours == {22, 23, 0, 1}
+
+
 @pytest.mark.parametrize("tz", [LA, "Europe/London", "Australia/Sydney"])
 def test_daily_time_holds_across_a_dst_change(tz):
     """Walk 60 consecutive runs through a DST change: always 9:00 local, once a day."""
