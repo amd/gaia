@@ -36,6 +36,7 @@ from typing import (
     Literal,
     MutableMapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -235,6 +236,20 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 # A cloud reasoning model spends output tokens on thinking too; its window is
 # the provider's, not local hardware's.
 CLOUD_MAX_OUTPUT_TOKENS = 32768
+# Share of a local window one reply may take: 8K of 32K, 16K of 64K.
+LOCAL_OUTPUT_CTX_FRACTION = 4
+
+
+def local_max_output_tokens(ctx_size: int) -> int:
+    """Output cap for a local model loaded with a *ctx_size*-token window.
+
+    A quarter of the window, never below the 32K-window cap nor above the
+    cloud cap, so a big script fits in one reply when the window has room.
+    """
+    return max(
+        LOCAL_MAX_OUTPUT_TOKENS,
+        min(CLOUD_MAX_OUTPUT_TOKENS, ctx_size // LOCAL_OUTPUT_CTX_FRACTION),
+    )
 
 
 def _skill_prompt_body(agent, skill) -> str:
@@ -522,12 +537,14 @@ def _trace_includes_schema_text() -> bool:
 class ToolCallTruncated(ValueError):
     """A native tool call ran past the output-token cap mid-arguments."""
 
-    def __init__(self, model_id: str, cap: int):
+    def __init__(self, model_id: str, cap: int, tools: Sequence[str] = ()):
         self.cap = cap
+        self.tools = tuple(tools)
         super().__init__(
             f"Tool call truncated mid-arguments (finish_reason=length). Model "
             f"{model_id} ran out of output tokens before finishing the call "
-            f"({cap} max) — pass a larger max_output_tokens to the agent."
+            f"({cap} max). Write long content in smaller parts across several "
+            "calls, or pass a larger max_output_tokens to the agent."
         )
 
 
@@ -2550,14 +2567,21 @@ Do NOT wrap conversational replies in JSON.
         switch mid-session takes effect."""
         if self.max_output_tokens is not None:
             return self.max_output_tokens
-        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import LemonadeClient, resolve_ctx_size
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
-        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
-            self.chat.effective_model
-        ):
+        if not isinstance(backend, LemonadeClient):
+            return LOCAL_MAX_OUTPUT_TOKENS
+        model = self.chat.effective_model
+        if backend.cloud_model_provider(model):
             return CLOUD_MAX_OUTPUT_TOKENS
-        return LOCAL_MAX_OUTPUT_TOKENS
+        # Once per model: sizing the window can probe Lemonade for free memory.
+        caps = self.__dict__.setdefault("_local_output_caps", {})
+        if model not in caps:
+            caps[model] = local_max_output_tokens(
+                resolve_ctx_size(model, getattr(self, "device", None))
+            )
+        return caps[model]
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -4506,7 +4530,8 @@ Do NOT wrap conversational replies in JSON.
             prompt = (
                 f"Your last tool call was cut off at the {reason.cap}-token output "
                 "limit before its arguments were finished, so nothing ran. Send "
-                "much shorter arguments."
+                "much shorter arguments: split the work into parts that each fit "
+                "well under the limit, and do them in several calls."
             )
             # write_file replaces the whole file, so a long file is built with edits.
             if "edit_file" in self._tools_registry:
@@ -4515,6 +4540,13 @@ Do NOT wrap conversational replies in JSON.
                     "old_content and new_content, never the whole file; to create "
                     "a long file, write_file a short first part, then add the rest "
                     "with edit_file in small pieces."
+                )
+            if "run_python" in reason.tools:
+                prompt += (
+                    " For run_python, do not send one big script: build the file "
+                    "in steps, one run_python call per part (e.g. one sheet or a "
+                    "few slides), each opening the file the previous call saved, "
+                    "adding its part and saving it again."
                 )
             return prompt
         if isinstance(reason, MalformedToolMarkup):
@@ -5323,7 +5355,15 @@ Do NOT wrap conversational replies in JSON.
                 # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
-                raise ToolCallTruncated(self.model_id, self._max_output_tokens())
+                raise ToolCallTruncated(
+                    self.model_id,
+                    self._max_output_tokens(),
+                    [
+                        (tc.get("function") or {}).get("name", "")
+                        for tc in raw_tool_calls
+                        if isinstance(tc, dict)
+                    ],
+                )
             if not raw_tool_calls:
                 raise ValueError(
                     "Native tool_calls envelope contained an empty tool_calls list."
