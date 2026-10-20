@@ -166,6 +166,32 @@ for start, end in bursts:
 No hot buckets does not mean no incident: re-run with `sev >= 2`, a smaller
 bucket, or a single template's rows.
 
+## Lists of anomalous entities
+
+When the user asks for a list of bad items (blocks, hosts, users, requests,
+sessions), it has to be precise as well as complete:
+
+- An entity goes on the list only if at least one of its events belongs to an
+  anomaly template from step 4, never because it appears next to a baseline
+  warning or error. Build the list from the anomaly templates, not from all
+  non-INFO lines.
+- Check the share you flagged. If the list holds most of the entities in the
+  log, your rule matches the baseline: drop the templates that are present for
+  most entities and rebuild. Real anomalies are usually a small minority.
+- Report how many entities exist, how many you flagged, and the template(s)
+  that put each group on the list.
+
+```python
+ENTITY = r"\b(req-[0-9a-f]{8}|host-\w+)\b"   # pin to your log's entity id: request, host, block, user...
+df["entity"] = df["msg"].str.extract(ENTITY, expand=False)
+ents = df.dropna(subset=["entity"])
+share = ents.groupby("tpl")["entity"].nunique() / ents["entity"].nunique()
+print(share.sort_values(ascending=False).head(10))   # near 1.0 = baseline, not anomaly
+anomaly_tpls = set(ANOMALY_TEMPLATES)                  # the ones you judged anomalous above
+flagged = sorted(ents.loc[ents["tpl"].isin(anomaly_tpls), "entity"].unique())
+print(len(flagged), "of", ents["entity"].nunique(), "entities flagged")
+```
+
 ## Report shape
 
 - **Coverage**: each file with its first and last timestamp and line count,

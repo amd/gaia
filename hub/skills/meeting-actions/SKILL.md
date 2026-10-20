@@ -79,6 +79,26 @@ three times.
    `write_file(file_path, content)` as Markdown or CSV where they asked; build
    a workbook with openpyxl in `run_python`. Then run the final check below.
 
+**Duplicate check (run it before saving).** Two rows are probably one item
+when they share an owner and most of their key words, even if one comes from
+the minutes and the other from the user's notes. Merge each pair it prints,
+or say why they differ:
+
+```python
+import re, difflib, itertools
+def words(t): return set(re.findall(r"[a-z0-9]{3,}", t.lower())) - {"the", "and", "for", "with", "will"}
+rows = tracker  # list of dicts with 'owner' and 'task'
+for a, b in itertools.combinations(range(len(rows)), 2):
+    ra, rb = rows[a], rows[b]
+    if ra["owner"].split()[0].lower() != rb["owner"].split()[0].lower():
+        continue
+    wa, wb = words(ra["task"]), words(rb["task"])
+    jacc = len(wa & wb) / max(1, len(wa | wb))
+    ratio = difflib.SequenceMatcher(None, ra["task"].lower(), rb["task"].lower()).ratio()
+    if jacc >= 0.4 or ratio >= 0.6:
+        print(f"possible duplicate: {a} / {b}: {ra['task'][:60]!r} ~ {rb['task'][:60]!r}")
+```
+
 If the agent offers `extract_document_items`, you can use it for the first
 pass over a long transcript. Ask for commitments "explicit or implied", with
 owner, due and status fields, then do steps 4-7 on what it returns.
