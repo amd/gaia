@@ -425,7 +425,8 @@ jobs:
     secrets: inherit
 
   # Puts the advisory eval's verdict where a maintainer sees it: the run summary
-  # always, and an issue per release when it did not pass (comments on a re-run).
+  # always, and an issue per release when it did not pass (comments on a re-run;
+  # closed by the next release that passes).
   eval-report:
     name: Report the eval result
     needs: [gaia-eval]
@@ -436,46 +437,61 @@ jobs:
       contents: read
       issues: write
     steps:
-      - name: Summarise, and file an issue when the eval did not pass
+      - name: Summarise the eval result
         env:
-          GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.gaia-eval.result }}
-          RELEASE: ${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
           {
             echo "### Gaia eval subset (report only): \`${RESULT}\`"
             echo ""
             echo "This eval does not gate publishing. The per-category scorecards are in the"
             echo "\`Gaia eval subset\` job's summary and artifacts."
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$RESULT" = "success" ]; then
-            exit 0
-          fi
-          # DEDUP KEY - do not reword: a re-run of the same release comments instead.
-          TITLE="Agent release eval did not pass on ${RELEASE}"
+
+      - name: Check out the auto-issue action
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions/auto-issue
+          persist-credentials: false
+
+      - name: Ensure the eval-failure label exists
+        if: needs.gaia-eval.result != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
-          BODY="$(cat <<EOF
-          The judged eval for \`${RELEASE}\` ended \`${RESULT}\`. Publishing did not wait for it.
 
-          - Run: ${RUN_URL}
+      # One issue per release; a re-run of the same release comments on it.
+      - name: File (or update) the issue for this release
+        if: needs.gaia-eval.result != 'success'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          key: eval-agent-gaia/${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0}', inputs.version) }}
+          title: Agent release eval did not pass on ${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}
+          labels: eval-failure
+          body: |
+            The judged eval for `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` ended `${{ needs.gaia-eval.result }}`. Publishing did not wait for it.
 
-          \`failure\` is either a breached quality bar (a regression to look at before the next
-          release) or a scenario that could not be measured (infrastructure, or no Claude quota).
-          The job summary names which. \`cancelled\` means nothing was measured.
-          EOF
-          )"
-          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
-            --search "${TITLE} in:title" --json number,title \
-            | jq -r --arg t "${TITLE}" 'map(select(.title == $t)) | .[0].number // empty')"
-          if [ -n "${EXISTING}" ]; then
-            gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "${TITLE}" --body "${BODY}" \
-              --label eval-failure
-          fi
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            `failure` is either a breached quality bar (a regression to look at before the next
+            release) or a scenario that could not be measured (infrastructure, or no Claude quota).
+            The job summary names which. `cancelled` means nothing was measured.
+
+            A passing re-run, or a later passing release on the same major.minor line, closes this issue.
+
+      # Closes this release's and earlier releases' issues on the same major.minor line only; newer or other lines stay open.
+      - name: Close earlier releases' eval issues
+        if: needs.gaia-eval.result == 'success'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key-prefix: eval-agent-gaia/
+          legacy-title-prefix: "Agent release eval did not pass on "
+          up-to-version: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if that release's failure still needs a look."
 
   # ── Stage 2: native sidecar freeze on every platform ────────────────
   # The matrix lives in build_flagship_sidecar.yml, shared with publish.yml's

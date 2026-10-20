@@ -2176,7 +2176,8 @@ jobs:
             echo "are the only copy - download them before they expire (14 days)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # A release or RC tag run that does not pass files an issue, one per tag.
+  # A release or RC tag run that does not pass files an issue, one per tag, and
+  # a tag run that passes closes the earlier tags' issues.
   # The nightly that used to catch environment drift (a Lemonade bump, a
   # re-quantised model, a runner-image change) is gone, so the tag run is now the
   # only recurring measurement - and its annotations would otherwise go unread.
@@ -2190,61 +2191,69 @@ jobs:
   # describes nothing. The now-deleted weekly caller did exactly that, every run
   # for ten days, filing issues about a job that never started.
   release-escalation:
-    name: File an issue when the release eval does not pass
+    name: File (or close) the release eval issue
     needs: [eval-gate, agent-eval, flagship-tasks, aggregate]
     if: >-
       always() && github.event_name == 'push' && github.ref_type == 'tag' &&
-      needs.eval-gate.outputs.run == 'true' &&
-      (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success')
+      needs.eval-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
+    env:
+      PASSED: ${{ needs.agent-eval.result == 'success' && needs.flagship-tasks.result == 'success' }}
     steps:
-      - name: File (or update) the issue for this tag
+      - name: Check out the auto-issue action
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions/auto-issue
+          persist-credentials: false
+
+      - name: Ensure the eval-failure label exists
+        if: env.PASSED != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TAG: ${{ github.ref_name }}
-          LANES_RESULT: ${{ needs.agent-eval.result }}
-          OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
-          OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
         run: |
-          set -euo pipefail
-          # This job has no checkout, so every gh call names the repo; without it gh
-          # dies with "not a git repository" and the alert is never filed.
-          # DEDUP KEY - do not reword. The lookup below searches this exact title,
-          # so a re-run of the same tag comments on its issue instead of filing another.
-          TITLE="Flagship eval did not pass on ${TAG}"
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
-          BODY="$(cat <<EOF
-          The flagship eval on release tag \`${TAG}\` did not pass. Publishing is not blocked by it.
 
-          - Run: ${RUN_URL}
-          - Scenario lanes: \`${LANES_RESULT}\`
-          - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`${OUTCOMES_FAILED:+ - gate failed for: ${OUTCOMES_FAILED}}
+      # One issue per tag; a re-run of the same tag comments on it.
+      - name: File (or update) the issue for this tag
+        if: env.PASSED != 'true'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          key: eval-flagship/${{ github.ref_name }}
+          title: Flagship eval did not pass on ${{ github.ref_name }}
+          labels: eval-failure
+          body: |
+            The flagship eval on release tag `${{ github.ref_name }}` did not pass. Publishing is not blocked by it.
 
-          Start with the run's summary page: it names which lanes measured, which measured nothing, and
-          how long each took. Then download the failing lane's \`eval-<lane>\` artifact - it carries the
-          transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
-          already destroyed, so the artifact is the only copy, and it expires in 14 days.
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Scenario lanes: `${{ needs.agent-eval.result }}`
+            - Outcomes (`gaia eval tasks`): `${{ needs.flagship-tasks.result }}`${{ needs.flagship-tasks.outputs.failed_suites && format(' - gate failed for: {0}', needs.flagship-tasks.outputs.failed_suites) || '' }}
 
-          Compare with the previous tag's run first. A failure no change since then explains usually means
-          the environment moved, not the code: a Lemonade version bump, a re-quantised model, a driver or
-          runner-image change.
+            Start with the run's summary page: it names which lanes measured, which measured nothing, and
+            how long each took. Then download the failing lane's `eval-<lane>` artifact - it carries the
+            transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
+            already destroyed, so the artifact is the only copy, and it expires in 14 days.
 
-          \`cancelled\` rather than \`failure\` means no measurement happened at all - a manual cancel, or a
-          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
-          EOF
-          )"
-          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
-            --search "${TITLE} in:title" --json number,title \
-            | jq -r --arg t "${TITLE}" 'map(select(.title == $t)) | .[0].number // empty')"
-          if [ -n "${EXISTING}" ]; then
-            gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
-            echo "commented on existing issue #${EXISTING}"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "${TITLE}" --body "${BODY}" \
-              --label eval-failure
-          fi
+            Compare with the previous tag's run first. A failure no change since then explains usually means
+            the environment moved, not the code: a Lemonade version bump, a re-quantised model, a driver or
+            runner-image change.
+
+            `cancelled` rather than `failure` means no measurement happened at all - a manual cancel, or a
+            lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
+
+            A passing re-run, or a later passing tag on the same major.minor line, closes this issue.
+
+      # Closes this tag's and earlier tags' issues on the same major.minor line only; newer or other lines stay open.
+      - name: Close earlier tags' eval issues
+        if: env.PASSED == 'true'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key-prefix: eval-flagship/
+          legacy-title-prefix: "Flagship eval did not pass on "
+          up-to-version: ${{ github.ref_name }}
+          note: "The flagship eval passed on `${{ github.ref_name }}` in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if this tag's failure still needs a look."

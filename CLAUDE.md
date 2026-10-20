@@ -125,6 +125,7 @@ That's it. No "What changed" / "Files modified" / "Implementation notes" section
 - **Cut exhaustive file-by-file enumeration and implementation walkthroughs.** The diff is the source of truth for what files changed and how. The description is the source of truth for *why a reviewer should care*.
 - **No "Generated with Claude Code" tagline** (see attribution rule below).
 - **If the PR really does bundle many threads**, group them — don't list 16 commits. Reviewers scan 4 themes faster than 16 bullets.
+- **A PR that fixes an issue says `Closes #N`** (or `Fixes #N`); use `Refs #N` only for partial work. Without the keyword the issue stays open after the fix ships.
 
 **Anti-patterns:**
 
@@ -808,6 +809,14 @@ Two rules are important enough to restate here:
   collapsed inside a `<details>` block.
 - **Output style comes from [How You Communicate](#how-you-communicate)**, same as
   everywhere else. Plain language first, technical depth underneath.
+
+### Filing issues
+
+- **Search before you file.** Run `gh issue list -R amd/gaia --state all --search "<2-3 key terms>"`
+  and read the closed results too. If one matches, comment on it or reopen it instead.
+- **A re-scope closes its children in the same change.** When a plan retires a feature
+  (e.g. agents → skills, #2995), list the issues that assumed it and close them with a
+  one-line reason, or they sit open on a premise that no longer exists.
 
 Automated PR-review *policy* — severity tiers, the nit cap, skip rules, length caps —
 lives in [`REVIEW.md`](REVIEW.md), which is the single source of truth for review

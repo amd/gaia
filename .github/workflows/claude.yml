@@ -1847,29 +1847,55 @@ jobs:
           gh release edit "$TAG_NAME" --notes-file RELEASE_NOTES.md
           echo "✅ GitHub release updated successfully"
 
-      - name: Notify on failure
+      # Its own checkout: the main one above uses RELEASE_PAT, and an expired PAT is
+      # one of the failures this step has to report.
+      - name: Check out the auto-issue action
+        id: auto_issue_checkout
         if: failure() && steps.tag.outputs.SKIP != 'true'
+        uses: actions/checkout@v7
+        with:
+          path: .auto-issue
+          sparse-checkout: .github/actions/auto-issue
+          persist-credentials: false
+
+      - name: Report that no issue could be filed
+        if: failure() && steps.tag.outputs.SKIP != 'true' && steps.auto_issue_checkout.outcome == 'failure'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch }}
         run: |
-          # Fallback if TAG_NAME is empty
-          if [ -z "$TAG_NAME" ]; then
-            TAG_NAME="unknown"
-          fi
+          echo "::error::Release notes generation failed for ${TAG_NAME} and the tracking issue could not be filed (checking out .github/actions/auto-issue failed). Write the release notes by hand or re-run this workflow."
+          exit 1
 
-          gh issue create \
-            --title "⚠️ Release notes generation failed for $TAG_NAME" \
-            --body "The automated release notes generation for **$TAG_NAME** failed.
+      # One issue per tag: a re-run of the same tag comments on it, and a green
+      # re-run closes it.
+      - name: Notify on failure
+        if: failure() && steps.tag.outputs.SKIP != 'true' && steps.auto_issue_checkout.outcome == 'success'
+        uses: ./.auto-issue/.github/actions/auto-issue
+        with:
+          mode: report
+          key: release-notes/${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch || 'unknown' }}
+          title: "⚠️ Release notes generation failed for ${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch || 'unknown' }}"
+          labels: |
+            bug
+            release
+          assignees: kovtcharov-amd
+          body: |
+            The automated release notes generation for **${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch || 'unknown' }}** failed.
 
-          **Action required:** Please manually write release notes for this release.
+            **Action required:** re-run the workflow, or write the release notes by hand and close this issue. A green re-run closes it automatically.
 
-          - Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG_NAME
-          - Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+            - Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.tag.outputs.TAG_NAME || github.event.workflow_run.head_branch }}
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          cc @kovtcharov-amd" \
-            --assignee kovtcharov-amd \
-            --label "bug,release"
+            cc @kovtcharov-amd
+
+      - name: Close this tag's release-notes issue
+        if: success() && steps.tag.outputs.SKIP != 'true'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: release-notes/${{ steps.tag.outputs.TAG_NAME }}
+          legacy-title: "⚠️ Release notes generation failed for ${{ steps.tag.outputs.TAG_NAME }}"
 
   # When a Claude call above was refused for budget, ask claude-account-switch.yml
   # to probe both accounts. Separate job so `actions: write` never reaches a job

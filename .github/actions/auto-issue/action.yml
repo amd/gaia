@@ -1,0 +1,126 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: 'Auto issue'
+description: 'Keep one tracking issue per workflow alert: comment on it instead of filing another, and close it when a later run recovers.'
+
+# Every issue this files carries a hidden `<!-- gaia-auto-issue: KEY -->` marker,
+# and lookup matches that marker exactly, so a re-run comments on its issue
+# instead of filing another. `mode: resolve` closes the open issue for a key
+# with a "recovered in run <url>" comment. Only issues the workflow token's bot
+# filed are ever touched. See auto_issue.py for the failure semantics.
+#
+# The job needs `issues: write` and must check out at least this directory:
+#   - uses: actions/checkout@v7
+#     with: { sparse-checkout: .github/actions/auto-issue }
+
+inputs:
+  mode:
+    description: '`report` (file or update) or `resolve` (close on recovery)'
+    required: true
+  key:
+    description: 'Stable alert key, e.g. `nightly-patch-release/failure`. For resolve, newline-separated keys.'
+    required: false
+    default: ''
+  key-prefix:
+    description: 'resolve only: close every issue whose key starts with this (newline-separated)'
+    required: false
+    default: ''
+  except-key:
+    description: 'resolve only: never close these keys (newline-separated)'
+    required: false
+    default: ''
+  except-title:
+    description: 'resolve only: never close unmarked issues with these exact titles (newline-separated)'
+    required: false
+    default: ''
+  up-to-version:
+    description: 'resolve only: close only issues whose version (from the key, or a legacy title) is this one or earlier on the same major.minor line'
+    required: false
+    default: ''
+  title:
+    description: 'report only: title for a new issue (also applied on `update: edit`)'
+    required: false
+    default: ''
+  body:
+    description: 'report only: issue body, or the comment posted on the existing issue'
+    required: false
+    default: ''
+  update:
+    description: 'report only: `comment` on the existing issue, or `edit` its body in place'
+    required: false
+    default: 'comment'
+  labels:
+    description: 'report only: labels for a new issue (newline-separated)'
+    required: false
+    default: ''
+  assignees:
+    description: 'report only: assignees for a new issue (newline-separated)'
+    required: false
+    default: ''
+  legacy-title:
+    description: 'Exact titles of unmarked issues filed before markers existed (newline-separated)'
+    required: false
+    default: ''
+  legacy-title-prefix:
+    description: 'Title prefixes of unmarked issues filed before markers existed (newline-separated)'
+    required: false
+    default: ''
+  note:
+    description: 'resolve only: closing comment. Defaults to "Recovered in run <url>".'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token with issues: write'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: ${{ inputs.mode == 'resolve' && 'Close the recovered tracking issue' || 'File or update the tracking issue' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        AI_MODE: ${{ inputs.mode }}
+        AI_KEY: ${{ inputs.key }}
+        AI_KEY_PREFIX: ${{ inputs.key-prefix }}
+        AI_EXCEPT_KEY: ${{ inputs.except-key }}
+        AI_EXCEPT_TITLE: ${{ inputs.except-title }}
+        AI_UP_TO_VERSION: ${{ inputs.up-to-version }}
+        AI_TITLE: ${{ inputs.title }}
+        AI_BODY: ${{ inputs.body }}
+        AI_UPDATE: ${{ inputs.update }}
+        AI_LABELS: ${{ inputs.labels }}
+        AI_ASSIGNEES: ${{ inputs.assignees }}
+        AI_LEGACY_TITLE: ${{ inputs.legacy-title }}
+        AI_LEGACY_TITLE_PREFIX: ${{ inputs.legacy-title-prefix }}
+        AI_NOTE: ${{ inputs.note }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        args=(--repo="$GITHUB_REPOSITORY")
+        [ -n "$AI_LEGACY_TITLE" ] && args+=(--legacy-title="$AI_LEGACY_TITLE")
+        [ -n "$AI_LEGACY_TITLE_PREFIX" ] && args+=(--legacy-title-prefix="$AI_LEGACY_TITLE_PREFIX")
+        case "$AI_MODE" in
+          report)
+            body_file="$RUNNER_TEMP/auto-issue-body-$$.md"
+            printf '%s\n' "$AI_BODY" > "$body_file"
+            args+=(--key="$AI_KEY" --title="$AI_TITLE" --body-file="$body_file" --update="$AI_UPDATE")
+            [ -n "$AI_LABELS" ] && args+=(--label="$AI_LABELS")
+            [ -n "$AI_ASSIGNEES" ] && args+=(--assignee="$AI_ASSIGNEES")
+            ;;
+          resolve)
+            [ -n "$AI_KEY" ] && args+=(--key="$AI_KEY")
+            [ -n "$AI_KEY_PREFIX" ] && args+=(--key-prefix="$AI_KEY_PREFIX")
+            [ -n "$AI_EXCEPT_KEY" ] && args+=(--except-key="$AI_EXCEPT_KEY")
+            [ -n "$AI_EXCEPT_TITLE" ] && args+=(--except-title="$AI_EXCEPT_TITLE")
+            [ -n "$AI_UP_TO_VERSION" ] && args+=(--up-to-version="$AI_UP_TO_VERSION")
+            args+=(--note="${AI_NOTE:-Recovered in run $RUN_URL. Closing automatically; reopen if the problem is back.}")
+            ;;
+          *)
+            echo "::error::auto-issue: mode must be 'report' or 'resolve', got '$AI_MODE'"
+            exit 1
+            ;;
+        esac
+        python3 "$GITHUB_ACTION_PATH/auto_issue.py" "$AI_MODE" "${args[@]}"

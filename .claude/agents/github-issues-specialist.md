@@ -27,6 +27,8 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## Issue template — agent-ready
 
+Before filing, follow CLAUDE.md "Filing issues": search open *and* closed issues first, and close a re-scope's children in the same change.
+
 ```markdown
 ## Summary
 <one-sentence what + why>
@@ -53,6 +55,8 @@ The "out of scope" block is important — agents left un-bounded expand work ind
 ## PR description — sell the merge, don't summarize the diff
 
 Two sections. That's the whole default shape (see CLAUDE.md "PR Descriptions"):
+
+A PR that fixes an issue says `Closes #N` in the body; `Refs #N` only for partial work.
 
 ```markdown
 <One paragraph, ~3 sentences of plain prose. Before-state: what was broken or
