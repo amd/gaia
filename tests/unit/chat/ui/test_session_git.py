@@ -164,14 +164,14 @@ def test_confirmed_pr_pushes_without_force_then_opens_it(
 ):
     calls = []
 
-    def fake_run(argv, cwd, stdin=None):
+    def fake_run(argv, cwd, stdin=None, **_):
         calls.append(argv)
         joined = " ".join(argv)
-        if "rev-parse --abbrev-ref" in joined:
+        if joined.endswith("symbolic-ref --short -q HEAD"):
             return "feature"
         if argv[1:] == ["remote"]:
             return "origin"
-        if "symbolic-ref" in joined:
+        if "refs/remotes/origin/HEAD" in joined:
             return "origin/main"
         if "pr" in argv and "create" in argv:
             return "https://github.com/o/r/pull/7"
@@ -276,6 +276,43 @@ def test_only_removed_folder_changes_commit_nothing(client, session_id, repo):
     assert resp.status_code == 400
     assert "changed no files" in resp.json()["detail"]
     assert _git(repo, "rev-parse", "HEAD") == before
+
+
+@pytest.fixture
+def new_repo(tmp_path):
+    """A folder just `git init`-ed: no commits, so HEAD names no commit yet."""
+    repo = tmp_path / "fresh"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "start")
+    _git(repo, "config", "user.email", "dev@example.com")
+    _git(repo, "config", "user.name", "Dev")
+    _git(repo, "config", "commit.gpgsign", "false")
+    return repo
+
+
+def test_a_repo_with_no_commits_is_listed_and_commits(client, session_id, new_repo):
+    _chat_writes(client, session_id, new_repo / "app.py", new_repo / "README.md")
+    resp = client.get(f"/api/sessions/{session_id}/changes/git")
+    assert resp.status_code == 200, resp.text
+    (r,) = resp.json()["repos"]
+    assert r["branch"] == "start"
+    assert sorted(r["files"]) == ["README.md", "app.py"]
+
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(new_repo), "message": "First", "confirmed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    committed = _git(new_repo, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert sorted(committed) == ["README.md", "app.py"]
+
+
+def test_a_detached_head_is_still_reported_as_detached(
+    client, session_id, repo, chat_edit
+):
+    _git(repo, "checkout", "-q", "--detach")
+    (r,) = client.get(f"/api/sessions/{session_id}/changes/git").json()["repos"]
+    assert r["branch"] == "HEAD"
 
 
 def test_commit_refused_while_a_turn_runs(client, session_id, repo, chat_edit):

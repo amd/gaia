@@ -173,7 +173,11 @@ def draft_message(
 
 def _repo_state(root: str) -> Dict[str, Any]:
     git = _git_exe()
-    branch = _run([git, "rev-parse", "--abbrev-ref", "HEAD"], root)
+    # Names the branch before its first commit too; "HEAD" means detached.
+    branch = (
+        _run([git, "symbolic-ref", "--short", "-q", "HEAD"], root, ok_codes=(0, 1))
+        or "HEAD"
+    )
     remotes = _run([git, "remote"], root).split()
     default = None
     if "origin" in remotes:
