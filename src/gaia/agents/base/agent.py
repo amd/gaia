@@ -243,12 +243,14 @@ LOCAL_OUTPUT_CTX_FRACTION = 4
 def local_max_output_tokens(ctx_size: int) -> int:
     """Output cap for a local model loaded with a *ctx_size*-token window.
 
-    A quarter of the window, never below the 32K-window cap nor above the
-    cloud cap, so a big script fits in one reply when the window has room.
+    A quarter of the window, never above the cloud cap, so a big script fits in
+    one reply when the window has room. Never below the 32K-window cap either,
+    except that a window under 16K gives half of itself, so the reply cannot
+    take the whole window and leave nothing for the prompt and history.
     """
+    floor = min(LOCAL_MAX_OUTPUT_TOKENS, ctx_size // 2)
     return max(
-        LOCAL_MAX_OUTPUT_TOKENS,
-        min(CLOUD_MAX_OUTPUT_TOKENS, ctx_size // LOCAL_OUTPUT_CTX_FRACTION),
+        floor, min(CLOUD_MAX_OUTPUT_TOKENS, ctx_size // LOCAL_OUTPUT_CTX_FRACTION)
     )
 
 
@@ -2567,21 +2569,18 @@ Do NOT wrap conversational replies in JSON.
         switch mid-session takes effect."""
         if self.max_output_tokens is not None:
             return self.max_output_tokens
-        from gaia.llm.lemonade_client import LemonadeClient, resolve_ctx_size
+        from gaia.agents.base.history import context_window
+        from gaia.llm.lemonade_client import LemonadeClient
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
         if not isinstance(backend, LemonadeClient):
             return LOCAL_MAX_OUTPUT_TOKENS
-        model = self.chat.effective_model
-        if backend.cloud_model_provider(model):
+        if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
-        # Once per model: sizing the window can probe Lemonade for free memory.
-        caps = self.__dict__.setdefault("_local_output_caps", {})
-        if model not in caps:
-            caps[model] = local_max_output_tokens(
-                resolve_ctx_size(model, getattr(self, "device", None))
-            )
-        return caps[model]
+        # The same window history budgets against, re-read each call: it can
+        # shrink to free memory, and a client may pin it. Its sizing is cached
+        # per process in lemonade_client, so this does not re-probe Lemonade.
+        return local_max_output_tokens(context_window(self))
 
     def _get_mixin_prompts(self) -> list[str]:
         """
