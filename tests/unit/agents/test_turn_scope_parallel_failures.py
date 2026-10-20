@@ -144,6 +144,30 @@ def test_an_error_that_names_the_fix_does_not_move_the_streak(guard):
     assert guard.check("read_file", {"file_path": "g.txt"}) is None
 
 
+def test_the_same_failing_batch_every_response_ends_the_turn(guard):
+    """A batch counts as one try, but repeating it cannot loop forever."""
+    for response in range(1, 20):
+        run_batch(guard, bad_batch())
+        if guard.turn_should_end:
+            break
+    assert guard.turn_should_end and guard.end_reason == "failures"
+    assert response == 5
+
+
+def test_corrections_that_keep_failing_end_the_turn(guard):
+    """Fresh arguments for the failed files each time still run out."""
+    # Trip the streak with each file failing once, so all four may be corrected.
+    for one in bad_batch():
+        run_batch(guard, [one])
+    assert guard.failures["read_file"] == 4
+    for response in range(1, 40):
+        run_batch(guard, bad_batch(response))
+        if guard.turn_should_end:
+            break
+    assert guard.turn_should_end and guard.end_reason == "failures"
+    assert response == 4
+
+
 def test_correctable_failures_on_one_target_still_count_in_the_end(guard):
     for n in range(5):
         args = {"file_path": "a.txt", "start_line": 10**6 + n}
