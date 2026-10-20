@@ -247,7 +247,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.17**; the stream is
+package — call it with plain `fetch`. Contract version **2.18**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -259,6 +259,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**. The agent indexes any it has not read yet before the turn runs, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
+| `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
@@ -321,7 +322,7 @@ The canonical event shapes, as emitted:
 | `token` | `{ type, delta }` — answer text to append |
 | `tool_call` | `{ type, tool, args }` |
 | `tool_result` | `{ type, tool, data, render? }` |
-| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope? }` — answer it, or it ends the run; see §8 |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, each value capped at 64,000 characters (`args_truncated: true` when one was cut) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage? }` — terminal |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
@@ -671,7 +672,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.17","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.18","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
