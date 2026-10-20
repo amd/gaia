@@ -78,7 +78,8 @@ class Finding:
 # ---------------------------------------------------------------------------
 
 _LISTING_WORDS = ("list", "browse", "tree", "glob")
-_SEARCH_WORDS = _LISTING_WORDS + ("search", "grep", "find", "locate")
+#: "query" covers the document tools: query_documents, query_specific_file.
+_SEARCH_WORDS = _LISTING_WORDS + ("search", "grep", "find", "locate", "query")
 _READ_WORDS = _SEARCH_WORDS + (
     "read",
     "view",

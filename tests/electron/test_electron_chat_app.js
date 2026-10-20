@@ -462,7 +462,7 @@ describe('Chat App Integration', () => {
 
     it('should render the empty-chat screen (NewChat) when no session is active', () => {
       expect(appContent).toMatch(
-        /currentSessionId \? \(\s*<ChatView[^>]*\/>\s*\) : \(\s*<NewChat onSend=\{startChat\} \/>/
+        /currentSessionId \? \(\s*<ChatView[^>]*\/>\s*\) : \(\s*<NewChat [^>]*onSend=\{startChat\}[^>]*\/>/
       );
     });
 
@@ -656,10 +656,10 @@ describe('Chat App Integration', () => {
       expect(storeContent).toContain('currentSessionId === id ? []');
     });
 
-    it('should have dark theme as default', () => {
+    it('should follow the OS theme by default', () => {
       // Pinned to the fallback argument itself -- a looser line-level match
       // also hits the `'light' | 'dark'` annotation and passes on any default.
-      expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]dark['"]/);
+      expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]system['"]/);
     });
 
     it('should have setShowDocLibrary and open/close settings actions', () => {
@@ -684,7 +684,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should pass prompt handler to child components', () => {
-      expect(appContent).toContain('<NewChat onSend={startChat} />');
+      expect(appContent).toMatch(/<NewChat [^>]*onSend=\{startChat\}[^>]*\/>/);
     });
 
     it('should use useCallback for memoized handlers', () => {
@@ -959,7 +959,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain('aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}');
+      expect(sidebarContent).toContain("? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`");
+      expect(sidebarContent).toContain(': `Delete ${session.title}`}');
       expect(sidebarContent).toContain('<nav className="sb-list" aria-label="Recent chats">');
     });
 
@@ -1101,10 +1102,12 @@ describe('Chat App Integration', () => {
       chatContent = fs.readFileSync(chatPath, 'utf8');
     });
 
-    it('should prompt differently on an empty chat than on a reply', () => {
+    it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expect(chatContent).toContain(
-        "placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
+        "messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
       );
+      expect(chatContent).toContain('placeholder={isStreaming');
+      expect(chatContent).toContain("? 'Queue your next message'");
     });
 
     it('should use the shared Composer for input', () => {
@@ -1369,12 +1372,17 @@ describe('Chat App Integration', () => {
       expect(dialogContent).toContain('<Suspense');
     });
 
-    it('should keep model-server status, context size, custom model, dynamic tools and MCP in Advanced', () => {
+    it('should keep model-server status, custom model, dynamic tools and MCP in Advanced', () => {
       expect(advancedContent).toContain('className="status-grid"');
-      expect(advancedContent).toContain('className="ctx-preset-row"');
       expect(advancedContent).toContain('className="model-override-desc"');
       expect(advancedContent).toContain('Dynamic Tools');
       expect(advancedContent).toContain('mcp-status-connected');
+    });
+
+    it('should choose the context size in Model, sized to what fits, not in Advanced', () => {
+      const modelContent = fs.readFileSync(path.join(settingsDir, 'ModelSettings.tsx'), 'utf8');
+      expect(advancedContent).not.toContain('ctx-preset-row');
+      expect(modelContent).toContain('<ModelContextSize model={activeLocal} />');
     });
 
     it('should have danger zone section in Privacy', () => {

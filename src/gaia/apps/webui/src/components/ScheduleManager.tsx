@@ -8,6 +8,7 @@ import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { parseScheduleInput } from '../services/api';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import './ScheduleManager.css';
 
 /** Format an interval in seconds to a human-readable string. */
@@ -189,7 +190,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
             {isSelected && (
                 <div className="schedule-results">
-                    <h4>Execution History</h4>
+                    <h4>Execution history</h4>
                     {resultsLoading ? (
                         <p className="schedule-results-empty">Loading...</p>
                     ) : results.length === 0 ? (
@@ -217,6 +218,8 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 export function ScheduleManager() {
     const { setShowSchedules } = useChatStore();
     const { schedules, loading, error, loadSchedules, createSchedule } = useScheduleStore();
+    const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
+    useEscapeToClose(true, close);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);
@@ -290,10 +293,10 @@ export function ScheduleManager() {
     }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule]);
 
     return (
-        <div className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Schedule Manager">
+        <div className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Scheduled tasks">
             <div className="modal-panel schedule-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Scheduled Tasks</h3>
+                    <h3>Scheduled tasks</h3>
                     <button className="btn-icon" onClick={() => setShowSchedules(false)} aria-label="Close schedule manager">
                         <X size={18} />
                     </button>
@@ -304,7 +307,7 @@ export function ScheduleManager() {
                     <section className="schedule-section">
                         {!showCreate ? (
                             <button className="btn-primary" onClick={() => setShowCreate(true)}>
-                                <Plus size={14} /> New Schedule
+                                <Plus size={14} /> New schedule
                             </button>
                         ) : (
                             <div className="schedule-create-form">
@@ -389,7 +392,7 @@ export function ScheduleManager() {
 
                     {/* Schedule list */}
                     <section className="schedule-section">
-                        <h4>Active Schedules</h4>
+                        <h4>Active schedules</h4>
                         {loading ? (
                             <p className="schedule-empty">Loading schedules...</p>
                         ) : error ? (

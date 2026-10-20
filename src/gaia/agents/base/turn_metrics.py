@@ -34,14 +34,25 @@ agent's own work.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import time
 import uuid
+from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, Iterator, List, Optional
+
+from gaia.utils.perf_trace import (  # noqa: F401  (re-exported)
+    activate,
+    current,
+    note_server_timings,
+    note_wait,
+    span,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +64,7 @@ TURN_LOG_ENV = "GAIA_TURN_LOG"
 _CHARS_PER_TOKEN = 4.28
 
 SCHEMA = "gaia.turn/1"
+POST_SCHEMA = "gaia.turn_post/1"
 
 
 def turn_log_path() -> Optional[Path]:
@@ -65,31 +77,67 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class _Tokenizer:
-    """cl100k when available, a measured char ratio otherwise.
+#: Last sealed records, newest last, for the sidecar's debug endpoint.
+RECENT_TURNS: Deque[Dict[str, Any]] = deque(maxlen=50)
 
-    Absolute counts differ from Gemma's own tokenizer either way — what this is
-    used for is ratios and deltas (how much a prompt shrank, what fraction of a
-    prompt was cache-eligible), and both estimators preserve those.
+
+@contextmanager
+def pre_turn_span(owner: Any, name: str) -> Iterator[None]:
+    """Time work done before the turn's recorder exists (e.g. memory recall).
+
+    The span is parked on *owner* as ``_pre_turn_spans`` and folded into the
+    next record, which then starts its clock at the earliest of them.
+    """
+    if turn_log_path() is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        pending = getattr(owner, "_pre_turn_spans", None) or []
+        pending.append((name, started, time.perf_counter()))
+        owner._pre_turn_spans = pending
+
+
+class _Tokenizer:
+    """cl100k when available; otherwise an estimate that leans high.
+
+    History trimming and context eviction read this as a size, so the fallback
+    must not undercount: JSON and CJK text run far below 4.28 chars a token, and
+    one token is never more than three UTF-8 bytes of ordinary text (#5066).
     """
 
     def __init__(self) -> None:
         self._enc = None
-        self.name = f"chars/{_CHARS_PER_TOKEN}"
+        self.name = f"max(chars/{_CHARS_PER_TOKEN}, utf8_bytes/3)"
         try:
             import tiktoken
 
             self._enc = tiktoken.get_encoding("cl100k_base")
             self.name = "tiktoken:cl100k_base"
-        except Exception as e:  # noqa: BLE001 - optional dep, name records which
-            logger.debug("tiktoken unavailable, using char-ratio estimate: %s", e)
+        except Exception as e:  # noqa: BLE001 - load failure is named, not hidden
+            logger.warning(
+                "Token counts fall back to an estimate that may overcount: the "
+                "cl100k_base tokenizer data could not load (%s). Check network or "
+                "proxy access, or set TIKTOKEN_CACHE_DIR to a folder holding it.",
+                e,
+            )
 
     def count(self, text: str) -> int:
         if not text:
             return 0
         if self._enc is not None:
-            return len(self._enc.encode(text, disallowed_special=()))
-        return round(len(text) / _CHARS_PER_TOKEN)
+            try:
+                return len(self._enc.encode(text, disallowed_special=()))
+            except UnicodeEncodeError:
+                # Lone surrogates (leniently decoded bytes): count them as U+FFFD.
+                text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+                return len(self._enc.encode(text, disallowed_special=()))
+        return max(
+            round(len(text) / _CHARS_PER_TOKEN),
+            -(-len(text.encode("utf-8", "surrogatepass")) // 3),
+        )
 
 
 _TOKENIZER: Optional[_Tokenizer] = None
@@ -146,12 +194,16 @@ class TurnRecorder:
         skills_active: Optional[List[str]] = None,
         history_messages: int = 0,
         path: Optional[Path] = None,
+        started: Optional[float] = None,
+        prompt_fragments: Optional[Dict[str, int]] = None,
     ) -> None:
         tok = _tokenizer()
         self.path = path if path is not None else turn_log_path()
         self.turn_id = uuid.uuid4().hex[:12]
         self.started_at = _now()
-        self._t0 = time.perf_counter()
+        # *started* (a perf_counter value) backdates the turn to when a mixin
+        # began working on it, so pre-turn recall counts in total_s.
+        self._t0 = started if started is not None else time.perf_counter()
         # Held from construction rather than re-passed to finish(): all three
         # are fixed when the turn opens, and asking twice let the model id be
         # resolved a second time and disagree with what the turn actually ran.
@@ -174,12 +226,66 @@ class TurnRecorder:
             "skills_active": list(skills_active or []),
             "history_messages": history_messages,
             "token_estimator": tok.name,
+            # Which system prompt went out, and how big each mixin's part of it
+            # was: a changed hash between two turns of one chat is a full
+            # re-read on a model whose template puts the tools after it.
+            "system_sha": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[
+                :12
+            ],
+            "fragments": dict(prompt_fragments or {}),
         }
 
         self.llm_calls: List[Dict[str, Any]] = []
         self.tool_calls: List[Dict[str, Any]] = []
+        self.spans: List[Dict[str, Any]] = []
         self._open_call: Optional[Dict[str, Any]] = None
         self._prev_rendered = ""
+        # Spans recorded after finish() — post-answer work the user may still
+        # wait on (memory writes, the next turn's lock) — go to a second line.
+        self._sealed = False
+        self._post_spans: List[Dict[str, Any]] = []
+
+    # ── spans and sub-call timings ─────────────────────────────────────────
+
+    def _rel(self, t: float) -> float:
+        return round(t - self._t0, 4)
+
+    def add_span(
+        self, name: str, started: float, ended: float, attrs: Dict[str, Any]
+    ) -> None:
+        entry = {
+            "name": name,
+            "start_s": self._rel(started),
+            "s": round(ended - started, 4),
+        }
+        if attrs:
+            entry.update(attrs)
+        (self._post_spans if self._sealed else self.spans).append(entry)
+
+    def note_client(self, key: str, seconds: float) -> None:
+        """Accumulate a client-side wait (lock, lease, probe) on the open call."""
+        call = self._open_call
+        if call is None:
+            return
+        client = call.setdefault("client", {})
+        client[key] = round(client.get(key, 0.0) + seconds, 4)
+
+    def note_server(self, timings: Dict[str, Any]) -> None:
+        """Keep the backend's prefill/decode split and its cache reuse."""
+        call = self._open_call
+        if call is None:
+            return
+        server = {
+            k: timings[k]
+            for k in ("prompt_n", "prompt_ms", "cache_n", "predicted_n", "predicted_ms")
+            if isinstance(timings.get(k), (int, float))
+        }
+        if "prompt_ms" in server or "predicted_ms" in server:
+            server["compute_s"] = round(
+                (server.get("prompt_ms", 0.0) + server.get("predicted_ms", 0.0)) / 1000,
+                4,
+            )
+        call["server"] = server
 
     # ── LLM calls ──────────────────────────────────────────────────────────
 
@@ -190,10 +296,12 @@ class TurnRecorder:
         shared_chars = _common_prefix_len(self._prev_rendered, rendered_prompt)
         total_tokens = tok.count(rendered_prompt)
         cached_tokens = tok.count(rendered_prompt[:shared_chars])
+        now = time.perf_counter()
         self._open_call = {
             "step": step,
             "at": _now(),
-            "_t": time.perf_counter(),
+            "start_s": self._rel(now),
+            "_t": now,
             "input_tokens_local": total_tokens,
             "input_tokens_cached": cached_tokens,
             "input_tokens_new": max(0, total_tokens - cached_tokens),
@@ -245,6 +353,14 @@ class TurnRecorder:
         for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
             if key in stats:
                 call[key] = _num(stats.get(key))
+        # The backend's own per-request timings beat any stats endpoint: they
+        # belong to this request, not to whichever one the server served last.
+        server = call.get("server") or {}
+        if "prompt_n" in server and "cache_n" in server:
+            call["input_tokens"] = server["prompt_n"] + server["cache_n"]
+            call["cache_read_input_tokens"] = server["cache_n"]
+        if "predicted_n" in server:
+            call["output_tokens"] = server["predicted_n"]
 
         # Prefill rate over the tokens the server actually had to process.
         # Far above the cold-start rate means the KV prefix was reused; at or
@@ -296,6 +412,24 @@ class TurnRecorder:
         llm_s = sum(c.get("wall_s", 0.0) for c in self.llm_calls)
         tool_s = sum(c.get("wall_s", 0.0) for c in self.tool_calls)
         waited_s = sum(c.get("waited_s", 0.0) for c in self.tool_calls)
+        server_s = [
+            c["server"]["compute_s"]
+            for c in self.llm_calls
+            if "compute_s" in c.get("server", {})
+        ]
+        client_waits: Dict[str, float] = {}
+        for c in self.llm_calls:
+            for key, value in (c.get("client") or {}).items():
+                client_waits[key] = round(client_waits.get(key, 0.0) + value, 4)
+        server_totals: Dict[str, Any] = {}
+        if server_s and len(server_s) == len(self.llm_calls):
+            compute = sum(server_s)
+            server_totals = {
+                # Seconds the backend computed for this turn; the rest of the
+                # wall time is what GAIA (or a tool, or the user) cost.
+                "server_compute_s": round(compute, 3),
+                "non_model_s": round(total_s - compute, 3),
+            }
 
         record = {
             "schema": SCHEMA,
@@ -344,7 +478,59 @@ class TurnRecorder:
                 "cache_write_tokens_server": sum(
                     c.get("cache_creation_input_tokens") or 0 for c in self.llm_calls
                 ),
+                **server_totals,
+                "client_waits_s": client_waits,
             },
+            "spans": self.spans,
+            "gaps": self._gaps(),
+        }
+        self._sealed = True
+        self._write(record)
+        RECENT_TURNS.append(record)
+        return record
+
+    def _gaps(self) -> List[Dict[str, Any]]:
+        """Time between consecutive model calls, and which spans filled it.
+
+        The backend sits idle in these windows (unless something else uses
+        it), so they are where pipelining can win back time.
+        """
+        gaps = []
+        calls = [c for c in self.llm_calls if "start_s" in c and "wall_s" in c]
+        for prev, nxt in zip(calls, calls[1:]):
+            g0 = prev["start_s"] + prev["wall_s"]
+            g1 = nxt["start_s"]
+            inside = [
+                {"name": sp["name"], "s": sp["s"]}
+                for sp in self.spans
+                if sp["start_s"] < g1 and sp["start_s"] + sp["s"] > g0
+            ]
+            tools = [
+                t["name"] for t in self.tool_calls if t.get("step") == prev.get("step")
+            ]
+            gaps.append(
+                {
+                    "after_step": prev.get("step"),
+                    "s": round(g1 - g0, 4),
+                    "tools": tools,
+                    "spans": inside,
+                }
+            )
+        return gaps
+
+    def write_post(self) -> Optional[Dict[str, Any]]:
+        """Write spans recorded after the answer, as a ``gaia.turn_post/1`` line.
+
+        That work runs after ``finish()`` — memory writes, extraction queueing —
+        and still holds the agent before the next turn can start.
+        """
+        if not self._post_spans:
+            return None
+        record = {
+            "schema": POST_SCHEMA,
+            "turn_id": self.turn_id,
+            "post_s": round(sum(sp["s"] for sp in self._post_spans), 4),
+            "spans": self._post_spans,
         }
         self._write(record)
         return record
@@ -397,6 +583,11 @@ def format_summary(record: Dict[str, Any]) -> str:
         f"model {t.get('llm_s', 0):.1f}s",
         f"tools {t.get('tool_s', 0):.1f}s",
     ]
+    # Present only when every call reported server timings — a partial sum
+    # would understate compute and overstate GAIA's share.
+    if "server_compute_s" in t:
+        parts.append(f"server {t['server_compute_s']:.1f}s")
+        parts.append(f"non-model {t['non_model_s']:.1f}s")
     # Only when someone was actually asked to approve something — on every
     # other turn the figure is zero and the word is just noise.
     waiting = t.get("waiting_on_user_s", 0) or 0
@@ -406,9 +597,17 @@ def format_summary(record: Dict[str, Any]) -> str:
 
 
 __all__ = [
+    "POST_SCHEMA",
+    "RECENT_TURNS",
     "SCHEMA",
     "TURN_LOG_ENV",
     "TurnRecorder",
+    "activate",
+    "current",
     "format_summary",
+    "note_server_timings",
+    "note_wait",
+    "pre_turn_span",
+    "span",
     "turn_log_path",
 ]

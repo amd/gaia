@@ -13,7 +13,7 @@ import App from '../App';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
-import type { Session, SetupCheck } from '../types';
+import type { Session, SetupCheck, StartCard } from '../types';
 
 const mocked = vi.mocked(api);
 
@@ -54,13 +54,16 @@ beforeEach(() => {
     });
     mocked.checkSetup.mockResolvedValue(READY);
     mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getSetupPlan.mockRejectedValue(new Error('no plan'));
     mocked.getSystemStatus.mockResolvedValue({
         lemonade_running: true,
         model_loaded: 'Gemma-4-E4B-it-GGUF',
     } as never);
     mocked.listAgents.mockResolvedValue({ agents: [], total: 0 });
     mocked.listSessions.mockResolvedValue({ sessions: [], total: 0 });
-    mocked.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mocked.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mocked.getTunnelStatus.mockResolvedValue({ active: false } as never);
     mocked.createSession.mockResolvedValue(session({ id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia' }));
     mocked.getMessages.mockResolvedValue({ messages: [] } as never);
@@ -175,12 +178,59 @@ describe('a new chat', () => {
 });
 
 describe('first-run setup', () => {
+    it('a cold start shows a neutral loading screen until the setup check answers, never the chat', async () => {
+        let answer!: (c: SetupCheck) => void;
+        mocked.checkSetup.mockImplementation(() => new Promise((r) => { answer = r; }));
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: false, model_loaded: null, initialized: false } as never);
+        render(<App />);
+
+        expect(await screen.findByText('Starting GAIA…')).toBeInTheDocument();
+        await waitFor(() => expect(mocked.getSystemStatus).toHaveBeenCalled());
+        expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
+
+        answer(NOT_READY);
+        expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
+        expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
+    });
+
+    it('a PC set up before goes straight to chat while the check runs', async () => {
+        mocked.checkSetup.mockImplementation(() => new Promise(() => { /* still checking */ }));
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: null, initialized: true } as never);
+        render(<App />);
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
+    });
+
+    async function finishSetupWith(card: StartCard) {
+        mocked.checkSetup.mockResolvedValue(NOT_READY);
+        mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
+        mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+        render(<App />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await userEvent.click(await screen.findByRole('button', { name: new RegExp(card.title) }));
+    }
+
+    it('a first task picked at the end of setup starts the first chat', async () => {
+        await finishSetupWith({ skill: 'check-in', title: 'Check in', note: '', prompt: 'Good morning. Let us check in.', needs_input: false });
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Good morning. Let us check in.');
+    });
+
+    it('a first task that needs a subject opens a new chat with it typed in', async () => {
+        await finishSetupWith({ skill: 'summarize', title: 'Summarize something', note: '', prompt: 'Summarize this: ', needs_input: true });
+        expect(await screen.findByLabelText('Message')).toHaveValue('Summarize this: ');
+        expect(mocked.createSession).not.toHaveBeenCalled();
+    });
+
     it('shows the setup screen when GAIA is not set up', async () => {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         render(<App />);
 
         expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
-        expect(screen.getByText('The local model server is not installed.')).toBeInTheDocument();
+        // Setup reads as progress: the check's reason is not shown as a problem.
+        expect(screen.getByText('A few minutes of setup, then your first chat.')).toBeInTheDocument();
+        expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
 

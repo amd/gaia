@@ -21,6 +21,9 @@ const path = require("path");
 const fs = require("fs");
 
 const electronMock = require("electron");
+
+// init() requires the restart check main.cjs passes; these tests never reach it.
+const INIT_OPTIONS = { confirmRestart: async () => true };
 const { autoUpdater: mockAutoUpdaterInstance } = require("electron-updater");
 
 let tmpHome;
@@ -70,7 +73,7 @@ describe("forward feed resolution", () => {
   test("init() applies a generic feed + 'latest' channel from GAIA_UPDATE_FEED_URL", () => {
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance._feedURL).toEqual({
       provider: "generic",
@@ -90,7 +93,7 @@ describe("forward feed resolution", () => {
     );
 
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance._feedURL.provider).toBe("generic");
     expect(mockAutoUpdaterInstance._feedURL.url).toBe(
@@ -108,7 +111,7 @@ describe("forward feed resolution", () => {
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/from-env";
 
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance._feedURL.url).toBe(
       "https://updates.example.com/from-env"
@@ -117,7 +120,7 @@ describe("forward feed resolution", () => {
 
   test("init() with no feed enters the loud NO_CHANNEL state and sets no feed", () => {
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
 
     const state = mod.getState();
     expect(state.status).toBe(mod.STATES.NO_CHANNEL);
@@ -129,7 +132,7 @@ describe("forward feed resolution", () => {
 
   test("checkForUpdates() surfaces NO_CHANNEL instead of checking a dead feed", async () => {
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
 
     const checkSpy = jest
       .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
@@ -143,7 +146,7 @@ describe("forward feed resolution", () => {
 
   test("checkForUpdates() picks up a feed configured after init()", async () => {
     const mod = loadModule();
-    mod.init(makeMockWindow());
+    mod.init(makeMockWindow(), INIT_OPTIONS);
     expect(mod.getState().status).toBe(mod.STATES.NO_CHANNEL);
 
     // Configure a feed after init, then check again.
@@ -166,7 +169,7 @@ describe("forward feed resolution", () => {
     jest.useFakeTimers();
     try {
       const mod = loadModule();
-      mod.init(makeMockWindow());
+      mod.init(makeMockWindow(), INIT_OPTIONS);
       expect(mod.getState().status).toBe(mod.STATES.NO_CHANNEL);
 
       // A no-feed start must not have armed any timer.

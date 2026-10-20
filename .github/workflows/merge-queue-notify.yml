@@ -4,8 +4,10 @@
 # Notifies PR authors when their PR fails in the merge queue.
 #
 # Two triggers:
-# 1. workflow_run: Fires when watched workflows complete — posts a comment if
-#    the triggering run was a merge_group event that failed.
+# 1. workflow_run: Fires when a watched workflow completes on a merge-queue
+#    branch — posts a comment if that run failed. The `branches` filter keeps
+#    every PR and push run of the watched workflows from recording a skipped
+#    run here (~35 a day before it existed).
 # 2. merge_group: Pass-through so the merge queue sees a "success" status
 #    instead of a phantom "failure" (GitHub creates run records for every
 #    workflow file on push/merge_group; files without a matching trigger
@@ -20,6 +22,10 @@ on:
       - "Unit Tests"
     types:
       - completed
+    # Matches the triggering run's head branch; merge-queue runs are always
+    # gh-readonly-queue/<base>/pr-<n>-<sha>.
+    branches:
+      - 'gh-readonly-queue/**'
   # Explicit merge_group trigger prevents phantom failure runs in the merge queue
   merge_group:
 

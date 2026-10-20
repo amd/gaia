@@ -701,11 +701,10 @@ This ties the skill layer to the broader
 [security model](/plans/security-model): skills are a grant surface, audited and
 scoped per agent, not a global capability.
 
-## Agent Hub integration
+## Download-server integration
 
-Skills are first-class Agent Hub artifacts, distributed and versioned alongside
-agent packages from the [Agent Hub Restructure](/spec/agent-hub-restructure).
-They are a **fourth catalog lane** on the existing hub — not a second registry:
+Skills are distributed and versioned alongside agent packages.
+They are a **fourth catalog lane** on the existing download server — not a second registry:
 the same Worker, the same R2 bucket, the same `index.json`, the same signing and
 immutability rules ([#2467](https://github.com/amd/gaia/issues/2467)).
 
@@ -920,6 +919,5 @@ standard intentionally leaves open.
 - [Skill Format](/plans/skill-format) — `SKILL.md` schema, permission grammar, tiers, CLI
 - [Composing skills and skill sets](/guides/composing-skills) — author walkthrough
 - [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`
-- [Agent Hub Restructure](/spec/agent-hub-restructure) — `gaia-agent.yaml`, packaging, distribution
 - [Security Model](/plans/security-model) — grants, audit trail, sandboxing
 - [Agent Skills standard](https://agentskills.io) · [Claude Code skills](https://code.claude.com/docs/en/skills)

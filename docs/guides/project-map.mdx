@@ -59,8 +59,8 @@ Code index: not built — call index_codebase to enable semantic code search
 (`NPU_CTX_SIZE`) and 0.9% of the GPU profile's 65,536. It is sized against the
 smaller window on purpose — a budget that only holds on 64K is not a budget.
 
-Measured with GAIA's shared estimator (`count_tokens` — cl100k, or a character
-ratio when tiktoken is absent), so it bounds the map to within that estimator's
+Measured with GAIA's shared estimator (`count_tokens` — cl100k, or an estimate
+that leans high when tiktoken is absent), so it bounds the map to within that estimator's
 error of the model's own count rather than to the exact token.
 
 `render_project_map()` enforces it on every render. Sections are emitted in

@@ -1018,6 +1018,7 @@ class _ExecutingAgent(_Gated):
 
     from gaia.agents.base.agent import Agent as _Base
 
+    internet_off = _Base.internet_off
     _policy_refusal = _Base._policy_refusal
     _execute_tool = _Base._execute_tool
     # _execute_tool fits arguments to their annotated types before dispatch, so

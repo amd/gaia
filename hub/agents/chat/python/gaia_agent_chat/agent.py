@@ -56,6 +56,7 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
+from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.project_map import resolve_project_root
 
@@ -78,6 +79,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     FileSearchToolsMixin,
     FileToolsMixin,
     RAGToolsMixin,
+    ReasoningEffortToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
     WaitToolsMixin,
@@ -358,6 +360,7 @@ class ChatAgent(
     SDToolsMixin,
     AudioToolsMixin,
     WaitToolsMixin,
+    ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -691,10 +694,11 @@ class ChatAgent(
             self._start_watching()
 
     def _indexed_documents_line(self) -> str:
-        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed.
+        """``[Indexed documents: a.pdf (/docs/a.pdf), …]``, or "" when none are.
 
-        A document still indexing in the background is not searchable, so it
-        is named on a line of its own instead.
+        Each entry carries its path, so a file tool never has to search for a
+        document the user already attached. A document still indexing in the
+        background is not searchable, so it is named on a line of its own.
         """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
@@ -703,8 +707,11 @@ class ChatAgent(
             return ""
         lines = []
         if self.rag.indexed_files:
-            names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-            lines.append(f"[Indexed documents: {', '.join(names)}]")
+            entries = sorted(
+                {f"{Path(fp).name} ({fp})" for fp in self.rag.indexed_files},
+                key=str.lower,
+            )
+            lines.append(f"[Indexed documents: {', '.join(entries)}]")
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -1642,6 +1649,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         self._register_external_tools_conditional()
         self._register_loop_control_tools()  # set_loop_state, request_user_input
+        self.register_reasoning_effort_tools()  # only for models that grade reasoning
 
         # load_tools escape hatch (#1450, Part 2) — registered ONLY when the
         # dynamic loader is active, so the loader-off path stays byte-identical.
@@ -1790,6 +1798,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
+                    note_untracked("execute_python_file", str(p))
                     job = run_python_job(
                         cmd,
                         cwd=str(run_dir),
@@ -1931,6 +1940,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     handle.write(code)
                     snippet = Path(handle.name)
                 cmd = python_command(snippet)
+                note_untracked(
+                    "run_python", code.strip().splitlines()[0] if code.strip() else ""
+                )
                 start = time.monotonic()
                 try:
                     job = run_python_job(
@@ -2490,6 +2502,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
                 )
                 client.ensure_model()
+                before_change(output_path, "text_to_speech")
                 duration = client.synthesize_to_wav(text, output_path, voice=voice)
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2620,7 +2633,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,
-            choices: list = None,
+            choices: List[str] = None,
             default_if_no_response: str = None,
             timeout_seconds: int = 300,
             continue_if_no_response: bool = True,
@@ -2794,6 +2807,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.schedule(event_handler, directory, recursive=True)
             observer.start()
             self.observers.append(observer)
+            self.file_handlers.append(event_handler)
             logger.info(f"Started watching: {directory}")
         except Exception as e:
             logger.error(f"Failed to watch {directory}: {e}")
@@ -2859,6 +2873,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer.stop()
             observer.join()
         self.observers.clear()
+        # Each handler reindexes on its own thread; stop those too. A core
+        # without close() reindexes inline, so there is nothing to stop.
+        handlers = self.__dict__.get("file_handlers", [])
+        for handler in handlers:
+            close = getattr(handler, "close", None)
+            if close is not None:
+                close()
+        handlers.clear()
 
     def load_session(self, session_id: str) -> bool:
         """

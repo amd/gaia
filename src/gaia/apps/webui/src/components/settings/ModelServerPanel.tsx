@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
+import { displayModelName } from '../../stores/modelStore';
 import type { LoadedModelInfo, ModelServerInfo } from '../../types/api.gen';
 
 const BACKEND_LABELS: Record<string, string> = {
@@ -81,7 +82,7 @@ export function ModelServerPanel() {
         if (!chat?.name) return;
         setReloading(true);
         try {
-            await api.loadModel(chat.name, chat.ctx_size ?? undefined);
+            if (!(await api.loadModelAskingFirst(chat.name, chat.ctx_size ?? undefined))) return;
             setNotice({ ok: true, text: `Reloading ${chat.name}. Reopen this panel in a moment to see its backend.` });
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
@@ -140,7 +141,11 @@ export function ModelServerPanel() {
                     value={`${OWNER_LABELS[info.owner] ?? info.owner}${info.version ? ` v${info.version}` : ''}`}
                 />
                 <Row label="Address" value={info.base_url} />
-                <Row label="Chat model" value={chat?.name ?? 'None loaded'} />
+                <Row
+                    label="Chat model"
+                    value={chat?.name ? displayModelName(chat.name) : 'None loaded'}
+                    title={chat?.name ?? undefined}
+                />
                 {chat && <Row label="Runs on" value={runsOn(chat)} />}
                 {chat && chat.backend !== 'remote' && <Row label="Context window" value={ctxLabel(chat.ctx_size)} />}
                 <Row

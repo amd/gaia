@@ -25,7 +25,12 @@ Status lifecycle::
 
 ``claim_job`` is an atomic ``pending -> firing`` transition (single UPDATE
 guarded on status), so a job fires exactly once even if two drivers poll the
-same store.
+same store. The claim is a lease: ``claim_job`` returns a ``claim_id`` token,
+the firing driver renews ``claimed_at`` with ``renew_claim`` while the send
+runs, and ``mark_fired`` / ``mark_failed`` succeed only for the holder of the
+token. ``find_stale_firing`` + ``recover_claim`` let another driver move on a
+lease that stopped being renewed instead of leaving it ``firing`` forever (the
+confirmation timing lives in :mod:`gaia_agent_email.lease`).
 
 All public helpers are pure functions taking a ``DatabaseMixin``-typed first
 argument, mirroring ``action_store``. They never reach into the agent class.
@@ -34,8 +39,10 @@ argument, mirroring ``action_store``. They never reach into the agent class.
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -52,7 +59,10 @@ CREATE TABLE IF NOT EXISTS email_scheduled_jobs (
     status       TEXT NOT NULL DEFAULT 'pending',
     error        TEXT,
     created_at   REAL NOT NULL,
-    fired_at     REAL
+    fired_at     REAL,
+    claimed_at   REAL,
+    claim_id     TEXT,
+    superseded_claim TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_email_scheduled_jobs_due
     ON email_scheduled_jobs(status, due_at);
@@ -69,9 +79,34 @@ STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
 
+_LEASE_COLUMNS = (
+    ("claimed_at", "REAL"),
+    ("claim_id", "TEXT"),
+    ("superseded_claim", "TEXT"),
+)
+
+
 def init_schema(db) -> None:
-    """Create the scheduled-jobs table if it doesn't exist. Idempotent."""
+    """Create the scheduled-jobs table if absent, and add newer columns."""
     db.execute(EMAIL_SCHEDULED_JOBS_DDL)
+    columns = {r["name"] for r in db.query("PRAGMA table_info(email_scheduled_jobs)")}
+    for name, sql_type in _LEASE_COLUMNS:
+        if name in columns:
+            continue
+        try:
+            db.execute(f"ALTER TABLE email_scheduled_jobs ADD COLUMN {name} {sql_type}")
+        except sqlite3.OperationalError as e:
+            # Another connection (the scheduler, a second agent) added it first.
+            if "duplicate column name" not in str(e):
+                raise
+    # A row left firing by a build that recorded no claim time starts its
+    # stale window now, rather than counting as hours old on sight.
+    db.update(
+        "email_scheduled_jobs",
+        {"claimed_at": time.time()},
+        "status = :firing AND claimed_at IS NULL",
+        {"firing": STATUS_FIRING},
+    )
 
 
 def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,6 +121,8 @@ def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
         "error": row["error"],
         "created_at": row["created_at"],
         "fired_at": row["fired_at"],
+        "claimed_at": row["claimed_at"],
+        "claim_id": row["claim_id"],
     }
 
 
@@ -149,38 +186,188 @@ def list_jobs(db, *, status: str = STATUS_PENDING) -> List[Dict[str, Any]]:
     return [_row_to_job(r) for r in rows or ()]
 
 
-def claim_job(db, *, job_id: str) -> bool:
+def claim_job(db, *, job_id: str, now: Optional[float] = None) -> Optional[str]:
     """Atomically transition a job ``pending -> firing``.
 
-    Returns True when this caller won the claim; False when the job was
-    already claimed, fired, cancelled, or doesn't exist. The status guard in
-    the WHERE clause is what makes a job fire exactly once.
+    Returns the claim's ``claim_id`` token when this caller won, else None
+    (already claimed, fired, cancelled, or unknown). The status guard in the
+    WHERE clause is what makes a job fire exactly once. Pass the token to
+    ``renew_claim`` and ``mark_fired`` / ``mark_failed``.
     """
+    claim_id = uuid.uuid4().hex
     affected = db.update(
         "email_scheduled_jobs",
-        {"status": STATUS_FIRING},
+        {
+            "status": STATUS_FIRING,
+            "claimed_at": now if now is not None else time.time(),
+            "claim_id": claim_id,
+            "superseded_claim": None,
+        },
         "job_id = :id AND status = :pending",
         {"id": job_id, "pending": STATUS_PENDING},
+    )
+    return claim_id if affected == 1 else None
+
+
+def renew_claim(db, *, job_id: str, claim_id: str, now: float) -> bool:
+    """Heartbeat a firing claim. False once the claim is no longer ours."""
+    affected = db.update(
+        "email_scheduled_jobs",
+        {"claimed_at": now},
+        "job_id = :id AND status = :firing AND claim_id = :claim",
+        {"id": job_id, "firing": STATUS_FIRING, "claim": claim_id},
     )
     return affected == 1
 
 
-def mark_fired(db, *, job_id: str) -> None:
-    db.update(
-        "email_scheduled_jobs",
-        {"status": STATUS_FIRED, "fired_at": time.time()},
-        "job_id = :id",
-        {"id": job_id},
-    )
+# The holder of a claim may still report its outcome after another driver
+# recovered the job, as long as the job was not claimed again since: the
+# holder knows what really happened, and the recovery only guessed.
+_HOLDER_GUARD = (
+    "job_id = :id AND ((status = :firing AND claim_id = :claim) OR "
+    "(superseded_claim = :claim AND status IN ({statuses})))"
+)
 
 
-def mark_failed(db, *, job_id: str, error: str) -> None:
-    db.update(
+def mark_fired(db, *, job_id: str, claim_id: str) -> bool:
+    """Record a successful fire. False if the claim was taken over meanwhile.
+
+    Also succeeds over a recovery that failed or re-queued the job, so a send
+    that did go out is never left looking failed.
+    """
+    affected = db.update(
         "email_scheduled_jobs",
-        {"status": STATUS_FAILED, "error": error, "fired_at": time.time()},
-        "job_id = :id",
-        {"id": job_id},
+        {
+            "status": STATUS_FIRED,
+            "fired_at": time.time(),
+            "error": None,
+            "claim_id": None,
+            "superseded_claim": None,
+        },
+        _HOLDER_GUARD.format(statuses=":failed, :pending"),
+        {
+            "id": job_id,
+            "firing": STATUS_FIRING,
+            "claim": claim_id,
+            "failed": STATUS_FAILED,
+            "pending": STATUS_PENDING,
+        },
     )
+    return affected == 1
+
+
+def mark_failed(db, *, job_id: str, claim_id: str, error: str) -> bool:
+    """Record a failed fire. False if the claim was taken over meanwhile.
+
+    Replaces a recovery's generic failure with the real error, but never
+    overrides a re-queued job: its re-run decides the outcome.
+    """
+    affected = db.update(
+        "email_scheduled_jobs",
+        {
+            "status": STATUS_FAILED,
+            "error": error,
+            "fired_at": time.time(),
+            "claim_id": None,
+            "superseded_claim": None,
+        },
+        _HOLDER_GUARD.format(statuses=":failed"),
+        {
+            "id": job_id,
+            "firing": STATUS_FIRING,
+            "claim": claim_id,
+            "failed": STATUS_FAILED,
+        },
+    )
+    return affected == 1
+
+
+def _describe_heartbeat(claimed: Optional[float], now: float) -> str:
+    """``at 14:05 on 2026-10-18 (3 hours ago)``, in local time."""
+    if claimed is None:
+        return "at an unknown time"
+    stamp = datetime.fromtimestamp(claimed).strftime("%H:%M on %Y-%m-%d")
+    minutes = max(0, int((now - claimed) // 60))
+    if minutes >= 120:
+        ago = f"{minutes // 60} hours ago"
+    elif minutes >= 1:
+        ago = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    else:
+        ago = "under a minute ago"
+    return f"at {stamp} ({ago})"
+
+
+#: Kinds that are safe to run a second time. A snooze restore only puts a
+#: message back in the inbox; a scheduled send would send twice.
+RERUNNABLE_KINDS = frozenset({KIND_SNOOZE})
+
+
+def find_stale_firing(db, *, now: float, stale_after: float) -> List[Dict[str, Any]]:
+    """Every ``firing`` job whose lease has not been renewed in ``stale_after``."""
+    rows = db.query(
+        "SELECT * FROM email_scheduled_jobs WHERE status = :firing "
+        "AND (claimed_at IS NULL OR claimed_at <= :cutoff)",
+        {"firing": STATUS_FIRING, "cutoff": now - stale_after},
+    )
+    return [_row_to_job(r) for r in rows or ()]
+
+
+def recover_claim(db, job: Dict[str, Any], *, now: float) -> Optional[str]:
+    """Move on from an abandoned lease. Returns ``"requeued"``, ``"failed"``,
+    or None if the lease changed since ``job`` was read (it is alive).
+
+    A snooze goes back to ``pending`` and fires on the next pass. Any other
+    kind, a scheduled send above all, is marked ``failed`` with the reason and
+    never run again: the send may already have gone out. If the original
+    holder turns out to be alive, its own ``mark_fired`` / ``mark_failed``
+    still lands (see ``superseded_claim``).
+    """
+    claim_id, claimed = job["claim_id"], job["claimed_at"]
+    guard = "job_id = :id AND status = :firing AND " + " AND ".join(
+        (
+            "claim_id IS NULL" if claim_id is None else "claim_id = :claim",
+            "claimed_at IS NULL" if claimed is None else "claimed_at = :claimed",
+        )
+    )
+    when = _describe_heartbeat(claimed, now)
+    if job["kind"] in RERUNNABLE_KINDS:
+        values = {"status": STATUS_PENDING, "claimed_at": None}
+        outcome = "requeued"
+    else:
+        values = {
+            "status": STATUS_FAILED,
+            "fired_at": now,
+            "error": (
+                f"interrupted while firing (last heartbeat {when}). Not run "
+                "again because it may already have gone out. Check the Sent "
+                "folder before scheduling it again: if it was sent, this job "
+                "may still change to fired."
+            ),
+        }
+        outcome = "failed"
+    values.update({"claim_id": None, "superseded_claim": claim_id})
+    affected = db.update(
+        "email_scheduled_jobs",
+        values,
+        guard,
+        {
+            "id": job["job_id"],
+            "firing": STATUS_FIRING,
+            "claim": claim_id,
+            "claimed": claimed,
+        },
+    )
+    return outcome if affected == 1 else None
+
+
+def list_recent_failures(db, *, since: float) -> List[Dict[str, Any]]:
+    """Jobs that failed at or after ``since``, newest first."""
+    rows = db.query(
+        "SELECT * FROM email_scheduled_jobs WHERE status = :failed "
+        "AND fired_at >= :since ORDER BY fired_at DESC",
+        {"failed": STATUS_FAILED, "since": since},
+    )
+    return [_row_to_job(r) for r in rows or ()]
 
 
 def cancel_job(db, *, job_id: str) -> bool:
@@ -201,6 +388,7 @@ __all__ = [
     "EMAIL_SCHEDULED_JOBS_DDL",
     "KIND_SCHEDULED_SEND",
     "KIND_SNOOZE",
+    "RERUNNABLE_KINDS",
     "STATUS_CANCELLED",
     "STATUS_FAILED",
     "STATUS_FIRED",
@@ -210,9 +398,13 @@ __all__ = [
     "claim_job",
     "create_job",
     "fetch_due",
+    "find_stale_firing",
     "get_job",
     "init_schema",
     "list_jobs",
+    "list_recent_failures",
     "mark_fired",
     "mark_failed",
+    "recover_claim",
+    "renew_claim",
 ]

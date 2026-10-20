@@ -534,3 +534,115 @@ def test_process_query_trace_and_summary_carry_the_breakdown(_clean_registry):
     )
     # The turn is over, so the SDK no longer reports into it.
     assert agent.chat.llm_call_sink is None
+
+
+def test_a_step_whose_tool_fails_still_records_its_stats(_clean_registry):
+    """The error-recovery path used to skip the step's record, losing its tool and tokens."""
+
+    @tool
+    def flaky_lookup() -> dict:
+        """Look something up, and fail."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "error", "error": "Access denied"}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    replies = [
+        json.dumps({"thought": "look", "tool": "flaky_lookup", "tool_args": {}}),
+        json.dumps({"thought": "done", "answer": "I couldn't look it up."}),
+    ]
+    provider = FakeProvider(
+        replies,
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        finish="stop",
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("What is the value?", max_steps=5)
+
+    records = [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+    assert [r["step"] for r in records] == [1, 2]
+    assert records[0]["tools"][0]["name"] == "flaky_lookup"
+    assert result["timing_summary"]["tool_seconds"] == pytest.approx(
+        sum(t["seconds"] for r in records for t in r["tools"]), abs=1e-3
+    )
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+
+
+def _native_tool_calls(*names):
+    """The envelope LemonadeProvider emits for native ``tool_calls``."""
+    return json.dumps(
+        {
+            "__tool_calls__": [
+                {
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": "{}"},
+                }
+                for i, name in enumerate(names)
+            ],
+            "finish_reason": "tool_calls",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [("flaky_lookup",), ("good_lookup", "flaky_lookup"), ("flaky_lookup",) * 2],
+    ids=["one-failing", "one-of-two-failing", "all-failing"],
+)
+def test_a_step_whose_native_tool_call_fails_still_records_its_stats(
+    _clean_registry, calls
+):
+    """Native ``tool_calls`` (Gemma, Qwen, cloud) take a separate error path."""
+
+    @tool
+    def flaky_lookup() -> dict:
+        """Look something up, and fail."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "error", "error": "Access denied"}
+
+    @tool
+    def good_lookup() -> dict:
+        """Look something up."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "success", "value": 42}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    replies = [
+        _native_tool_calls(*calls),
+        json.dumps({"thought": "done", "answer": "I couldn't look it up."}),
+    ]
+    provider = FakeProvider(
+        replies,
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        finish="stop",
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("What is the value?", max_steps=5)
+
+    records = [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+    assert [r["step"] for r in records] == [1, 2]
+    assert [t["name"] for t in records[0]["tools"]] == list(calls)
+    assert result["timing_summary"]["tool_seconds"] == pytest.approx(
+        sum(t["seconds"] for r in records for t in r["tools"]), abs=1e-3
+    )
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40

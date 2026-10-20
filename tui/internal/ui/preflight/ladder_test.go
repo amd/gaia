@@ -94,8 +94,8 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 		{
 			name:     "404 means the agent is not registered",
 			diagnose: func() Diagnosis { return l.Status("call the agent", 404, `{"detail":"unknown agent"}`) },
-			wantCmd:  "gaia hub install email",
-			wantIn:   "email",
+			wantCmd:  "gaia daemon restart",
+			wantIn:   "gaia hub install email",
 		},
 		{
 			name:     "502 from a dead sidecar points at the sidecar",

@@ -16,6 +16,8 @@ requires-python = ">=3.10"
 # Floor: 0.25.0 is the first core release shipping
 # gaia.agents.tools.path_access (#4656), imported at agent start; 0.22.0 added
 # gaia.agents.registry.get_embedding_model_for_device (#2112).
+# gaia.agents.tools.reasoning_tools first ships in 0.25.1: raise the floor to
+# it in that release, not before, or CI cannot resolve against the in-tree core.
 # tests/test_chat_dependency_floor.py guards this floor.
 #
 # Intentionally bare `amd-gaia` (no `[rag]` extras marker): a plain

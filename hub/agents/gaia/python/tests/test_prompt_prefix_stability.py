@@ -161,7 +161,7 @@ def flagship(monkeypatch, tmp_path):
                 self.file_metadata = {}
                 self.file_to_chunk_indices = {}
 
-            def index_document(self, path, progress_callback=None):
+            def index_document(self, path, progress_callback=None, wait_callback=None):
                 self.indexed_files.add(path)
                 return {"success": True, "file_name": "handbook.md", "num_chunks": 1}
 
@@ -256,7 +256,7 @@ def test_each_request_extends_the_previous_one(flagship):
     turn_two = model.requests[1][0][-1]["content"]
     assert "RECALLED PROCEDURES" in turn_two and "read-the-handbook" in turn_two
     turn_three = [m for m in model.requests[4][0] if m["role"] == "user"][-1]
-    assert "[Indexed documents: handbook.md]" in turn_three["content"]
+    assert "[Indexed documents: handbook.md (" in turn_three["content"]
     assert "Sam works on the safety team" not in model.requests[-1][0][0]["content"]
 
 

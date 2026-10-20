@@ -555,7 +555,12 @@ def relock(skills_root: Path | str) -> RelockResult:
             from scratch and silently discard provenance.
     """
     root = Path(skills_root)
-    lock = SkillLock.load(root)
+    # Held throughout, so an install that lands mid-relock is not dropped by it.
+    with SkillLock.locked(root) as lock:
+        return _relock_locked(root, lock)
+
+
+def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
     updated: list[str] = []
     added: list[str] = []
     removed: list[str] = []

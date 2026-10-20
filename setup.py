@@ -58,6 +58,7 @@ setup(
         "gaia.engineering",
         "gaia.eval.bench",
         "gaia.eval.retrieval",
+        "gaia.eval.memory",
         "gaia.eval.code_retrieval",
         "gaia.installer",
         "gaia.hub",
@@ -93,6 +94,7 @@ setup(
         "gaia.skills.audit",
     ],
     package_data={
+        "gaia.eval.memory": ["scenarios/*.yaml"],
         "gaia.eval": [
             "webapp/*.json",
             "webapp/*.js",
