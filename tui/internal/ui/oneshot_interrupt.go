@@ -179,7 +179,11 @@ func runOneShotInterruptible(
 	canceler, cooperative := c.(client.AgentCanceler)
 	cooperative = cooperative && state == sent
 
-	fmt.Fprintf(sErr, "\n⏹  Stopping the turn (%v) — press Ctrl+C again to quit without waiting\n", sig)
+	again := "send the signal again"
+	if sig == os.Interrupt {
+		again = "press Ctrl+C again"
+	}
+	fmt.Fprintf(sErr, "\n⏹  Stopping the turn (%v) — %s to quit without waiting\n", sig, again)
 
 	var (
 		escalated bool

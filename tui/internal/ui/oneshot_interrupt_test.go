@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -411,5 +412,23 @@ func TestAnUninterruptedTurnIsUnchanged(t *testing.T) {
 	}
 	if strings.TrimSpace(r.out.String()) != "done" {
 		t.Errorf("stdout = %q, want the answer", r.out.String())
+	}
+}
+
+// SIGTERM or SIGHUP has no Ctrl+C behind it — after SIGHUP no terminal at all —
+// so the hint must not tell anyone to press it.
+func TestAStopFromSIGTERMDoesNotSayPressCtrlC(t *testing.T) {
+	agent := &stoppableAgent{events: []interface{}{toolCall}, honourCancel: true}
+	r := startInterruptible(t, agent, 5*time.Second, false)
+	r.waitStderr(t, "bash_execute")
+
+	r.sigs <- syscall.SIGTERM
+	res := r.result(t, 2*time.Second)
+
+	if res.ExitCode != ExitInterrupted {
+		t.Fatalf("exit = %d, want %d", res.ExitCode, ExitInterrupted)
+	}
+	if errW := r.err.String(); strings.Contains(errW, "Ctrl+C") {
+		t.Errorf("a SIGTERM stop told the user to press Ctrl+C:\n%s", errW)
 	}
 }
