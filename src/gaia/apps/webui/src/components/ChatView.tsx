@@ -37,6 +37,7 @@ import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
+import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
@@ -238,6 +239,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     } = useChatStore();
 
     const addNotification = useNotificationStore((s) => s.addNotification);
+    const notificationPanelVisible = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
@@ -258,7 +260,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const attach = useAttachments();
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
-    const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const { policyToast, showPolicyToast, dismissPolicyToast } = usePolicyToast();
+    const [pendingReceiptScroll, setPendingReceiptScroll] = useState<string | null>(null);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -340,7 +343,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // and eliminating extension-triggered "runtime.lastError" floods.
     const streamBufferRef = useRef('');
     const streamRafRef = useRef<number | null>(null);
-    const policyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** Timestamp of the last auto-scroll (used for throttling). */
     const lastScrollRef = useRef(0);
@@ -514,18 +516,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 clearTimeout(scrollTimerRef.current);
                 scrollTimerRef.current = null;
             }
-            if (policyToastTimerRef.current) {
-                clearTimeout(policyToastTimerRef.current);
-                policyToastTimerRef.current = null;
-            }
             if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current);
                 reconnectTimerRef.current = null;
             }
-            setPolicyToast(null);
+            dismissPolicyToast();
             streamBufferRef.current = '';
         };
     }, [sessionId]);
+
+    // Scroll to the receipt once the notification panel has rendered it.
+    useEffect(() => {
+        if (!pendingReceiptScroll || !notificationPanelVisible) return;
+        document
+            .getElementById(policyReceiptAnchor(pendingReceiptScroll))
+            ?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
+        setPendingReceiptScroll(null);
+    }, [pendingReceiptScroll, notificationPanelVisible]);
 
     // Track scroll position — drives both the scroll-to-bottom button and
     // the isNearBottom flag that gates auto-scroll during streaming.
@@ -973,9 +980,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     addNotification(notification);
                     const step = agentEventToStep(event, stepIdRef);
                     if (step) addAgentStep(step);
-                    setPolicyToast({ tool: toolName, receiptId: event.receipt_id });
-                    if (policyToastTimerRef.current) clearTimeout(policyToastTimerRef.current);
-                    policyToastTimerRef.current = setTimeout(() => setPolicyToast(null), 5200);
+                    showPolicyToast({ tool: toolName, receiptId: event.receipt_id });
                     return;
                 }
 
@@ -1909,11 +1914,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 if (!receiptId) return;
                                 setNotificationTypeFilter('policy_alert');
                                 setNotificationPanelVisible(true);
-                                window.setTimeout(() => {
-                                    document
-                                        .getElementById(policyReceiptAnchor(receiptId))
-                                        ?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
-                                }, 80);
+                                setPendingReceiptScroll(receiptId);
                             }}
                         >
                             View receipt
