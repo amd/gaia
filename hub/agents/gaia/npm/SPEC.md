@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.17"`                  |
+| Contract version   | `API_VERSION = "2.18"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,7 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`) is optional.
+`documents`, `memory`) is optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -296,6 +296,14 @@ file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
 field, so probe `/version` before sending it.
+
+`memory` (contract ≥ 2.18) is `"on"`, `"private"` (a private chat) or `"off"`
+(memory turned off in the caller's settings). Under `"private"` or `"off"` the
+turn saves nothing to memory, including the errors and lessons the agent saves
+on its own. A retained session keeps the last value, so send it every turn;
+omit it to leave memory as the agent has it. `"on"` never turns memory on when
+the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
+`422` the field.
 
 ```json
 {
