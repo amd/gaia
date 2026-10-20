@@ -21,6 +21,7 @@ interface ModelState {
     /** Friendly names the backend gave, by model id. */
     names: Record<string, string>;
     refresh: () => Promise<void>;
+    retryNow: () => void;
     select: (model: string) => Promise<void>;
     queue: (model: string | null) => void;
     applyQueued: () => Promise<void>;
@@ -30,8 +31,26 @@ interface ModelState {
 
 const RESTORE_RETRY_MS = 5_000;
 const RESTORE_RETRIES = 24;
+/** A failed read is retried, doubling up to the cap: the backend may still be starting. */
+export const MODEL_RETRY_INITIAL_MS = 1_000;
+export const MODEL_RETRY_MAX_MS = 30_000;
 let restoreRetries = 0;
 let namesRequested = false;
+let failRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let failRetryMs = MODEL_RETRY_INITIAL_MS;
+
+function clearFailRetry(): void {
+    if (failRetryTimer) clearTimeout(failRetryTimer);
+    failRetryTimer = null;
+}
+
+/** Forget pending retries and backoff, so each test starts from a fresh launch. */
+export function resetModelRetryForTests(): void {
+    clearFailRetry();
+    failRetryMs = MODEL_RETRY_INITIAL_MS;
+    restoreRetries = 0;
+    namesRequested = false;
+}
 
 /** Local models' friendly names, read once so every surface names a model as the chip does. */
 async function loadLocalNames(remember: ModelState['rememberNames']): Promise<void> {
@@ -58,6 +77,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
         }
         try {
             const active = await api.getActiveModel();
+            clearFailRetry();
+            failRetryMs = MODEL_RETRY_INITIAL_MS;
             const r = active.restore;
             // The model server is still starting; the saved model is checked once it answers.
             if (r?.status === 'pending' && restoreRetries < RESTORE_RETRIES) {
@@ -73,7 +94,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
             });
         } catch (err) {
             set({ error: err instanceof Error ? err.message : String(err) });
+            // Without this the chip says "Model" for the whole session when the
+            // window loaded before the backend listened.
+            if (!failRetryTimer) {
+                failRetryTimer = setTimeout(() => { failRetryTimer = null; void get().refresh(); }, failRetryMs);
+                failRetryMs = Math.min(failRetryMs * 2, MODEL_RETRY_MAX_MS);
+            }
         }
+    },
+    /** Read the model now if the last read failed (the backend just became reachable). */
+    retryNow: () => {
+        if (!failRetryTimer) return;
+        clearFailRetry();
+        void get().refresh();
     },
     select: async (model) => {
         const active = await api.selectModel(model);
