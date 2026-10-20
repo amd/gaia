@@ -488,20 +488,25 @@ suggestion costs one line the model can ignore.
 - **Matching.** The same embedder as skill-body selection scores
   `name: first line of description` against the current message (cut at 4,000
   characters). A skill is suggested when it scores at least **0.30** and within
-  **0.05** of the best-scoring skill, loaded skills included — so a request the
+  **0.02** of the best-scoring skill, loaded skills included — so a request the
   loaded skill already covers does not pull in a weaker neighbour. At most
-  three are suggested by score; each one's unloaded `pairs_with` companions
-  follow it.
-- **Calibration.** 37 invented requests over the 16 hub skills, 7 of which no
-  skill should match (`tests/fixtures/skills/skill_suggestion_cases.json`).
-  With `embeddinggemma-300m`, precision 1.00 and recall 0.94, and no suggestion
-  on any of the 7. The best match for each positive scored 0.30–0.67; no
-  negative scored above 0.26. The scores depend on the embedding model:
-  `nomic-embed-text-v2` measured 0.71 / 0.78 at the same settings, so
-  recalibrate before changing the embedder. Run
+  three are suggested by score. A suggested skill's unloaded `pairs_with`
+  companions follow it only when they score at least **0.40** themselves:
+  pairing is mutual, so `office-docs` pairs with five skills, and adding
+  companions unconditionally cut precision from 0.84 to 0.52.
+- **Calibration.** 54 invented requests over the 20 hub skills
+  (`tests/fixtures/skills/skill_suggestion_cases.json`). 12 of them should get
+  no suggestion, and 5 of those are near misses such as *"what is a pivot
+  table?"*. With `embeddinggemma-300m`: precision 0.84, recall 0.93, and 3 of
+  the 12 negatives got a suggestion. All 3 are near misses scoring 0.35–0.44,
+  as high as real requests (the weakest best match on a positive is 0.30), so
+  no threshold removes them without losing recall. Every hub skill needs
+  labelled requests; the coverage test names any that has none. The scores
+  depend on the embedding model: `nomic-embed-text-v2` measured far worse on
+  the first 37 requests, so recalibrate before changing the embedder. Run
   `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k calibration`
-  with `LEMONADE_BASE_URL` naming a running server. It sends embedding
-  requests only, which load the embedding model if it is not loaded already.
+  with `LEMONADE_BASE_URL` naming a running server. It only posts to
+  `/embeddings`, which loads the embedding model if it is not loaded already.
 - **Cost.** Each description is embedded once and cached by content. A turn
   costs one query embedding.
 - **No embedder.** The turn gets no suggestion and selection pauses for a
