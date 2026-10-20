@@ -465,6 +465,53 @@ With nobody to answer the prompt, the call is refused.
 
 Tunable: `GAIA_SKILL_DISCOVERY` (`0` hides the list).
 
+#### Suggested skills
+
+Smaller local models often skip the catalogue: they load nothing, or only the
+first of two skills a request needs. So at the start of each turn the flagship
+scores the user's message against every listed skill and, when some clearly fit
+and are not loaded yet, adds one line to that turn's context, beside the
+current time at the top of the user's message:
+
+```
+Skills that match this request and are not loaded yet: transcribe-meeting,
+summarize — load them with load_skill before starting.
+```
+
+The line goes in the user's message, not the system prompt. A system prompt
+that changes from turn to turn makes the server re-read the whole conversation.
+
+It suggests and never loads — the model still decides. The per-turn word
+matcher the catalogue replaced loaded the right skill on 0 of 24 tasks; a wrong
+suggestion costs one line the model can ignore.
+
+- **Matching.** The same embedder as skill-body selection scores
+  `name: first line of description` against the current message (cut at 4,000
+  characters). A skill is suggested when it scores at least **0.30** and within
+  **0.05** of the best-scoring skill, loaded skills included — so a request the
+  loaded skill already covers does not pull in a weaker neighbour. At most
+  three are suggested by score; each one's unloaded `pairs_with` companions
+  follow it.
+- **Calibration.** 37 invented requests over the 16 hub skills, 7 of which no
+  skill should match (`tests/fixtures/skills/skill_suggestion_cases.json`).
+  With `embeddinggemma-300m`, precision 1.00 and recall 0.94, and no suggestion
+  on any of the 7. The best match for each positive scored 0.30–0.67; no
+  negative scored above 0.26. The scores depend on the embedding model:
+  `nomic-embed-text-v2` measured 0.71 / 0.78 at the same settings, so
+  recalibrate before changing the embedder. Run
+  `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k calibration`
+  with `LEMONADE_BASE_URL` naming a running server. It sends embedding
+  requests only, which load the embedding model if it is not loaded already.
+- **Cost.** Each description is embedded once and cached by content. A turn
+  costs one query embedding.
+- **No embedder.** The turn gets no suggestion and selection pauses for a
+  minute; the reason is logged at debug level. It is never an error, because
+  the catalogue still lists every skill. The same applies with memory off.
+
+Tunable: `GAIA_SKILL_SUGGEST` (`0` turns it off, `1` forces it on) or
+`GaiaAgentConfig(skill_suggestions=False)`; `skill_suggestion_threshold` sets
+the floor. Turning the catalogue off turns suggestions off too.
+
 ## Learned changes: the effective skill vs. the shipped one
 
 A skill you install is a **starting point**, not a fixed contract. An agent can
