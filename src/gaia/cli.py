@@ -403,12 +403,14 @@ class GaiaCliClient:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
             from gaia.llm.providers.lemonade import classify_lemonade_exception
+            from gaia.llm.surface_hints import surface_wording
 
             classified = classify_lemonade_exception(e)
             error_message = (
-                f"❌ Error: {classified.user_message}\n   Details: {e}"
+                f"❌ Error: {surface_wording(classified.user_message, 'cli')}"
+                f"\n   Details: {surface_wording(str(e), 'cli')}"
                 if classified
-                else f"❌ Error: {e}"
+                else f"❌ Error: {surface_wording(str(e), 'cli')}"
             )
             self.log.error(error_message)
             print(error_message)
@@ -475,11 +477,16 @@ class GaiaCliClient:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
             from gaia.llm.providers.lemonade import classify_lemonade_exception
+            from gaia.llm.surface_hints import surface_wording
 
             self.log.error(f"Error in chat: {str(e)}")
             classified = classify_lemonade_exception(e)
-            detail = f"\n   Details: {e}" if classified else ""
-            print(f"❌ Error: {classified.user_message if classified else e}{detail}")
+            raw = surface_wording(str(e), "cli")
+            detail = f"\n   Details: {raw}" if classified else ""
+            message = (
+                surface_wording(classified.user_message, "cli") if classified else raw
+            )
+            print(f"❌ Error: {message}{detail}")
             sys.exit(1)
 
 

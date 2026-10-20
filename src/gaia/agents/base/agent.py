@@ -47,6 +47,7 @@ from gaia.agents.base.completion import (
     caveated_answer,
     incomplete_answer,
     mentioned_paths,
+    saved_before_error,
 )
 from gaia.agents.base.console import (
     AgentConsole,
@@ -8550,7 +8551,7 @@ Do NOT wrap conversational replies in JSON.
         }
 
     def _gate_unsealed_answer(
-        self, answer: Optional[str]
+        self, answer: Optional[str], model_failed: bool = False
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -8560,9 +8561,15 @@ Do NOT wrap conversational replies in JSON.
         nothing is unverified: the caller's max-steps fallback owns that text.
         A non-empty *answer* always stays ahead of the report: it is often the
         only place the turn's findings exist.
+
+        *model_failed*: a model call ended the turn, so the model never had the
+        chance to read its writes back. Files a write tool reported saved are
+        listed as saved instead of calling the whole turn unconfirmed.
         """
         self._check_extraction_sources()
-        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
+        gaps = self._completion_evidence.gaps(
+            answer or "", _claims_file_write, readback=not model_failed
+        )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
@@ -8578,6 +8585,9 @@ Do NOT wrap conversational replies in JSON.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
             answer += "\n\n" + inventory
+        saved = self._completion_evidence.written_files() if model_failed else []
+        if saved and answer:
+            answer += "\n\n" + saved_before_error(saved)
         return answer, gaps
 
     #: What warm_up primes with. Short and fixed, so the priming call itself
@@ -9003,6 +9013,8 @@ Do NOT wrap conversational replies in JSON.
         loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
+        # The model call failed, so the model never got to check its own work.
+        model_call_failed = False
         # Model-call retries this turn: client-level (inside one request) and
         # step-level (the agent waiting and asking again), plus whether the
         # model stayed unreachable. Reported on the result.
@@ -9607,6 +9619,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9683,6 +9696,7 @@ Do NOT wrap conversational replies in JSON.
                             loop_break_answer_unprinted = True
                             break
 
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9792,6 +9806,7 @@ Do NOT wrap conversational replies in JSON.
                         error_msg = f"LLM Server Connection Failed: {str(e)}"
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -9877,6 +9892,7 @@ Do NOT wrap conversational replies in JSON.
 
                         # Either context-overflow after trim, or unrelated.
                         # Give up gracefully.
+                        model_call_failed = True
                         self.error_history.append(
                             {
                                 "step": steps_taken,
@@ -11694,7 +11710,9 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
+            final_answer, completion_gaps = self._gate_unsealed_answer(
+                final_answer, model_failed=model_call_failed
+            )
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context

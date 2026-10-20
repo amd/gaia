@@ -833,12 +833,15 @@ class CompletionEvidence:
         answer: str,
         claims_file_write: Callable[[str], bool],
         soft: list[str] | None = None,
+        readback: bool = True,
     ) -> list[str]:
         """Missing work that makes the turn incomplete.
 
         With no save asked for, nothing written and no "I/we saved", a save
         claim may be information ("downloads are saved to ~/Downloads"); its
         gap goes to *soft*, worth one correction but never an incomplete turn.
+        ``readback=False`` drops the read-it-back check, for a turn the model
+        call ended before the model could read anything back.
         """
         required = {self.key(path) for path in self.requested}
         # "Save it as notes.md in my Documents folder" names the file, not its
@@ -976,7 +979,7 @@ class CompletionEvidence:
                 "The requested output file has no recorded successful write; an earlier side-effect file does not fulfill that save."
             )
         pathless_save = not required and (self.save_requested or claim_without_path)
-        for item in self.files.values():
+        for item in self.files.values() if readback else ():
             # Requested or claimed outputs need readback; an ordinary edit does not.
             data_output = (
                 pathless_save
@@ -1095,6 +1098,13 @@ def caveated_answer(answer: str | None, gaps: list[str]) -> str:
     return f"{answer.rstrip()}\n\nI couldn't confirm all of this:\n\n" + "\n".join(
         f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps
     )
+
+
+def saved_before_error(paths: list[str]) -> str:
+    """Name the files a turn saved before a failed model call ended it."""
+    if len(paths) == 1:
+        return f"Saved before the error: `{paths[0]}`."
+    return "Saved before the error:\n\n" + "\n".join(f"- `{p}`" for p in paths)
 
 
 def incomplete_answer(gaps: list[str]) -> str:

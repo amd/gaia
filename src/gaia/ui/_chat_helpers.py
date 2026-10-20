@@ -2002,19 +2002,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _agent_ui_wording(text: str) -> str:
-    """Swap the agent's TUI-only "how to switch model" advice for the Agent UI's.
+    """Swap the agent's TUI-only provider advice for the Agent UI's own.
 
     The agent loop can't tell which front-end it serves (the flagship sidecar
-    answers both), so the Agent UI rewrites the one sentence it owns here.
+    answers both), so the Agent UI rewrites the sentences it owns here.
     """
-    from gaia.llm.providers.lemonade import (
-        AGENT_UI_MODEL_SWITCH_HINT,
-        TUI_MODEL_SWITCH_HINT,
-    )
+    from gaia.llm.surface_hints import surface_wording
 
-    if not text or TUI_MODEL_SWITCH_HINT not in text:
-        return text
-    return text.replace(TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT)
+    return surface_wording(text, "agent_ui")
 
 
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
@@ -3542,9 +3537,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # AgentSDK that wrap the original LemonadeError.
                 classified = _classify_chat_exception(e)
                 if classified is not None:
-                    result_holder["error"] = classified.user_message
+                    result_holder["error"] = _agent_ui_wording(classified.user_message)
                 else:
-                    result_holder["error"] = str(e)
+                    result_holder["error"] = _agent_ui_wording(str(e))
             finally:
                 if "inbox" in inbox_holder:
                     untaken = followups.close_inbox(
