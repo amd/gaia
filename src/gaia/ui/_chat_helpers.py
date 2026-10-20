@@ -55,6 +55,7 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     confirmations_supported,
     documents_supported,
+    memory_supported,
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -1613,6 +1614,13 @@ def _memory_off(session: dict, db) -> bool:
     return bool(session.get("private", 0)) or not memory_enabled(db)
 
 
+def _memory_mode(session: dict, db) -> str:
+    """*session*'s memory mode for a relayed sidecar: on, private, or off."""
+    if bool(session.get("private", 0)):
+        return "private"
+    return "on" if memory_enabled(db) else "off"
+
+
 def _apply_memory_state(agent, session: dict, db) -> None:
     """Set *agent*'s memory-off state for this turn from *session* and Settings.
 
@@ -1835,12 +1843,17 @@ def _dispatch_sidecar_query(
     agent_type: str,
     session_id: str | None = None,
     documents: list | None = None,
+    memory: str = "on",
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
     the turn with an upgrade message rather than answer without them.
+
+    *memory* is the chat's memory mode (:func:`_memory_mode`). Likewise, a
+    private or memory-off turn is stopped rather than sent to a sidecar that
+    keeps memory but is too old to be told not to save.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1890,6 +1903,16 @@ def _dispatch_sidecar_query(
             )
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
+
+    relayed_memory = None
+    if profile.min_memory_api_version is not None:
+        if memory_supported(profile, handle.api_version):
+            relayed_memory = memory
+        elif memory != "on":
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.memory_upgrade_message}
+            )
+            return
 
     proxy = handle.proxy()
 
@@ -1983,6 +2006,7 @@ def _dispatch_sidecar_query(
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
+        memory=relayed_memory,
     )
 
 
@@ -2240,9 +2264,16 @@ def _agent_location(agent) -> InferenceLocation | None:
 
 
 def _turn_summary(
-    sse_handler, agent, message: str, answer_event: Optional[dict]
+    sse_handler,
+    agent,
+    message: str,
+    answer_event: Optional[dict],
+    relayed_location: InferenceLocation | None = None,
 ) -> dict:
     """The side rail's account of this turn (see :mod:`gaia.ui.turn_summary`).
+
+    *relayed_location* is where a turn with no in-process agent ran: a sidecar
+    turn answered by the model the chat named.
 
     A failure here becomes an ``error`` the rail shows, so it never costs the
     user the answer it describes.
@@ -2250,7 +2281,9 @@ def _turn_summary(
     try:
         evidence = getattr(agent, "_completion_evidence", None)
         return sse_handler.turn_ledger.summary(
-            location=_agent_location(agent) if agent is not None else None,
+            location=(
+                _agent_location(agent) if agent is not None else relayed_location
+            ),
             written_files=evidence.written_files() if evidence is not None else (),
             display_names=upload_display_names(message),
             usage=answer_event,
@@ -3345,6 +3378,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
+                        memory=_memory_mode(session, db),
                     )
                     return
 
@@ -4024,7 +4058,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             if inference_stats is not None and model_id:
                 inference_stats["measured_model"] = model_id
             turn_summary = _turn_summary(
-                sse_handler, result_holder.get("agent"), request.message, answer_event
+                sse_handler,
+                result_holder.get("agent"),
+                request.message,
+                answer_event,
+                # A relayed turn ran on the model it sent; with none, the sidecar picked.
+                relayed_location=turn_location if model_id else None,
             )
 
             msg_id = db.upsert_message(

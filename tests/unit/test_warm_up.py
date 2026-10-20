@@ -162,3 +162,20 @@ def test_memory_upkeep_moves_into_the_warm_up_and_runs_once():
     assert steps[0] == "Tidying memory"
     # The first real query must not run it again.
     assert agent._memory_post_init_pending is False  # pylint: disable=protected-access
+
+
+def test_warm_up_leaves_memory_upkeep_pending_for_a_private_agent():
+    class _MemoryAgent(MemoryMixin, _Agent):
+        runs = 0
+
+        def _run_memory_post_init(self):
+            type(self).runs += 1
+
+    agent = _MemoryAgent()
+    agent._incognito = True  # pylint: disable=protected-access
+    agent._memory_post_init_pending = True  # pylint: disable=protected-access
+
+    agent.warm_up()
+
+    assert _MemoryAgent.runs == 0
+    assert agent._memory_post_init_pending is True  # pylint: disable=protected-access

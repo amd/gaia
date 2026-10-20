@@ -213,8 +213,12 @@ interface ChatState {
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
     draftPermissionMode: PermissionMode;
+    /** The user picked the draft mode on the chip; the configured default no longer moves it. */
+    draftPermissionModeChosen: boolean;
     /** The mode a new chat starts in: `full_access` in config, else ask. */
     defaultPermissionMode: PermissionMode;
+    /** The backend has answered with the configured default; until then it is a guess. */
+    defaultPermissionModeKnown: boolean;
     /** Library documents picked with no chat open; the next new chat starts with them. */
     draftDocumentIds: string[];
     sidebarOpen: boolean;
@@ -236,9 +240,12 @@ interface ChatState {
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
+    /** The user's pick on the new-chat chip. */
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
+    /** After a chat is created: the next draft starts from the default again. */
+    resetDraftPermissionMode: () => void;
     addDraftDocuments: (ids: string[]) => void;
     removeDraftDocument: (id: string) => void;
     clearDraftDocuments: () => void;
@@ -470,7 +477,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
+    draftPermissionModeChosen: false,
     defaultPermissionMode: 'ask',
+    defaultPermissionModeKnown: false,
     draftDocumentIds: [],
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
@@ -511,13 +520,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(show ? { showMemoryDashboard: true, showSchedules: false } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
         set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
-    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode }),
+    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode, draftPermissionModeChosen: true }),
     setDefaultPermissionMode: (mode) =>
         set((state) => ({
             defaultPermissionMode: mode,
+            defaultPermissionModeKnown: true,
+            // A pick the user made stays, even when it matches the old guess.
             draftPermissionMode:
-                state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
+                !state.draftPermissionModeChosen && state.draftPermissionMode === state.defaultPermissionMode
+                    ? mode
+                    : state.draftPermissionMode,
         })),
+    resetDraftPermissionMode: () =>
+        set((state) => ({ draftPermissionMode: state.defaultPermissionMode, draftPermissionModeChosen: false })),
     addDraftDocuments: (ids) =>
         set((state) => {
             const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));
