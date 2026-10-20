@@ -42,7 +42,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
@@ -79,7 +79,8 @@ AGENT_ID = "gaia"
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
-API_VERSION = "2.17"
+#: 2.18 added ``/query``'s ``memory`` field, so a private chat saves nothing.
+API_VERSION = "2.18"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -178,6 +179,18 @@ class QueryRequest(_Strict):
             "folder, and indexed before the turn runs. Send the full set every "
             "turn: files already indexed in a retained session are skipped, so "
             "one attached mid-conversation is picked up on the next turn."
+        ),
+    )
+
+    memory: Optional[Literal["on", "private", "off"]] = Field(
+        default=None,
+        description=(
+            "Whether this turn may save to memory (contract >= 2.18): 'on', "
+            "'private' (a private chat) or 'off' (memory turned off in the "
+            "caller's settings). With 'private' or 'off' nothing is written, "
+            "including the errors and lessons the agent saves on its own. Send "
+            "it every turn: a retained session keeps the last value. Omit it to "
+            "leave memory as the agent has it."
         ),
     )
 
@@ -584,6 +597,22 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             },
         }
     )
+
+
+def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
+    """Turn *agent*'s memory writes off or back on for this turn (>= 2.18).
+
+    "on" never re-enables memory the agent itself switched off (no store, or
+    ``GAIA_MEMORY_DISABLED``).
+    """
+    if mode is None or not hasattr(agent, "_incognito"):
+        return
+    if mode == "on":
+        if getattr(agent, "_memory_store", None) is not None:
+            agent._incognito = False
+        return
+    agent._incognito = True
+    agent._incognito_reason = "private" if mode == "private" else "memory_off"
 
 
 def build_query_agent(**config_kwargs: Any):
@@ -1109,6 +1138,7 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        _apply_memory_mode(agent, request.memory)
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
