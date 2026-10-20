@@ -25,8 +25,10 @@ const DEFAULT_FORCE_WAIT_MS = 1000;
 const LIST_TIMEOUT_MS = 5000;
 const POLL_MS = 50;
 
+// The daemon by its module or CLI verb; Lemonade by its executable's name,
+// so a tool that merely mentions Lemonade (--lemonade-url) is still stopped.
 const SHARED_SERVER_PATTERN =
-  /(?:-m\s+gaia\.daemon\b)|(?:\bgaia(?:\.exe)?["']?\s+daemon\b)|lemonade|\blemond\b/i;
+  /(?:-m\s+gaia\.daemon\b)|(?:\bgaia(?:\.exe)?["']?\s+daemon\b)|(?:^|[\\/"'\s])(?:lemonade|lemonade-server|lemonadeserver|lemonade-tray|lemond)(?:\.exe)?(?=["'\s]|$)/i;
 
 /** True for a command line that belongs to a server shared by every GAIA client. */
 function isSharedServer(command) {
@@ -182,6 +184,7 @@ async function killProcessTree(target, opts = {}) {
     log = console.log,
     logError = console.error,
     label = "process",
+    platform = process.platform,
   } = opts;
   const proc = target && typeof target === "object" ? target : null;
   const pid = proc ? proc.pid : target;
@@ -256,7 +259,13 @@ async function killProcessTree(target, opts = {}) {
 
   if (await waitAllGone(all(), graceMs)) return { killed, survivors: [] };
 
-  if (!tableError) {
+  if (platform === "win32") {
+    // SIGTERM was already TerminateProcess, so a member still listed is one
+    // that could not be ended or a pid already reused: only the root, through
+    // its handle, is worth a second try. Skipping the re-read also keeps a
+    // slow PowerShell from eating the quit's time limit.
+    members.clear();
+  } else if (!tableError) {
     try {
       absorb(await readTable());
     } catch (err) {

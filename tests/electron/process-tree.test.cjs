@@ -149,6 +149,33 @@ describe("killProcessTree on real processes", () => {
 
   // On Windows SIGTERM is TerminateProcess, so nothing survives to the SIGKILL
   // pass these two tests are about.
+  test("on Windows the SIGKILL pass re-reads nothing and targets only the root", async () => {
+    const root = await startTree([], 1);
+    const bystander = await startTree([], 1);
+    let reads = 0;
+    const listProcesses = async () => {
+      reads += 1;
+      return [
+        { pid: root.child.pid, ppid: process.pid, command: "root", started: null },
+        { pid: bystander.child.pid, ppid: root.child.pid, command: "tool", started: null },
+      ];
+    };
+    // Pretend SIGTERM changed nothing, as for a process Windows refused to end.
+    const realKill = root.child.kill.bind(root.child);
+    root.child.kill = (sig) => (sig === "SIGKILL" ? realKill("SIGKILL") : true);
+    const killSpy = jest.spyOn(process, "kill");
+    try {
+      await killProcessTree(root.child, { ...quiet, graceMs: 200, listProcesses, platform: "win32" });
+      const sigkills = killSpy.mock.calls.filter(([, sig]) => sig === "SIGKILL").map(([p]) => p);
+      expect(reads).toBe(1);
+      expect(sigkills).not.toContain(bystander.child.pid);
+      expect(await waitFor(() => root.child.exitCode !== null || root.child.signalCode !== null)).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+      bystander.child.kill("SIGKILL");
+    }
+  });
+
   posixOnly("a member whose pid runs something else by the SIGKILL pass is spared", async () => {
     const root = await startTree(["--ignore-term"], 1);
     const stranger = await startTree(["--ignore-term"], 1);
@@ -250,6 +277,10 @@ describe("descendantsFromTable", () => {
     ['"C:\\venv\\Scripts\\gaia.exe" daemon start', true],
     ["/usr/bin/lemond ./ --port 13305", true],
     ["C:\\Program Files\\Lemonade\\LemonadeServer.exe --silent", true],
+    ['"C:\\Users\\me\\AppData\\Local\\lemonade_server\\bin\\lemonade-server.exe" serve', true],
+    ["lemonade-tray.exe", true],
+    ["node mcp.js --lemonade-url http://localhost:13305", false],
+    ["C:\\tools\\lemonade-helpers\\mcp.exe --stdio", false],
     ["python -m gaia chat --ui --ui-port 4321", false],
     ["node mcp-server-daemonize.js", false],
     ["", false],
