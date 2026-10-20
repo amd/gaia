@@ -814,6 +814,17 @@ _FAILED_CALL_ANSWER_PROMPT = (
     "failure itself is reported after your answer; don't repeat it."
 )
 
+# Added when the closing reply called a tool anyway and is asked again, tools gone.
+_NO_TOOLS_RETRY_NOTE = (
+    "Tools are no longer available. Reply with your final answer as plain "
+    "text only, using what the results above already show."
+)
+
+
+class _NotAnAnswer(ValueError):
+    """The closing reply came back, but it was a tool call or nothing."""
+
+
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
@@ -6826,10 +6837,40 @@ Do NOT wrap conversational replies in JSON.
         """Ask for the final answer on the way out of the loop, no tool calls.
 
         Same model path and tools as the loop (streaming or not), plus
-        ``tool_choice="none"``. Returns the answer, or ``None`` when the user
-        pressed Stop. Raises when the call fails or the reply is not an answer;
-        the caller says why.
+        ``tool_choice="none"``. A model that ignores that and calls a tool, or
+        replies with nothing, is asked once more with no tools offered at all.
+        Returns the answer, or ``None`` when the user pressed Stop. Raises when
+        the call fails or neither reply is an answer; the caller says why.
         """
+        try:
+            return self._closing_answer_once(messages, conversation, instruction, step)
+        except _NotAnAnswer as first:
+            logger.info(
+                "Closing reply was not an answer (%s); retrying without tools", first
+            )
+            try:
+                return self._closing_answer_once(
+                    messages,
+                    conversation,
+                    f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
+                    step,
+                    offer_tools=False,
+                )
+            except _NotAnAnswer:
+                raise first from None
+            except Exception as second:  # noqa: BLE001 - report the first reason
+                logger.warning("Closing retry without tools failed: %s", second)
+                raise first from None
+
+    def _closing_answer_once(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        instruction: str,
+        step: int,
+        offer_tools: bool = True,
+    ) -> Optional[str]:
+        """One closing request; see :meth:`_closing_answer`."""
         cancel_event = getattr(self, "_cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeError("the request was cancelled")
@@ -6842,7 +6883,7 @@ Do NOT wrap conversational replies in JSON.
             + [{"role": "user", "content": instruction}]
         )
         # Tool history needs the tools on some providers; the model may not call one.
-        tools = self._openai_tools
+        tools = self._openai_tools if offer_tools else None
         no_calls = {"tool_choice": "none"} if tools else {}
         # The same effort as the loop: a change rewrites the prompt's start.
         no_calls.update(self._reasoning_request_kwargs())
@@ -6896,7 +6937,7 @@ Do NOT wrap conversational replies in JSON.
             r"<think>.*?</think>", "", response or "", flags=re.DOTALL
         ).strip()
         if not response:
-            raise ValueError("the model returned an empty reply")
+            raise _NotAnAnswer("the model returned an empty reply")
         parsed = self._parse_llm_response(response)
         answer = parsed.get("answer")
         if not isinstance(answer, str):
@@ -6905,12 +6946,12 @@ Do NOT wrap conversational replies in JSON.
         if not requested and parsed.get("tool"):
             requested = [parsed["tool"]]
         if requested or _unfinished_answer_kind(answer) == "tool_markup":
-            raise ValueError(
+            raise _NotAnAnswer(
                 f"the model asked to run {', '.join(requested) or 'another tool'} "
                 "instead of answering"
             )
         if not answer.strip():
-            raise ValueError("the model's reply had no answer in it")
+            raise _NotAnAnswer("the model's reply had no answer in it")
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 

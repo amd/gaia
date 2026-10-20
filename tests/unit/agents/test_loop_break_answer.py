@@ -405,7 +405,9 @@ def test_failed_repeats_on_the_legacy_path_keep_the_research():
     ids=["call-raises", "empty-reply", "asks-for-a-tool", "calls-a-tool-anyway"],
 )
 def test_failed_closing_call_returns_the_notice_and_why(agent, caplog, reply, reason):
-    _stub_chat(agent, *_repeat_then(reply))
+    # A reply that is not an answer is asked for once more, without tools.
+    retry = () if isinstance(reply, BaseException) else (reply,)
+    _stub_chat(agent, *_repeat_then(reply, *retry))
 
     with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
         result = agent.process_query("fix the loader and run the tests")
@@ -420,6 +422,30 @@ def test_failed_closing_call_returns_the_notice_and_why(agent, caplog, reply, re
         r.levelno == logging.WARNING and reason in r.getMessage()
         for r in caplog.records
     )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        json.dumps({"thought": "again", "tool": _TOOL, "tool_args": {"path": "."}}),
+        _native_call(_CALLS + 1),
+        "",
+    ],
+    ids=["asks-for-a-tool", "calls-a-tool-anyway", "empty-reply"],
+)
+def test_a_closing_tool_call_is_retried_without_tools(agent, reply):
+    """``tool_choice="none"`` is a request some local servers ignore."""
+    chat = _stub_chat(agent, *_repeat_then(reply, _answer(_ANSWER)))
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    assert result["result"].startswith(_ANSWER)
+    assert "couldn't be written" not in result["result"]
+    calls = _model_calls(agent, chat)
+    assert len(calls) == _CALLS + 2
+    retry = calls[-1].kwargs
+    assert retry["tools"] is None and "tool_choice" not in retry
+    assert "no longer available" in retry["messages"][-1]["content"]
 
 
 # ---------------------------------------------------------------------------
