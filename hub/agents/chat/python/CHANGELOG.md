@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A `run_python` snippet or `execute_python_file` script whose code only reads
+  files no longer marks the turn's undo as incomplete, unless files changed in
+  the folders it ran in. A snippet is recorded by its docstring or first
+  comment line instead of its first line of code. Uses `may_write` on
+  `note_untracked`, new in core 0.25.1.
 - gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
   agent chooses how hard the model reasons for the rest of a request; each new
   message starts again at the default. It registers per agent and only on a

@@ -16,6 +16,7 @@ import ctypes
 import functools
 import logging
 import os
+import re
 import signal
 import subprocess
 import time
@@ -344,6 +345,229 @@ def files_written_since(
                 if len(found) >= _REPORT_MAX_FILES:
                     return sorted(found), False
     return sorted(found), True
+
+
+def files_written_by(
+    job: PythonJob,
+    watch: Iterable[os.PathLike | str],
+    started: float,
+    ignore: Iterable[os.PathLike | str] = (),
+) -> List[str]:
+    """Files under *watch* changed since *started* while *job* ran.
+
+    A killed job was already searched; a bounded search that stops early
+    reports what it found.
+    """
+    if job.stopped:
+        return list(job.written)
+    return files_written_since(watch, started, ignore)[0]
+
+
+# ── does a script write files? ──────────────────────────────────────────────
+
+#: Methods that write wherever they are called from.
+_WRITE_METHODS = frozenset(
+    {
+        "write_text",
+        "write_bytes",
+        "save",
+        "savefig",
+        "savez",
+        "savez_compressed",
+        "savetxt",
+        "tofile",
+        "to_excel",
+        "to_parquet",
+        "to_pickle",
+        "to_feather",
+        "to_hdf",
+        "to_sql",
+        "to_stata",
+        "to_orc",
+        "to_file",
+        "touch",
+        "mkdir",
+        "makedirs",
+        "rmdir",
+        "removedirs",
+        "unlink",
+        "rmtree",
+        "copy2",
+        "copyfile",
+        "copytree",
+        "chmod",
+        "chown",
+        "utime",
+        "truncate",
+        "symlink_to",
+        "hardlink_to",
+        "extractall",
+        "urlretrieve",
+        "make_archive",
+        "unpack_archive",
+    }
+)
+
+#: Methods that write only when given a destination (``df.to_csv()`` returns text).
+_WRITE_WITH_TARGET = frozenset(
+    {"to_csv", "to_json", "to_html", "to_latex", "to_markdown", "to_xml", "to_string"}
+)
+_TARGET_KEYWORDS = frozenset({"path_or_buf", "buf", "path", "path_or_buffer"})
+
+#: ``os`` functions that change files or start a process.
+_OS_WRITES = frozenset(
+    {
+        "remove",
+        "unlink",
+        "rename",
+        "renames",
+        "replace",
+        "mkdir",
+        "makedirs",
+        "rmdir",
+        "removedirs",
+        "chmod",
+        "chown",
+        "lchown",
+        "link",
+        "symlink",
+        "truncate",
+        "utime",
+        "system",
+        "popen",
+        "startfile",
+        "write",
+        "open",
+        "mkfifo",
+    }
+)
+_SHUTIL_READS = frozenset({"which", "disk_usage", "get_terminal_size"})
+
+#: Constructors that create their output file.
+_WRITER_CLASSES = frozenset({"ExcelWriter", "SimpleDocTemplate"})
+
+_MODE = re.compile(r"^[rwaxbtU+]{1,4}$")
+
+
+def _dotted(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        inner = _dotted(node.value)
+        return f"{inner}.{node.attr}" if inner else ""
+    return ""
+
+
+def _opens_for_writing(call: ast.Call, method: bool) -> bool:
+    """``open``-style call: True unless its mode is a constant that only reads."""
+    modes = [kw.value for kw in call.keywords if kw.arg == "mode"]
+    # open(path, mode) and module.open(path, mode); Path(p).open(mode).
+    if not modes and len(call.args) > 1:
+        modes.append(call.args[1])
+    if not modes and method and call.args:
+        first = call.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            if _MODE.match(first.value):
+                modes.append(first)
+    for mode in modes:
+        if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
+            return True
+        if _MODE.match(mode.value) and set(mode.value) & set("wax+"):
+            return True
+    return False
+
+
+def _call_may_write(call: ast.Call) -> bool:
+    func = call.func
+    if isinstance(func, ast.Name):
+        name, owner = func.id, ""
+    elif isinstance(func, ast.Attribute):
+        name, owner = func.attr, _dotted(func.value)
+    else:
+        return False
+    root = owner.split(".")[0]
+    if isinstance(func, ast.Name) and name in ("exec", "eval", "__import__"):
+        return True
+    if root == "subprocess" or name == "Popen":
+        return True
+    if root == "shutil":
+        return name not in _SHUTIL_READS
+    if owner == "os":
+        return name in _OS_WRITES or name.startswith("spawn") or name.startswith("exec")
+    if owner == "sqlite3" and name == "connect":
+        return True
+    if name in ("open", "ZipFile", "TarFile"):
+        return _opens_for_writing(call, method=isinstance(func, ast.Attribute))
+    if name in _WRITE_METHODS or name in _WRITER_CLASSES:
+        return True
+    if name in _WRITE_WITH_TARGET:
+        return bool(call.args) or any(
+            kw.arg in _TARGET_KEYWORDS for kw in call.keywords
+        )
+    if name == "Workbook":  # xlsxwriter.Workbook(path); openpyxl's takes none
+        return bool(call.args)
+    if name in ("rename", "replace") and isinstance(func, ast.Attribute):
+        # Path(...).rename(...), not df.rename(columns=...) or str.replace.
+        receiver = func.value
+        return isinstance(receiver, ast.Call) and _dotted(receiver.func).endswith(
+            "Path"
+        )
+    return False
+
+
+def may_write_files(source: str) -> bool:
+    """Whether a script could create, change or delete files.
+
+    A static check of the calls it makes, leaning towards yes: code that does
+    not parse, runs other code, or starts a process counts as writing.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return True
+    return any(
+        isinstance(node, ast.Call) and _call_may_write(node) for node in ast.walk(tree)
+    )
+
+
+_DESCRIBE_MAX = 120
+#: A shebang, an encoding line, or a bare ``#``.
+_PREAMBLE = re.compile(r"^#(!|.*coding[:=]|\s*$)")
+
+
+def describe_code(source: str) -> str:
+    """A one-line description of a snippet for the turn's change record.
+
+    Its docstring or leading comment if it has one, else its first line of
+    code that is not an import.
+    """
+    text = (source or "").strip()
+    if not text:
+        return ""
+    line = ""
+    try:
+        doc = ast.get_docstring(ast.parse(text))
+    except (SyntaxError, ValueError):
+        doc = None
+    if doc and doc.strip():
+        line = doc.strip().splitlines()[0]
+    if not line:
+        lines = [
+            ln.strip()
+            for ln in text.splitlines()
+            if ln.strip() and not _PREAMBLE.match(ln.strip())
+        ]
+        if lines and lines[0].startswith("#"):
+            line = lines[0].lstrip("#").strip()
+        if not line:
+            line = next(
+                (ln for ln in lines if not ln.startswith(("#", "import ", "from "))),
+                lines[0] if lines else "",
+            )
+    line = " ".join(line.split())
+    if len(line) > _DESCRIBE_MAX:
+        line = line[: _DESCRIBE_MAX - 1].rstrip() + "…"
+    return line
 
 
 def too_wide_to_scan(folder: os.PathLike | str) -> bool:

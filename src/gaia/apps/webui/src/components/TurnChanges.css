@@ -77,6 +77,10 @@
     word-break: break-all;
 }
 
+.turn-changes-warning summary {
+    cursor: pointer;
+}
+
 .turn-changes-message {
     margin-top: 6px;
     display: flex;

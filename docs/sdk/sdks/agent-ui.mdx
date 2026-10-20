@@ -809,7 +809,7 @@ Deleting a chat deletes its copies.
           "finished_at": "2026-10-16T15:30:40+00:00",
           "restored_at": null,
           "files": [{"path": "C:\\notes\\todo.md", "change": "edited", "tool": "edit_file"}],
-          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": []}],
+          "untracked": [{"kind": "shell", "detail": "npm run build", "paths": [], "may_write": true}],
           "incomplete": true
         }
       ]
@@ -821,7 +821,10 @@ Deleting a chat deletes its copies.
     something GAIA can't copy ahead of time — a shell command outside the
     read-only tier, a Python snippet or script, or an MCP tool not marked
     read-only — and `untracked` lists each one. Undo does not cover what those
-    changed.
+    changed. A Python snippet or script counts only when its code may write
+    files or files changed in the folders it ran in; `detail` is its first
+    docstring or comment line, else its first line of code, and `paths` the
+    files seen changing.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/changes/{turn_id}/diff">
