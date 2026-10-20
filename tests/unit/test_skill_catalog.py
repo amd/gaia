@@ -101,9 +101,9 @@ def test_starter_descriptions_fit_under_the_cap_so_none_are_cut(starter_pack):
     for skill in starter_pack.values():
         whole = f"- {skill.name}: {' '.join(skill.description.split())}"
         line = _line(catalog, skill.name)
-        assert line == whole or line.startswith(whole + " (pairs with: "), (
-            f"{skill.name} was cut"
-        )
+        assert line == whole or line.startswith(
+            whole + " (pairs with: "
+        ), f"{skill.name} was cut"
 
 
 def test_an_oversized_description_is_capped(tmp_path):
