@@ -58,6 +58,10 @@ three times.
 5. **Merge across meetings.** Items about the same deliverable with the same
    owner are one row, even when the wording changes. Keep the date it was
    first raised, the date of its latest mention, and the status history.
+   Merge across sources too: an item from the minutes that the user's own
+   notes, an email or a chat restate is the same row, not a second one. Before
+   saving, compare every pair of rows with the same owner and similar wording
+   and fold any duplicates together, keeping every source in Evidence.
 6. **Set status only from what was said:**
    - `Open`: raised, no later mention.
    - `In progress`: a later meeting says it was started.

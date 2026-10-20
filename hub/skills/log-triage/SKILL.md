@@ -37,7 +37,10 @@ incident.
 4. **Rank templates by severity, then hosts hit, then rarity**, never by count.
    Read the table this way:
    - **Baseline**: present across most of the range (`span_pct` near 100) at a
-     steady rate, whatever its level. Routine, even when it says "error".
+     steady rate, whatever its level. Routine, even when it says "error" or
+     "fatal": a platform that logs thousands of FATAL lines every day is
+     telling you its normal, not an incident. Never count baseline lines as
+     alerts or add them to an anomaly total; report them once as background.
    - **Anomaly**: a high-severity template, a template that appears in only a
      short window (`span_pct` near 0), a high `peak` against its own normal
      rate, or a template that hit many distinct hosts at once.
