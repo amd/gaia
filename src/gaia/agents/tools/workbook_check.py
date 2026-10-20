@@ -93,6 +93,16 @@ MAX_VALUES = 60
 #: LibreOffice's first start creates its profile, which takes a while.
 RECALC_TIMEOUT_S = 180
 
+# Calc's "Recalculation on file load" for Excel 2007+ and ODF files defaults to
+# never, which keeps the values the last program cached instead of computing
+# them. 0 is "always recalculate"; seeded into the private profile per run.
+_ALWAYS_RECALC_PROFILE = """<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="OOXMLRecalcMode" oor:op="fuse"><value>0</value></prop></item>
+<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="ODFRecalcMode" oor:op="fuse"><value>0</value></prop></item>
+</oor:items>
+"""
+
 _ARITHMETIC = frozenset({"+", "-", "*", "/", "^"})
 _CELL = re.compile(r"^([A-Z]{1,3})(\d{1,7})$")
 _COLS = re.compile(r"^([A-Z]{1,3}):([A-Z]{1,3})$")
@@ -737,7 +747,9 @@ def recalculate(path: Path, soffice: str, workdir: Path) -> Path:
     """Convert a copy of *path* with LibreOffice, which computes every formula.
 
     Returns the recalculated copy inside *workdir*. A private LibreOffice
-    profile keeps a running LibreOffice window from swallowing the request.
+    profile keeps a running LibreOffice window from swallowing the request,
+    and is set to recalculate on load: by default Calc keeps the values cached
+    in an Excel-saved file, which would hide a formula broken since.
 
     Raises:
         RuntimeError: LibreOffice did not produce the copy.
@@ -745,7 +757,12 @@ def recalculate(path: Path, soffice: str, workdir: Path) -> Path:
     source = workdir / ("source" + path.suffix.lower())
     shutil.copyfile(path, source)
     out_dir = workdir / "out"
-    profile = (workdir / "profile").resolve().as_uri()
+    profile_dir = workdir / "profile"
+    (profile_dir / "user").mkdir(parents=True, exist_ok=True)
+    (profile_dir / "user" / "registrymodifications.xcu").write_text(
+        _ALWAYS_RECALC_PROFILE, encoding="utf-8"
+    )
+    profile = profile_dir.resolve().as_uri()
     cmd = [
         soffice,
         f"-env:UserInstallation={profile}",

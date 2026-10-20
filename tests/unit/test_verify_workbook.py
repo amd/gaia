@@ -8,6 +8,8 @@ recalculated the file, so the agent reported it as done.
 """
 
 import hashlib
+import re
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -245,6 +247,47 @@ def test_libreoffice_recalculation_computes_values_and_leaves_the_file_alone(
     assert "Summary!B3" not in _problems(result, "errors")
     assert "Summary!B3" in _problems(result, "warnings")
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+
+def _with_cached_values(path: Path, cached: dict) -> Path:
+    """A copy of *path* whose formula cells carry stale cached values.
+
+    This is what an Excel-saved file looks like after openpyxl edits a cell a
+    formula depends on: the old result stays in each formula's ``<v>``.
+    """
+    stale = path.with_name("stale.xlsx")
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(stale, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                xml = data.decode("utf-8")
+                for cell, value in cached.items():
+                    xml, n = re.subn(
+                        rf'(<c r="{cell}"[^>]*>\s*<f>[^<]*</f>)(\s*<v>[^<]*</v>|\s*<v\s*/>)?',
+                        rf"\g<1><v>{value}</v>",
+                        xml,
+                    )
+                    assert n == 1, (cell, xml)
+                data = xml.encode("utf-8")
+            zout.writestr(item, data)
+    return stale
+
+
+@pytest.mark.skipif(find_soffice() is None, reason="LibreOffice not installed")
+def test_libreoffice_recomputes_values_an_earlier_save_cached(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = 5
+    ws["B1"] = "=A1*2"
+    ws["A2"] = 0
+    ws["B2"] = "=1/A2"
+    path = _with_cached_values(_save(wb, tmp_path), {"B1": 999, "B2": 5})
+
+    result = check_workbook(path)
+
+    assert result["recalculated"] is True
+    assert result["computed_values"]["Sheet!B1"] == 10
+    assert _problems(result, "errors")["Sheet!B2"]["error"] == "#DIV/0!"
 
 
 # ── the tool ────────────────────────────────────────────────────────────────
