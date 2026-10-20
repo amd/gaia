@@ -68,14 +68,7 @@ from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .session_environment import apply_environment
-from .sse_handler import (
-    _ANSWER_JSON_SUB_RE,
-    _RAG_RESULT_JSON_SUB_RE,
-    _THOUGHT_JSON_SUB_RE,
-    _TOOL_CALL_JSON_SUB_RE,
-    _clean_answer_json,
-    _fix_double_escaped,
-)
+from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
@@ -3184,7 +3177,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             # Saved as the reply, so it stays in the chat and reads as an answer, not a crash.
-            msg_id = db.add_message(session_id, "assistant", refusal)
+            msg_id = db.add_message(session_id, "assistant", refusal, ends_turn=True)
             yield f"data: {json.dumps({'type': 'answer', 'content': refusal})}\n\n"
             yield f"data: {json.dumps(_done_event(msg_id, refusal, False))}\n\n"
             return
@@ -3956,29 +3949,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = idle_message
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Clean LLM output artifacts before DB storage.
-        # Apply all canonical patterns so stored content is always clean
-        # regardless of which streaming path was taken.
-        # Order matters: _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE.
-        # The base agent asks for {"thought":..., "answer":...} JSON; if that JSON
-        # leaks into full_response (e.g. streaming buffer released early), the
-        # thought-stripper would consume the entire blob including the answer,
-        # leaving an empty string.  Extracting the answer first prevents that.
+        # Clean LLM output artifacts before DB storage, whichever streaming
+        # path was taken.
         if full_response:
-            full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
-            # Extract answer from {"thought":..., "answer":...} before thought stripping.
-            full_response = _clean_answer_json(full_response)
-            full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
-            full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
-            # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
-            # embedded after plain text — strips the duplicate JSON wrapper.
-            full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
-            full_response = _fix_double_escaped(full_response)
-            # Strip trailing JSON artifact sequences (3+ closing braces = nested tool result leak)
-            full_response = _re.sub(r"\}{3,}\s*$", "", full_response).strip()
-            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON extraction)
-            full_response = _re.sub(r"[\n\s]*`{3,}\s*$", "", full_response).strip()
-            full_response = full_response.strip()
+            full_response = clean_reply_text(full_response)
 
         # Guard: if cleaning reduced the response to JSON/code artifacts only
         # (e.g. "}", "}}", "}\n", "}\n```", backtick-only), fall back to the agent's
@@ -4101,6 +4075,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=result_holder.get("model_messages"),
                 turn_summary=turn_summary,
+                ends_turn=True,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -4163,7 +4138,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 captured_steps if (keep_steps and captured_steps) else None
             )
             if sse_type == "error":
-                db.add_message(request.session_id, "assistant", content)
+                db.add_message(request.session_id, "assistant", content, ends_turn=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
                 turn_summary = _turn_summary(
@@ -4176,6 +4151,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
+                    ends_turn=True,
                 )
                 done_event = _done_event(
                     msg_id, content, turn_cancelled, turn_summary=turn_summary
@@ -4194,7 +4170,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         await _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
-            db.add_message(request.session_id, "assistant", error_msg)
+            db.add_message(request.session_id, "assistant", error_msg, ends_turn=True)
         except Exception as exc:
             logger.error("Could not persist chat error: %s", exc)
         error_data = json.dumps({"type": "error", "content": error_msg})
@@ -4293,13 +4269,17 @@ async def _run_chat_lifecycle(
     response, a client disconnect cannot cancel it — the producer finishes
     and persists server-side (#1580 follow-up).
     """
+    from gaia.ui.restart_recovery import TurnJournal
     from gaia.ui.turn_queue import TurnCancelled, TurnSlot, ordinal, turn_queue
 
     session_id = request.session_id
     outcome = _RunOutcome()
+    journal = TurnJournal(db, session_id)
+    shutting_down = False
 
     def _emit(data: str) -> None:
         outcome.observe(data)
+        journal.observe(data)
         run.emit(data)
 
     queued_at = _time.monotonic()
@@ -4340,7 +4320,9 @@ async def _run_chat_lifecycle(
         try:
             await run.slot.acquire()
         except TurnCancelled:
-            msg_id = db.add_message(session_id, "assistant", "Cancelled.")
+            msg_id = db.add_message(
+                session_id, "assistant", "Cancelled.", ends_turn=True
+            )
             _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
             return
         finally:
@@ -4351,7 +4333,22 @@ async def _run_chat_lifecycle(
                 _emit(data)
         finally:
             run.slot.close()
+    except asyncio.CancelledError:
+        # Shutdown: the marker stays, and the next start says the turn was cut off.
+        shutting_down = True
+        try:
+            journal.flush()
+        except (RuntimeError, sqlite3.Error) as exc:
+            # The database already closed; the text from the last save stands.
+            logger.warning("Could not save the interrupted turn's text: %s", exc)
+        raise
     finally:
+        if not shutting_down:
+            try:
+                journal.close()
+            except (RuntimeError, sqlite3.Error) as exc:
+                # Don't mask the turn's own error; the next start closes the turn.
+                logger.warning("Could not close the finished turn: %s", exc)
         _record_run_outcome(db, session_id, outcome.status())
     # Notify the AgentLoop that a user turn completed (best-effort; no-op if
     # the autonomy loop isn't running). Fires on real run completion rather

@@ -2499,3 +2499,23 @@ def _fix_double_escaped(text: str) -> str:
         text = text.replace("\\t", "\t")
         text = text.replace('\\"', '"')
     return text
+
+
+def clean_reply_text(text: str) -> str:
+    """Strip the LLM output artifacts a reply must not be stored with."""
+    if not text:
+        return text
+    text = _TOOL_CALL_JSON_SUB_RE.sub("", text)
+    # _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE, or a leaked
+    # {"thought":..., "answer":...} blob is stripped whole, answer included.
+    text = _clean_answer_json(text)
+    text = _THOUGHT_JSON_SUB_RE.sub("", text)
+    text = _RAG_RESULT_JSON_SUB_RE.sub("", text)
+    # Mixed content: plain text followed by a duplicate {"answer": "..."} wrapper.
+    text = _ANSWER_JSON_SUB_RE.sub("", text)
+    text = _fix_double_escaped(text)
+    # 3+ closing braces at the end are a leaked nested tool result.
+    text = re.sub(r"\}{3,}\s*$", "", text).strip()
+    # A code fence left after JSON extraction, e.g. "}\n```".
+    text = re.sub(r"[\n\s]*`{3,}\s*$", "", text).strip()
+    return text
