@@ -319,6 +319,10 @@ def _reply_reserve(agent: Any) -> int:
     # provider's own, far larger window, so it takes nothing from history here.
     if _is_cloud(agent) and not getattr(agent, "_use_claude", False):
         return 0
+    # The cap actually sent per reply, which grows with a large local window.
+    max_output = getattr(agent, "_max_output_tokens", None)
+    if callable(max_output):
+        return max_output()
     config = getattr(getattr(agent, "chat", None), "config", None)
     return getattr(config, "max_tokens", 8192)
 

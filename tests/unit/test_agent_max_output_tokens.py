@@ -3,8 +3,10 @@
 """The agent's per-reply output cap must reach the wire, sized per model.
 
 Cloud reasoning models spend output tokens on thinking, so an 8K cap sized for a
-local 32K context truncates them. These tests read the JSON body Lemonade
-actually receives, not the kwargs handed to an internal client.
+local 32K context truncates them. A local model loaded with a larger window gets
+a proportionally larger cap: Qwen3.6 at 64K kept cutting big scripts off at 8K.
+These tests read the JSON body Lemonade actually receives, not the kwargs
+handed to an internal client.
 """
 
 import json
@@ -19,7 +21,9 @@ from gaia.agents.base.agent import (
     CLOUD_MAX_OUTPUT_TOKENS,
     LOCAL_MAX_OUTPUT_TOKENS,
     Agent,
+    local_max_output_tokens,
 )
+from gaia.llm import lemonade_client
 from gaia.llm.lemonade_client import LemonadeClient
 
 BASE_URL = "http://127.0.0.1:9/api/v1"
@@ -34,9 +38,13 @@ class _Agent(Agent):
 
 @pytest.fixture
 def no_local_model_management(monkeypatch):
-    """Local model loading is not what these tests exercise; the request is."""
+    """Local model loading is not what these tests exercise; the request is.
+
+    The local window is pinned to 32K, where the cap is the 8K floor.
+    """
     monkeypatch.setattr(LemonadeClient, "_ensure_model_loaded", lambda *a, **k: None)
     monkeypatch.setattr(LemonadeClient, "health_check", lambda self: {"ok": True})
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 32768)
 
 
 def _request_bodies(model_id, **agent_kwargs):
@@ -108,6 +116,47 @@ def test_catalog_metadata_marks_a_custom_provider_as_cloud(no_local_model_manage
         "recipe": "cloud"
     }
     assert agent._max_output_tokens() == CLOUD_MAX_OUTPUT_TOKENS
+
+
+@pytest.mark.parametrize(
+    "ctx,expected",
+    [(8192, 8192), (32768, 8192), (65536, 16384), (131072, 32768), (262144, 32768)],
+)
+def test_local_cap_is_a_quarter_of_the_window_within_bounds(ctx, expected):
+    assert local_max_output_tokens(ctx) == expected
+
+
+def test_a_large_local_window_raises_the_cap_on_the_wire(
+    no_local_model_management, monkeypatch
+):
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 65536)
+    bodies = _request_bodies(LOCAL_MODEL)
+    assert {b["max_completion_tokens"] for b in bodies} == {16384}
+
+
+def test_the_window_is_sized_once_per_model(no_local_model_management, monkeypatch):
+    calls = []
+
+    def ctx(model, device=None):
+        calls.append(model)
+        return 65536
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", ctx)
+    agent = _Agent(
+        model_id=LOCAL_MODEL, base_url=BASE_URL, skip_lemonade=True, silent_mode=True
+    )
+    assert agent._max_output_tokens() == agent._max_output_tokens() == 16384
+    assert calls == [LOCAL_MODEL]
+
+
+def test_history_reserves_the_cap_actually_sent(no_local_model_management, monkeypatch):
+    from gaia.agents.base.history import _reply_reserve
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 65536)
+    agent = _Agent(
+        model_id=LOCAL_MODEL, base_url=BASE_URL, skip_lemonade=True, silent_mode=True
+    )
+    assert _reply_reserve(agent) == 16384
 
 
 @pytest.mark.parametrize("bad", [0, -1, 1.5, "32768", True])
