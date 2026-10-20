@@ -7342,9 +7342,8 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure, or when the agent has no model
-        id, so the caller falls through to the safe in-loop trim path
-        rather than crashing.
+        Returns False on any probe failure so the caller falls through to
+        the safe in-loop trim path rather than crashing.
         """
         try:
             import httpx
@@ -7379,11 +7378,8 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
-            own_model = getattr(self, "model_id", None)
-            if not own_model:
-                # Empty names compare equal in _model_ids_match, so
-                # a missing id would match anything.
-                return False
+            # Same resolution as the chat config: no model_id runs the default.
+            own_model = getattr(self, "model_id", None) or resolve_default_chat_model()
             for m in data.get("all_models_loaded", []):
                 if m.get("type") not in ("llm", "vlm"):
                     continue
@@ -7399,7 +7395,7 @@ Do NOT wrap conversational replies in JSON.
                 # Clamp like the load path: a model at its max can't reload larger.
                 expected_ctx = resolve_effective_ctx_size(
                     resolve_ctx_size(
-                        model=m.get("model_name"),
+                        model=m.get("model_name") or own_model,
                         device=self.device,
                         base_url=base_url,
                     ),

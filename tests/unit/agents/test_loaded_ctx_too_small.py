@@ -181,8 +181,17 @@ def test_non_chat_entry_with_same_name_is_ignored():
 
 
 @pytest.mark.parametrize("model_id", [None, ""], ids=["none", "empty"])
-def test_missing_model_id_returns_false(model_id):
-    assert _probe([_entry(OWN_MODEL, 4096)], model_id=model_id) is False
+def test_missing_model_id_judges_the_default_model(model_id):
+    # No model_id means the agent runs the resolved default, so judge that one.
+    with patch(
+        "gaia.agents.base.agent.resolve_default_chat_model", return_value=OWN_MODEL
+    ):
+        assert _probe([_entry(OWN_MODEL, 4096)], model_id=model_id) is True
+        assert _probe([_entry(OWN_MODEL, EXPECTED)], model_id=model_id) is False
+        assert (
+            _probe([_entry("Qwen3-VL-4B", 4096, type_="vlm")], model_id=model_id)
+            is False
+        )
 
 
 def test_high_trained_ceiling_still_flags_undersized_load():
