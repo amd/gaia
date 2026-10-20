@@ -17,6 +17,7 @@ import {
 } from '../utils/sessionGrouping';
 import { ordinal } from '../utils/chatAlerts';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
+import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import gaiaRobot from '../assets/gaia-robot.png';
 import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
@@ -307,7 +308,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             type="search"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); } }}
+                            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setQuery(''); searchRef.current?.blur(); } }}
+                            {...CLAIMS_ESCAPE}
                             placeholder="Search chats"
                             aria-label="Search chats (Ctrl+K)"
                         />
