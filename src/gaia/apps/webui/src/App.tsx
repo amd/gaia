@@ -322,6 +322,18 @@ function App() {
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
+        if (store.draftWorkingFolder) {
+            try {
+                await api.setWorkingFolder(session.id, store.draftWorkingFolder);
+            } catch (err) {
+                setCreateError(
+                    `The chat was created, but it couldn't be set to work in ${store.draftWorkingFolder}, so your message was not sent: ${
+                        err instanceof Error ? err.message : err}`,
+                );
+                return;
+            }
+            store.setDraftWorkingFolder(null);
+        }
         // Always sent, so the chat runs in exactly the mode its chip showed.
         try {
             await api.setPermissionMode(session.id, store.draftPermissionMode);

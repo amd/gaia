@@ -217,6 +217,8 @@ interface ChatState {
     defaultPermissionMode: PermissionMode;
     /** Library documents picked with no chat open; the next new chat starts with them. */
     draftDocumentIds: string[];
+    /** Folder picked on the new-chat screen; null keeps the default one. */
+    draftWorkingFolder: string | null;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
@@ -237,6 +239,7 @@ interface ChatState {
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
     setDraftPermissionMode: (mode: PermissionMode) => void;
+    setDraftWorkingFolder: (path: string | null) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
     addDraftDocuments: (ids: string[]) => void;
@@ -472,6 +475,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     draftPermissionMode: 'ask',
     defaultPermissionMode: 'ask',
     draftDocumentIds: [],
+    draftWorkingFolder: null,
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -512,6 +516,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowSchedules: (show) =>
         set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
     setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode }),
+    setDraftWorkingFolder: (path) => set({ draftWorkingFolder: path }),
     setDefaultPermissionMode: (mode) =>
         set((state) => ({
             defaultPermissionMode: mode,

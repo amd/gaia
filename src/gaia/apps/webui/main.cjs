@@ -577,6 +577,16 @@ ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
   return true;
 });
 
+// The new-chat screen's folder picker: the OS dialog, parented to the window.
+ipcMain.handle("dialog:pick-folder", async () => {
+  const options = { title: "Choose the folder this chat works in", properties: ["openDirectory"] };
+  const result =
+    mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     ...titleBarOptions(),

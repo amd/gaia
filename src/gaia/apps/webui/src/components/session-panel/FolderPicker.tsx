@@ -7,9 +7,26 @@ import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import type { BrowseResponse } from '../../types';
+import './SessionPanel.css';
+
+interface FolderPickerProps {
+    onPick: (path: string) => void;
+    onClose: () => void;
+    /** Heading; adding a folder to a chat by default. */
+    title?: string;
+    /** The dialog's accessible name. */
+    label?: string;
+    note?: string;
+}
 
 /** Pick a folder on this PC to give the chat, by browsing or by pasting its path. */
-export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
+export function FolderPicker({
+    onPick,
+    onClose,
+    title = 'Add a folder',
+    label = 'Add a folder to this chat',
+    note = 'GAIA will be able to read and write everything in the folder you pick, in this chat only.',
+}: FolderPickerProps) {
     const [listing, setListing] = useState<BrowseResponse | null>(null);
     const [typed, setTyped] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -38,17 +55,17 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                 className="modal-panel sp-picker"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Add a folder to this chat"
+                aria-label={label}
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="modal-header">
-                    <h3>Add a folder</h3>
+                    <h3>{title}</h3>
                     <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">
                         <X size={18} />
                     </button>
                 </div>
                 <div className="modal-body sp-picker-body">
-                    <p className="sp-meta">GAIA will be able to read and write everything in the folder you pick, in this chat only.</p>
+                    <p className="sp-meta">{note}</p>
                     <form
                         className="sp-picker-path"
                         onSubmit={(e) => { e.preventDefault(); if (typed.trim()) open(typed.trim()); }}

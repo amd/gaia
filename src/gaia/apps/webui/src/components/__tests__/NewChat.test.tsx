@@ -1,8 +1,8 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
@@ -233,5 +233,64 @@ describe('NewChat warm-up line', () => {
         useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
         expect(warmUpLine({ seconds: 3, model: 'Gemma-4-E4B-it-GGUF', device: 'gpu' })).toBe('Loading Gemma 4 E4B on your GPU… 3s');
         useModelStore.setState({ names: {} });
+    });
+});
+
+describe('NewChat working folder picker', () => {
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, draftWorkingFolder: null });
+    });
+    afterEach(() => {
+        delete (window as { gaiaAPI?: unknown }).gaiaAPI;
+    });
+
+    it('uses the desktop app\'s native folder dialog', async () => {
+        const pickFolder = vi.fn().mockResolvedValue('C:\\work\\reports');
+        (window as { gaiaAPI?: unknown }).gaiaAPI = { dialog: { pickFolder } };
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click((await screen.findByText('my-project')).closest('button')!);
+
+        expect(await screen.findByText('reports')).toBeInTheDocument();
+        expect(pickFolder).toHaveBeenCalledOnce();
+        expect(useChatStore.getState().draftWorkingFolder).toBe('C:\\work\\reports');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('keeps the default folder when the native dialog is cancelled', async () => {
+        (window as { gaiaAPI?: unknown }).gaiaAPI = { dialog: { pickFolder: vi.fn().mockResolvedValue(null) } };
+        render(<NewChat onSend={vi.fn()} />);
+        fireEvent.click((await screen.findByText('my-project')).closest('button')!);
+        await waitFor(() => expect(useChatStore.getState().draftWorkingFolder).toBeNull());
+        expect(screen.getByText('my-project')).toBeInTheDocument();
+    });
+
+    it('takes a typed path in a plain browser', async () => {
+        vi.mocked(api.browseFiles).mockImplementation(async (path?: string) => ({
+            current_path: path ?? '/home/u',
+            parent_path: null,
+            entries: [],
+            quick_links: [],
+        }));
+        render(<NewChat onSend={vi.fn()} />);
+
+        fireEvent.click((await screen.findByText('my-project')).closest('button')!);
+        const dialog = await screen.findByRole('dialog', { name: 'Choose the folder this chat works in' });
+        const input = within(dialog).getByLabelText('Folder path');
+        fireEvent.change(input, { target: { value: '/srv/data' } });
+        fireEvent.submit(input.closest('form')!);
+        await waitFor(() => expect(api.browseFiles).toHaveBeenLastCalledWith('/srv/data'));
+        fireEvent.click(await within(dialog).findByRole('button', { name: 'Use this folder' }));
+
+        expect(useChatStore.getState().draftWorkingFolder).toBe('/srv/data');
+        expect(await screen.findByText('data')).toBeInTheDocument();
+    });
+
+    it('goes back to the default folder', async () => {
+        useChatStore.setState({ draftWorkingFolder: '/srv/data' });
+        render(<NewChat onSend={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Use the default folder' }));
+        expect(useChatStore.getState().draftWorkingFolder).toBeNull();
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
     });
 });

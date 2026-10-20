@@ -29,7 +29,7 @@ const SOURCE_LABEL: Record<ScopeSource, string> = {
     gaia_documents: "GAIA's documents folder",
     scratch: "GAIA's scratch folder",
     document: 'Document in this chat',
-    working_folder: 'Folder GAIA started in',
+    working_folder: 'Folder this chat works in',
     approved: 'Approved during this chat',
 };
 
@@ -191,7 +191,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so GAIA can't hold it to these folder and internet settings.
+                            This chat's agent runs as its own process, so GAIA can't hold it to these folder settings.
                         </span>
                     )}
                     {env.removed.length > 0 && (
@@ -233,7 +233,7 @@ function Internet({ sessionId }: { sessionId: string }) {
             <Switch
                 checked={env.internet}
                 onChange={(on) => void toggle(on)}
-                disabled={saving || !env.enforced}
+                disabled={saving || !env.internet_enforced}
                 label="Internet for this chat"
                 text={env.internet ? 'On' : 'Off: web search and pages are blocked'}
             />

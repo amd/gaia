@@ -20,8 +20,12 @@ export interface SessionEnvironment {
     folders: ScopeEntry[];
     removed: string[];
     internet: boolean;
-    /** False when the chat's agent keeps its own file scope (a relayed sidecar). */
+    /** The folder picked when the chat was started; null for the default one. */
+    working_folder: string | null;
+    /** False when the chat's agent keeps its own file scope and is not sent its folders. */
     enforced: boolean;
+    /** False when the chat's agent runs as its own process and keeps its own internet. */
+    internet_enforced: boolean;
 }
 
 export type OutputKind = 'file' | 'export' | 'image' | 'document' | 'memory' | 'schedule';

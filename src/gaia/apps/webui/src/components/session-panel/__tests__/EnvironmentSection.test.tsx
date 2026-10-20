@@ -113,11 +113,19 @@ describe('Can read and write', () => {
     });
 
     it("says a separate agent isn't held to these settings, and offers no controls", async () => {
-        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+        expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
+    });
+
+    it('lets the GAIA agent in its own process take folders but not the internet switch', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, internet_enforced: false });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByRole('button', { name: /Add folder/ })).toBeInTheDocument();
+        expect(screen.queryByText(/runs as its own process/)).not.toBeInTheDocument();
         expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
     });
 
