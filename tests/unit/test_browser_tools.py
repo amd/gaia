@@ -18,7 +18,21 @@ try:
 except ImportError:
     ChatAgent = ChatAgentConfig = None
 
-from gaia.web.client import WebClient
+from gaia.web import client as web_client
+from gaia.web.client import WebClient, _SearchGate
+
+
+@pytest.fixture(autouse=True)
+def _instant_search_backoff(monkeypatch):
+    """Search pacing and backoff are pinned in test_web_search_rate_limit.py."""
+    monkeypatch.setattr(
+        web_client, "_SEARCH_GATE", _SearchGate(min_interval=0.0, sleep=lambda s: None)
+    )
+    # A Tavily connector configured on the dev box must not answer these tests.
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server.is_mcp_server_configured", lambda _id: False
+    )
+
 
 # ===== WebClient Tests =====
 

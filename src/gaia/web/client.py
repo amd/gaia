@@ -13,12 +13,15 @@ the DNS-rebind TOCTOU window between ``validate_url`` (which calls
 import http.client
 import ipaddress
 import os
+import random
 import re
 import socket
 import threading
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
@@ -548,6 +551,113 @@ class PinnedIPAdapter(HTTPAdapter):
         if tls_hostname and host_params.get("scheme") == "https":
             pool_kwargs["server_hostname"] = tls_hostname
         return host_params, pool_kwargs
+
+
+# -- Search pacing and block detection -----------------------------------------
+
+#: Statuses DuckDuckGo uses to turn away automated traffic. Any other non-200
+#: is a real failure and is not retried.
+SEARCH_BLOCK_STATUSES = frozenset({202, 403, 429, 503})
+
+#: Markup only DDG's bot-check page carries; a 200 with these holds no results.
+_DDG_CHALLENGE_MARKERS = (
+    "anomaly-modal",
+    'id="challenge-form"',
+    "bots use duckduckgo too",
+)
+
+_DDG_ENDPOINTS = (
+    ("html", "https://html.duckduckgo.com/html/"),
+    ("lite", "https://lite.duckduckgo.com/lite/"),
+)
+
+
+class SearchUnavailableError(RuntimeError):
+    """Every search endpoint turned the query away; waiting may fix it.
+
+    ``retry_after`` is the seconds to wait before searching again.
+    """
+
+    def __init__(self, message: str, retry_after: float, status: Optional[int]):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.status = status
+
+
+class _SearchGate:
+    """Process-wide pacing for search requests, shared by every ``WebClient``.
+
+    Agents fire searches in parallel; each caller reserves the next free slot,
+    so requests leave at least ``min_interval`` apart. A block signal pushes
+    every caller back until ``blocked_until``.
+    """
+
+    def __init__(self, min_interval: float, sleep=time.sleep) -> None:
+        self.min_interval = min_interval
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next_slot = 0.0
+        self._blocked_until = 0.0
+
+    def blocked_for(self) -> float:
+        """Seconds until searching is allowed again after a block, or 0."""
+        with self._lock:
+            return max(0.0, self._blocked_until - time.monotonic())
+
+    def wait_turn(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next_slot, self._blocked_until)
+            self._next_slot = slot + self.min_interval
+        if slot > now:
+            self._sleep(slot - now)
+
+    def back_off(self, seconds: float) -> None:
+        with self._lock:
+            self._blocked_until = max(self._blocked_until, time.monotonic() + seconds)
+
+
+_SEARCH_GATE = _SearchGate(min_interval=1.5)
+
+
+def _retry_after_seconds(response: requests.Response) -> Optional[float]:
+    """The ``Retry-After`` header in seconds (delta or HTTP-date), if present."""
+    value = (response.headers or {}).get("Retry-After")
+    if not value:
+        return None
+    value = str(value).strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        log.debug("Unparseable Retry-After header: %r", value)
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _ddg_block_reason(response: requests.Response) -> Optional[str]:
+    """Why DDG refused to answer, or ``None`` when the page holds real results."""
+    if response.status_code in SEARCH_BLOCK_STATUSES:
+        return f"HTTP {response.status_code}"
+    if response.status_code == 200:
+        page = (response.text or "").lower()
+        if any(marker in page for marker in _DDG_CHALLENGE_MARKERS):
+            return "a bot-check page (HTTP 200)"
+    return None
+
+
+def _unwrap_ddg_href(href: str) -> str:
+    """DDG wraps result URLs in a redirect; return the real target."""
+    if "uddg=" in href:
+        params = parse_qs(urlparse(href).query)
+        if "uddg" in params:
+            return params["uddg"][0]
+    return href
 
 
 class WebClient:
@@ -1266,64 +1376,118 @@ class WebClient:
 
     # -- Search --------------------------------------------------------------
 
-    def search_duckduckgo(self, query: str, num_results: int = 5) -> list:
+    #: Retries after a block: exponential from this base, plus up to this much jitter.
+    SEARCH_BACKOFF_BASE = 2.0
+    #: A wait longer than this is not slept inside one tool call; the caller is
+    #: told how long to wait instead.
+    SEARCH_BACKOFF_CAP = 20.0
+
+    def search_duckduckgo(
+        self, query: str, num_results: int = 5, max_attempts: int = 3
+    ) -> list:
         """Search DuckDuckGo and parse results from HTML.
 
-        Uses the HTML-only version (html.duckduckgo.com) which does not
-        require JavaScript rendering. Uses POST as DDG expects form submission.
+        Tries the HTML endpoint (html.duckduckgo.com), then the lite one
+        (lite.duckduckgo.com), by POST as DDG expects. When both turn the query
+        away (202/403/429/503 or a bot-check page) it waits with jittered
+        exponential backoff, honouring ``Retry-After``, for up to
+        ``max_attempts`` rounds. Searches from every client in the process are
+        paced through one gate.
 
         Returns: [{"title": str, "url": str, "snippet": str}]
+
+        Raises:
+            SearchUnavailableError: every attempt was turned away.
+            RuntimeError: DDG answered another non-200 status.
         """
         if not BS4_AVAILABLE:
             raise ImportError("beautifulsoup4 is required for web search.")
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be at least 1, got {max_attempts}")
 
-        response = self.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": query, "b": ""},
-        )
-        # A blocked or challenged search is not "no results" (DDG answers an
-        # automated-traffic check with 202 and a page that holds none).
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"DuckDuckGo answered HTTP {response.status_code}, so no results "
-                "were read. It may be rate-limiting automated searches; wait a "
-                "minute before searching again."
-            )
+        pending = _SEARCH_GATE.blocked_for()
+        if pending > self.SEARCH_BACKOFF_CAP:
+            raise self._search_unavailable("an earlier block", pending, None)
 
-        soup = self.parse_html(response.text)
-        results = []
-
-        for result_div in soup.select(".result"):
-            title_el = result_div.select_one(".result__title a, .result__a")
-            snippet_el = result_div.select_one(".result__snippet")
-
-            if not title_el:
-                continue
-
-            title = title_el.get_text(strip=True)
-            href = title_el.get("href", "")
-            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
-
-            # DDG wraps URLs in a redirect -- extract the actual URL
-            if "uddg=" in href:
-                parsed = urlparse(href)
-                params = parse_qs(parsed.query)
-                if "uddg" in params:
-                    href = params["uddg"][0]
-
-            if title and href:
-                results.append(
-                    {
-                        "title": title,
-                        "url": href,
-                        "snippet": snippet,
-                    }
+        reason, status, wait = "", None, 0.0
+        for attempt in range(max_attempts):
+            hinted = None
+            for name, url in _DDG_ENDPOINTS:
+                _SEARCH_GATE.wait_turn()
+                response = self.post(url, data={"q": query, "b": ""})
+                blocked = _ddg_block_reason(response)
+                if blocked is None:
+                    if response.status_code != 200:
+                        raise RuntimeError(
+                            f"DuckDuckGo answered HTTP {response.status_code}, so "
+                            "no results were read."
+                        )
+                    return self._parse_ddg(name, response.text, num_results)
+                reason, status = blocked, response.status_code
+                after = _retry_after_seconds(response)
+                if after is not None:
+                    hinted = max(hinted or 0.0, after)
+                log.warning(
+                    "DuckDuckGo %s endpoint refused a search (%s), attempt %d/%d",
+                    name,
+                    blocked,
+                    attempt + 1,
+                    max_attempts,
                 )
-
-            if len(results) >= num_results:
+            backoff = self.SEARCH_BACKOFF_BASE * 2**attempt + random.uniform(
+                0, self.SEARCH_BACKOFF_BASE
+            )
+            wait = max(backoff, hinted or 0.0)
+            _SEARCH_GATE.back_off(wait)
+            if wait > self.SEARCH_BACKOFF_CAP:
                 break
+        raise self._search_unavailable(reason, wait, status)
 
-        return results
+    @staticmethod
+    def _search_unavailable(
+        reason: str, wait: float, status: Optional[int]
+    ) -> SearchUnavailableError:
+        return SearchUnavailableError(
+            f"DuckDuckGo turned the search away ({reason}), so no results were "
+            f"read. It is rate-limiting automated searches; searching again in "
+            f"about {wait:.0f} seconds may work.",
+            retry_after=wait,
+            status=status,
+        )
+
+    def _parse_ddg(self, endpoint: str, html: str, num_results: int) -> list:
+        """Results from an html- or lite-endpoint page."""
+        soup = self.parse_html(html)
+        results = []
+        if endpoint == "lite":
+            for link in soup.select("a.result-link"):
+                after = link.find_next(
+                    ["a", "td"], class_=["result-link", "result-snippet"]
+                )
+                snippet = (
+                    after.get_text(strip=True)
+                    if after is not None and after.name == "td"
+                    else ""
+                )
+                results.append((link, snippet))
+        else:
+            for result_div in soup.select(".result"):
+                title_el = result_div.select_one(".result__title a, .result__a")
+                if not title_el:
+                    continue
+                snippet_el = result_div.select_one(".result__snippet")
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                results.append((title_el, snippet))
+
+        parsed = []
+        for title_el, snippet in results:
+            title = title_el.get_text(strip=True)
+            href = _unwrap_ddg_href(title_el.get("href", ""))
+            if title and href:
+                parsed.append({"title": title, "url": href, "snippet": snippet})
+            if len(parsed) >= num_results:
+                break
+        return parsed
 
     # -- Utility -------------------------------------------------------------
 
