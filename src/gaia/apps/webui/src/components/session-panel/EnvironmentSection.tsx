@@ -31,6 +31,7 @@ const SOURCE_LABEL: Record<ScopeSource, string> = {
     document: 'Document in this chat',
     working_folder: 'Folder GAIA started in',
     approved: 'Approved during this chat',
+    allowed_paths: 'Set by GAIA_ALLOWED_PATHS',
 };
 
 const FILES_SHOWN = 3;

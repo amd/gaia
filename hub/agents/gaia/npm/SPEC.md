@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.17"`                  |
+| Contract version   | `API_VERSION = "2.18"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,7 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`) is optional.
+`documents`, `allowed_paths`) is optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -296,6 +296,14 @@ file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
 field, so probe `/version` before sending it.
+
+`allowed_paths` (contract ≥ 2.18) carries the conversation's file scope as the
+caller computed it, so the agent works in the folders the caller's UI shows. A
+new session is built with exactly that scope; a retained session gains any
+entry it lacks and keeps what the user granted mid-chat. `GAIA_ALLOWED_PATHS`
+still narrows it, and a path outside it is asked about, never silently
+granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
+field.
 
 ```json
 {

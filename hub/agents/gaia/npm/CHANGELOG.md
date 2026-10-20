@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Folders you name are asked about, not refused, under Full access in the
+  Agent UI.** Pre-approving tools over `/sessions/{id}/bypass` refused every
+  path outside the chat's scope with nobody asked. When the caller can answer
+  confirmations, the agent now asks for the path instead.
+- **`/query` takes the chat's file scope** (contract **2.18**). `allowed_paths`
+  lets the Agent UI hand the agent the same scope its session panel shows.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
   reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
   floor and `min_gaia_version` rise to it in that release; a release whose

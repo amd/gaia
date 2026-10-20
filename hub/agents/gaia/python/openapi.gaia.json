@@ -126,6 +126,21 @@
         "additionalProperties": false,
         "description": "``POST /v1/gaia/query`` body (frozen #2015 contract, spec §2.2).",
         "properties": {
+          "allowed_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation's file scope as the caller computed it (contract >= 2.18), so the agent works where the caller's UI says it does. Absolute paths. Builds a new session with exactly this scope; a retained session gains any entry it lacks and keeps what the user granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's default scope.",
+            "title": "Allowed Paths"
+          },
           "can_answer_questions": {
             "anyOf": [
               {
@@ -397,7 +412,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.17"
+    "version": "2.18"
   },
   "openapi": "3.1.0",
   "paths": {

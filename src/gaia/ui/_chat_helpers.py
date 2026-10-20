@@ -42,7 +42,12 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
-from gaia.security import BLOCKED_DIRECTORIES
+from gaia.security import (
+    BLOCKED_DIRECTORIES,
+    AllowedPathsEnvError,
+    env_allowed_paths,
+    narrow_allowed_paths,
+)
 from gaia.stream_timeout import (
     DEFAULT_STREAM_TIMEOUT_SECONDS,
     MAX_STREAM_TIMEOUT_SECONDS,
@@ -56,6 +61,7 @@ from gaia.ui.email_sidecar.profiles import (
     confirmations_supported,
     documents_supported,
     profile_for,
+    scope_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
@@ -1501,7 +1507,9 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     Falls back to the current working directory only when nothing is attached,
     and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
-    protected directory — a scope that broad is not a scope.
+    protected directory — a scope that broad is not a scope. When
+    ``GAIA_ALLOWED_PATHS`` shares nothing with that fallback, the folders it
+    names are the scope instead (see :func:`_env_scope_for_fallback`).
 
     Args:
         rag_file_paths: Paths of the documents attached to this session.
@@ -1524,6 +1532,10 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
 
     cwd = Path.cwd().resolve()
     reason = _unsafe_directory_grant_reason(cwd)
+    fallback = [managed] if reason else sorted({managed, str(cwd)})
+    env_scope = _env_scope_for_fallback(fallback)
+    if env_scope:
+        return sorted({managed, *env_scope})
     if reason:
         logger.warning(
             "Refusing to grant this session file access to %s because %s. The "
@@ -1532,8 +1544,47 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
             cwd,
             reason,
         )
-        return [managed]
-    return sorted({managed, str(cwd)})
+    return fallback
+
+
+def _env_scope_for_fallback(fallback: list) -> list:
+    """``GAIA_ALLOWED_PATHS``'s folders, when they share nothing with *fallback*.
+
+    The setting only narrows, but narrowing a default the user never picked to
+    nothing leaves an agent that can open no file at all; the folders the user
+    did name stand in. Entries too broad to grant on their own are skipped.
+
+    Args:
+        fallback: The scope a session with no documents would otherwise get.
+
+    Returns:
+        The usable entries, or ``[]`` when the setting is unset, invalid (the
+        agent's validator reports that), or overlaps *fallback*.
+    """
+    try:
+        ceiling = env_allowed_paths()
+    except AllowedPathsEnvError:
+        return []
+    if ceiling is None or narrow_allowed_paths(fallback, warn=False):
+        return []
+    usable = []
+    for root in ceiling:
+        reason = _unsafe_directory_grant_reason(root)
+        if reason:
+            logger.warning(
+                "Not granting GAIA_ALLOWED_PATHS entry %s because %s.", root, reason
+            )
+        else:
+            usable.append(str(root))
+    return usable
+
+
+def _effective_scope(allowed: list) -> list:
+    """*allowed* as the agent's validator will hold it under ``GAIA_ALLOWED_PATHS``."""
+    try:
+        return narrow_allowed_paths(allowed, warn=False)
+    except AllowedPathsEnvError:
+        return []
 
 
 def _with_attachments(allowed: list, attached: list) -> list:
@@ -1842,12 +1893,17 @@ def _dispatch_sidecar_query(
     agent_type: str,
     session_id: str | None = None,
     documents: list | None = None,
+    allowed_paths: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
     the turn with an upgrade message rather than answer without them.
+
+    *allowed_paths* is the chat's computed file scope. A sidecar that takes it
+    gets it with ``GAIA_ALLOWED_PATHS`` already applied — the sidecar process
+    need not share this one's environment — so it works where the UI says.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1990,6 +2046,12 @@ def _dispatch_sidecar_query(
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
+        allowed_paths=(
+            _effective_scope(allowed_paths)
+            if allowed_paths is not None
+            and scope_supported(profile, handle.api_version)
+            else None
+        ),
     )
 
 
@@ -3352,6 +3414,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
+                        allowed_paths=allowed,
                     )
                     return
 
