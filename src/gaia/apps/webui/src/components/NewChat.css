@@ -50,7 +50,19 @@
     border: 1px solid var(--border-light);
     border-radius: var(--radius-full);
     color: var(--text-secondary);
+    background: none;
+    font: inherit;
     font-size: 12.5px;
+    cursor: pointer;
+}
+
+.new-chat-folder:hover {
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+
+.new-chat-meta {
+    align-items: center;
 }
 
 .new-chat-folder span {

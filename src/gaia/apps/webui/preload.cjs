@@ -15,6 +15,7 @@
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
  *   system:*         — System metrics for the observability dashboard (#2007)
  *   power:*          — Keep the PC awake while a chat turn runs (#5226)
+ *   dialog:*         — Native dialogs (the folder a new chat works in)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -78,6 +79,12 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   // ── Keep the PC awake while GAIA works (#5226) ────────────────────────
   power: {
     setKeepAwake: (on) => ipcRenderer.invoke("power:keep-awake", on),
+  },
+
+  // ── Native dialogs ────────────────────────────────────────────────────
+  dialog: {
+    // Resolves the picked folder's path, or null when the user cancels.
+    pickFolder: () => ipcRenderer.invoke("dialog:pick-folder"),
   },
 
   // ── System metrics for the observability dashboard (#2007) ────────────

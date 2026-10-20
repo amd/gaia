@@ -105,6 +105,17 @@ class RelayProfile:
     #: the installed agent is below :attr:`min_documents_api_version` — it
     #: would answer as if the files were not there.
     documents_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes the chat's folder settings
+    #: (``folders``, ``withheld_folders``, ``working_folder``). ``None`` means
+    #: the agent never reads them, so the chat's folders can't be changed.
+    min_folders_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running a turn on a chat with folder settings when the
+    #: installed agent is below :attr:`min_folders_api_version`.
+    folders_upgrade_message: str = ""
+    #: Shown (as a warning; the turn still runs) when the only folder setting
+    #: is the ``GAIA_WORKING_DIR`` default and the agent is too old to take it.
+    #: ``{folder}`` and ``{env}`` are filled in.
+    default_folder_ignored_message: str = ""
     #: Contract version from which ``GET /v1/<agent>/skills`` lists the skills
     #: the agent can load. ``None`` means the agent has no such route.
     min_skills_api_version: Optional[Tuple[int, int]] = None
@@ -418,6 +429,18 @@ GAIA_PROFILE = RelayProfile(
         "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
         "or remove the documents from this chat, then retry."
     ),
+    # 2.18 added /query's folders, withheld_folders and working_folder fields.
+    min_folders_api_version=(2, 18),
+    folders_upgrade_message=(
+        "This chat has its own folders, but the installed GAIA agent can't be "
+        "given them (needs contract 2.18+). Update the GAIA agent, or start a "
+        "chat without a picked or added folder, then retry."
+    ),
+    default_folder_ignored_message=(
+        "The installed GAIA agent can't be given the default working folder "
+        "{folder} (set by {env} or --working-dir; needs contract 2.18+), so it "
+        "works in its own folder. Update the GAIA agent to use it."
+    ),
     # 2.17 added GET /skills.
     min_skills_api_version=(2, 17),
     skills_upgrade_message=(
@@ -494,6 +517,15 @@ def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def folders_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar takes the chat's folder settings on ``/query``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_folders_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when the sidecar lists its skills on ``GET /v1/<agent>/skills``.
 
@@ -526,5 +558,6 @@ __all__ = [
     "api_version_supported",
     "confirmations_supported",
     "documents_supported",
+    "folders_supported",
     "skills_supported",
 ]

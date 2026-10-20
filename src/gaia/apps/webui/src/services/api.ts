@@ -1136,6 +1136,11 @@ export async function addEnvironmentFolder(sessionId: string, path: string): Pro
     return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
 }
 
+/** Pick the folder a new chat works in; refused once the chat has started. */
+export async function setWorkingFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/working-folder`, { path });
+}
+
 export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
     return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
 }

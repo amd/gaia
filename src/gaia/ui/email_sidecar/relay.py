@@ -316,6 +316,20 @@ class _FullAccessNotSet(SidecarError):
         self.event = event
 
 
+def _add_scope(body: Dict[str, Any], scope: Optional[Dict[str, Any]]) -> None:
+    """Put the chat's folder settings on a ``/query`` *body* (contract >= 2.18).
+
+    Sent whole every turn, so a folder removed since the last one is refused.
+    """
+    if not scope:
+        return
+    body["folders"] = list(scope.get("folders") or [])
+    body["withheld_folders"] = list(scope.get("withheld") or [])
+    working_folder = scope.get("working_folder") or scope.get("default_working_folder")
+    if working_folder:
+        body["working_folder"] = working_folder
+
+
 def _best_effort_cancel(proxy: Any, rid: str) -> None:
     try:
         proxy.cancel_query(rid)
@@ -343,11 +357,17 @@ def relay_query(
     session_id: Optional[str] = None,
     answers_confirmations: bool = False,
     documents: Optional[List[str]] = None,
+    scope: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
+
+    *scope* — the chat's ``folders``, ``withheld`` and ``working_folder`` (else
+    ``default_working_folder``), for
+    a sidecar the caller has established takes them
+    (``profiles.folders_supported``).
 
     *answers_confirmations* — the caller has established that this sidecar
     takes ``tool_decision`` answers (``profiles.confirmations_supported``), so
@@ -413,6 +433,7 @@ def relay_query(
         body["session_id"] = session_id
     if documents:
         body["documents"] = list(documents)
+    _add_scope(body, scope)
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

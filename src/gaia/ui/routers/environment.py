@@ -57,6 +57,19 @@ async def add_folder(
     return await asyncio.to_thread(env.describe, db, session)
 
 
+@router.put("/api/sessions/{session_id}/environment/working-folder")
+async def set_working_folder(
+    session_id: str, body: FolderRequest, db: ChatDatabase = Depends(get_db)
+):
+    """Pick the folder a new chat works in, before its first message."""
+    session = _session(db, session_id)
+    try:
+        await asyncio.to_thread(env.set_working_folder, db, session_id, body.path)
+    except env.EnvironmentChangeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return await asyncio.to_thread(env.describe, db, session)
+
+
 @router.post("/api/sessions/{session_id}/environment/folders/remove")
 async def remove_folder(
     session_id: str, body: FolderRequest, db: ChatDatabase = Depends(get_db)

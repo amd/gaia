@@ -187,13 +187,15 @@ def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/environment").status_code == 404
 
 
-def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
-    client, session_id, folder, monkeypatch
+def test_a_relayed_email_agent_refuses_folder_and_internet_changes(
+    client, folder, monkeypatch
 ):
-    # A Hub binary or the email sidecar runs as its own process.
+    # The email sidecar runs as its own process and is never sent folders.
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    session_id = client.post("/api/sessions", json={"agent_type": "email"}).json()["id"]
     body = client.get(f"/api/sessions/{session_id}/environment").json()
     assert body["enforced"] is False
+    assert body["internet_enforced"] is False
     off = client.put(
         f"/api/sessions/{session_id}/environment/internet", json={"on": False}
     )
@@ -211,3 +213,62 @@ def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
     assert (
         client.get(f"/api/sessions/{session_id}/environment").json()["internet"] is True
     )
+
+
+def test_a_relayed_gaia_agent_takes_folders_but_not_internet(
+    client, session_id, folder, monkeypatch
+):
+    # The flagship sidecar is sent the chat's folders on every /query.
+    monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
+    added = client.post(
+        f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
+    )
+    assert added.status_code == 200, added.text
+    assert added.json()["enforced"] is True
+    assert added.json()["internet_enforced"] is False
+    assert str(folder) in _paths(added.json())
+    off = client.put(
+        f"/api/sessions/{session_id}/environment/internet", json={"on": False}
+    )
+    assert off.status_code == 409
+
+
+def test_working_folder_is_saved_and_granted(client, session_id, folder):
+    picked = client.put(
+        f"/api/sessions/{session_id}/environment/working-folder",
+        json={"path": str(folder)},
+    )
+    assert picked.status_code == 200, picked.text
+    body = picked.json()
+    assert body["working_folder"] == str(folder.resolve())
+    entry = next(f for f in body["folders"] if f["path"] == str(folder.resolve()))
+    assert entry["source"] == "working_folder"
+    again = client.get(f"/api/sessions/{session_id}/environment").json()
+    assert again["working_folder"] == str(folder.resolve())
+
+
+@pytest.mark.parametrize("which", ["home", "missing"])
+def test_working_folder_refuses_home_and_missing_folders(
+    client, session_id, tmp_path, which
+):
+    from pathlib import Path
+
+    path = Path.home() if which == "home" else tmp_path / "nope"
+    picked = client.put(
+        f"/api/sessions/{session_id}/environment/working-folder",
+        json={"path": str(path)},
+    )
+    assert picked.status_code == 400
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+    assert body["working_folder"] is None
+
+
+def test_working_folder_cannot_change_once_the_chat_started(
+    client, session_id, folder, live_agent
+):
+    picked = client.put(
+        f"/api/sessions/{session_id}/environment/working-folder",
+        json={"path": str(folder)},
+    )
+    assert picked.status_code == 400
+    assert "already started" in picked.json()["detail"]

@@ -1398,7 +1398,9 @@ agent at once, so they take effect on its next step.
       "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
       "removed": ["C:\\work\\private"],
       "internet": true,
-      "enforced": true
+      "working_folder": "C:\\work\\project",
+      "enforced": true,
+      "internet_enforced": true
     }
     ```
 
@@ -1406,9 +1408,14 @@ agent at once, so they take effect on its next step.
     `source` is `added`, `gaia_documents`, `scratch`, `document`,
     `working_folder` or `approved` (granted during the chat). `removable` is
     false for an attached document, which leaves through the chat's document
-    list. `enforced` is false for an agent that runs as its own process (a
-    relayed sidecar); the folder and internet endpoints then refuse changes
-    with **409** (**400** for adding a folder).
+    list. `working_folder` is the folder picked when the chat was started, or
+    `null` for the default one (`GAIA_WORKING_DIR` or `--working-dir`, else
+    the folder the server started in). `enforced` says the chat's folders hold:
+    the GAIA agent, in-process or as its own process, gets them every turn,
+    while another relayed agent (email) does not, and the folder endpoints then
+    refuse changes with **409** (**400** for adding a folder).
+    `internet_enforced` is false for any agent that runs as its own process,
+    and the internet endpoint then refuses with **409**.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">
@@ -1416,6 +1423,13 @@ agent at once, so they take effect on its next step.
     write the folder. **400** for a path that isn't a folder, for a filesystem
     root, the home folder or a protected folder, and for a folder inside one
     the user removed.
+  </Accordion>
+
+  <Accordion title="PUT /api/sessions/{session_id}/environment/working-folder">
+    **Request:** `{"path": "C:\\work\\project"}`. Pick the folder a new
+    chat works in, before its first message: the agent may read and write it,
+    maps it as its project, and starts shell commands there. **400** for the
+    same folders adding one refuses, and once the chat has started.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders/remove">

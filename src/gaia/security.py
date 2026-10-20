@@ -474,6 +474,28 @@ _ALLOWED_PATHS_DOCS = "https://amd-gaia.ai/docs/reference/cli#narrowing-file-acc
 _warned_scope_entries: Set[Tuple[str, Tuple[str, ...]]] = set()
 
 
+def unsafe_directory_grant_reason(directory: Path) -> str:
+    """Why *directory* is too broad to hand a session, or ``""`` if it is fine.
+
+    Args:
+        directory: A resolved directory being considered as a session scope.
+
+    Returns:
+        A reason naming what the grant would expose, empty when it is safe.
+    """
+    if directory == Path(directory.anchor):
+        return "it is a filesystem root"
+    if directory == Path.home().resolve():
+        return "it is your home directory"
+    for blocked in BLOCKED_DIRECTORIES:
+        blocked_path = Path(blocked).resolve()
+        if directory == blocked_path or blocked_path.is_relative_to(directory):
+            return f"it contains the protected directory '{blocked}'"
+        if directory.is_relative_to(blocked_path):
+            return f"it is inside the protected directory '{blocked}'"
+    return ""
+
+
 class AllowedPathsEnvError(ValueError):
     """``GAIA_ALLOWED_PATHS`` holds a value that cannot be used as a scope."""
 

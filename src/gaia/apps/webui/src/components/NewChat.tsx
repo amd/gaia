@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Folder } from 'lucide-react';
+import { ChevronRight, Folder, X } from 'lucide-react';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { StartCards } from './StartCards';
+import { FolderPicker } from './session-panel/FolderPicker';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
@@ -56,6 +57,73 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
                 <ChevronRight size={12} className={open ? 'is-open' : ''} aria-hidden="true" /> Details
             </button>
             {open && <pre className="new-chat-details-text">{detail}</pre>}
+        </div>
+    );
+}
+
+function baseName(path: string): string {
+    const parts = path.split(/[\\/]/).filter(Boolean);
+    return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * The folder the new chat will work in, and a way to pick another: the OS
+ * dialog in the desktop app, a path box and browser in a plain browser.
+ */
+function WorkingFolderChip({ folder }: { folder: StartScreen['working_folder'] | undefined }) {
+    const picked = useChatStore((s) => s.draftWorkingFolder);
+    const setPicked = useChatStore((s) => s.setDraftWorkingFolder);
+    const [browsing, setBrowsing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const choose = useCallback(async () => {
+        setError(null);
+        const native = window.gaiaAPI?.dialog?.pickFolder;
+        if (!native) {
+            setBrowsing(true);
+            return;
+        }
+        try {
+            const path = await native();
+            if (path) setPicked(path);
+        } catch (err) {
+            setError(`Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }, [setPicked]);
+
+    if (!folder && !picked) return null;
+    const title = picked
+        ? `GAIA works in ${picked} in this chat. Click to pick another folder.`
+        : folder?.gaia_folder
+            ? `GAIA works in its own folder, ${folder.path}. Click to pick a folder for this chat.`
+            : `GAIA works in ${folder?.path}. Click to pick another folder for this chat.`;
+    return (
+        <div className="new-chat-meta">
+            <button type="button" className="new-chat-folder" title={title} aria-label={title} onClick={() => void choose()}>
+                <Folder size={13} aria-hidden="true" />
+                <span>{picked ? baseName(picked) : folder?.name}</span>
+            </button>
+            {picked && (
+                <button
+                    type="button"
+                    className="btn-icon-sm"
+                    onClick={() => setPicked(null)}
+                    aria-label="Use the default folder"
+                    title="Use the default folder"
+                >
+                    <X size={12} />
+                </button>
+            )}
+            {error && <span className="new-chat-error" role="alert">{error}</span>}
+            {browsing && (
+                <FolderPicker
+                    title="Choose a folder"
+                    label="Choose the folder this chat works in"
+                    note="This chat will read and write in the folder you pick, and run commands there."
+                    onPick={(path) => { setPicked(path); setBrowsing(false); }}
+                    onClose={() => setBrowsing(false)}
+                />
+            )}
         </div>
     );
 }
@@ -148,19 +216,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     leftControls={<PermissionModeChip sessionId={null} />}
                     rightControls={<ModelChip />}
                 />
-                {folder && (
-                    <div className="new-chat-meta">
-                        <span
-                            className="new-chat-folder"
-                            title={folder.gaia_folder
-                                ? `GAIA works in its own folder, ${folder.path}. Attach a file or start GAIA from a project folder to work there.`
-                                : `GAIA works in ${folder.path}`}
-                        >
-                            <Folder size={13} aria-hidden="true" />
-                            <span>{folder.name}</span>
-                        </span>
-                    </div>
-                )}
+                <WorkingFolderChip folder={folder} />
                 {warming !== null && !starting && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
                 )}

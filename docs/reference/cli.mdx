@@ -62,6 +62,7 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
+| `--working-dir <path>` | The folder a new Agent UI chat works in (sets `GAIA_WORKING_DIR`; default: the folder GAIA starts in). A filesystem root, the home folder or a protected folder is refused at startup. Each chat can still pick its own on the new-chat screen |
 | `--cli` | Launch interactive CLI chat |
 | `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. |
 
@@ -875,6 +876,7 @@ on stderr.
 | `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
 | `--ui-dist` | path | - | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the package |
+| `--working-dir` | path | - | The folder a new Agent UI chat works in (sets `GAIA_WORKING_DIR`; used with `--ui`) |
 
 **Exit codes:** `--query` exits `0` when the agent answered, `1` when the query or the agent failed, and `130` when interrupted with Ctrl+C — so `gaia chat --query "..." && next-step` only runs next-step on success.
 

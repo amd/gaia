@@ -302,9 +302,7 @@ class TestComputeAllowedPaths:
         protected = tmp_path / "protected"
         child = protected / "service"
         child.mkdir(parents=True)
-        monkeypatch.setattr(
-            "gaia.ui._chat_helpers.BLOCKED_DIRECTORIES", {str(protected)}
-        )
+        monkeypatch.setattr("gaia.security.BLOCKED_DIRECTORIES", {str(protected)})
         monkeypatch.chdir(child)
 
         assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]

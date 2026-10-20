@@ -87,7 +87,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [],
+        draftDocumentIds: [], draftWorkingFolder: null,
     });
 });
 
@@ -165,6 +165,38 @@ describe('a new chat', () => {
 
         await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'full_access'));
         expect(useChatStore.getState().draftPermissionMode).toBe('full_access');
+    });
+
+    it('works in the folder picked before the chat existed, then forgets it', async () => {
+        mocked.setWorkingFolder.mockResolvedValue({} as never);
+        useChatStore.setState({ draftWorkingFolder: '/srv/reports' });
+        render(<App />);
+        await sendFirstMessage('go');
+
+        await waitFor(() => expect(mocked.setWorkingFolder).toHaveBeenCalledWith('sess-new-0001', '/srv/reports'));
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(useChatStore.getState().draftWorkingFolder).toBeNull();
+    });
+
+    it('sets no working folder when none was picked', async () => {
+        render(<App />);
+        await sendFirstMessage('go');
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.setWorkingFolder).not.toHaveBeenCalled();
+    });
+
+    it('does not send the message when the working folder was refused', async () => {
+        mocked.setWorkingFolder.mockRejectedValue(new Error('it is your home directory'));
+        useChatStore.setState({ draftWorkingFolder: '/home/u' });
+        render(<App />);
+        await sendFirstMessage('go');
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't be set to work in \/home\/u.*home directory/);
+        expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // Still on the new-chat screen with the pick, and the empty chat is gone.
+        expect(mocked.deleteSession).toHaveBeenCalledWith('sess-new-0001');
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+        expect(useChatStore.getState().draftWorkingFolder).toBe('/home/u');
     });
 
     it('does not send the message when the permission mode could not be set', async () => {

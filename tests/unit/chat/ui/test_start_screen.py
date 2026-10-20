@@ -199,3 +199,15 @@ def test_start_endpoint_says_why_when_the_agent_cannot_list_skills(client, monke
     assert body["cards"] == []
     assert body["skills_error"] == "The GAIA agent could not be started"
     assert body["working_folder"]["name"]
+
+
+def test_working_folder_follows_gaia_working_dir(tmp_path, monkeypatch):
+    project = tmp_path / "picked"
+    project.mkdir()
+    monkeypatch.chdir(Path.home())
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(project))
+    assert ss.working_folder() == {
+        "path": str(project.resolve()),
+        "name": "picked",
+        "gaia_folder": False,
+    }

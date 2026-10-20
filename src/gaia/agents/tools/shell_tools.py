@@ -2722,19 +2722,27 @@ class ShellToolsMixin:
         """
         return self._path_allowed
 
+    def _new_shell_session(self) -> ShellSession:
+        """A session starting in the agent's configured project, else the process cwd."""
+        start = getattr(getattr(self, "config", None), "project_root", None)
+        return ShellSession(
+            start_cwd=start if isinstance(start, str) else None,
+            cwd_guard=self._session_cwd_guard(),
+        )
+
     @property
     def shell_session(self) -> ShellSession:
         """This agent's shell session, created on first use."""
         session = getattr(self, "_shell_session", None)
         if session is None or session.closed:
-            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            session = self._new_shell_session()
             self._shell_session = session
         return session
 
     def reset_shell_session(self) -> ShellSession:
         """Replace the session with a clean one and return it."""
         previous = getattr(self, "_shell_session", None)
-        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        self._shell_session = self._new_shell_session()
         if previous is not None:
             previous.close()
         return self._shell_session

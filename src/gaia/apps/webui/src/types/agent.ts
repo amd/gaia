@@ -114,6 +114,11 @@ export interface GaiaElectronAPI {
   power: {
     setKeepAwake: (on: boolean) => Promise<boolean>;
   };
+  /** Absent in a desktop build that predates it. */
+  dialog?: {
+    /** The OS folder picker; resolves null when the user cancels. */
+    pickFolder: () => Promise<string | null>;
+  };
   tray: {
     getConfig: () => Promise<TrayConfig>;
     /** Resolves with the saved config; rejects with why it couldn't be saved. */

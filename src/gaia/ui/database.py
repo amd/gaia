@@ -114,12 +114,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 -- What one chat may reach, set from the session panel (#5276).
--- folders: added by the user; withheld: removed, refused even under a wider grant.
+-- folders: added by the user; withheld: removed, refused even under a wider grant;
+-- working_folder: picked when the chat was started, NULL for the default one.
 CREATE TABLE IF NOT EXISTS session_environment (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     folders TEXT NOT NULL DEFAULT '[]',
     withheld TEXT NOT NULL DEFAULT '[]',
-    internet_off INTEGER NOT NULL DEFAULT 0
+    internet_off INTEGER NOT NULL DEFAULT 0,
+    working_folder TEXT
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -370,6 +372,11 @@ class ChatDatabase:
             "WHEN title LIKE 'Schedule:%' THEN 'scheduled' "
             "ELSE 'chat' END",
         )
+        if self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'session_environment'"
+        ).fetchone():
+            self._add_column("session_environment", "working_folder", "TEXT")
 
     @property
     def db_path(self) -> str:
@@ -1195,12 +1202,17 @@ class ChatDatabase:
         """The chat's added and removed folders and its internet switch."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT folders, withheld, internet_off FROM session_environment "
-                "WHERE session_id = ?",
+                "SELECT folders, withheld, internet_off, working_folder "
+                "FROM session_environment WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
         if row is None:
-            return {"folders": [], "withheld": [], "internet_off": False}
+            return {
+                "folders": [],
+                "withheld": [],
+                "internet_off": False,
+                "working_folder": None,
+            }
         try:
             folders, withheld = json.loads(row["folders"]), json.loads(row["withheld"])
         except ValueError as e:
@@ -1212,6 +1224,7 @@ class ChatDatabase:
             "folders": folders,
             "withheld": withheld,
             "internet_off": bool(row["internet_off"]),
+            "working_folder": row["working_folder"],
         }
 
     def set_session_environment(
@@ -1238,6 +1251,17 @@ class ChatDatabase:
                     json.dumps(withheld),
                     1 if internet_off else 0,
                 ),
+            )
+
+    def set_session_working_folder(self, session_id: str, folder: str) -> None:
+        """Record the folder the chat works in; its other settings are kept."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO session_environment (session_id, working_folder)
+                   VALUES (?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                       working_folder = excluded.working_folder""",
+                (session_id, folder),
             )
 
     def get_session_documents(self, session_id: str) -> List[Dict[str, Any]]:

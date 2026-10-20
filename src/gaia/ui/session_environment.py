@@ -77,13 +77,89 @@ def relayed(session: Dict[str, Any]) -> bool:
     )
 
 
+def _takes_folders(session: Dict[str, Any]) -> bool:
+    """Whether the chat's agent can be held to its folders: in-process, or sent them."""
+    if not relayed(session):
+        return True
+    from gaia.ui.email_sidecar.profiles import profile_for
+
+    profile = profile_for(session.get("agent_type") or "chat")
+    return profile is not None and profile.min_folders_api_version is not None
+
+
+def _refuse(what: str) -> EnvironmentChangeError:
+    return EnvironmentChangeError(
+        f"This chat's agent runs as its own process, so GAIA can't hold it to {what}. "
+        "Start a chat with the GAIA agent to use them."
+    )
+
+
 def _require_enforceable(db: ChatDatabase, session_id: str) -> None:
+    """Refuse an internet setting for an agent GAIA can't hold to it."""
     session = db.get_session(session_id)
     if session is not None and relayed(session):
+        raise _refuse("these settings")
+
+
+def _require_folders_reach(db: ChatDatabase, session_id: str) -> None:
+    """Refuse a folder setting for an agent that is neither in-process nor sent it."""
+    session = db.get_session(session_id)
+    if session is not None and not _takes_folders(session):
+        raise _refuse("these folder settings")
+
+
+def relayed_scope(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
+    """The folder settings a relayed agent is sent each turn to apply itself.
+
+    ``working_folder`` is the chat's own pick; ``default_working_folder`` is
+    ``GAIA_WORKING_DIR`` (or ``--working-dir``), kept apart so a sidecar too
+    old to take folders is stopped only by settings the chat itself made.
+    """
+    from ._chat_helpers import env_working_dir
+
+    env = load(db, session_id)
+    default = None if env["working_folder"] else env_working_dir()
+    return {
+        "folders": list(env["folders"]),
+        "withheld": list(env["withheld"]),
+        "working_folder": env["working_folder"],
+        "default_working_folder": str(default) if default else None,
+    }
+
+
+def _checked_folder(path: str) -> Path:
+    """*path* as a folder GAIA may be given, or why it can't be."""
+    from ._chat_helpers import _unsafe_directory_grant_reason
+
+    target = Path(os.path.expanduser(path)).resolve()
+    if not target.is_dir():
+        raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
+    reason = _unsafe_directory_grant_reason(target)
+    if reason:
         raise EnvironmentChangeError(
-            "This chat's agent runs as its own process, so GAIA can't hold it to "
-            "these settings. Start a chat with the GAIA agent to use them."
+            f"GAIA can't be given {target}: {reason}. Pick a narrower folder."
         )
+    return target
+
+
+def set_working_folder(db: ChatDatabase, session_id: str, path: str) -> None:
+    """Make *path* the folder this chat works in, before its first message.
+
+    The agent is built around its working folder, so a chat that has started
+    keeps the one it has; adding a folder is how it reaches another.
+    """
+    session = db.get_session(session_id)
+    if session is None:
+        raise EnvironmentChangeError(f"Chat {session_id} does not exist.")
+    if session.get("message_count", 0) or _live_agent(session_id) is not None:
+        raise EnvironmentChangeError(
+            "This chat has already started, so its working folder is set. Add the "
+            "folder to this chat instead, or start a new chat in it."
+        )
+    _require_folders_reach(db, session_id)
+    target = _checked_folder(path)
+    db.set_session_working_folder(session_id, str(target))
+    logger.info("Chat %s works in %s", session_id, target)
 
 
 def _live_agent(session_id: str) -> Optional[Any]:
@@ -92,17 +168,33 @@ def _live_agent(session_id: str) -> Optional[Any]:
     return cached_session_agent(session_id)
 
 
-def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
+def _computed_scope(
+    db: ChatDatabase, session: Dict[str, Any], env: Dict[str, Any]
+) -> List[str]:
     """The scope a new agent for this chat would get, before the user's changes."""
-    from ._chat_helpers import _compute_allowed_paths, _resolve_rag_paths
+    from ._chat_helpers import (
+        WorkingDirEnvError,
+        _compute_allowed_paths,
+        _managed_documents_dir,
+        _resolve_rag_paths,
+    )
 
     rag, library = _resolve_rag_paths(db, session.get("document_ids", []))
-    return _compute_allowed_paths(rag + library)
+    try:
+        return _compute_allowed_paths(rag + library, env["working_folder"])
+    except WorkingDirEnvError as e:
+        # Only reached with no documents and no pick: the GAIA folder alone.
+        logger.warning("No default working folder to show: %s", e)
+        return [str(_managed_documents_dir())]
 
 
 def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     """What the session panel shows: every folder and file the chat may touch."""
-    from ._chat_helpers import _managed_documents_dir
+    from ._chat_helpers import (
+        WorkingDirEnvError,
+        _managed_documents_dir,
+        default_working_dir,
+    )
 
     session_id = session["id"]
     env = load(db, session_id)
@@ -112,7 +204,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         scope = [str(p) for p in validator.allowed_paths]
         scratch = str(validator.scratch_dir) if validator.scratch_dir else None
     else:
-        scope = _computed_scope(db, session) + list(env["folders"])
+        scope = _computed_scope(db, session, env) + list(env["folders"])
         scratch = None
 
     added = {_norm(p) for p in env["folders"]}
@@ -122,7 +214,14 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
-    cwd = _norm(os.getcwd())
+    cwd = env["working_folder"]
+    if not cwd:
+        try:
+            cwd = str(default_working_dir())
+        except WorkingDirEnvError as e:
+            # The panel still lists the chat's folders; the turn says what to fix.
+            logger.warning("No default working folder to show: %s", e)
+    cwd = _norm(cwd) if cwd else None
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)
@@ -157,23 +256,19 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],
-        "enforced": not relayed(session) and (validator is not None or agent is None),
+        "working_folder": env["working_folder"],
+        # A relayed agent is sent its folders each turn; its internet is its own.
+        "enforced": _takes_folders(session)
+        and (relayed(session) or validator is not None or agent is None),
+        "internet_enforced": not relayed(session)
+        and (validator is not None or agent is None),
     }
 
 
 def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     """Let the chat read and write *path*, now and in later turns."""
-    from ._chat_helpers import _unsafe_directory_grant_reason
-
-    _require_enforceable(db, session_id)
-    target = Path(os.path.expanduser(path)).resolve()
-    if not target.is_dir():
-        raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
-    reason = _unsafe_directory_grant_reason(target)
-    if reason:
-        raise EnvironmentChangeError(
-            f"GAIA can't be given {target}: {reason}. Pick a narrower folder."
-        )
+    _require_folders_reach(db, session_id)
+    target = _checked_folder(path)
     env = load(db, session_id)
     covering = [
         w
@@ -206,7 +301,7 @@ def add_folder(db: ChatDatabase, session_id: str, path: str) -> None:
 
 def remove_folder(db: ChatDatabase, session_id: str, path: str) -> None:
     """Take *path* away from the chat; enforced from the agent's next step."""
-    _require_enforceable(db, session_id)
+    _require_folders_reach(db, session_id)
     target = str(Path(os.path.expanduser(path)).resolve())
     env = load(db, session_id)
     folders = [f for f in env["folders"] if not within(f, target)]
