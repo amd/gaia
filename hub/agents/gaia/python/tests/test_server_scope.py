@@ -46,6 +46,7 @@ class _ScopeAgent:
                 self.console.auto_approve_gated_tools,
                 self.console.full_access,
                 self.console.answers_confirmations,
+                self.console.grants_paths,
             )
         )
         return {"answer": "ok"}
@@ -145,8 +146,8 @@ def test_a_relative_scope_entry_is_refused(built):
     assert agents == []
 
 
-def test_full_access_over_http_leaves_a_watched_session_askable(built):
-    """Pre-approved, not full access: an out-of-scope path is asked about."""
+def test_full_access_over_http_grants_paths_on_a_watched_session(built):
+    """Full access widens the file scope; the shell gates stay on."""
     client, agents = built
     assert _query(client, session_id="s1").status_code == 200
     r = client.post("/v1/gaia/sessions/s1/bypass", json={"enabled": True})
@@ -154,7 +155,15 @@ def test_full_access_over_http_leaves_a_watched_session_askable(built):
 
     assert _query(client, session_id="s1").status_code == 200
 
-    assert agents[0].seen[-1] == (True, False, True)
+    assert agents[0].seen[-1] == (True, False, True, True)
+
+
+def test_ask_mode_grants_nothing_without_a_prompt(built):
+    client, agents = built
+
+    assert _query(client, session_id="s1").status_code == 200
+
+    assert agents[0].seen[-1] == (False, False, True, False)
 
 
 @pytest.mark.parametrize(

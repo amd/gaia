@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: MIT
 """An out-of-scope read asks the user through the agent's console, once."""
 
+import json
 import threading
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -117,6 +119,62 @@ def test_full_access_answers_the_path_prompt(layout):
     agent = _ReadAgent(layout["scope"], handler)
 
     assert _read(agent, layout["file"])["status"] == "success"
+
+
+def _relayed_handler(full_access):
+    """The relayed sidecar's handler: shell gates on, a person watching."""
+    handler = SSEOutputHandler()
+    handler.auto_approve_gated_tools = full_access
+    handler.grants_paths = full_access
+    handler.answers_confirmations = True
+    return handler
+
+
+def test_relayed_full_access_grants_a_named_folder_without_asking(layout):
+    handler = _relayed_handler(full_access=True)
+    agent = _ReadAgent(layout["scope"], handler)
+
+    assert _read(agent, layout["file"])["status"] == "success"
+    assert handler._confirm_event is None
+
+
+def test_relayed_full_access_still_refuses_the_home_folder(layout, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: layout["file"].parent))
+    handler = _relayed_handler(full_access=True)
+    agent = _ReadAgent(layout["scope"], handler)
+
+    result = agent._execute_tool(
+        "search_code", {"directory": str(layout["file"].parent), "pattern": "x"}
+    )
+
+    assert "too broad" in json.dumps(result)
+    assert handler._confirm_event is None
+
+
+def test_full_access_grants_no_path_on_an_unattended_run(layout):
+    handler = _relayed_handler(full_access=True)
+    handler.answers_confirmations = False
+    agent = _ReadAgent(layout["scope"], handler)
+
+    assert _read(agent, layout["file"])["status"] != "success"
+    assert handler._confirm_event is None
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_relayed_ask_mode_asks_for_the_path(layout, approved):
+    handler = _relayed_handler(full_access=False)
+    agent = _ReadAgent(layout["scope"], handler)
+    results = {}
+
+    worker = threading.Thread(
+        target=lambda: results.update(read=_read(agent, layout["file"]))
+    )
+    worker.start()
+    requests = _answer_next_prompt(handler, approved=approved)
+    worker.join(timeout=5)
+
+    assert [r["tool"] for r in requests] == [PATH_ACCESS_PROMPT_TOOL]
+    assert (results["read"]["status"] == "success") is approved
 
 
 @pytest.mark.parametrize("approved", [True, False])

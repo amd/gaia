@@ -3033,12 +3033,14 @@ Do NOT wrap conversational replies in JSON.
         if getattr(console, "full_access", False):
             logger.warning("Full access is on: granting %s without asking", path)
             return True
+        watched = getattr(console, "answers_confirmations", False) is True
+        if watched and getattr(console, "grants_paths", False) is True:
+            logger.warning(
+                "Full access is on for this chat: granting %s without asking", path
+            )
+            return True
         auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
-        if (
-            callable(auto_approves)
-            and auto_approves()
-            and not getattr(console, "answers_confirmations", False)
-        ):
+        if callable(auto_approves) and auto_approves() and not watched:
             logger.warning(
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )

@@ -350,6 +350,15 @@ class OutputHandler(ABC):
     edit_roots: Tuple[str, ...] = ()
     """Folders "accept edits" may write into — the session's workspace."""
 
+    grants_paths: bool = False
+    """The user turned on Full access: grant an out-of-scope path without asking.
+
+    Set by ``PermissionState`` with Full access, independent of whether the
+    shell guardrails are lifted. Honoured only with :attr:`answers_confirmations`,
+    so an unattended run that pre-approves tools still never widens the scope.
+    Paths no answer may grant (home, drive roots, secrets) stay refused.
+    """
+
     answers_confirmations: bool = False
     """A person can answer a confirmation on this run even while tools are pre-approved.
 
