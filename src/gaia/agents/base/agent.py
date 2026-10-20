@@ -7365,9 +7365,11 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _is_loaded_ctx_too_small(self) -> bool:
-        """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than the window GAIA loads that
-        model with (``resolve_ctx_size``).
+        """Probe Lemonade's health endpoint to see whether this agent's own
+        model is loaded with a context size below its target window.
+
+        The target is ``resolve_ctx_size`` clamped to the model's trained
+        ``max_context_window``; other loaded models are ignored.
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -7380,9 +7382,11 @@ Do NOT wrap conversational replies in JSON.
 
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                _model_ids_match,
                 cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_ctx_size,
+                resolve_effective_ctx_size,
                 resolve_lemonade_api_key,
                 resolve_lemonade_base_url,
             )
@@ -7406,18 +7410,31 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
+            # Same resolution as the chat config: no model_id runs the default.
+            own_model = getattr(self, "model_id", None) or resolve_default_chat_model()
             for m in data.get("all_models_loaded", []):
-                if m.get("type") in ("llm", "vlm"):
-                    ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Each model against its own window: an NPU model is right
-                    # at 32K, a memory-sized GPU model may be far above 64K.
-                    expected_ctx = resolve_ctx_size(
-                        model=m.get("model_name"),
+                if m.get("type") not in ("llm", "vlm"):
+                    continue
+
+                # Judges only the agent's own model, other residents don't matter.
+                if not (
+                    _model_ids_match(m.get("model_name"), own_model)
+                    or _model_ids_match(m.get("id"), own_model)
+                ):
+                    continue
+
+                ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                # Clamp like the load path: a model at its max can't reload larger.
+                expected_ctx = resolve_effective_ctx_size(
+                    resolve_ctx_size(
+                        model=m.get("model_name") or own_model,
                         device=self.device,
                         base_url=base_url,
-                    )
-                    if 0 < ctx < expected_ctx:
-                        return True
+                    ),
+                    m.get("max_context_window"),
+                )
+                if 0 < ctx < expected_ctx:
+                    return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
             logger.debug("Loaded-context probe failed: %s", e)
