@@ -118,6 +118,44 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 - **Consumes** — `create_table`, `insert_data`, `query_data`, `list_tables`.
 - **Configure** — a CSV, export, or pasted table.
 
+### report-from-sources
+
+Builds a report, deck, brief or workbook from the user's files without dropping
+what the sources stress. It inventories the inputs and picks the newest file for
+each dataset, keeps a key-facts ledger per source (headline numbers, stated
+changes, notable events, risks), puts source and period on every figure, then
+checks the saved file against the ledger and against a numbered list of
+everything the user asked for.
+
+- **Demonstrates** — analyst practice as a procedure: provenance, coverage
+  checks, and verifying a saved file against the request with `run_python`.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — a folder of sources and the deliverable you want.
+
+### log-triage
+
+Finds the incident in a log rather than the noise. It parses every file over its
+full time range, groups messages into templates, ranks them by severity, hosts
+hit and rarity instead of volume, finds bursts, and reports exact first and last
+timestamps, with routine baseline messages kept apart from anomalies.
+
+- **Demonstrates** — whole-file analysis with pandas in `run_python` instead of
+  reading a large file into the conversation.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — one or more log files; fit the line pattern to their format.
+
+### meeting-actions
+
+Turns meeting notes, minutes or transcripts into one action tracker. It catches
+commitments said in passing ("I'll send it", "let me check") as well as
+labelled actions, records owner, due date and evidence, and merges an item that
+comes back in later meetings into one row with its latest status.
+
+- **Demonstrates** — exhaustive extraction with a regex safety net, and
+  de-duplication across documents.
+- **Consumes** — `list_files`, `read_file`, `run_python`, `write_file`.
+- **Configure** — a folder of notes, or one meeting's transcript.
+
 ### source-watch
 
 The generic watcher, and the template the next two are forked from: fetch a
