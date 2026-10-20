@@ -239,6 +239,26 @@ export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number
     return apiFetch('GET', '/agents');
 }
 
+/** Progress of a hub install, as ``GET /api/agents/{id}/install-status`` reports it. */
+export interface AgentInstallStatus {
+    id: string;
+    /** `queued`, a running phase, then `completed` or `failed`. */
+    status: string;
+    phase: string;
+    percent: number;
+    version: string | null;
+    error: string | null;
+}
+
+/** Start installing an agent from the Agent Hub (202); poll getAgentInstallStatus. */
+export async function installAgent(id: string): Promise<{ id: string; status: string }> {
+    return apiFetch('POST', '/agents/install', { id });
+}
+
+export async function getAgentInstallStatus(id: string): Promise<AgentInstallStatus> {
+    return apiFetch('GET', `/agents/${encodeURIComponent(id)}/install-status`);
+}
+
 // -- First-run setup (same `gaia init` the TUI runs) ----------------------------
 
 /** Hardware report (memory, disk, GPU, NPU) shown on the setup screen. */
