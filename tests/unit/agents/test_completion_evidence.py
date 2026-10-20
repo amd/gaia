@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent, _claims_file_write
+from gaia.agents.base.agent import Agent, _claims_file_write, _with_replaced_answer
 from gaia.agents.base.completion import (
     CompletionEvidence,
     incomplete_answer,
@@ -1231,3 +1231,37 @@ def test_a_short_honest_reply_does_not_bring_back_the_false_claim(agent):
     )
     assert "## Decisions" not in result["result"]
     assert result["result"].startswith("I could not save the file.")
+
+
+def test_a_short_retraction_after_the_correction_does_not_bring_back_the_answer(
+    agent,
+):
+    """A reply that corrects the earlier answer must not follow its wrong version."""
+    retraction = "Actually, Raj owns the release notes, not Ana."
+    script(
+        agent,
+        {"answer": _SUMMARY},
+        call("write_file", file_path="summary.md", content="alpha\nbeta\n"),
+        call("read_file", file_path="summary.md"),
+        {"answer": retraction},
+    )
+    result = agent.process_query(
+        "Summarize the notes and save to `summary.md`", max_steps=10
+    )
+    assert "## Decisions" not in result["result"]
+    assert retraction in result["result"]
+
+
+@pytest.mark.parametrize(
+    "reply, restored",
+    [
+        ("All 2 lines match what was written.", True),
+        ("Actually the file has three owners, not two.", False),
+        ("Correction: the parser ships Monday.", False),
+        ("Sorry, I misread the notes.", False),
+        ("On closer look, Raj owns both.", False),
+        ("I was wrong about the owners.", False),
+    ],
+)
+def test_only_an_acknowledgement_restores_the_earlier_answer(reply, restored):
+    assert (_with_replaced_answer(reply, _SUMMARY) is not None) is restored

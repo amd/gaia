@@ -1395,15 +1395,28 @@ _GIVE_ANSWER_AGAIN = (
 )
 
 
+#: A reply that opens by retracting what came before: putting the earlier
+#: answer back would show the user the wrong version first.
+_RETRACTION = re.compile(
+    r"^\W*(?:actually|correction|sorry|apologies|my (?:mistake|apologies)|"
+    r"i was wrong|i misread|i misstated|i made a mistake|to correct|"
+    r"on (?:closer|second) (?:look|inspection|reading))\b",
+    re.IGNORECASE,
+)
+
+
 def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
     """*replaced* followed by *reply*, when *reply* is only an acknowledgement.
 
     After a correction a model often answers the correction ("All 55 lines
     match what was written") instead of the user, and that line would become
-    the whole answer. ``None`` when *reply* stands on its own.
+    the whole answer. ``None`` when *reply* stands on its own, or when it
+    retracts the earlier answer ("Actually the file has three owners").
     """
     reply, replaced = reply.strip(), replaced.strip()
     if not replaced or replaced in reply or len(reply) * 3 >= len(replaced):
+        return None
+    if _RETRACTION.search(reply):
         return None
     return f"{replaced}\n\n{reply}" if reply else replaced
 
