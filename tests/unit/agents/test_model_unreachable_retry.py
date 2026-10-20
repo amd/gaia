@@ -222,13 +222,15 @@ def test_persistent_failure_ends_with_a_plain_unreachable_answer(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
 
     text = strip_verification_scope(result["result"])
-    # One sentence saying where it stopped and what is kept, then the next step.
+    # Where it stopped and why, what already ran and is kept, the next step.
     assert text == (
-        "I stopped at step 3 because the model service stayed unavailable "
-        "(5 attempts failed, the last with HTTP 503, then 2 more after waiting); "
-        f"the 2 tool calls already made ({_TOOL} 2x) and what they changed are "
-        'kept. Say "continue" once the service is back and I\'ll pick up from here.'
+        "The model stopped responding at step 3, so this request is unfinished. "
+        "5 attempts failed, the last with HTTP 503, then 2 more after waiting.\n\n"
+        f"Done before it stopped: 2 tool calls ({_TOOL} 2x); what they changed "
+        'is kept.\n\nSay "continue" once the service is back and I\'ll pick up '
+        "from here."
     )
+    assert result["model_failed"] is True
     # Cannot pass for success.
     assert result["status"] == "failed"
     assert result["model_unreachable"] is True
@@ -240,7 +242,7 @@ def test_persistent_failure_ends_with_a_plain_unreachable_answer(agent):
 def test_unreachable_before_any_tool_says_nothing_ran(agent):
     _script(agent, *[_transient() for _ in range(1 + DEFAULT_MODEL_STEP_RETRIES)])
     result = agent.process_query("Check the ledger", max_steps=10)
-    assert "before any tool ran" in result["result"]
+    assert "Nothing had run yet." in result["result"]
     assert result["status"] == "failed"
 
 
@@ -250,7 +252,7 @@ def test_step_retry_can_be_turned_off(agent, monkeypatch):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []
-    assert "I stopped at step 2" in result["result"]
+    assert "stopped responding at step 2" in result["result"]
 
 
 @pytest.mark.parametrize("reason", ["read timeout", "upstream timeout"])
@@ -459,7 +461,9 @@ def test_tui_turn_gives_up_with_the_answer_not_an_error(agent):
     types = [e["type"] for e in events]
     assert "error" not in types
     assert types[-1] == "final"
-    assert events[-1]["answer"].startswith("I stopped at step 2 because the model")
+    assert events[-1]["answer"].startswith("The model stopped responding at step 2")
+    # Marked failed, so a front-end never records the turn as done.
+    assert events[-1]["failed"] is True
     # Printed by the agent itself (so the CLI shows it too), not recovered
     # from the return value by the transport's fallback.
     assert "usage" in events[-1]
@@ -592,8 +596,14 @@ def test_stalled_model_ends_with_the_stall_message_not_a_generic_one(agent):
     result = agent.process_query("Which model are you?", max_steps=5)
 
     text = strip_verification_scope(result["result"])
-    assert text.startswith("The hosted model accepted the request but sent nothing")
+    assert text.startswith(
+        "The model stopped responding at step 1, so this request is unfinished. "
+        "The hosted model accepted the request but sent nothing for 120s "
+        "(tried 2 times)."
+    )
+    assert "Nothing had run yet." in text
     assert "pick another model" in text
+    assert result["status"] == "failed" and result["model_failed"] is True
     assert "temporary issue" not in text
     # A stall already spent its retries in the client; no step retry on top.
     assert agent.sleeps == []
@@ -609,3 +619,125 @@ def test_retry_notice_also_becomes_the_live_phase(agent):
     agent._announce_model_retry(RetryNotice("stream stalled", 0.2, 1, 1))
     assert warnings == ["The model stopped sending — retrying now (1/1)"]
     assert phases == [("model_retry", warnings[0])]
+
+
+# ── a model failure ends the turn as failed, on every console ─────────────
+
+
+def _sse_turn(agent, failure, query="Check the ledger"):
+    """A streaming turn on the Agent UI's console: the model opens with a
+    sentence and a tool call, then *failure* ends the next model call."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    agent.streaming = True
+    handler = SSEOutputHandler()
+    agent.console = handler
+    calls = []
+
+    def _stream(*_, **__):
+        calls.append(1)
+        if len(calls) == 1:
+            yield SimpleNamespace(
+                text="I'll start by reading the ledger. ", is_complete=False, stats=None
+            )
+            yield SimpleNamespace(text=_tool_call(1), is_complete=True, stats={})
+            return
+        raise failure
+
+    chat = MagicMock()
+    chat.get_stats = MagicMock(return_value={})
+    chat.send_messages_stream = MagicMock(side_effect=_stream)
+    agent.chat = chat
+    result = agent.process_query(query, max_steps=10)
+    events = []
+    while not handler.event_queue.empty():
+        event = handler.event_queue.get()
+        if event is not None:
+            events.append(event)
+    return result, events
+
+
+def _answers(events):
+    return [e for e in events if e.get("type") == "answer" and not e.get("streamed")]
+
+
+@pytest.mark.parametrize(
+    "failure, headline",
+    [
+        (_stalled(), "The model stopped responding at step 2"),
+        (
+            LemonadeClientError("Chat completion failed: HTTP 404 model unavailable"),
+            "The model call failed at step 2",
+        ),
+        (
+            _transient(reason="connection error"),
+            "The model stopped responding at step 2",
+        ),
+    ],
+    ids=["stall", "http-404", "unreachable"],
+)
+def test_model_failure_mid_turn_prints_a_failed_answer(
+    clean_registry, failure, headline
+):  # pylint: disable=unused-argument
+    """The bug: the turn ended with only the model's opening sentence on
+    screen and was recorded as done. The answer must explain the failure,
+    keep what ran, and be marked failed for the front-end."""
+    agent = _make_agent(streaming=True)
+    result, events = _sse_turn(agent, failure)
+
+    assert result["status"] == "failed"
+    assert result["model_failed"] is True
+    answers = _answers(events)
+    assert len(answers) == 1
+    answer = answers[0]
+    assert answer["failed"] is True
+    assert answer["content"].startswith(headline)
+    assert f"1 tool call ({_TOOL} 1x)" in answer["content"]
+    assert _TOOL_RUNS == [1]
+
+
+def test_failed_answer_names_the_deliverable_left_unwritten(clean_registry):
+    # pylint: disable=unused-argument
+    agent = _make_agent(streaming=True)
+    _, events = _sse_turn(
+        agent,
+        _stalled(),
+        query="Build the summary and save it as deck.pptx in C:\tmp",
+    )
+    content = _answers(events)[0]["content"]
+    assert "stopped responding" in content
+    assert "deck.pptx" in content
+
+
+def test_cloud_model_refusal_marks_the_turn_failed(clean_registry):
+    # pylint: disable=unused-argument
+    from gaia.llm.providers.lemonade import LemonadeCloudModelUnavailableError
+
+    agent = _make_agent(streaming=True)
+    refusal = LemonadeCloudModelUnavailableError(
+        model_id="accounts/fireworks/models/gone", provider="fireworks"
+    )
+    result, events = _sse_turn(agent, refusal)
+
+    assert result["model_failed"] is True
+    # Reported once, as the turn's error, never as an ordinary answer.
+    errors = [e for e in events if e.get("type") == "agent_error"]
+    assert len(errors) == 1 and "HTTP 404" in errors[0]["content"]
+    assert _answers(events) == []
+
+
+def test_a_successful_turn_is_not_marked_failed(clean_registry):
+    # pylint: disable=unused-argument
+    agent = _make_agent(streaming=True)
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    agent.console = SSEOutputHandler()
+    _script(agent, _tool_call(1), _transient(), _ANSWER)
+    result = agent.process_query("Check the ledger", max_steps=10)
+    events = []
+    while not agent.console.event_queue.empty():
+        event = agent.console.event_queue.get()
+        if event is not None:
+            events.append(event)
+    assert result["model_failed"] is False
+    assert all("failed" not in e for e in _answers(events))

@@ -489,6 +489,10 @@ class OutputHandler(ABC):
         """
         ...
 
+    def mark_turn_failed(self) -> None:
+        """The next :meth:`print_final_answer` ends a turn a model failure cut
+        short, so a console can report the turn as failed. Optional — no-op."""
+
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]
     ):

@@ -266,7 +266,11 @@ def _dispatch_one(
     elif etype == "final":
         answer = str(event.get("answer", "") or "")
         cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()
-        handler._emit({"type": "answer", "content": cleaned})
+        out = {"type": "answer", "content": cleaned}
+        if event.get("failed") is True:
+            # The sidecar's turn ended on a model failure; the answer says so.
+            out["failed"] = True
+        handler._emit(out)
         return True
 
     elif etype == "error":
@@ -278,6 +282,8 @@ def _dispatch_one(
             {
                 "type": "agent_error",
                 "content": _augment_error_detail(str(detail), profile),
+                # Ends the turn, unlike an in-process tool's agent_error.
+                "fatal": True,
             }
         )
         return True
@@ -305,6 +311,7 @@ def _full_access_error(
             f"agent, so this turn was stopped: {exc}. Send the message again; "
             "if it keeps failing, restart the agent from its card."
         ),
+        "fatal": True,
     }
 
 
@@ -540,7 +547,7 @@ def relay_query(
         # No terminal event arrived — the sidecar generation is still decoding
         # on the single GPU slot; stop it or later queries death-spiral.
         _best_effort_cancel(proxy, rid)
-        handler._emit({"type": "agent_error", "content": crash_message})
+        handler._emit({"type": "agent_error", "content": crash_message, "fatal": True})
 
 
 __all__ = [

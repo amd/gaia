@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A turn the model gave up on ends as failed, not done.** When the model
+  stopped responding or refused mid-turn (a stall, a 404, every retry spent),
+  the turn ended on the model's opening sentence and the Agent UI listed the
+  chat as done. The final answer now names the step, the provider and the
+  cause, what already ran, and what is unfinished, and the `final` event
+  carries `failed: true`.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
   reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
   floor and `min_gaia_version` rise to it in that release; a release whose

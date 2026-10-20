@@ -26,7 +26,7 @@ import threading
 import time as _time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -2316,22 +2316,47 @@ async def _local_place(model_id: str, client, base_url: str, headers: dict) -> s
     return f"on your {' and '.join(chips)}" if chips else "on this PC"
 
 
+def _turn_failure(
+    answer_event: Optional[dict],
+    fatal_error: Optional[str],
+    result: Any,
+) -> Tuple[bool, Optional[str]]:
+    """``(failed, explanation)`` for a turn: did a model failure end it?
+
+    Three sources, one per way the news arrives: the agent's answer event
+    (in-process or relayed ``final``), a relayed sidecar's terminal error, and
+    the in-process agent's own result. *explanation* is the text to show when
+    no answer event carried it.
+    """
+    if isinstance(answer_event, dict) and answer_event.get("failed"):
+        return True, None
+    if fatal_error is not None:
+        return True, fatal_error
+    if isinstance(result, dict) and result.get("model_failed"):
+        return True, None
+    return False, None
+
+
 def _done_event(
     msg_id: int,
     content: str,
     turn_cancelled: bool,
     stats: Optional[dict] = None,
     turn_summary: Optional[dict] = None,
+    failed: bool = False,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
     ``cancelled`` is set only when the user's Stop actually ended the run, so
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
+    ``failed`` marks a turn a model failure ended; its content explains why.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
         event["cancelled"] = True
+    elif failed:
+        event["failed"] = True
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -3575,6 +3600,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Also capture agent steps for persistence
         full_response = ""
         answer_event = None
+        fatal_error = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -3665,6 +3691,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
+                elif event_type == "agent_error" and event.get("fatal"):
+                    # A relayed sidecar's terminal error: the turn ends here.
+                    fatal_error = event.get("content") or ""
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -3911,6 +3940,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
 
+        # A model failure ended the turn. The streamed text is only its opening
+        # sentence, so the message must say what happened.
+        turn_failed, failure_text = _turn_failure(
+            answer_event, fatal_error, result_holder.get("result")
+        )
+        if turn_failed and answer_event is None:
+            explained = _agent_ui_wording(failure_text or result_holder["answer"] or "")
+            if explained and explained not in full_response:
+                full_response = (
+                    f"{full_response.rstrip()}\n\n{explained}"
+                    if full_response.strip()
+                    else explained
+                )
+
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
@@ -4096,6 +4139,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_cancelled,
                 stats=inference_stats,
                 turn_summary=turn_summary,
+                failed=turn_failed,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -4204,6 +4248,7 @@ class _RunOutcome:
         self._error = False
         self._done = False
         self._cancelled = False
+        self._failed = False
 
     def observe(self, data: str) -> None:
         # A frame may carry ": padding" lines after its data line.
@@ -4222,9 +4267,10 @@ class _RunOutcome:
         elif kind == "done":
             self._done = True
             self._cancelled = bool(event.get("cancelled"))
+            self._failed = bool(event.get("failed"))
 
     def status(self) -> str:
-        if self._error or not self._done:
+        if self._error or self._failed or not self._done:
             return "failed"
         return "stopped" if self._cancelled else "done"
 

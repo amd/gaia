@@ -323,7 +323,7 @@ The canonical event shapes, as emitted:
 | `tool_result` | `{ type, tool, data, render? }` |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope? }` — answer it, or it ends the run; see §8 |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage? }` — terminal |
+| `final` | `{ type, answer, usage?, failed? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
 Rules a client must respect:
