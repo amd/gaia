@@ -17,6 +17,7 @@ from gaia.agents.base.skill_catalog import (
     CATALOG_DESCRIPTION_CHARS,
     CATALOG_ENV,
     CATALOG_HEADER,
+    CATALOG_PAIRS_SHOWN,
     GROUNDING_RULE,
     catalog_env_override,
     companions,
@@ -98,7 +99,11 @@ def test_catalogue_cost_stays_bounded(starter_pack):
 def test_starter_descriptions_fit_under_the_cap_so_none_are_cut(starter_pack):
     catalog = render_catalog(starter_pack)
     for skill in starter_pack.values():
-        assert "…" not in _line(catalog, skill.name), f"{skill.name} was cut"
+        whole = f"- {skill.name}: {' '.join(skill.description.split())}"
+        line = _line(catalog, skill.name)
+        assert line == whole or line.startswith(whole + " (pairs with: "), (
+            f"{skill.name} was cut"
+        )
 
 
 def test_an_oversized_description_is_capped(tmp_path):
@@ -129,7 +134,7 @@ def test_pairs_render_on_both_sides_of_the_pair(tmp_path):
     _write_skill(tmp_path, "loner", "Do something else.")
     catalog = render_catalog(_discover(tmp_path))
 
-    assert _line(catalog, "deck") == "- deck: Build a deck. (pairs with: data, sources)"
+    assert _line(catalog, "deck") == "- deck: Build a deck. (pairs with: sources, data)"
     assert _line(catalog, "sources").endswith("(pairs with: deck)")
     assert _line(catalog, "data").endswith("(pairs with: deck)")
     assert "pairs with" not in _line(catalog, "loner")
@@ -154,13 +159,40 @@ def test_an_unlisted_import_is_not_named_as_a_companion(tmp_path):
     assert companions(skills, "deck") == []
 
 
-def test_the_pairs_note_comes_out_of_the_description_budget(tmp_path):
-    _write_skill(tmp_path, "verbose", "word " * 204, pairs_with=("other",))
-    _write_skill(tmp_path, "other", "Other.")
+def test_a_popular_skill_keeps_its_whole_description(tmp_path):
+    """Pairs grow with the hub; they must never eat the description the model
+    decides from. Many skills pairing with one hub skill is the real shape."""
+    description = "Build Office files. " + "word " * 80
+    _write_skill(tmp_path, "office", description)
+    names = [f"companion-{i:02d}" for i in range(12)]
+    for name in names:
+        _write_skill(tmp_path, name, "Read some source.", pairs_with=("office",))
+    skills = _discover(tmp_path)
+    line = _line(render_catalog(skills), "office")
+
+    assert f"- office: {' '.join(description.split())} (pairs with: " in line
+    assert line.endswith(f"{', '.join(names[:CATALOG_PAIRS_SHOWN])}, +9 more)")
+    assert companions(skills, "office") == names  # load_skill still names all
+
+
+def test_a_line_stays_bounded_however_many_pairs(tmp_path):
+    long_names = [("x" * 60) + f"-{i:02d}" for i in range(20)]
+    _write_skill(tmp_path, "verbose", "word " * 204, pairs_with=tuple(long_names))
+    for name in long_names:
+        _write_skill(tmp_path, name, "Other.")
     line = _line(render_catalog(_discover(tmp_path)), "verbose")
 
-    assert line.endswith("… (pairs with: other)")
-    assert len(line) <= len("- verbose: ") + CATALOG_DESCRIPTION_CHARS + 1
+    assert "…" in line and line.endswith(", +17 more)")
+    assert len(line) <= len("- verbose: ") + CATALOG_DESCRIPTION_CHARS + 1 + 240
+
+
+def test_the_skills_own_pairs_are_shown_first(tmp_path):
+    _write_skill(tmp_path, "deck", "Build a deck.", pairs_with=("zeta",))
+    for name in ("alpha", "beta", "gamma"):
+        _write_skill(tmp_path, name, "Source.", pairs_with=("deck",))
+    _write_skill(tmp_path, "zeta", "Source.")
+
+    assert companions(_discover(tmp_path), "deck") == ["zeta", "alpha", "beta", "gamma"]
 
 
 def test_claude_imports_are_loadable_but_not_listed(tmp_path):

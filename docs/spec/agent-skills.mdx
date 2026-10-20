@@ -423,9 +423,10 @@ metadata:
 
 Pairing is mutual — declaring it on one side is enough, and both lines in the
 catalogue end with the note, e.g.
-`- data-explore: … (pairs with: office-docs)`. The note counts against the
-480-character description budget. `load_skill` names any companion that is
-installed but not loaded yet (`companion_skills`, plus a one-line
+`- data-explore: … (pairs with: office-docs)`. The note has its own budget and
+never cuts the description: at most three names, the skill's own `pairs_with`
+first, then `+N more`. `load_skill` names every companion that is installed but
+not loaded yet (`companion_skills`, plus a one-line
 `companion_hint`), so a model that loaded one half of a pair learns about the
 other. A name that is not installed is ignored and logged at debug level, never
 an error: a skill may name a companion the user has not installed. Use it only

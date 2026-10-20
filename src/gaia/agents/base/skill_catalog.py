@@ -64,15 +64,18 @@ CATALOG_HEADER = (
 
 #: Above every starter-pack description (longest 443), so the cap only bites on
 #: an outlier; the 1,024-char format limit would otherwise set the block's size.
-#: A line's "(pairs with: …)" note counts against the same budget.
 CATALOG_DESCRIPTION_CHARS = 480
 
+#: Companions named on a catalogue line. The note has its own budget so a
+#: popular skill's description is never cut to make room; load_skill names all.
+CATALOG_PAIRS_SHOWN = 3
 
-def _catalog_description(description: str, budget: int) -> str:
+
+def _catalog_description(description: str) -> str:
     text = " ".join((description or "").split())
-    if len(text) <= budget:
+    if len(text) <= CATALOG_DESCRIPTION_CHARS:
         return text
-    return text[:budget].rstrip() + "…"
+    return text[:CATALOG_DESCRIPTION_CHARS].rstrip() + "…"
 
 
 def _listed(skill: "Skill") -> bool:
@@ -80,17 +83,19 @@ def _listed(skill: "Skill") -> bool:
 
 
 def companions(skills: Dict[str, "Skill"], name: str) -> List[str]:
-    """Listed skills that pair with *name*, sorted.
+    """Listed skills that pair with *name*: its own declared order, then the rest.
 
     Pairing is mutual: a skill pairs with every name in its own
     ``metadata.gaia.pairs_with`` and with every skill that names it, so one side
-    declaring the pair is enough. Names that are not installed are skipped —
-    a skill may name a companion the user has not installed.
+    declaring the pair is enough. The skill's own list comes first so its author
+    picks what the catalogue line shows; skills that name it follow, sorted.
+    Names that are not installed are skipped — a skill may name a companion the
+    user has not installed.
     """
     skill = skills.get(name)
     if skill is None:
         return []
-    found = set()
+    found: List[str] = []
     for other in skill.gaia.pairs_with:
         target = skills.get(other)
         if target is None or not _listed(target):
@@ -100,26 +105,34 @@ def companions(skills: Dict[str, "Skill"], name: str) -> List[str]:
                 other,
             )
             continue
-        found.add(other)
-    found.update(
-        other.name
-        for other in skills.values()
-        if _listed(other) and name in other.gaia.pairs_with
+        if other != name and other not in found:
+            found.append(other)
+    found.extend(
+        sorted(
+            other.name
+            for other in skills.values()
+            if _listed(other)
+            and name in other.gaia.pairs_with
+            and other.name != name
+            and other.name not in found
+        )
     )
-    found.discard(name)
-    return sorted(found)
+    return found
+
+
+def _pairs_note(paired: List[str]) -> str:
+    if not paired:
+        return ""
+    shown = ", ".join(paired[:CATALOG_PAIRS_SHOWN])
+    hidden = len(paired) - CATALOG_PAIRS_SHOWN
+    more = f", +{hidden} more" if hidden > 0 else ""
+    return f" (pairs with: {shown}{more})"
 
 
 def _catalog_line(skills: Dict[str, "Skill"], skill: "Skill") -> str:
-    """``- name: description (pairs with: a, b)``, within the description budget.
-
-    The pairs note comes out of the description's budget rather than adding to
-    it, so a pair never makes a line longer than an uncut description could be.
-    """
-    paired = companions(skills, skill.name)
-    suffix = f" (pairs with: {', '.join(paired)})" if paired else ""
-    budget = max(CATALOG_DESCRIPTION_CHARS - len(suffix), 0)
-    return f"- {skill.name}: {_catalog_description(skill.description, budget)}{suffix}"
+    """``- name: description (pairs with: a, b, c, +N more)``."""
+    note = _pairs_note(companions(skills, skill.name))
+    return f"- {skill.name}: {_catalog_description(skill.description)}{note}"
 
 
 def render_catalog(skills: Dict[str, "Skill"]) -> str:
@@ -156,6 +169,7 @@ __all__ = [
     "CATALOG_DESCRIPTION_CHARS",
     "CATALOG_ENV",
     "CATALOG_HEADER",
+    "CATALOG_PAIRS_SHOWN",
     "GROUNDING_RULE",
     "catalog_env_override",
     "companions",
