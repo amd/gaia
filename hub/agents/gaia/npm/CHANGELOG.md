@@ -6,10 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **Folders you name are asked about, not refused, under Full access in the
-  Agent UI.** Pre-approving tools over `/sessions/{id}/bypass` refused every
-  path outside the chat's scope with nobody asked. When the caller can answer
-  confirmations, the agent now asks for the path instead.
+- **Full access in the Agent UI grants the folders you name.** Turning it on
+  over `/sessions/{id}/bypass` refused every path outside the chat's scope with
+  nobody asked. On a run the caller can answer for, Full access now grants the
+  path without a prompt, as it does in-process; Ask mode asks. Unattended runs,
+  the home folder and drive roots are still refused.
 - **`/query` takes the chat's file scope** (contract **2.18**). `allowed_paths`
   lets the Agent UI hand the agent the same scope its session panel shows.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
