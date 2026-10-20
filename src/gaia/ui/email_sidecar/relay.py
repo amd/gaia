@@ -117,6 +117,21 @@ _MUTATING_TOOLS = EMAIL_PROFILE.mutating_tools
 _TOOL_LABELS = EMAIL_PROFILE.tool_labels
 
 
+#: ``final.usage`` fields copied onto the UI's ``answer`` event, under the
+#: names :meth:`SSEOutputHandler.print_final_answer` gives them.
+_ANSWER_USAGE_KEYS = (
+    "steps",
+    "tools_used",
+    "elapsed",
+    "tokens",
+    "ttft",
+    "tok_per_s",
+    "input_tokens",
+    "cached_tokens",
+    "metrics",
+)
+
+
 def _humanize_tool(tool: str) -> str:
     return tool.replace("_", " ").strip() or "tool"
 
@@ -189,6 +204,14 @@ def _dispatch_one(
             }
             if event.get("risk"):
                 request["risk"] = str(event["risk"])
+            if event.get("tool_label"):
+                request["tool_label"] = str(event["tool_label"])
+            # The whole call: the summary shortens code, and a path prompt is
+            # worded from the path's kind.
+            if isinstance(event.get("args"), dict):
+                request["args"] = event["args"]
+                if event.get("args_truncated"):
+                    request["args_truncated"] = True
             handler._emit(request)
             return False
 
@@ -266,7 +289,13 @@ def _dispatch_one(
     elif etype == "final":
         answer = str(event.get("answer", "") or "")
         cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()
-        handler._emit({"type": "answer", "content": cleaned})
+        out = {"type": "answer", "content": cleaned}
+        # Same top-level fields an in-process answer carries, so the turn's
+        # token counts and cost are recorded for a relayed turn too.
+        usage = event.get("usage")
+        if isinstance(usage, dict):
+            out.update({k: usage[k] for k in _ANSWER_USAGE_KEYS if k in usage})
+        handler._emit(out)
         return True
 
     elif etype == "error":
@@ -344,12 +373,16 @@ def relay_query(
     answers_confirmations: bool = False,
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
+    memory: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
     *allowed_paths* — the chat's file scope, for a sidecar the caller has
     established takes it (``profiles.scope_supported``); ``None`` leaves the
     sidecar on its own default.
+
+    *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
+    sidecar the caller has established takes it (``profiles.memory_supported``).
 
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
@@ -420,6 +453,8 @@ def relay_query(
         body["documents"] = list(documents)
     if allowed_paths is not None:
         body["allowed_paths"] = list(allowed_paths)
+    if memory is not None:
+        body["memory"] = memory
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False
