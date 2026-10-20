@@ -322,7 +322,10 @@ def _reply_reserve(agent: Any) -> int:
     # The cap actually sent per reply, which grows with a large local window.
     max_output = getattr(agent, "_max_output_tokens", None)
     if callable(max_output):
-        return max_output()
+        value = max_output()
+        # Only a real positive count; a stand-in agent falls back to the config.
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
     config = getattr(getattr(agent, "chat", None), "config", None)
     return getattr(config, "max_tokens", 8192)
 
