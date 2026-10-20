@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers
-from gaia.security import ALLOWED_PATHS_ENV, PathValidator
+from gaia.security import ALLOWED_PATHS_ENV, AllowedPathsEnvError, PathValidator
 from gaia.ui import session_environment
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client, relay
@@ -185,6 +185,49 @@ def test_the_relay_sends_the_scope_the_ui_computed(tree, monkeypatch):
 
     # Already narrowed: the sidecar may not share this process's environment.
     assert body["allowed_paths"] == [str(tree.work)]
+
+
+def test_an_invalid_setting_stops_the_relayed_turn_with_its_remedy(tree, monkeypatch):
+    # The folder was deleted after the app started: the sidecar may not see
+    # this environment, so an empty scope would refuse every file unexplained.
+    monkeypatch.setenv(ALLOWED_PATHS_ENV, str(tree.project / "gone"))
+    proxy = _Proxy()
+
+    class _Handle:
+        api_version = "2.18"
+
+        def proxy(self):
+            return proxy
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: _Handle())
+    handler = SSEOutputHandler()
+    chat_helpers._dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="s", message="list my files", agent_type="gaia"),
+        [],
+        None,
+        "gaia",
+        allowed_paths=[str(tree.work)],
+    )
+
+    assert proxy.bodies == []
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    [error] = [e for e in events if e.get("type") == "agent_error"]
+    assert ALLOWED_PATHS_ENV in error["content"]
+    assert "does not exist" in error["content"]
+
+
+def test_the_panel_raises_on_an_invalid_setting(tree, monkeypatch):
+    monkeypatch.chdir(tree.home)
+    monkeypatch.setenv(ALLOWED_PATHS_ENV, "relative/folder")
+    monkeypatch.setattr(session_environment, "_live_agent", lambda _sid: None)
+    db = ChatDatabase(":memory:")
+    session = db.create_session(agent_type="gaia")
+
+    with pytest.raises(AllowedPathsEnvError, match="not an absolute path"):
+        session_environment.describe(db, session)
 
 
 def test_an_older_flagship_is_sent_no_scope(tree, monkeypatch):

@@ -110,7 +110,11 @@ def _env_scope_entries() -> List[Path]:
 
 
 def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
-    """What the session panel shows: every folder and file the chat may touch."""
+    """What the session panel shows: every folder and file the chat may touch.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid value.
+    """
     from ._chat_helpers import _effective_scope, _managed_documents_dir
 
     session_id = session["id"]

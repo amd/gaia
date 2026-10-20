@@ -1559,7 +1559,8 @@ def _env_scope_for_fallback(fallback: list) -> list:
 
     Returns:
         The usable entries, or ``[]`` when the setting is unset, invalid (the
-        agent's validator reports that), or overlaps *fallback*.
+        agent's validator, or the relay's :func:`_effective_scope`, reports
+        that), or overlaps *fallback*.
     """
     try:
         ceiling = env_allowed_paths()
@@ -1580,11 +1581,15 @@ def _env_scope_for_fallback(fallback: list) -> list:
 
 
 def _effective_scope(allowed: list) -> list:
-    """*allowed* as the agent's validator will hold it under ``GAIA_ALLOWED_PATHS``."""
-    try:
-        return narrow_allowed_paths(allowed, warn=False)
-    except AllowedPathsEnvError:
-        return []
+    """*allowed* as the agent's validator will hold it under ``GAIA_ALLOWED_PATHS``.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid
+            value. Never answered with an empty scope: a relayed sidecar need
+            not share this process's environment, so it could not say why it
+            refuses every file.
+    """
+    return narrow_allowed_paths(allowed, warn=False)
 
 
 def _with_attachments(allowed: list, attached: list) -> list:
@@ -1954,6 +1959,17 @@ def _dispatch_sidecar_query(
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
 
+    relayed_scope = None
+    if allowed_paths is not None and scope_supported(profile, handle.api_version):
+        try:
+            relayed_scope = _effective_scope(allowed_paths)
+        except AllowedPathsEnvError as exc:
+            # In process, the agent's validator raises this same error. The
+            # sidecar may not see this environment, so say it here instead of
+            # sending a scope that refuses every file without saying why.
+            sse_handler._emit({"type": "agent_error", "content": str(exc)})
+            return
+
     proxy = handle.proxy()
 
     # Before /init: a cloud model whose key Lemonade forgot reads as "not present".
@@ -2046,12 +2062,7 @@ def _dispatch_sidecar_query(
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
-        allowed_paths=(
-            _effective_scope(allowed_paths)
-            if allowed_paths is not None
-            and scope_supported(profile, handle.api_version)
-            else None
-        ),
+        allowed_paths=relayed_scope,
     )
 
 
