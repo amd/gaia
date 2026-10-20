@@ -6859,6 +6859,9 @@ Do NOT wrap conversational replies in JSON.
             except _NotAnAnswer:
                 raise first from None
             except Exception as second:  # noqa: BLE001 - report the first reason
+                cancel_event = getattr(self, "_cancel_event", None)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise
                 logger.warning("Closing retry without tools failed: %s", second)
                 raise first from None
 

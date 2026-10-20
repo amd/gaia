@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.agents.base import agent as agent_module
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import VERIFICATION_NOTE_OPENER
@@ -515,3 +516,38 @@ def test_the_loop_break_answer_is_finalized_exactly_once(agent, tool_result):
 
     assert len(seen) == 1
     assert result["result"].count("[finalized]") == 1
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_stop_during_the_closing_retry_reports_the_cancel():
+    """A Stop pressed between the two closing tries is not a tool-call failure."""
+    agent = _make_agent(streaming=False)
+    agent._cancel_event = threading.Event()
+    tries = []
+
+    def _once(*_args, **kwargs):
+        tries.append(kwargs.get("offer_tools", True))
+        if len(tries) == 1:
+            agent._cancel_event.set()
+            raise agent_module._NotAnAnswer("the model asked to run x")
+        raise RuntimeError("the request was cancelled")
+
+    with patch.object(agent, "_closing_answer_once", side_effect=_once):
+        with pytest.raises(RuntimeError, match="cancelled"):
+            agent._closing_answer([], [], "answer now", 1)
+    assert tries == [True, False]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_a_failed_closing_retry_reports_the_first_reason():
+    agent = _make_agent(streaming=False)
+    first = agent_module._NotAnAnswer("the model asked to run x instead of answering")
+
+    with patch.object(
+        agent,
+        "_closing_answer_once",
+        side_effect=[first, ConnectionError("server went away")],
+    ):
+        with pytest.raises(agent_module._NotAnAnswer) as raised:
+            agent._closing_answer([], [], "answer now", 1)
+    assert raised.value is first

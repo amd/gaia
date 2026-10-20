@@ -239,3 +239,15 @@ def test_real_loop_runs_the_corrected_calls_after_a_bad_parallel_batch(agent):
     assert len(agent.reads) == 10
     assert result["result"].startswith(answer)
     assert not queue
+
+
+def test_a_correctable_failure_with_no_target_still_counts(tmp_path):
+    """``correctable`` only spares a target the model can retry; no target, no pass."""
+    scope = TurnScopeGuard(failure_limit=2)
+    scope.begin_turn("Look it up.", str(tmp_path))
+    hint = {"status": "error", "error": "bad page size", "correctable": True}
+    for size in (1, 2):
+        assert scope.check("search", {"page_size": size}) is None
+        scope.record("search", {"page_size": size}, hint)
+    assert scope.failures["search"] == 2
+    assert scope.check("search", {"page_size": 3}) is not None

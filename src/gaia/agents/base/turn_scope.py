@@ -480,7 +480,11 @@ class TurnScopeGuard:
             return
         # Told exactly how to fix the call: a correction, not a wall, until the
         # same target keeps failing anyway.
-        if _is_correctable(result) and on_target < self.failure_limit:
+        if (
+            _is_correctable(result)
+            and target is not None
+            and on_target < self.failure_limit
+        ):
             return
         if self._batch is not None:
             self._batch.add(key)
