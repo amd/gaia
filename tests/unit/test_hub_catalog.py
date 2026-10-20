@@ -111,7 +111,10 @@ def test_offline_fallback_uses_disk_cache(tmp_path):
     assert result.agents[0]["id"] == "cached"
 
 
-@pytest.mark.parametrize("cache_body", ["[]", "42", '"invalid"'])
+@pytest.mark.parametrize(
+    "cache_body",
+    ["[]", "42", '"invalid"', '{"agents": "x"}', "{}"],
+)
 def test_offline_malformed_cache_raises_catalog_error(tmp_path, cache_body):
     cache = tmp_path / "catalog-cache.json"
     cache.write_text(cache_body)
@@ -137,6 +140,14 @@ def test_offline_malformed_cache_raises_catalog_error(tmp_path, cache_body):
     )
     assert unified.offline is True
     assert [agent["id"] for agent in unified.agents] == ["local"]
+
+
+@pytest.mark.parametrize("cache_body", ["[]", "42", '"invalid"'])
+def test_cache_age_rejects_a_non_object_cache(tmp_path, cache_body):
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text(cache_body)
+    with pytest.raises(CatalogError, match="catalog-cache.json"):
+        catalog.cache_age_seconds(cache)
 
 
 def test_no_network_no_cache_raises(tmp_path):
