@@ -46,12 +46,18 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // very handler we are trying to install, falling through to Electron's bare
 // JS-error dialog.
 let installSafetyNet, installLogTee, _fatalHandler;
+// Set when a fatal error quits the app: the crash dialog was the question,
+// so the quit guard must not ask again.
+let fatalQuitting = false;
 try {
   ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
   ({ fatal: _fatalHandler } = installSafetyNet({
     logPath: _MAIN_LOG_PATH,
     dialogModule: dialog,
     appModule: app,
+    beforeQuit: () => {
+      fatalQuitting = true;
+    },
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -95,6 +101,7 @@ const {
 } = require("./services/link-policy.cjs");
 const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
+const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
 // Electron-recommended switch for distro-agnostic Linux behaviour: picks
@@ -224,6 +231,11 @@ const windowConfig = appConfig.window || {
 // ── State ──────────────────────────────────────────────────────────────────
 
 let backendProcess = null;
+// The in-flight startBackend(), so a quit during startup can wait for the
+// spawn and stop it instead of leaving it behind.
+let backendStarting = null;
+// Set as cleanup() begins; startup stops at its next step once it is.
+let shutdownStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
@@ -1210,7 +1222,13 @@ app.whenReady().then(async () => {
   }
 
   // Start the Python backend
-  backendProcess = await startBackend();
+  if (shutdownStarted) return;
+  backendStarting = startBackend();
+  backendProcess = await backendStarting;
+  if (shutdownStarted) {
+    console.log("[main] Quit during startup — not opening the window");
+    return;
+  }
 
   // Create the window (hidden until ready-to-show)
   createWindow();
@@ -1308,8 +1326,6 @@ app.on("window-all-closed", () => {
 // Electron's before-quit does NOT await async handlers.
 // We use will-quit + event.preventDefault() to perform async cleanup, then re-quit.
 
-let cleanupDone = false;
-
 /** Only while the GAIA service runs: without it, no answer is running. */
 function workCanBeLost() {
   return Boolean(trayManager && backendProcess);
@@ -1338,7 +1354,7 @@ function confirmUpdateRestart() {
 const quitGuard = installQuitGuard({
   app,
   updater: electronAutoUpdater,
-  shouldAsk: workCanBeLost,
+  shouldAsk: () => !fatalQuitting && workCanBeLost(),
   confirm: () => askAboutRunningWork(QUIT),
   onQuitting: () => {
     isQuitting = true;
@@ -1356,24 +1372,11 @@ const quitGuard = installQuitGuard({
   },
 });
 
-app.on("will-quit", (event) => {
-  if (cleanupDone) return; // Cleanup already finished, let the app quit
-
-  event.preventDefault(); // Prevent quit until cleanup is done
-  console.log("[main] will-quit: performing async cleanup...");
-
-  cleanup().then(() => {
-    cleanupDone = true;
-    console.log("[main] Cleanup complete, quitting...");
-    app.quit(); // Re-trigger quit — cleanupDone prevents infinite loop
-  }).catch((err) => {
-    console.error("[main] Cleanup error:", err.message);
-    cleanupDone = true;
-    app.quit();
-  });
-});
+installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
+  shutdownStarted = true;
+
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
     autoUpdater.destroy();
@@ -1395,24 +1398,43 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // Stop all managed OS agents gracefully
-  if (agentProcessManager) {
-    console.log("Stopping all managed agents...");
-    try {
-      await agentProcessManager.stopAll();
-    } catch (err) {
-      console.error("Error stopping agents:", err.message);
-    }
-    agentProcessManager = null;
-  }
+  // The agents and the backend stop side by side: each waits out its own
+  // grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
   }
+}
 
-  // Stop the Python backend via the port-manager (SIGTERM → wait 3 s → SIGKILL).
+async function stopAgentsForQuit() {
+  if (!agentProcessManager) return;
+  console.log("Stopping all managed agents...");
+  try {
+    await agentProcessManager.stopAll();
+  } catch (err) {
+    console.error("Error stopping agents:", err.message);
+  }
+  agentProcessManager = null;
+}
+
+async function stopBackendForQuit() {
+  // A quit during startup: wait for the spawn so it can be stopped below.
+  if (backendStarting) {
+    try {
+      const started = await backendStarting;
+      if (started && !backendProcess && started.exitCode === null && started.signalCode === null) {
+        backendProcess = started;
+      }
+    } catch (err) {
+      console.error("[main] Backend start failed during quit:", err.message);
+    }
+  }
+
+  // Stop the Python backend and everything it started via the port-manager
+  // (SIGTERM → wait 3 s → SIGKILL).
   // F5: previously we did this inline; extracted so main.cjs stays lean and
   // to prevent orphan leaks across runs (issue #782).
   if (backendProcess) {
