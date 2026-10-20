@@ -19,8 +19,9 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
@@ -39,7 +40,14 @@ from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
 from gaia.ui import scripted_user
-from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
+from gaia.ui.event_narration import (
+    DEBUG_CHANNEL,
+    derive_narration,
+    format_count,
+    grant_phrase,
+    tool_phrase,
+)
+from gaia.ui.turn_summary import TurnLedger
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -215,16 +223,22 @@ def _skip_ws(text: str, i: int) -> int:
     return i
 
 
-def _json_object_end(
-    text: str, start: int, resume: "Optional[tuple[int, int, bool, bool]]" = None
-) -> "tuple[Optional[int], tuple[int, int, bool, bool]]":
+def _json_object_end(text: str, start: int, resume: Optional[tuple] = None) -> tuple:
     """Index just past the ``{...}`` opening at *start*, or None if unclosed.
 
     String-aware, so a brace or an escaped quote inside a value never ends it.
     Also returns the scan state, so a caller whose text only grew can pass it
-    back as *resume* instead of rescanning a long envelope on every token.
+    back as *resume* instead of rescanning a long envelope on every token. The
+    state's last item is where a top-level ``"answer"`` string value begins
+    (just past its opening quote), unless a ``tool`` key came before it.
     """
-    pos, depth, in_str, esc = resume if resume else (start, 0, False, False)
+    if resume:
+        pos, depth, in_str, esc, expect_key, key_start, last_key, tool_seen, ans = (
+            resume
+        )
+    else:
+        pos, depth, in_str, esc = start, 0, False, False
+        expect_key, key_start, last_key, tool_seen, ans = False, 0, "", False, None
     for j in range(pos, len(text)):
         c = text[j]
         if in_str:
@@ -234,15 +248,29 @@ def _json_object_end(
                 esc = True
             elif c == '"':
                 in_str = False
+                if depth == 1 and expect_key:
+                    last_key = text[key_start:j]
+                    expect_key = False
+                    tool_seen = tool_seen or last_key in ("tool", "tool_args")
         elif c == '"':
             in_str = True
+            if depth == 1:
+                if expect_key:
+                    key_start = j + 1
+                elif last_key == "answer" and not tool_seen and ans is None:
+                    ans = j + 1
         elif c == "{":
             depth += 1
+            expect_key = depth == 1
+        elif c == "," and depth == 1:
+            expect_key = True
         elif c == "}":
             depth -= 1
             if depth == 0:
-                return j + 1, (j + 1, depth, in_str, esc)
-    return None, (len(text), depth, in_str, esc)
+                state = (j + 1, depth, in_str, esc, expect_key, key_start)
+                return j + 1, state + (last_key, tool_seen, ans)
+    state = (len(text), depth, in_str, esc, expect_key, key_start)
+    return None, state + (last_key, tool_seen, ans)
 
 
 def _leading_envelope(
@@ -531,6 +559,12 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_tool = None
         self._confirm_args = None
         self._tool_start_time: Optional[float] = None
+        # The turn's place on the model (``turn_queue.TurnSlot``); given up
+        # while a prompt or question waits on the user. None outside a chat run.
+        self.turn_slot = None
+        # Re-checks the model once the turn has its place back: another chat
+        # may have unloaded or reloaded it meanwhile. Raises when it can't.
+        self.on_model_regained = None
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
         self.background_mode: bool = background_mode
@@ -566,6 +600,8 @@ class SSEOutputHandler(OutputHandler):
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
+        # What this turn's tools used, wrote and contacted, for the side rail.
+        self.turn_ledger = TurnLedger()
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -648,6 +684,7 @@ class SSEOutputHandler(OutputHandler):
     def print_plan(self, plan: List[Any], current_step: int = None):
         # Convert plan items to strings for JSON serialization
         plan_strs = []
+        narrations = []
         for step in plan:
             if isinstance(step, dict):
                 if "tool" in step:
@@ -657,15 +694,24 @@ class SSEOutputHandler(OutputHandler):
                             f"{k}={v!r}" for k, v in step["tool_args"].items()
                         )
                     plan_strs.append(f"{step['tool']}{args_str}")
+                    narrations.append(
+                        derive_narration(step["tool"], step.get("tool_args"))
+                    )
                 else:
                     plan_strs.append(json.dumps(step))
+                    text = (
+                        step.get("description") or step.get("goal") or step.get("step")
+                    )
+                    narrations.append(str(text) if text else plan_strs[-1])
             else:
                 plan_strs.append(str(step))
+                narrations.append(plan_strs[-1])
 
         self._emit(
             {
                 "type": "plan",
                 "steps": plan_strs,
+                "step_narrations": narrations,
                 "current_step": current_step,
             }
         )
@@ -676,6 +722,7 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
+        self.turn_ledger.tool_started(tool_name)
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -683,6 +730,7 @@ class SSEOutputHandler(OutputHandler):
             "type": "tool_start",
             "tool": tool_name,
             "detail": detail_label,
+            "narration": derive_narration(tool_name),
         }
         # Attach MCP server name if this is an MCP tool.
         # _mcp_server is set by MCPTool.to_gaia_format() during registration
@@ -709,12 +757,14 @@ class SSEOutputHandler(OutputHandler):
         # so the frontend can show what the tool was called with.
         if title == "Arguments" and isinstance(data, dict):
             detail = _format_tool_args(self._last_tool_name, data)
+            self.turn_ledger.tool_args(data)
             self._emit(
                 {
                     "type": "tool_args",
                     "tool": self._last_tool_name,
                     "args": data,
                     "detail": detail,
+                    "narration": derive_narration(self._last_tool_name, data),
                 }
             )
             return
@@ -731,6 +781,7 @@ class SSEOutputHandler(OutputHandler):
         summary = _summarize_tool_result(data)
         success = not tool_result_failed(data)
         self._last_tool_success = success
+        self.turn_ledger.tool_result(data, success)
         event = {
             "type": "tool_result",
             "title": title,
@@ -1056,6 +1107,9 @@ class SSEOutputHandler(OutputHandler):
                 "type": "tool_start",
                 "tool": "run_shell_command",
                 "detail": command,
+                "narration": derive_narration(
+                    "run_shell_command", {"command": command}
+                ),
             }
         )
 
@@ -1121,6 +1175,19 @@ class SSEOutputHandler(OutputHandler):
             if state == _ENV_PENDING:
                 return not end_of_stream
             if state == _ENV_OPEN:
+                answer_start = scan[1][-1] if scan else None
+                if answer_start is not None:
+                    # The answer streams as it arrives; the thought before it
+                    # is dropped and the structure after it is the decoder's tail.
+                    raw_value = self._stream_buffer[answer_start:]
+                    self._stream_buffer = ""
+                    self._envelope_scan = None
+                    self._json_filtered = True
+                    self._answer_stream = JsonStringStreamDecoder()
+                    self._emit_answer_text(self._answer_stream.feed(raw_value))
+                    if end_of_stream:
+                        self._answer_stream = None
+                    return True
                 if not end_of_stream:
                     self._report_envelope_progress()
                     return True
@@ -1652,7 +1719,10 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": f"Full access is ON — ran '{tool_name}' without asking.",
+                    "message": (
+                        "Full access is on, so GAIA didn't ask first. "
+                        f"{derive_narration(tool_name, tool_args)}"
+                    ),
                 }
             )
             return True
@@ -1664,7 +1734,10 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "info",
-                    "message": f"Accept edits is on — ran '{tool_name}' in the workspace without asking.",
+                    "message": (
+                        "Accept edits is on, so GAIA didn't ask first. "
+                        f"{derive_narration(tool_name, tool_args)}"
+                    ),
                 }
             )
             return True
@@ -1712,6 +1785,8 @@ class SSEOutputHandler(OutputHandler):
         request: Dict[str, Any] = {
             "type": "permission_request",
             "tool": tool_name,
+            # The tool in plain words, for the question; ``tool`` stays the id.
+            "tool_label": tool_phrase(tool_name),
             "args": tool_args,
             "confirm_id": confirm_id,
         }
@@ -1722,6 +1797,10 @@ class SSEOutputHandler(OutputHandler):
         scope = grant_scope(tool_name, tool_args)
         if scope is not None:
             request["always_scope"] = scope.label
+            # ``always_scope`` is matched as-is by the MCP control; this is its wording.
+            always_label = grant_phrase(tool_name, scope.subject)
+            if always_label:
+                request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label
         # is earned by the command, not by the tool's worst case.
         risk = call_risk(tool_name, tool_args)
@@ -1737,18 +1816,21 @@ class SSEOutputHandler(OutputHandler):
         # Poll in short intervals so cancellation is detected promptly.
         deadline = None if timeout is None else time.monotonic() + timeout
         answered = False
-        while deadline is None or time.monotonic() < deadline:
-            if self.cancelled.is_set():
-                self._clear_pending_confirmation()
-                self._last_denial = Denial(
-                    tool_name,
-                    f"Confirmation for '{tool_name}' was abandoned: the run was "
-                    "cancelled before the user answered.",
-                )
-                return False
-            if self._confirm_event.wait(timeout=0.5):
-                answered = True
-                break
+        with self._away_from_model():
+            while deadline is None or time.monotonic() < deadline:
+                if self.cancelled.is_set():
+                    break
+                if self._confirm_event.wait(timeout=0.5):
+                    answered = True
+                    break
+        if self.cancelled.is_set():
+            self._clear_pending_confirmation()
+            self._last_denial = Denial(
+                tool_name,
+                f"Confirmation for '{tool_name}' was abandoned: the run was "
+                "cancelled before the user answered.",
+            )
+            return False
 
         if not answered:
             self._emit(
@@ -1784,6 +1866,57 @@ class SSEOutputHandler(OutputHandler):
                 f"Tool '{tool_name}' was denied by the user.",
             )
         return result
+
+    def waiting_on(self) -> Optional[str]:
+        """``"permission"`` or ``"question"`` while the turn is paused on the user.
+
+        An answered prompt no longer counts, even while the turn waits in line
+        to get back on the model.
+        """
+        with self._confirm_lock:
+            unanswered = self._confirm_event is None or not self._confirm_event.is_set()
+            if (
+                self._confirm_id is not None and unanswered
+            ) or self._relay_confirm_id is not None:
+                return "permission"
+        with self._user_input_lock:
+            if any(not evt.is_set() for evt in self._user_input_events.values()):
+                return "question"
+        return None
+
+    @contextmanager
+    def _away_from_model(self) -> Iterator[None]:
+        """Let other chats use the model while this turn waits on the user.
+
+        On the way back the turn retakes the model at the front of the line,
+        and a Stop while it waits there ends the turn.
+        """
+        slot = self.turn_slot
+        try:
+            stepped_away = slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            stepped_away = False
+        if not stepped_away:
+            yield
+            return
+        try:
+            yield
+        finally:
+            if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
+                # Withdrawn from the line: the turn must not use the model.
+                self.cancelled.set()
+            elif not self.cancelled.is_set() and self.on_model_regained is not None:
+                try:
+                    self.on_model_regained()
+                except Exception as exc:  # pylint: disable=broad-except
+                    # The model the turn needs is gone and can't be loaded:
+                    # end the turn before the approved tool runs, and say why.
+                    logger.error("Model check after the user answered failed: %s", exc)
+                    self._emit({"type": "agent_error", "content": str(exc)})
+                    self.cancelled.set()
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -1906,6 +2039,10 @@ class SSEOutputHandler(OutputHandler):
         except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
             logger.debug("email relay: failed to close active response", exc_info=True)
 
+    def tool_running(self) -> bool:
+        """True from a tool's start until its result or end."""
+        return self._tool_start_time is not None
+
     def awaiting_user_input(self) -> bool:
         """True while a question or a tool confirmation is waiting on the user."""
         if self._confirm_id is not None or self._relay_confirm_id is not None:
@@ -1999,11 +2136,12 @@ class SSEOutputHandler(OutputHandler):
 
         # Block until resolved or timeout
         deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            if self.cancelled.is_set():
-                break
-            if evt.wait(timeout=0.5):
-                break
+        with self._away_from_model():
+            while time.monotonic() < deadline:
+                if self.cancelled.is_set():
+                    break
+                if evt.wait(timeout=0.5):
+                    break
 
         # Clean up. Under the lock and as one step, so a resolve landing at the
         # deadline either wins outright or is rejected — never accepted into a
@@ -2131,12 +2269,16 @@ def _format_tool_args(  # pylint: disable=unused-argument
             continue
         if value is True:
             parts.append(key)
+        elif isinstance(value, (list, tuple)):
+            parts.append(f"{key}: {', '.join(str(v) for v in value)}")
         elif isinstance(value, str) and len(value) > 150:
             parts.append(f"{key}: {value[:150]}...")
         else:
             parts.append(f"{key}: {value}")
 
-    return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
+    # A value that itself holds ", " would be split into fake rows by the UI.
+    one_line = len(parts) <= 2 and not any(", " in p for p in parts)
+    return ", ".join(parts) if one_line else "\n".join(parts)
 
 
 def _count_summary(data: Dict[str, Any]) -> Optional[str]:
@@ -2307,6 +2449,8 @@ def _tool_description(tool_name: str) -> str:
         "get_file_preview": "Previewing file contents",
         "index_document": "Indexing a document for retrieval",
         "evaluate_retrieval": "Evaluating document retrieval quality",
+        # Registered per agent, so the global label lookup cannot see it.
+        "set_reasoning_effort": "Setting reasoning effort",
     }
     return descriptions.get(tool_name, "")
 

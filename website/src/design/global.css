@@ -6,8 +6,8 @@
    `components` layer and inline utilities still win over them.
 
    These primitives are the shared vocabulary every page composes from. They
-   live here, not as ad-hoc Tailwind chains per page, so the landing, hub and
-   agent-detail pages cannot drift from each other.
+   live here, not as ad-hoc Tailwind chains per page, so pages cannot drift
+   from each other.
 
    Type sizes use clamp() so the 1200px design collapses sanely on small
    screens: the design's stated value is always the upper bound. */
@@ -44,10 +44,6 @@
   .g-h-page {
     font-size: clamp(2.75rem, 1.5rem + 5vw, 84px);
     @apply font-display font-semibold uppercase leading-[0.95] tracking-[0.01em];
-  }
-  .g-h-agent {
-    font-size: clamp(2.25rem, 1.4rem + 3.6vw, 64px);
-    @apply font-display font-semibold uppercase leading-[0.98] tracking-[0.01em];
   }
   .g-h-section {
     font-size: clamp(2.25rem, 1.4rem + 3.4vw, 62px);
@@ -182,10 +178,6 @@
   .g-pill-active {
     @apply border-g-accent-fill bg-g-accent-fill text-g-on-accent hover:text-g-on-accent;
   }
-  /* Static descriptive pill (tags on the agent page). */
-  .g-pill-static {
-    @apply font-mono rounded-g-pill border border-g-border px-3 py-1 text-[12.5px] text-g-muted;
-  }
   /* Eyebrow pill with a solid accent dot. */
   .g-pill-eyebrow {
     @apply inline-flex items-center gap-2.5 rounded-g-pill border border-g-border bg-g-surface py-1.5 pl-3 pr-4;
@@ -259,9 +251,8 @@
     border-color: rgb(var(--g-code-text) / 0.14);
   }
 
-  /* Syntax and severity colours for hand-authored code panels (Terminal). Prism
-     handles rendered markdown separately in the agent detail page, off the same
-     tokens. Every role here is measured only against --g-code-bg. */
+  /* Syntax and severity colours for hand-authored code panels (Terminal).
+     Every role here is measured only against --g-code-bg. */
   .g-code-panel .tok-key { color: rgb(var(--g-code-accent)); }
   .g-code-panel .tok-str { color: rgb(var(--g-code-green)); }
   .g-code-panel .tok-fn { color: rgb(var(--g-code-amber)); }

@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Tuple
 
 from gaia.daemon import paths
 from gaia.daemon.constants import DAEMON_API_VERSION, HOST, SERVICE_ID
@@ -65,13 +66,13 @@ def write_instance(inst: DaemonInstance) -> None:
     paths.atomic_write_json(paths.instance_path(), inst.to_dict())
 
 
-def read_instance() -> Optional[DaemonInstance]:
+def read_instance(path: Optional[Path] = None) -> Optional[DaemonInstance]:
     """Load instance.json, or ``None`` if absent/corrupt.
 
     A corrupt or truncated file is treated as "no trustworthy instance" and logged
     (not silently ignored) — the caller then reclaims via a fresh start.
     """
-    path = paths.instance_path()
+    path = path or paths.instance_path()
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -132,12 +133,16 @@ def pid_alive(pid: int) -> bool:
         return psutil.pid_exists(pid)
 
 
-def probe(inst: DaemonInstance, timeout: float = _PROBE_TIMEOUT) -> Optional[dict]:
-    """Probe the recorded port with the recorded token.
+def probe_state(
+    inst: DaemonInstance, timeout: float = _PROBE_TIMEOUT
+) -> Tuple[str, Optional[dict]]:
+    """Probe the recorded port with the recorded token, and say what answered.
 
-    Returns the status payload only if the server answers 200 with our service id
-    and the pid recorded in the file — otherwise ``None`` (an unrelated process
-    grabbed the freed port, or the daemon is unresponsive). Never raises.
+    Returns ``("live", body)`` when our daemon answered, ``("busy", None)`` when
+    something accepted the connection but did not answer within *timeout*, and
+    ``("gone", None)`` otherwise (nothing listening, a foreign server, or a
+    different daemon). A busy daemon is alive: only a caller that has waited it
+    out may treat it as hung. Never raises.
     """
     import requests
 
@@ -150,19 +155,27 @@ def probe(inst: DaemonInstance, timeout: float = _PROBE_TIMEOUT) -> Optional[dic
             headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
             timeout=timeout,
         )
+    except requests.exceptions.ReadTimeout:
+        return "busy", None
     except requests.exceptions.RequestException:
-        return None
+        return "gone", None
     if r.status_code != 200:
-        return None
+        return "gone", None
     try:
         body = r.json()
     except ValueError:
-        return None
+        return "gone", None
     if body.get("service") != SERVICE_ID:
-        return None
+        return "gone", None
     if int(body.get("pid", -1)) != inst.pid:
-        return None
-    return body
+        return "gone", None
+    return "live", body
+
+
+def probe(inst: DaemonInstance, timeout: float = _PROBE_TIMEOUT) -> Optional[dict]:
+    """The status payload if our daemon answered within *timeout*, else ``None``."""
+    state, body = probe_state(inst, timeout=timeout)
+    return body if state == "live" else None
 
 
 def is_live(inst: DaemonInstance, timeout: float = _PROBE_TIMEOUT) -> bool:

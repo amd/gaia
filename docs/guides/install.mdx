@@ -24,8 +24,8 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     | Choice | What you get | Shortcut it adds |
     |---|---|---|
-    | **Desktop app** | A window with chat, your documents and files, and every tool call shown as it runs. Starts when you sign in to Windows — turn that off from the app's tray menu or Task Manager → Startup. | **GAIA**, on the desktop and Start menu |
-    | **Terminal** | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/terminal-hub). | **GAIA Terminal Hub**, on the desktop and Start menu |
+    | **GAIA Agent UI** (desktop app) | A window with chat, your documents and files, and every tool call shown as it runs. Starts when you sign in to Windows — turn that off in the app's Settings → General or Task Manager → Startup. | **GAIA**, on the desktop and Start menu |
+    | **GAIA Terminal UI** (terminal) | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/tui). | **GAIA Terminal UI**, on the desktop and Start menu |
 
     1. On [amd-gaia.ai](https://amd-gaia.ai/#install), click **Install GAIA for Windows**. The file is `gaia-<version>-win-x64-setup.exe`.
     2. Run it. It needs no administrator rights — everything installs for your account only.
@@ -60,7 +60,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     Intel Macs are not currently supported by the desktop app.
 
-    Want the terminal instead, or as well? Its `.pkg` (Apple Silicon and Intel) is on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/terminal-hub#installing).
+    Want the terminal instead, or as well? Its `.pkg` (Apple Silicon and Intel) is on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/tui#installing).
   </Tab>
 
   <Tab title="Linux (Debian/Ubuntu)">
@@ -74,7 +74,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     Or install via the GUI: double-click the `.deb` file and your software center will install it.
 
-    Want the terminal instead, or as well? Its `.deb` and `.rpm` are on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/terminal-hub#installing).
+    Want the terminal instead, or as well? Its `.deb` and `.rpm` are on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/tui#installing).
   </Tab>
 
   <Tab title="Linux (other distros)">
@@ -189,8 +189,14 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
   never starts its own instead.
 - **What GAIA does on your server:** registers its embedding model
   (`user.embeddinggemma-300m-GGUF`), downloads the models it needs and loads them.
-  Its chat model loads with GAIA's context size for that load. It doesn't change
-  your server's settings, and setup leaves your other loaded models alone.
+  Its chat model loads with GAIA's context size for that load.
+- **What GAIA never does there:** change your server's setup. It doesn't register
+  cloud providers or hand your server keys, install backends, save load options
+  into its config, or unload or delete your models.
+- **Cloud providers:** to chat through Fireworks AI or the AMD LLM Gateway, set
+  the provider up on your server yourself, with its key in your server's
+  environment. GAIA then uses it as it is. If it isn't set up, connecting says so
+  instead of changing your server.
 - **Long documents:** if answers about long documents time out, raise your server's
   request timeout (`global_timeout` in its config).
 
@@ -198,6 +204,9 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
 The choice is stored as `lemonade_mode` and `lemonade_base_url` in
 `~/.gaia/config.json`. Switching tells a running GAIA daemon right away. It stops
 GAIA's own server when you switch to yours, and starts it again when you switch back.
+Switching back needs GAIA's own server installed, and waits until it answers: if it
+isn't installed or won't start, the switch is refused or undone and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
+step.
 
 ## Updating GAIA
 
@@ -223,7 +232,7 @@ installations using that folder will stop working. Silent uninstalls keep it.
 Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
-- **GAIA Terminal Hub** — the terminal. Removes `gaia-tui`, `gaia-agent`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+- **GAIA Terminal UI** — the terminal. Removes `gaia-tui`, `gaia-agent`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
 Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
 ```powershell
@@ -278,7 +287,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal hub and agent binaries (one-line installer) | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer) | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |

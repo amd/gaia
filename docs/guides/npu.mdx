@@ -36,12 +36,12 @@ This will:
 1. Verify NPU hardware is detected
 2. Install the FLM backend (`flm:npu`)
 3. Download the NPU-optimized models (`gemma4-it-e2b-FLM` for chat, `embed-gemma-300m-FLM` for documents and memory)
-4. Install the [GAIA agent](/guides/gaia) from the Agent Hub, the same agent a bare `gaia init` installs
+4. Install the [GAIA agent](/guides/gaia) if it is missing, the same agent a bare `gaia init` installs
 5. Run a verification test and make NPU the default device
 
-The Agent UI and terminal UI then have an agent to talk to. If the Agent Hub can't be
+The Agent UI and terminal UI then have an agent to talk to. If GAIA's download server can't be
 reached, setup still downloads the models, then reports itself incomplete and exits
-`1` — run `gaia hub install gaia` once the network is back. To return to the GPU, run
+`1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, run
 `gaia config set default_device gpu`.
 
 ## Usage
@@ -65,9 +65,7 @@ gaia prompt "Hello" --device npu
 ### Agent UI
 
 1. Launch with `gaia chat --ui`
-2. In the Agent Hub, each agent card shows a **device dropdown**
-3. Select **NPU** from the dropdown (only visible if NPU hardware is detected)
-4. A green ✓ badge indicates the agent has been verified on that device
+2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; switch with `gaia config set default_device gpu` (or `npu`)
 
 ### Evaluation
 

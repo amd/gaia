@@ -55,6 +55,7 @@ def _restore_tool_registry():
 def lemonade():
     client = create_autospec(LemonadeClient, instance=True)
     client.ensure_model_downloaded.return_value = True
+    client.is_users_server.return_value = False  # GAIA's own server
     client.load_model.return_value = {"status": "success"}
     client.unload_model.return_value = {"status": "success"}
     client.embeddings.side_effect = _fake_embeddings

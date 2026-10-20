@@ -22,10 +22,39 @@ LLAMACPP_BACKENDS = ("vulkan", "rocm", "metal", "cpu")
 #: fetched by Lemonade on first use. ``unsupported`` is never offered.
 _USABLE_STATES = frozenset({"installed", "installable", "update_required"})
 
+#: Shown with the backend when GAIA keeps its embedder off a ROCm GPU.
+EMBEDDER_ON_CPU_WITH_ROCM = (
+    "Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue."
+)
+
 #: Model types that are never the chat model.
 _NON_CHAT_TYPES = frozenset(
-    {"embedding", "reranking", "transcription", "image", "tts", "audio"}
+    {
+        "embedding",
+        "embed",
+        "reranking",
+        "rerank",
+        "transcription",
+        "asr",
+        "stt",
+        "image",
+        "tts",
+        "speech",
+        "audio",
+    }
 )
+
+
+def is_chat_model_entry(entry: Any) -> bool:
+    """True for an ``all_models_loaded`` entry that can be the chat model.
+
+    Speech, transcription, embedding, reranking and image models never are,
+    whatever loaded last.
+    """
+    return (
+        isinstance(entry, dict)
+        and str(entry.get("type") or "").lower() not in _NON_CHAT_TYPES
+    )
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -41,6 +70,17 @@ def default_llamacpp_backend(system_info: Any) -> Optional[str]:
     """The backend Lemonade picks when a load names none, or None if unreported."""
     backend = llamacpp_recipe(system_info).get("default_backend")
     return backend if isinstance(backend, str) and backend else None
+
+
+def embedder_avoids_rocm(
+    default_backend: Optional[str], preferred_backend: Optional[str]
+) -> bool:
+    """Whether GAIA loads its embedder on the CPU because llama.cpp uses ROCm.
+
+    With the chat model and the embedder both on a ROCm GPU, an amdgpu driver
+    issue can hold the GPU at 100% while idle (#5267).
+    """
+    return "rocm" in (default_backend, preferred_backend)
 
 
 def available_llamacpp_backends(system_info: Any) -> List[Dict[str, str]]:
@@ -127,9 +167,7 @@ def describe_loaded_model(
 def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The loaded chat model: the root ``model_loaded`` if it is one, else the first."""
     loaded = [
-        m
-        for m in health.get("all_models_loaded") or []
-        if isinstance(m, dict) and m.get("type") not in _NON_CHAT_TYPES
+        m for m in health.get("all_models_loaded") or [] if is_chat_model_entry(m)
     ]
     root = str(health.get("model_loaded") or "").lower()
     for m in loaded:
@@ -176,6 +214,15 @@ def describe_model_server(
     embed = _embedder_entry(health)
     sysinfo = system_info or {}
     version = health.get("version")
+    default_backend = default_llamacpp_backend(sysinfo)
+    from gaia.llm.lemonade_client import (
+        DEFAULT_EMBEDDING_MODEL,
+        manages_embedder_backend,
+    )
+
+    embedder_on_cpu = manages_embedder_backend(
+        DEFAULT_EMBEDDING_MODEL
+    ) and embedder_avoids_rocm(default_backend, preferred_backend)
     return {
         "reachable": True,
         "error": None,
@@ -191,7 +238,8 @@ def describe_model_server(
             else None
         ),
         "embedding_model": describe_loaded_model(embed, sysinfo) if embed else None,
-        "default_backend": default_llamacpp_backend(sysinfo),
+        "embedding_note": EMBEDDER_ON_CPU_WITH_ROCM if embedder_on_cpu else None,
+        "default_backend": default_backend,
         "available_backends": available_llamacpp_backends(sysinfo),
         "preferred_backend": preferred_backend,
     }

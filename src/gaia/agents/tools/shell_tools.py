@@ -30,6 +30,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
+from gaia.agents.base.file_snapshots import note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -1894,6 +1895,49 @@ _ANSWER_EXIT_ONE = {
 _GIT_DIFF_EXIT_CODE_FLAGS = frozenset({"--exit-code", "--quiet", "--no-index"})
 
 
+#: ``test`` / ``[`` operators that ask whether a path exists, as a file test.
+_FILE_TEST_FLAGS = frozenset({"-e", "-f", "-d", "-s", "-r", "-w", "-x", "-L", "-h"})
+
+#: ``Get-Command NAME`` (or its alias ``gcm``) as a whole PowerShell script.
+_GET_COMMAND_SCRIPT = re.compile(
+    r"\s*(?:get-command|gcm)\s+[^\s;|&]+[^;|&\r\n]*", re.IGNORECASE
+)
+
+
+def _probe_exit(segment: list) -> Optional[str]:
+    """Why exit 1 from *segment* means "not there", when it is an existence probe.
+
+    Each reading is the program's own documented status: where.exe and which
+    exit 1 when nothing is found, ``command -v`` / ``type`` when the name does
+    not resolve, ``test -f`` when the test is false.
+    """
+    name = _interpreter_name(segment[0])
+    operands = [a for a in segment[1:] if not a.startswith(("-", "/"))]
+    if name in ("where", "which") and operands:
+        return f"not found: {', '.join(operands)} ({name} exits 1 for that)"
+    if name == "command" and len(segment) >= 3 and segment[1] in ("-v", "-V"):
+        return f"not found: {segment[2]} (command -v exits 1 for that)"
+    # cmd.exe's `type` prints a file, so only the POSIX builtin is a lookup.
+    if name == "type" and os.name != "nt" and operands:
+        return f"not found: {', '.join(operands)} (type exits 1 for that)"
+    # One unary test only: `test -f a -a -x b` is not a probe.
+    unary = (name == "test" and len(segment) == 3) or (
+        name == "[" and len(segment) == 4 and segment[3] == "]"
+    )
+    if unary and segment[1] in _FILE_TEST_FLAGS:
+        return f"test {segment[1]} {segment[2]} is false (exit 1 is its answer)"
+    if name == "powershell":
+        script = [
+            segment[i]
+            for i, kind in sorted(_powershell_script_positions(segment).items())
+            if kind == "powershell"
+        ]
+        text = " ".join(script)
+        if _GET_COMMAND_SCRIPT.fullmatch(text):
+            return f"not found: {text.split()[1]} (Get-Command exits 1 for that)"
+    return None
+
+
 def _answer_exit(segment: list, code: int) -> Optional[str]:
     """Why *code* from *segment* is the program's answer, or None if it failed."""
     if code != 1 or not segment:
@@ -1901,6 +1945,9 @@ def _answer_exit(segment: list, code: int) -> Optional[str]:
     name = _interpreter_name(segment[0])
     if name in _ANSWER_EXIT_ONE:
         return _ANSWER_EXIT_ONE[name]
+    probe = _probe_exit(segment)
+    if probe:
+        return probe
     if name != "git":
         return None
     argv, error = _git_policy_argv(segment)
@@ -3218,6 +3265,20 @@ class ShellToolsMixin:
                 remaining -= slice_s
                 waited += slice_s
 
+    def _withheld_cwd_error(self, cwd: str) -> Optional[Dict[str, Any]]:
+        """The refusal for running in a folder the user removed, or None."""
+        validator = getattr(self, "path_validator", None)
+        withheld_root = getattr(validator, "withheld_root", None)
+        if not callable(withheld_root) or withheld_root(cwd) is None:
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": validator.access_denied_message(cwd)
+            + " Pass a working_directory in a folder this chat can still use.",
+            "has_errors": True,
+        }
+
     def _path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """Whether *path* is inside this agent's allowed paths.
 
@@ -4229,7 +4290,7 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
             Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
             'cd <dir> && b'. One approval covers the line; every part is
@@ -4319,6 +4380,12 @@ class ShellToolsMixin:
                     cwd = self.shell_session.cwd
                     session_scoped = True
 
+                # A folder the user removed from the chat is refused even under
+                # full access, and even as the folder a new session starts in.
+                withheld = self._withheld_cwd_error(cwd)
+                if withheld is not None:
+                    return withheld
+
                 # Operators, syntax, and the per-command whitelist, for every
                 # segment of every pipeline on the line. Shared with the
                 # pre-flight that runs before the confirmation prompt, so a
@@ -4334,6 +4401,8 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
+                # Only the read-only tier is known not to write files.
+                may_write = bool(error) or bypass
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:
@@ -4349,11 +4418,18 @@ class ShellToolsMixin:
                             ),
                             "has_errors": True,
                         }
+                    note_untracked("shell", command)
                     return self._run_approved_once(
                         command, cwd, steps, timeout, timeout_class, waited
                     )
 
                 granted = skill_granted_binaries(self)
+                # A skill-granted CLI is allowed without a prompt, not read-only.
+                may_write = may_write or any(
+                    _is_granted_segment(seg, granted)
+                    for st in steps
+                    for seg in st.segments
+                )
 
                 # A `cd` step moves the steps after it, so each step's directory
                 # — and what its arguments resolve against — is settled here,
@@ -4401,6 +4477,9 @@ class ShellToolsMixin:
                         "cwd": cwd,
                     }
 
+                if may_write:
+                    note_untracked("shell", command)
+
                 start_time = time.monotonic()
                 deadline = start_time + timeout
                 stdout_parts: list = []
@@ -4408,6 +4487,7 @@ class ShellToolsMixin:
                 ran: list = []
                 last_code = 0
                 last_answer: Optional[str] = None
+                answer_step = ""
                 # The first failure nothing on the line handles, as
                 # (and-or list, step, exit code, output to quote).
                 unhandled_failure: Optional[Tuple[int, str, int, str]] = None
@@ -4419,6 +4499,16 @@ class ShellToolsMixin:
                     if step.connector not in ("&&", "||"):
                         and_or_list += 1
                     if not _connector_runs(step.connector, last_code):
+                        # `where x && x --version` did not do what it asked
+                        # when x is missing: a probe that gates work is a
+                        # failure. grep's `&&` stays a conditional, as before.
+                        if step.connector == "&&" and last_answer and answer_step:
+                            unhandled_failure = unhandled_failure or (
+                                and_or_list,
+                                answer_step,
+                                last_code,
+                                f"{last_answer}, so '{step.text}' did not run",
+                            )
                         continue
                     # `||` handles a failure in its own and-or list, as in sh;
                     # one before a `;` still stands, so `pytest -q; ls` (or
@@ -4546,6 +4636,11 @@ class ShellToolsMixin:
                     last_code = result.returncode
                     last_answer = (
                         _step_answer_exit(step, result) if last_code != 0 else None
+                    )
+                    answer_step = (
+                        step.text
+                        if last_answer and _probe_exit(step.segments[-1])
+                        else ""
                     )
                     if last_code != 0 and last_answer is None:
                         # Under 2>&1 the verdict is on stdout.

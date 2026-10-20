@@ -286,7 +286,7 @@ jobs:
 
   draft:
     needs: check
-    if: needs.check.outputs.should_draft == 'true'
+    if: "!cancelled() && needs.check.result == 'success' && needs.check.outputs.should_draft == 'true'"
     runs-on: ubuntu-latest
     steps:
       - name: Show which Claude account this job uses

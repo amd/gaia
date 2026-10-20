@@ -185,7 +185,11 @@ def test_custom_agent_with_mcp_reports_diagnosable_connection_failure(
                 "mcpServers": {
                     "dummy": {
                         "command": sys.executable,
-                        "args": ["-c", "import sys; sys.exit(17)"],
+                        "args": [
+                            "-c",
+                            "import sys; sys.exit(17)",
+                            "--token=harness-secret-marker",
+                        ],
                     }
                 }
             }
@@ -199,17 +203,21 @@ def test_custom_agent_with_mcp_reports_diagnosable_connection_failure(
     registry = _discover_agent("installer-mcp")
     agent = registry.create_agent("installer-mcp", mcp_config_file=str(mcp_config))
 
-    assert agent.get_mcp_status_report() == [
-        {
-            "name": "dummy",
-            "connected": False,
-            "tool_count": 0,
-            "error": (
-                "Transport error for 'dummy': "
-                "MCP server process died (exit code: 17)"
-            ),
-        }
-    ]
+    # The error names the server and the program it ran, by file name only.
+    executable = os.path.basename(sys.executable)
+    died = f"MCP server 'dummy ({executable})' process died (exit code: 17)"
+    report = agent.get_mcp_status_report()
+    assert len(report) == 1
+    error = report[0].pop("error")
+    assert report == [{"name": "dummy", "connected": False, "tool_count": 0}]
+    # A slow interpreter outlives the 0.1 s startup check and dies during
+    # initialize instead; both wrappers carry the same diagnostic.
+    assert error in (
+        f"Transport error for 'dummy': {died}",
+        f"Error during initialization: {died}",
+    )
+    assert "harness-secret-marker" not in error
+    assert os.path.dirname(sys.executable) not in error
     assert agent.process_query("add 7 and 35") == {
         # Refused before the tool body ran, so the result says so — that flag is
         # what stops the verification footer claiming the call went through.

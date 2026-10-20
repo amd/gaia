@@ -14,7 +14,7 @@
     text-align: center;
     cursor: pointer;
     color: var(--text-secondary);
-    transition: all 250ms var(--ease);
+    transition: all var(--duration) var(--ease);
     margin-bottom: 18px;
 }
 .drop-zone:hover, .drop-zone.drag-over {
@@ -35,7 +35,7 @@
     border: 3px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 /* @keyframes spin defined in global index.css */
 
@@ -118,10 +118,10 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 12px;
+    font-size: var(--fs-caption);
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 .doc-status-failed { color: var(--danger); background: var(--danger-dim); }
 .doc-status-cancelled { color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 8%, transparent); }
@@ -133,7 +133,7 @@
     gap: 2px;
     flex-shrink: 0;
     opacity: 0;
-    transition: opacity 0.15s;
+    transition: opacity var(--duration-fast) var(--ease);
 }
 .doc-row:hover .doc-row-actions { opacity: 1; }
 
@@ -175,7 +175,7 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
 }
 .btn-retry:hover {
     background: var(--danger-dim);

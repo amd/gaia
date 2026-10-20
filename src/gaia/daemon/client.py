@@ -9,7 +9,9 @@ exactly ONE daemon (the second attaches to the first's instance.json).
 
 Recovery follows §0.25: a recorded instance is trusted only when its pid is alive
 AND a token-authed probe succeeds. A dead pid → reclaim by spawning fresh; a
-live-but-unresponsive pid → terminate it, then spawn fresh.
+live pid with nothing answering on its port → terminate it, then spawn fresh. A
+live pid that accepts the probe but answers slowly is busy, not dead: it is
+re-probed with a longer wait and never killed (:class:`DaemonBusyError`).
 """
 
 from __future__ import annotations
@@ -18,17 +20,25 @@ import os
 import subprocess
 import sys
 import time
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Callable, Optional, Tuple
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
 from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
-from gaia.daemon.errors import DaemonError, DaemonStartError, DaemonVersionError
+from gaia.daemon.errors import (
+    DaemonBusyError,
+    DaemonError,
+    DaemonHungError,
+    DaemonStartError,
+    DaemonVersionError,
+    LemonadeNotAnsweringError,
+)
 from gaia.daemon.instance import (
     DaemonInstance,
     is_live,
     pid_alive,
-    probe,
+    probe_state,
     read_instance,
     terminate_instance,
 )
@@ -36,7 +46,7 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
-from gaia.utils.terminal import background_popen_kwargs
+from gaia.utils.terminal import background_popen_kwargs, popen_outliving_job
 
 logger = get_logger(__name__)
 
@@ -47,6 +57,22 @@ _START_TIMEOUT = 60.0
 _PROGRESS_AFTER = 5.0
 _PROGRESS_EVERY = 10.0
 _LOG_TAIL_LINES = 5
+
+#: The second, longer probe a daemon gets after one that connected but timed
+#: out. Status never waits on other work, so a daemon still silent after this is
+#: overloaded or stuck, and is reported busy rather than killed.
+BUSY_PROBE_TIMEOUT_S = 10.0
+
+#: A daemon whose status has gone unanswered this long, across probes, is hung,
+#: not busy: the next start replaces it.
+HUNG_AFTER_S = 120.0
+
+#: Unanswered probes further apart than this belong to separate busy spells, so
+#: a marker left from a spell that ended unobserved never counts toward hung.
+BUSY_SPELL_GAP_S = HUNG_AFTER_S / 2
+
+#: Where the start of a daemon's current unanswered spell is recorded.
+BUSY_MARKER_NAME = "busy_since.json"
 
 #: Called with the seconds waited so far while a daemon start is in progress.
 ProgressCallback = Callable[[float], None]
@@ -115,10 +141,139 @@ def _check_version(inst: DaemonInstance) -> None:
         )
 
 
-def attach(timeout: float = 1.5) -> Optional[DaemonInstance]:
-    """Return the running daemon if one is live and version-compatible, else None."""
-    inst = read_instance()
-    if inst is None or not is_live(inst, timeout=timeout):
+def _patient_probe(
+    inst: DaemonInstance,
+    timeout: float,
+    on_slow: Optional[Callable[[], None]] = None,
+) -> Tuple[str, Optional[dict]]:
+    """:func:`probe_state`, giving a busy daemon one longer second chance.
+
+    *on_slow* is called before that second, longer wait.
+    """
+    state, body = probe_state(inst, timeout=timeout)
+    if state == "busy":
+        if on_slow is not None:
+            on_slow()
+        state, body = probe_state(inst, timeout=max(timeout, BUSY_PROBE_TIMEOUT_S))
+    return state, body
+
+
+def _is_gaia_daemon(pid: int) -> bool:
+    """True unless *pid* is visibly some other program (a reused pid)."""
+    import psutil
+
+    try:
+        return "gaia.daemon" in " ".join(psutil.Process(pid).cmdline())
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        return True  # cannot tell; the hung limit still bounds it
+
+
+def _busy_marker(host_dir: Optional[Path]) -> Path:
+    return (host_dir or paths.host_dir()) / BUSY_MARKER_NAME
+
+
+def _busy_since(inst: DaemonInstance, host_dir: Optional[Path]) -> float:
+    """When this daemon's current unanswered spell began; starts one if new.
+
+    Records this unanswered probe too, so a later one more than
+    :data:`BUSY_SPELL_GAP_S` after it starts a new spell.
+    """
+    import json
+
+    marker = _busy_marker(host_dir)
+    now = time.time()
+    since = now
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        if int(data["pid"]) == inst.pid and now - float(data["last"]) <= (
+            BUSY_SPELL_GAP_S
+        ):
+            since = float(data["since"])
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warning("daemon: ignoring unreadable %s (%s); starting over", marker, e)
+    paths.atomic_write_json(marker, {"pid": inst.pid, "since": since, "last": now})
+    return since
+
+
+def _clear_busy(host_dir: Optional[Path]) -> None:
+    try:
+        _busy_marker(host_dir).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("daemon: could not remove %s: %s", _busy_marker(host_dir), e)
+
+
+def _answers(
+    inst: DaemonInstance,
+    timeout: float,
+    *,
+    patient: bool = True,
+    host_dir: Optional[Path] = None,
+) -> bool:
+    """True if *inst* is live, False if it is gone.
+
+    A daemon that accepts the probe but does not answer gets a longer second
+    probe when *patient* (an exiting process skips it). A pid that is visibly
+    not a GAIA daemon is gone, whatever its port does.
+
+    Raises:
+        DaemonHungError: it has not answered for :data:`HUNG_AFTER_S`.
+        DaemonBusyError: it accepted the probe but has not answered, for less
+            than that.
+    """
+    if not pid_alive(inst.pid):
+        return False
+    state, _ = probe_state(inst, timeout=timeout)
+    if state == "busy" and not _is_gaia_daemon(inst.pid):
+        state = "gone"
+    if state == "busy":
+        since = _busy_since(inst, host_dir)
+        if time.time() - since < HUNG_AFTER_S and patient:
+            state, _ = probe_state(inst, timeout=max(timeout, BUSY_PROBE_TIMEOUT_S))
+            if state == "busy":
+                since = _busy_since(inst, host_dir)
+    if state != "busy":
+        _clear_busy(host_dir)
+        return state == "live"
+    silent_for = time.time() - since
+    where = f"Where to look: `gaia daemon logs` ({paths.log_path()})."
+    if silent_for >= HUNG_AFTER_S:
+        raise DaemonHungError(
+            f"the GAIA daemon (pid {inst.pid}, port {inst.port}) has not answered "
+            f"its status check for {silent_for:.0f}s, so it is hung. Run `gaia "
+            f"daemon restart`; the next `gaia daemon start` also replaces it. " + where
+        )
+    raise DaemonBusyError(
+        f"the GAIA daemon (pid {inst.pid}, port {inst.port}) is running but has "
+        f"not answered its status check for {silent_for:.0f}s, so it is "
+        f"overloaded or stuck. It was left running; after {HUNG_AFTER_S:.0f}s "
+        "it is treated as hung and replaced. Retry in a moment, or run `gaia "
+        "daemon restart` to restart it and its sidecar agents now. " + where
+    )
+
+
+def attach(
+    timeout: float = 1.5, host_dir: Optional[Path] = None, *, patient: bool = True
+) -> Optional[DaemonInstance]:
+    """Return the running daemon if one is live and version-compatible, else None.
+
+    Args:
+        host_dir: Attach to the daemon of another GAIA home, whose
+            ``instance.json`` is in this directory, instead of this process's.
+        patient: give a slow daemon a longer second probe. Exit paths pass
+            False rather than hold up the process.
+
+    Raises:
+        DaemonBusyError: a daemon is running but not answering. ``None`` would
+            tell the caller there is no daemon, and it would act as if alone.
+    """
+    inst = read_instance(host_dir / "instance.json") if host_dir else read_instance()
+    if inst is None or not _answers(inst, timeout, patient=patient, host_dir=host_dir):
         return None
     _check_version(inst)
     return inst
@@ -135,24 +290,34 @@ def start_or_attach(
     so a front-end can show that something is happening. *drop_env* names
     variables of this process a newly started daemon must not inherit.
     """
-    inst = attach()
+    try:
+        inst = attach()
+    except DaemonHungError:
+        inst = None  # replaced below, under the lock
     if inst is not None:
         return inst
 
     with StartLock(timeout=timeout):
         # Re-check under the lock: a concurrent caller may have just started it.
         inst = read_instance()
-        if inst is not None and is_live(inst):
-            _check_version(inst)
-            return inst
-        # Stale registry. If the pid is alive but unresponsive, it is our own
-        # daemon gone bad — terminate it before reclaiming (§0.25).
+        try:
+            if inst is not None and _answers(inst, 1.5):
+                _check_version(inst)
+                return inst
+        except DaemonHungError as e:
+            logger.warning("daemon: %s Replacing it.", e)
+        # Stale registry. A live pid whose port refuses us, answers as
+        # something else, or stayed silent past HUNG_AFTER_S is our own daemon
+        # gone bad — terminate it before reclaiming (§0.25). A merely busy one
+        # raised above and is never killed.
         if inst is not None and pid_alive(inst.pid):
             logger.warning(
-                "daemon: instance pid=%s is alive but unresponsive; reclaiming",
+                "daemon: instance pid=%s is alive but not answering as this "
+                "daemon; reclaiming",
                 inst.pid,
             )
             terminate_instance(inst)
+            _clear_busy(None)
         missing = missing_daemon_deps()
         if missing:
             raise DaemonStartError(
@@ -238,7 +403,7 @@ def _spawn_and_wait(
     # the console programs the daemon starts don't each open a blank window.
     spawn_kwargs = background_popen_kwargs()
     try:
-        proc = subprocess.Popen(
+        proc = popen_outliving_job(
             [sys.executable, "-m", "gaia.daemon"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -376,21 +541,38 @@ def ensure_agent(
     return inst
 
 
-def ensure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> dict:
+def ensure_lemonade(
+    timeout=_LEMONADE_ENSURE_TIMEOUT, host_dir: Optional[Path] = None
+) -> dict:
     """Start-or-attach the daemon and have it start GAIA's embedded Lemonade.
 
     Returns the daemon's answer: ``base_url``, ``port``, ``version`` and
     whether this call ``started`` the server. Blocking -- a cold start waits for
     the server's health check -- so call it off any event loop.
 
+    Args:
+        host_dir: Ask another GAIA home's daemon (see :func:`attach`), which
+            must already be running: this never starts another home's daemon.
+
     Raises:
+        LemonadeNotAnsweringError: GAIA's server is up but not answering yet;
+            the daemon left it alone, so asking again later may find it back.
         DaemonError: The daemon is unreachable, has nothing to start (another
             server is configured, or GAIA's own is not installed), or the
             server would not start. The message names the remedy.
     """
     import requests
 
-    inst = start_or_attach()
+    if host_dir is None:
+        inst = start_or_attach()
+    else:
+        inst = attach(host_dir=host_dir)
+        if inst is None:
+            raise DaemonError(
+                f"the GAIA daemon in {host_dir}, which owns the Lemonade Server "
+                "this process uses, is not running. Start it with `gaia daemon "
+                "start` (without GAIA_HOME set)."
+            )
     if _minor(inst) < _REQUIRED_LEMONADE_MINOR:
         raise DaemonVersionError(
             f"the running daemon (host API v{inst.api_version}) predates GAIA "
@@ -410,6 +592,8 @@ def ensure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> dict:
             f"Server: {e}. Check `gaia daemon status` and the daemon log at "
             f"{paths.log_path()}."
         ) from e
+    if r.status_code == 503 and r.headers.get("Retry-After"):
+        raise LemonadeNotAnsweringError(_error_detail(r))
     if r.status_code != 200:
         raise DaemonError(
             f"the daemon could not start Lemonade Server: {_error_detail(r)}"
@@ -500,7 +684,11 @@ def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
 
 
 def register_lemonade_client(
-    kind: str, pids: list, name: str = "", client_id: Optional[str] = None
+    kind: str,
+    pids: list,
+    name: str = "",
+    client_id: Optional[str] = None,
+    host_dir: Optional[Path] = None,
 ) -> str:
     """Tell the running daemon this process is using GAIA's Lemonade.
 
@@ -514,6 +702,7 @@ def register_lemonade_client(
         name: Shown in the daemon log.
         client_id: Repeat an earlier registration, so a daemon that restarted
             since learns of this client too. A no-op on the daemon that has it.
+        host_dir: Register with another GAIA home's daemon (see :func:`attach`).
 
     Returns:
         The client id to release with.
@@ -524,7 +713,7 @@ def register_lemonade_client(
     """
     import requests
 
-    inst = attach()
+    inst = attach(host_dir=host_dir, patient=False)
     if inst is None:
         raise DaemonError(
             "the GAIA daemon is not running, so there is nothing to register "
@@ -562,7 +751,9 @@ def register_lemonade_client(
     return r.json()["client_id"]
 
 
-def release_lemonade_client(client_id: str) -> Optional[dict]:
+def release_lemonade_client(
+    client_id: str, host_dir: Optional[Path] = None
+) -> Optional[dict]:
     """Release a registration from :func:`register_lemonade_client`.
 
     Returns:
@@ -575,7 +766,7 @@ def release_lemonade_client(client_id: str) -> Optional[dict]:
     """
     import requests
 
-    inst = attach()
+    inst = attach(host_dir=host_dir, patient=False)
     if inst is None:
         return None
     url = f"{inst.base_url}{API_PREFIX}/lemonade/clients/{client_id}"
@@ -631,14 +822,19 @@ def wait_until_gone(inst: DaemonInstance, timeout: float = 10.0) -> bool:
     return not pid_alive(inst.pid)
 
 
-def status_report() -> dict:
-    """Structured status for the CLI: running/stale/absent + identity + uptime."""
+def status_report(on_slow: Optional[Callable[[], None]] = None) -> dict:
+    """Structured status for the CLI: running/busy/stale/absent + identity + uptime.
+
+    *on_slow* is called if the daemon is slow to answer, before a longer wait.
+    """
     inst = read_instance()
     if inst is None:
         return {"state": "not_running"}
     if not pid_alive(inst.pid):
         return {"state": "stale", "reason": "pid_dead", "instance": inst}
-    body = probe(inst)
+    state, body = _patient_probe(inst, 1.5, on_slow)
+    if state == "busy":
+        return {"state": "busy", "instance": inst}
     if body is None:
         return {"state": "stale", "reason": "unresponsive", "instance": inst}
     return {"state": "running", "instance": inst, "status": body}

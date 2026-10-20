@@ -30,9 +30,8 @@
 # enforce:true breach blocks the refresh from committing a regressed card.
 #
 # Runner-only by construction (`gaia eval agent` needs Lemonade + the Agent UI
-# backend on AMD hardware; the dev boxes must never start Lemonade). Shares
-# the serial `lemonade-eval` slot; a full refresh occupies it for many hours —
-# check `gh run list` before dispatching.
+# backend on AMD hardware; the dev boxes must never start Lemonade). Runs on
+# the ephemeral devlab-dispatch pool, so it holds no `lemonade-eval` slot.
 #
 # KNOWN RESIDUAL GAP (same as email): this workflow can only govern what IT
 # commits; a hand-edited SCORECARD.md in an unrelated PR bypasses these guards
@@ -48,9 +47,9 @@ on:
         required: false
         default: ''
       eval_model:
-        description: 'Driver + judge model for the eval harness'
+        description: 'Driver + judge model for the eval harness. Blank = the model the flagship baseline was captured under (tests/fixtures/eval_baselines/gaia-flagship/meta.json)'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: ''
       model:
         description: 'The AGENT model under test (stamped on the card)'
         required: false
@@ -70,10 +69,9 @@ on:
         default: ''
 
 concurrency:
-  # The serial Lemonade slot — shared with every other self-hosted eval so two
-  # runs never race-evict each other's model. Declared at the workflow level
-  # only (single job; declaring it at BOTH levels is a self-deadlock).
-  group: lemonade-eval
+  # One refresh per branch at a time, so two runs never race the card commit.
+  # Not `lemonade-eval`: each run gets its own ephemeral machine and Lemonade.
+  group: gaia-scorecard-refresh-${{ github.ref }}
   cancel-in-progress: false
   queue: max
 
@@ -86,7 +84,8 @@ env:
   # gaia_email is not in this serial default (its budget is unsized here);
   # eval_flagship.yml's gaia-email lane measures it. Name it to include it.
   EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
-  EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
+  # The model itself is resolved per job from the baseline's meta.json.
+  EVAL_MODEL_OVERRIDE: ${{ inputs.eval_model }}
   MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   CTX_SIZE: ${{ inputs.ctx_size || '65536' }}
   REBASELINE: ${{ inputs.rebaseline }}
@@ -95,6 +94,9 @@ env:
   # (a category subset would silently downgrade the published sample basis).
   IS_FULL: ${{ (inputs.categories || '') == '' }}
   BACKEND_URL: http://127.0.0.1:4200
+  # The checkout is outside this runner's home, so without this every
+  # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   FIXTURE_PORT: '8765'
   GAIA_HUB_URL: http://127.0.0.1:8765/fixture_hub
   GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'
@@ -108,11 +110,15 @@ env:
   LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
   PYTHONIOENCODING: 'utf-8'
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+  # The venv's interpreter and CLI by full path. A bare `python` resolves
+  # through PATH, which a runner's own setup can put ahead of the venv.
+  VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
+  VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
 
 jobs:
   refresh:
     name: Re-run gaia eval, refresh-or-reject scorecard
-    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         shell: powershell
@@ -132,6 +138,23 @@ jobs:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0   # full history for git describe (cross-version baseline)
 
+      # The Claude model drives every scenario as well as judging it, so it must
+      # be the one the committed flagship baseline was captured under: its
+      # meta.json is the single source. A dispatch input overrides it.
+      - name: Resolve the eval driver model
+        run: |
+          $model = $env:EVAL_MODEL_OVERRIDE
+          if (-not $model) {
+            $meta = 'tests/fixtures/eval_baselines/gaia-flagship/meta.json'
+            $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
+            if (-not $model) {
+              Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: restore eval_model in $meta, or dispatch with the eval_model input."
+              exit 1
+            }
+          }
+          "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "Eval driver and judge model: $model"
+
       - name: Preflight — judge credential
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -142,10 +165,34 @@ jobs:
           }
 
       - name: Setup Python Environment
+        id: venv
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
           install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Check the venv interpreter
+        env:
+          SETUP_VENV_PY: ${{ steps.venv.outputs.python-path }}
+        run: |
+          if ($env:SETUP_VENV_PY -ne $env:VENV_PY) {
+            Write-Host "::error::setup-venv built '$env:SETUP_VENV_PY' but this workflow runs '$env:VENV_PY'. Point VENV_PY/VENV_GAIA in the workflow env at setup-venv's venv-name."
+            exit 1
+          }
+          foreach ($exe in @($env:VENV_PY, $env:VENV_GAIA)) {
+            if (-not (Test-Path $exe)) {
+              Write-Host "::error::$exe is missing - the venv install did not complete. See the Setup Python Environment step."
+              exit 1
+            }
+          }
+          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            exit 1
+          }
+          $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
+          Write-Host "Venv interpreter: $env:VENV_PY"
+          Write-Host "Bare 'python' on this runner: $(if ($bare) { $bare } else { 'none' })"
 
       - name: Resolve version, committed basis, and fail fast on a basis mismatch
         id: pre
@@ -153,7 +200,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $VERSION = python -c "import yaml; print(yaml.safe_load(open('$env:MANIFEST'))['version'])"
+          $VERSION = & $env:VENV_PY -c "import yaml; print(yaml.safe_load(open('$env:MANIFEST'))['version'])"
           if ($LASTEXITCODE -ne 0) { throw "could not read version from $env:MANIFEST" }
           "version=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -167,7 +214,7 @@ jobs:
             $committedPath = Join-Path $env:RUNNER_TEMP "committed_scorecard.md"
             [System.IO.File]::WriteAllLines($committedPath, (git show "HEAD:$env:SCORECARD"))
             $committedForPy = $committedPath -replace '\\', '/'
-            $COMMITTED_CTX = python -c "from gaia.eval.release_scorecard import parse_scorecard; from gaia.eval.scorecard_gate import env_ctx_size; import pathlib; v = env_ctx_size(parse_scorecard(pathlib.Path('$committedForPy'))); print('' if v is None else v)"
+            $COMMITTED_CTX = & $env:VENV_PY -c "from gaia.eval.release_scorecard import parse_scorecard; from gaia.eval.scorecard_gate import env_ctx_size; import pathlib; v = env_ctx_size(parse_scorecard(pathlib.Path('$committedForPy'))); print('' if v is None else v)"
             if ($LASTEXITCODE -ne 0) { throw "could not read committed ctx_size" }
           }
           "committed_ctx=$COMMITTED_CTX" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -227,12 +274,12 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
           $global:LASTEXITCODE = 0
-          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, MODELS; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
+          $probe = @(& $env:VENV_PY -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, MODELS; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
           if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 3) {
             Write-Host "::error::Could not resolve the embedding model from the venv - the install is broken."
             exit 1
           }
-          $embedOut = & python tests/ci_lemonade_check.py `
+          $embedOut = & $env:VENV_PY tests/ci_lemonade_check.py `
             --model $probe[-3] --checkpoint $probe[-2] --recipe $probe[-1] `
             --register-embedding --embeddings `
             --llamacpp-args "--ubatch-size 2048" 2>&1
@@ -247,7 +294,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           # Same script as the other gaia_* workflows, so "staged" cannot drift.
-          python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          & $env:VENV_PY tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
           if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
       - name: Run the gaia eval categories serially (real eval)
@@ -270,13 +317,13 @@ jobs:
             exit 1
           }
 
-          $fixture = Start-Process -FilePath "python" `
+          $fixture = Start-Process -FilePath $env:VENV_PY `
             -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","$env:FIXTURE_PORT" `
             -WorkingDirectory $PWD `
             -RedirectStandardOutput (Join-Path $PWD "eval-out\fixtures.log") `
             -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
             -NoNewWindow -PassThru
-          $backend = Start-Process -FilePath "python" `
+          $backend = Start-Process -FilePath $env:VENV_PY `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
             -WorkingDirectory (Join-Path $env:USERPROFILE "gaia-eval") `
             -RedirectStandardOutput (Join-Path $PWD "eval-out\backend.out.log") `
@@ -323,7 +370,7 @@ jobs:
             foreach ($category in @($env:EVAL_CATEGORIES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
               Write-Host "==== gaia eval agent --agent-type gaia --category $category ===="
               $global:LASTEXITCODE = 0
-              gaia eval agent --agent-type gaia --category $category `
+              & $env:VENV_GAIA eval agent --agent-type gaia --category $category `
                 --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --budget 5.00 `
                 --exclude-tag live --exclude-tag local_blocked_win_shim 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
@@ -355,13 +402,13 @@ jobs:
       - name: Quality gate (reads the thresholds manifest)
         timeout-minutes: 10
         run: |
-          python hub/agents/gaia/python/packaging/eval_quality_report.py
+          & $env:VENV_PY hub/agents/gaia/python/packaging/eval_quality_report.py
           if ($LASTEXITCODE -ne 0) { throw "quality gate report failed" }
 
       - name: Perf gate (reads the thresholds manifest)
         timeout-minutes: 10
         run: |
-          python hub/agents/gaia/python/packaging/eval_perf_report.py
+          & $env:VENV_PY hub/agents/gaia/python/packaging/eval_perf_report.py
           if ($LASTEXITCODE -ne 0) { throw "perf gate report failed" }
 
       - name: Regenerate SCORECARD.md from the real run
@@ -376,7 +423,7 @@ jobs:
           } catch {}
           $genArgs = @("--run-dir","eval-out","--model","$env:MODEL","--ctx-size","$env:CTX_SIZE","--hardware","AMD Ryzen AI MAX+ (Strix Halo)")
           if ($LEMONADE_VERSION) { $genArgs += @("--lemonade-version","$LEMONADE_VERSION") }
-          python hub/agents/gaia/python/packaging/gen_scorecard.py @genArgs
+          & $env:VENV_PY hub/agents/gaia/python/packaging/gen_scorecard.py @genArgs
           if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
 
       - name: Same-version regression check (reject a worse re-run)
@@ -392,7 +439,7 @@ jobs:
           if ("$env:REBASELINE" -eq "true") {
             $gateArgs += "--allow-ctx-mismatch"
           }
-          python -m gaia.eval.scorecard_gate @gateArgs
+          & $env:VENV_PY -m gaia.eval.scorecard_gate @gateArgs
           if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (same-version) failed" }
 
       - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
@@ -405,7 +452,7 @@ jobs:
           if ("$env:REBASELINE" -eq "true") {
             $gateArgs += "--allow-ctx-mismatch"
           }
-          python -m gaia.eval.scorecard_gate @gateArgs
+          & $env:VENV_PY -m gaia.eval.scorecard_gate @gateArgs
           if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (cross-version) failed" }
 
       - name: Upload eval output

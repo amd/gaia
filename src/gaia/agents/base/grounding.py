@@ -78,7 +78,8 @@ class Finding:
 # ---------------------------------------------------------------------------
 
 _LISTING_WORDS = ("list", "browse", "tree", "glob")
-_SEARCH_WORDS = _LISTING_WORDS + ("search", "grep", "find", "locate")
+#: "query" covers the document tools: query_documents, query_specific_file.
+_SEARCH_WORDS = _LISTING_WORDS + ("search", "grep", "find", "locate", "query")
 _READ_WORDS = _SEARCH_WORDS + (
     "read",
     "view",
@@ -373,7 +374,8 @@ _ABSENT_NOTE = "I said something doesn't exist without searching for it this tur
 # content: values presented as data that no tool produced
 # ---------------------------------------------------------------------------
 
-_GROUPED = re.compile(r"(?<![\w.,])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w,]|\.\d)")
+#: "293,500,000,000, up 4%": a comma after the figure ends it.
+_GROUPED = re.compile(r"(?<![\w.,])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?!\w|[,.]\d)")
 _PLAIN = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w]|\.\d)")
 _DATE = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 _FENCE = re.compile(
@@ -444,6 +446,8 @@ class _Value:
     decimals: int
     #: A key of ``_UNIT_SCALES`` when the answer states one.
     unit: Optional[str] = None
+    #: The figure as written before its scale: 293.5 of "$293.5B".
+    mantissa: Optional["_Value"] = None
 
 
 def _value(text: str, unit: Optional[str] = None) -> _Value:
@@ -457,6 +461,55 @@ def _value(text: str, unit: Optional[str] = None) -> _Value:
 def _unit(text: Optional[str]) -> Optional[str]:
     key = (text or "").lower()
     return key if key in _UNIT_SCALES else None
+
+
+_MAGNITUDES: Dict[str, float] = {
+    "k": 1e3,
+    "thousand": 1e3,
+    "m": 1e6,
+    "mm": 1e6,
+    "mn": 1e6,
+    "mil": 1e6,
+    "million": 1e6,
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "t": 1e12,
+    "tn": 1e12,
+    "trillion": 1e12,
+}
+#: Scales that need no currency sign: "14.5 million". A bare "B" is bytes.
+_WORD_MAGNITUDES = frozenset({"thousand", "million", "billion", "trillion", "bn"})
+#: "$14.5M", "$293.5B", "€2.1bn", "14.5 million": an amount and its scale.
+_SCALED = re.compile(
+    r"(?<![\w.,])(?P<cur>(?:US|C|A)?\$|€|£|¥)?\s?"
+    r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?"
+    r"(?P<mag>thousand|million|billion|trillion|mil|mn|mm|bn|tn|[kmbt])(?!\w)",
+    re.I,
+)
+
+
+def _scaled_amounts(text: str) -> List["tuple[re.Match[str], _Value]"]:
+    """Each scaled amount in *text*, valued in full to its written precision.
+
+    "$14.5M" is 14,500,000 to the nearest 100,000. A lone letter is a scale
+    only after a currency sign, so "$293.5B" is billions and "8 B" stays bytes.
+    """
+    found = []
+    for match in _SCALED.finditer(text):
+        magnitude = match.group("mag").lower()
+        if not match.group("cur") and magnitude not in _WORD_MAGNITUDES:
+            continue
+        scale = _MAGNITUDES[magnitude]
+        mantissa = _value(match.group("n"))
+        full = mantissa.number * scale
+        if not math.isfinite(full):
+            continue
+        places = mantissa.decimals - round(math.log10(scale))
+        found.append(
+            (match, _Value(match.group(0).strip(), full, places, mantissa=mantissa))
+        )
+    return found
 
 
 def _cell_value(cell: str, column_unit: Optional[str] = None) -> Optional[_Value]:
@@ -504,6 +557,17 @@ def _prose_values(text: str) -> List[_Value]:
     for match in _DATE.finditer(text):
         values.append(_value(match.group(0)))
     text = _DATE.sub(" ", text)
+    scaled = _scaled_amounts(text)
+    for match, value in scaled:
+        raw = match.group("n")
+        lead = text[max(0, match.start() - 24) : match.start()]
+        if not ("." in raw or "," in raw):
+            continue
+        if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
+            continue
+        values.append(value)
+    for match, _ in reversed(scaled):
+        text = text[: match.start()] + " " + text[match.end() :]
     for match in list(_GROUPED.finditer(text)) + list(_PLAIN.finditer(text)):
         raw = match.group(0)
         after = text[match.end() : match.end() + 1]
@@ -580,6 +644,8 @@ class _Corpus:
             for pattern in (_GROUPED, _PLAIN)
             for match in pattern.finditer(text)
         }
+        # "$293.5B" in a source also holds 293,500,000,000.
+        self.numbers.update(value.number for _, value in _scaled_amounts(text))
         # Each unit-tagged number in its dimension's base unit (seconds, bytes).
         self.quantities: Dict[str, Set[float]] = {}
         for match in _SOURCE_QUANTITY.finditer(text):
@@ -593,6 +659,11 @@ class _Corpus:
     def holds(self, value: _Value) -> bool:
         if value.number is None:
             return value.text in self.dates
+        if value.decimals < 0:
+            # Only to its precision: "0.45 shown as 45%" would let $30,000 source $3M.
+            return any(_rounds_to(n, value) for n in self.numbers) or (
+                value.mantissa is not None and self._holds_number(value.mantissa)
+            )
         return self._holds_number(value) or self._holds_converted(value)
 
     def _holds_converted(self, value: _Value) -> bool:

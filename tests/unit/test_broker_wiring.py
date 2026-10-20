@@ -91,7 +91,9 @@ class _LocalBroker:
         monkeypatch.setattr(broker_client, "acquire_lease", self._acquire)
         monkeypatch.setattr(broker_client, "release_lease", self._release)
 
-    def _acquire(self, model, *, priority=None, timeout=None, request_timeout=310.0):
+    def _acquire(
+        self, model, *, priority=None, timeout=None, request_timeout=310.0, **_kw
+    ):
         prio = priority or "background"
         self.acquired.append((model, prio))
         lease = self.broker.acquire(model, priority=prio, holder="host")
@@ -868,6 +870,9 @@ def test_rag_embedder_warmup_holds_one_lease_across_unload_and_load(monkeypatch)
     held_during: List[Tuple[str, bool]] = []
 
     class _Client:
+        def is_users_server(self):
+            return False
+
         def unload_model(self, model, ignore_if_not_loaded=False):
             held_during.append(("unload", broker_client.holding_lease()))
 
@@ -1127,7 +1132,9 @@ def test_reattaches_after_a_daemon_restart_rotates_its_token(monkeypatch):
     def _acquire(model, **kwargs):
         attempts.append(broker_client._attached)
         if len(attempts) == 1:
-            raise broker_client.BrokerUnavailableError("HTTP 401: token rotated")
+            raise broker_client.BrokerUnavailableError(
+                "HTTP 401: token rotated", status_code=401
+            )
         return {"lease_id": "L-new"}
 
     monkeypatch.setattr(broker_client, "acquire_lease", _acquire)

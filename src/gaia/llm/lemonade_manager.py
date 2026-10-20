@@ -17,6 +17,8 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
+    PROBE_TIMEOUT,
+    InsufficientMemoryError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
@@ -48,6 +50,9 @@ def _is_cloud_entry(entry: dict) -> bool:
     """
     return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
 
+
+#: Seconds between "still waiting" log lines while another preload runs.
+_PRELOAD_NOTICE_INTERVAL = 15.0
 
 # Device capability priority (high -> low)
 _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
@@ -354,6 +359,25 @@ class LemonadeManager:
         return bool(ensure_lemonade().get("started"))
 
     @classmethod
+    def _wait_for_gaia_lemonade(cls, quiet: bool) -> bool:
+        """Wait, bounded, for GAIA's server that is running but not answering yet.
+
+        Returns:
+            True once it answers; False after printing why it did not.
+        """
+        client = LemonadeClient(keep_alive=True, verbose=not quiet)
+        on_status = None if quiet else (lambda msg: print(msg, file=sys.stderr))
+        try:
+            # False means "not GAIA's server" too; callers check gaia_runs_lemonade first.
+            client.wait_for_gaia_lemonade(on_status=on_status)
+        except LemonadeClientError as e:
+            cls._log.error("%s", e)
+            if not quiet:
+                print(f"❌ {e}", file=sys.stderr)
+            return False
+        return True
+
+    @classmethod
     def print_server_error(cls, min_context_size: int = DEFAULT_CONTEXT_SIZE):
         """Print informative error when Lemonade server is not running.
 
@@ -498,6 +522,40 @@ class LemonadeManager:
             print("", file=sys.stderr)
             print(f"⚠️  {message}", file=sys.stderr)
             print("", file=sys.stderr)
+
+    @classmethod
+    def report_busy(cls, base_url: str, quiet: bool = True) -> None:
+        """Say that the server is up but busy, so a caller treats it as waiting.
+
+        Args:
+            base_url: Server URL to name in the message.
+            quiet: Log only; skip the stderr message.
+        """
+        message = (
+            f"Lemonade Server at {base_url} is busy: it accepted the connection "
+            f"but did not answer a status check within {PROBE_TIMEOUT[1]:g}s, "
+            "usually because it is loading a model for another app. Continuing; "
+            "the first request waits until it is free. If it never answers, "
+            "check the Lemonade server log."
+        )
+        cls._log.warning(message)
+        if not quiet:
+            print(f"⏳ {message}", file=sys.stderr, flush=True)
+
+    @classmethod
+    def _wait_for_preload(cls, preload_done: threading.Event) -> None:
+        """Wait for another caller's preload, saying so while it runs.
+
+        Bounded by that preload's own load timeout: it sets *preload_done*
+        when its load returns or raises.
+        """
+        started = time.monotonic()
+        while not preload_done.wait(_PRELOAD_NOTICE_INTERVAL):
+            cls._log.info(
+                "Waiting for a model load another caller in this process "
+                "started (%.0fs so far)",
+                time.monotonic() - started,
+            )
 
     @classmethod
     def _validate_device_requirement(cls, client, required_min_device, device):
@@ -703,7 +761,7 @@ class LemonadeManager:
                 preload_done = cls._preload_in_flight
                 cls._lock.release()
                 try:
-                    preload_done.wait()
+                    cls._wait_for_preload(preload_done)
                 finally:
                     cls._lock.acquire()
 
@@ -793,6 +851,10 @@ class LemonadeManager:
                                 verbose=not quiet,
                             )
                         status = client.get_status()
+                        if status.busy:
+                            # Says nothing about what is loaded; keep the cache.
+                            cls.report_busy(client.base_url, quiet)
+                            return True
                         # Defensive normalisation: some Lemonade versions can
                         # return `loaded_models: null`, which would crash the
                         # `any(...)` and `_find_loaded_llm_id` calls below.
@@ -901,10 +963,16 @@ class LemonadeManager:
 
                 pinned = base_url is not None or host is not None or port is not None
                 if gaia_runs_lemonade(client.base_url if pinned else None):
-                    from gaia.daemon.errors import DaemonError
+                    from gaia.daemon.errors import (
+                        DaemonError,
+                        LemonadeNotAnsweringError,
+                    )
 
                     try:
                         cls.start_embedded_if_stopped()
+                    except LemonadeNotAnsweringError:
+                        if not cls._wait_for_gaia_lemonade(quiet):
+                            return False
                     except DaemonError as e:
                         cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
                         if not quiet:
@@ -921,6 +989,12 @@ class LemonadeManager:
 
                 # Just check server status - no agent profile required
                 status = client.get_status()
+
+                if status.busy:
+                    # Up but not answering: not something to start, and not
+                    # ready to cache. The next caller checks again.
+                    cls.report_busy(client.base_url, quiet)
+                    return True
 
                 if not status.running:
                     # GAIA manages Lemonade — a stopped server is something to
@@ -1341,6 +1415,9 @@ class LemonadeManager:
                 prompt=False,
                 auto_download=True,
             )
+        except InsufficientMemoryError:
+            # Already says how much memory is needed; a restart would not help.
+            raise
         except Exception as e:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {model!r} with "

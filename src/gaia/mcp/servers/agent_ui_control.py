@@ -291,7 +291,7 @@ class TurnTracker:
         self.steps.append(step)
 
     def _fold_step(self, etype: str, event: Dict[str, Any]) -> None:
-        last = self.steps[-1] if self.steps else None
+        last: Dict[str, Any] = self.steps[-1] if self.steps else {}
         if etype == "tool_end":
             tool = self._last_tool_step()
             if tool:
@@ -322,7 +322,7 @@ class TurnTracker:
                     event.get("detail") or json.dumps(event.get("args"), default=str)
                 )
         elif etype == "thinking":
-            if last and last["type"] == "thinking":
+            if last.get("type") == "thinking":
                 last["detail"] = _cap(
                     (last.get("detail") or "") + (event.get("content") or ""), 4000
                 )
@@ -347,11 +347,11 @@ class TurnTracker:
                 return
             if status not in ("working", "warning", "info"):
                 return
-            if last and last["type"] == "status" and last.get("active"):
+            if last.get("type") == "status" and last.get("active"):
                 last["label"] = msg or "Working"
                 last["detail"] = msg
                 return
-            if last and last["type"] == "thinking" and last.get("active"):
+            if last.get("type") == "thinking" and last.get("active"):
                 last["label"] = msg or "Thinking"
                 return
             self._add_step(
@@ -492,7 +492,7 @@ class TurnTracker:
         }
 
     def footer(self) -> Dict[str, Any]:
-        """The token footer under an answer (MessageBubble ``msg-stats``)."""
+        """The exact numbers behind the footer under an answer (``AnswerStats``)."""
         latency_ms = int(round(self.elapsed_s() * 1000)) if not self.live else None
         stats = self.done_stats or {}
         parts: List[str] = []
@@ -1133,7 +1133,14 @@ def transport_security_settings(host: str):
     ``POST``. With no allowed origins, any page -- including one served from
     another localhost port -- is refused, so a site the user visits cannot
     answer a prompt. ``Host`` is pinned to loopback against DNS rebinding.
+    A non-loopback *host* is refused: it must be served by :func:`remote_app`.
     """
+    if not is_loopback_host(host):
+        raise RemoteBindError(
+            f"Refusing to serve {host!r} without a bearer token: it is reachable "
+            "from the network. Bind to localhost, or pass --allow-remote with a "
+            f"token in {REMOTE_TOKEN_ENV}."
+        )
     from mcp.server.transport_security import TransportSecuritySettings
 
     return TransportSecuritySettings(

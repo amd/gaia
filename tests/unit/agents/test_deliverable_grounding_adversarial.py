@@ -341,11 +341,12 @@ def test_a_scaled_figure_in_the_answer_still_counts_as_naming_it():
 # ---------------------------------------------------------------------------
 
 
-def test_the_correction_asks_for_one_line_not_an_explanation():
+def test_a_finding_never_asks_for_the_file_to_be_changed():
     [finding] = _memo("Pre-money of $16M.\n")
 
-    assert "one short line" in finding.correction
-    assert "don't explain this check" in finding.correction
+    for text in (finding.correction, finding.note):
+        assert "$16M" in text
+        assert not any(w in text.lower() for w in ("fix", "mark them", "estimate"))
 
 
 def test_the_note_is_one_short_line_however_many_figures_are_flagged():

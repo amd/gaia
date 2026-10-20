@@ -11,8 +11,12 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { AnswerStats } from './AnswerStats';
+import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
+import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
+import { TurnChanges } from './TurnChanges';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -32,6 +36,8 @@ interface MessageBubbleProps {
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
     onResend?: (message: Message) => void;
+    /** More message actions, before Copy (e.g. Retry with…). */
+    extraActions?: React.ReactNode;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -49,8 +55,9 @@ interface MessageBubbleProps {
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
+    const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
+    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
     const wasActiveRef = useRef(active);
     const textLengthRef = useRef(text.length);
     textLengthRef.current = text.length;
@@ -58,19 +65,19 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     // Type out characters
     useEffect(() => {
         if (phase !== 'typing') return;
-        if (chars >= text.length) { setPhase('idle'); return; }
+        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
         const timer = setTimeout(() => setChars(c => c + 1), 30);
         return () => clearTimeout(timer);
-    }, [phase, chars, text.length]);
+    }, [phase, chars, text.length, reduceMotion]);
 
     // Detect active → false: start erasing
     useEffect(() => {
         if (wasActiveRef.current && !active) {
             setChars(textLengthRef.current);
-            setPhase('erasing');
+            setPhase(reduceMotion ? 'done' : 'erasing');
         }
         wasActiveRef.current = active;
-    }, [active]);
+    }, [active, reduceMotion]);
 
     // Erase characters
     useEffect(() => {
@@ -88,21 +95,25 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
         }
     }, [active, phase]);
 
-    const elapsed = usePhaseElapsedSeconds(active, text);
+    const elapsed = useElapsedSeconds(active, text);
+    // One clock for the whole silent wait: a repeated or retried phase must not restart it.
+    const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
+    const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
+    const place = useInferencePlace();
 
     if (phase === 'done') return null;
 
-    const showModelWaitHint = active && !awaitingUser && elapsed >= MODEL_WAIT_HINT_S && isModelWaitLabel(label);
+    const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
-        <span className="thinking-indicator">
+        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
             )}
             {active && <span className="cursor" />}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{MODEL_WAIT_HINT}</span>
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
             )}
         </span>
     );
@@ -114,8 +125,8 @@ const WAITING_ON_USER_LABEL = 'Waiting for you';
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;
 
-/** Whole seconds the current phase label has been showing; resets when the label changes. */
-function usePhaseElapsedSeconds(active: boolean, label: string): number {
+/** Whole seconds `active` has held; resets when it drops or `key` changes. */
+function useElapsedSeconds(active: boolean, key?: string): number {
     const [elapsed, setElapsed] = useState(0);
     useEffect(() => {
         setElapsed(0);
@@ -123,12 +134,12 @@ function usePhaseElapsedSeconds(active: boolean, label: string): number {
         const started = Date.now();
         const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
         return () => clearInterval(t);
-    }, [active, label]);
+    }, [active, key]);
     return elapsed;
 }
 
 /** Detect if message content looks like an error. */
-function isErrorContent(content: string): boolean {
+export function isErrorContent(content: string): boolean {
     if (!content) return false;
     const lower = content.toLowerCase();
     return (
@@ -400,16 +411,11 @@ function formatFullTimestamp(iso: string): string {
     });
 }
 
-/** Format latency in ms to a human-readable string. */
-function formatLatency(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-}
-
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    useModelNames();
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -504,6 +510,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     <RefreshCw size={12} />
                                 </button>
                             )}
+                            {extraActions}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -571,27 +578,20 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
-                        <div className="msg-stats" aria-label="Message performance stats">
+                        <div className="msg-stats" aria-label="About this answer">
                             {message.created_at && (
                                 <span className="msg-stats-ts" title="Message timestamp">
                                     {formatFullTimestamp(message.created_at)}
                                 </span>
                             )}
-                            {latencyMs != null && latencyMs > 0 && (
-                                <span title="Total response time">{formatLatency(latencyMs)}</span>
+                            {message.stats?.retried && message.stats.model && (
+                                <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
-                                <span title="Tokens per second, final model call of this answer">{message.stats.tokens_per_second} tok/s</span>
-                            )}
-                            {message.stats?.time_to_first_token != null && message.stats.time_to_first_token > 0 && (
-                                <span title="Time to first token, final model call of this answer">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
-                            )}
-                            {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
-                                <span title="Input → output tokens, all model calls of this answer">
-                                    {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
-                                </span>
-                            )}
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
+                        <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
                 </div>
             </div>
@@ -730,7 +730,7 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
+export function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 

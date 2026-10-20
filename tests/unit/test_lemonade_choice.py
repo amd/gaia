@@ -215,13 +215,13 @@ class TestPrecedence:
         from gaia.llm.lemonade_launcher import gaia_runs_lemonade
 
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
-        choice.set_mode("gaia")
-        assert GaiaConfig.load().lemonade_mode == "gaia"
-        assert configured_lemonade_url() is None
         with mock.patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
             return_value=True,
         ):
+            choice.set_mode("gaia")
+            assert GaiaConfig.load().lemonade_mode == "gaia"
+            assert configured_lemonade_url() is None
             assert gaia_runs_lemonade() is True
 
 
@@ -392,6 +392,29 @@ class TestDetect:
         http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
         assert choice.detect_running_lemonade().status == choice.TOO_OLD
 
+    def test_a_busy_server_gets_time_to_answer(self, http, monkeypatch):
+        seen = []
+        real = choice.probe
+
+        def probe(url, api_key=None, *, timeout=choice._PROBE_TIMEOUT):
+            seen.append(timeout)
+            return real(url, api_key, timeout=timeout)
+
+        monkeypatch.setattr(choice, "probe", probe)
+        http.routes[f"{USER_URL}/health"] = _lemonade()
+        assert choice.detect_lemonade().found.status == choice.OK
+        assert seen[0][1] >= 10
+
+    def test_a_server_that_never_answers_is_unchecked_not_absent(self, http):
+        http.routes[f"{USER_URL}/health"] = requests.exceptions.ReadTimeout("read")
+        detection = choice.detect_lemonade()
+        assert detection.found is None
+        assert detection.unchecked == (USER_URL,)
+
+    def test_a_closed_port_is_simply_absent(self, http):
+        http.routes[f"{USER_URL}/health"] = requests.exceptions.ConnectTimeout("syn")
+        assert choice.detect_lemonade().unchecked == ()
+
 
 # ---------------------------------------------------------------------------
 # Saving the choice
@@ -430,7 +453,11 @@ class TestUseExternal:
             else FakeResponse(401)
         )
         choice.use_external(USER_URL, "s3cret")
-        choice.set_mode("gaia")
+        with mock.patch(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            return_value=True,
+        ):
+            choice.set_mode("gaia")
         choice.use_external(USER_URL)
         assert GaiaConfig.load().lemonade_mode == "external"
 

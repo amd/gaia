@@ -223,7 +223,7 @@ live the moment that version publishes.
 For a hub agent package (`hub/agents/<id>/{npm,python}/`), the doc surfaces that
 must stay in sync are:
 
-- **`README.md`** — the canonical, integrator-facing doc (rendered on the hub + npm)
+- **`README.md`** — the canonical, integrator-facing doc (rendered on npm)
 - **`SPEC.md`** — the full technical reference
 - **`SKILL.md`** — the AI-assistant integration playbook (Claude Code, etc.)
 - **`CHANGELOG.md`** — the version entry describing the change
@@ -394,11 +394,11 @@ want to test an installed wheel.
 
 **Every scenario scores the flagship `gaia` agent.** That is the `--agent-type` default and scenarios no longer pin their own, so a scorecard names one agent and two scorecards are comparable. Pass `--agent-type` only to measure a different agent — and never compare that result to a scorecard captured under another one, because `compare_scorecards` keys on `scenario_id` alone and will happily report "improved/regressed" across two different agents.
 
-**The flagship baseline is `tests/fixtures/eval_baselines/gaia-flagship/`**, one `scorecard_<category>.json` per category in [`eval/ci_lanes.json`](eval/ci_lanes.json), copied unedited from a real nightly on the self-hosted Strix Halo pool. Its `meta.json` records the run, the agent model, and the Claude model that drove and judged it. It is a single run (128/218, 59%), so a lone PASS→FAIL against it can be noise; re-run before calling it a regression. The target is **80%**. It is a goal, not a gate, so falling short of it doesn't fail CI. **Never hand-author, estimate, or edit a baseline number** — replace the files from a newer real run. A fabricated baseline is worse than none, because it looks like a verdict. Comparing against it is only valid under the same Claude model (`EVAL_MODEL` in `eval_flagship.yml`), because that model drives the scenarios as well as judging them; changing it means re-capturing the baseline.
+**The flagship baseline is `tests/fixtures/eval_baselines/gaia-flagship/`**, one `scorecard_<category>.json` per category in [`eval/ci_lanes.json`](eval/ci_lanes.json), copied unedited from a real CI run on the self-hosted Strix Halo pool. Its `meta.json` records the run, the agent model, and the Claude model that drove and judged it. It is a single run (128/218, 59%), so a lone PASS→FAIL against it can be noise; re-run before calling it a regression. The target is **80%**. It is a goal, not a gate, so falling short of it doesn't fail CI. **Never hand-author, estimate, or edit a baseline number** — replace the files from a newer real run. A fabricated baseline is worse than none, because it looks like a verdict. Comparing against it is only valid under the same Claude model (`EVAL_MODEL` in `eval_flagship.yml`), because that model drives the scenarios as well as judging them; changing it means re-capturing the baseline.
 
-**Most dev machines can't run the evals; use CI.** The scenario lanes need the memory and hardware of the self-hosted Strix Halo pool. Without that hardware, dispatch `eval_flagship.yml` on amd/gaia and list in the PR the categories it must re-run. A baseline must come from that same pool.
+**Most dev machines can't run the evals; CI runs them on release tags.** The scenario lanes need the memory and hardware of the self-hosted Strix Halo pool, which is too scarce for per-PR runs. `eval_flagship.yml` runs on every release and RC tag (`v0.24.1`, `v0.25.0-rc14`) and on manual dispatch — never on PRs or nightly. Without that hardware, list in the PR the categories to watch; the next RC's eval covers them. Dispatch `eval_flagship.yml` on your branch only when the change can't wait for the RC. A baseline must come from that same pool. An RC can skip the eval with `[skip eval]` in an annotated tag message (`git tag -a v0.25.0-rc16 -m "rc16 [skip eval]"`); a final release always runs it. Details: [`docs/reference/eval.mdx`](docs/reference/eval.mdx).
 
-**Changes that REQUIRE an eval run before merge:**
+**Changes that REQUIRE eval coverage (a local run, or categories named in the PR for the next RC):**
 
 - GaiaAgent / ChatAgent / ChatAgentLite system prompts (`_get_system_prompt()`) or any mixin prompt fragment
 - The base agent's `_compose_system_prompt`, prompt-assembly order, or `_format_tools_for_prompt`
@@ -441,7 +441,7 @@ web server and hub, and a fake `gh` that must be first on PATH because their too
 calls are auto-approved. `python util/run_eval_lane.py --lane <lane>` (or
 `--category <name>`) reproduces a CI lane's setup on this machine.
 
-**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
+**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next RC's run on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
 Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.
 
@@ -553,7 +553,7 @@ gaia/
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
 │   ├── governance/     # Governance / guardrails layer
-│   ├── hub/            # Agent Hub backend (catalog, install, package, publish)
+│   ├── hub/            # Download-server client: fetch, verify, install agent binaries (gaia init, daemon)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
@@ -581,7 +581,7 @@ gaia/
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
-├── hub/                # Agent Hub packages — agents/<id>/{npm,python}/, skills/, components/
+├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
 ├── scripts/            # Build, install, and launch scripts
 ├── util/               # Repo tooling (lint.py, check_doc_links.py, …)
@@ -668,6 +668,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
@@ -738,7 +739,6 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia install` - Install helper (e.g. Lemonade on first run)
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
 - `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
-- `gaia hub` - Browse, install, and uninstall agents from the Agent Hub
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
@@ -747,7 +747,15 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia stats` - Show statistics from the most recent run
 - `gaia memory` - Manage agent memory (onboarding bootstrap, status)
 - `gaia diagnostics` - Bundle logs + system info into a tarball for bug reports
-- `gaia agent {init|version|test|pack|publish|configure|health|status|login|export|import|install|list}` - Author and manage agents
+- `gaia agent {test|configure|health|status|export|import|install|list}` - Manage agents
+
+`gaia hub` and `gaia agent {init|version|pack|publish|login}` still work for scripts
+and release tooling but are hidden from `gaia -h`. **There is no user-facing Agent
+Hub:** GAIA is one agent (the flagship) reached through two apps, the TUI and the
+Agent UI. Don't propose catalog, browse or publish-your-agent features, and don't
+name `gaia hub` in user-facing fix hints — a missing flagship is fixed by `gaia init`.
+`hub.amd-gaia.ai` remains the download server behind `gaia init`, the daemon and
+the installers.
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
@@ -857,7 +865,7 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 **Read the matching skill before starting related work.** Every skill under
 `.claude/skills/<name>/SKILL.md` is auto-discovered by its `description` and invoked with
 the `Skill` tool — run `ls .claude/skills/` to see the current set. They cover releases,
-testing, hub-agent porting and integration, eval scorecards, the weekly audit workflow,
+testing, hub-agent integration, eval scorecards, the weekly audit workflow,
 LemonadeClient changes, GitHub responses, and presentations.
 
 This list is deliberately not enumerated here — a hand-maintained copy drifts the moment

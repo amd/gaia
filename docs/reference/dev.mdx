@@ -255,6 +255,7 @@ python util/lint.py --mypy        # type checking (blocking only on already-clea
 python util/lint.py --bandit      # security scan
 python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
+python util/lint.py --workflow-ancestor-skip # reject job if: conditions an upstream skip silently skips
 python util/lint.py --test-lanes  # reject test files that no CI lane runs
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
@@ -322,7 +323,7 @@ Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
 
-### Verifying the Agent Hub publish pipeline
+### Verifying the download-server publish pipeline
 
 Publishing to the hub is **irreversible** — `hub.amd-gaia.ai` has no unpublish
 route, so a bad release is permanent and public. Before running any
@@ -376,8 +377,8 @@ Client IP Address Filtering passes locally and fails in CI.
 
 ### The flagship agent in a core release
 
-`gaia init`, `gaia hub install gaia`, and the Windows setup install the flagship
-agent's `gaia-agent` binary from the Agent Hub and from the pin in
+`gaia init` and the Windows setup install the flagship
+agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
 `hub/agents/gaia/npm/binaries.lock.json`. Only `release_agent_gaia.yml` (tag
 `agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
 A final core release therefore fails unless that flagship release was cut from
@@ -404,8 +405,8 @@ approval, and keeps the result off every stable channel:
   so, and the run fails.
 - **GAIA agent** — the flagship `gaia-agent` binaries, frozen from the
   candidate's commit and attached to the pre-release with
-  `gaia-agent-release.json`. The candidate's `gaia init`, `gaia hub install gaia`
-  and Windows setup use these, never the Agent Hub's `gaia`, which can be many
+  `gaia-agent-release.json`. The candidate's `gaia init`
+  and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
@@ -414,9 +415,9 @@ approval, and keeps the result off every stable channel:
   does not move.
 - **Website** — a collapsed "Try the release candidate" entry under the stable
   downloads, shown only while the candidate is newer than the latest release.
-- **Not published** — Agent Hub components (the catalog has no pre-release
+- **Not published** — Download-server components (the catalog has no pre-release
   channel) and the terminal's `.pkg`/`.deb`/`.rpm` packages, which need a
-  numeric-only version. No Context7 refresh.
+  numeric-only version.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
 the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`
@@ -509,6 +510,44 @@ Token counts marked *cached* / *new* come from a client-side estimator
 ratios and deltas — how much a prompt shrank, what share was cache-eligible —
 not as exact model token counts. `out` is the backend's own count.
 </Note>
+
+### Is GAIA keeping the model server busy?
+
+On a local llama.cpp model, each call in the record also carries the server's
+own accounting for that request, read from the stream's `timings`, so it never
+mixes in another client's request:
+
+| Field | Meaning |
+|---|---|
+| `llm_calls[].server` | `prompt_n` tokens prefilled, `cache_n` tokens reused from the KV cache, `prompt_ms` / `predicted_ms`, and `compute_s` (their sum) |
+| `llm_calls[].client` | Time spent before the request reached the server: `lease_wait_s` (daemon model-slot lease), `lock_wait_s` (this process's per-model request lock), `ensure_loaded_s` (the model status probe), `stats_fetch_s` |
+| `totals.server_compute_s` | Seconds the server computed for this turn |
+| `totals.non_model_s` | Turn wall time minus server compute: what GAIA, its tools, and the user cost |
+| `spans` | Named stretches of agent work, such as `memory_context`, `skill_recall`, `memory_post_init`, `context_evict`, `memory_tool_log`, `parse_response` |
+| `gaps` | The time between consecutive model calls, with the tools and spans that filled it |
+
+`server_compute_s` and `non_model_s` appear only when every call reported
+timings; a partial sum would understate the model and overstate GAIA. Work that
+runs after the answer (memory writes) is appended as a second line with schema
+`gaia.turn_post/1` and the same `turn_id`.
+
+The flagship sidecar also serves the last records at
+`GET /v1/gaia/debug/turns?limit=N` (with its caller token) while `GAIA_TURN_LOG`
+is set. The route is off the versioned contract and returns 404 otherwise. It
+returns every session's records, queries included, to anyone holding the
+caller token, so keep turn recording on only on a machine you use alone.
+
+To watch the server itself, `util/perf_turns.py` drives `/v1/gaia/query` and
+samples the llama.cpp server behind Lemonade: `/slots` for per-slot busy time
+and idle gaps, `/metrics` for prefill and decode seconds, and, on Windows, GPU
+utilization per process. It waits for an idle GPU before each session and flags
+a run during which the model was reloaded or another client sent requests. It
+approves every tool confirmation by itself, so only give it queries whose tools
+you would approve:
+
+```bash
+python util/perf_turns.py --sidecar http://127.0.0.1:4311 --token TOKEN --query "hello" --runs 3 --out runs.jsonl
+```
 
 ### Seeing which tools the model was given
 

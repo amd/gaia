@@ -38,6 +38,21 @@ type Model struct {
 	SizeGB *float64 `json:"size_gb"`
 	Loaded bool     `json:"loaded"`
 	Error  string   `json:"error"`
+	// Downloaded is whether the server already has it; nil from a gaia too old
+	// to say.
+	Downloaded *bool `json:"downloaded"`
+}
+
+// Missing is the models the server does not have yet. A model whose state was
+// not reported counts as missing, as it always did.
+func (s Status) Missing() []Model {
+	var out []Model
+	for _, m := range s.Models {
+		if m.Downloaded == nil || !*m.Downloaded {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Status is the answer to "is this profile set up, and does it load?".

@@ -26,7 +26,7 @@ whoever started it.
 import os
 import threading
 from dataclasses import asdict, dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from gaia.logger import get_logger
 
@@ -34,6 +34,9 @@ logger = get_logger(__name__)
 
 #: How long shutdown waits for a start already in flight before leaving it be.
 STOP_LOCK_TIMEOUT = 5.0
+
+#: The ``Retry-After`` sent with a server that is up but not answering yet.
+LEMONADE_RETRY_AFTER_SECONDS = 2
 
 
 class LemonadeNotManaged(Exception):
@@ -49,9 +52,46 @@ class EnsuredLemonade:
     port: int
     version: str
     started: bool
+    pid: Optional[int] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class LemonadeActivity:
+    """What GAIA's server is doing right now, from its ``/health``.
+
+    Lemonade 2026.40+ marks each loaded model ``is_busy`` while a request holds
+    it, a stream included, and moves its ``last_use`` whenever a request starts
+    or a model loads. ``last_use`` counts from an arbitrary epoch, so it is
+    only ever compared with itself: a changed :attr:`marker` means traffic.
+    """
+
+    busy: bool
+    marker: Tuple
+    detail: str = ""
+
+
+def activity_from_health(health: dict) -> LemonadeActivity:
+    """Read :class:`LemonadeActivity` out of a ``/health`` payload."""
+    models = [m for m in health.get("all_models_loaded") or [] if isinstance(m, dict)]
+    busy = [
+        str(m.get("model_name"))
+        for m in models
+        if m.get("is_busy") or m.get("is_streaming")
+    ]
+    marker = (
+        health.get("model_loaded"),
+        tuple(
+            sorted((str(m.get("model_name")), str(m.get("last_use"))) for m in models)
+        ),
+    )
+    return LemonadeActivity(
+        busy=bool(busy),
+        marker=marker,
+        detail=f"serving {', '.join(busy)}" if busy else "",
+    )
 
 
 def _embedded_factory():
@@ -147,10 +187,15 @@ class EmbeddedLemonadeOwner:
             LemonadeNotManaged: ``LEMONADE_BASE_URL`` or the saved setting names
                 another server, or GAIA's own is not installed.
             LemonadeChoiceError: The saved setting is unusable.
-            EmbeddedLemonadeError: The server would not start, is running but
-                not answering, or runs a version this GAIA does not target.
+            EmbeddedLemonadeNotAnswering: The server is running but not
+                answering; it is left alone, so the caller may ask again.
+            EmbeddedLemonadeError: The server would not start, or runs a
+                version this GAIA does not target.
         """
-        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+        from gaia.llm.lemonade_embedded import (
+            EmbeddedLemonadeError,
+            EmbeddedLemonadeNotAnswering,
+        )
 
         # Under the lock, so a switch to the user's server that reconfigure()
         # is applying can't be undone by a start already on its way.
@@ -180,11 +225,11 @@ class EmbeddedLemonadeOwner:
             current = embedded.status()
             orphaned = self._orphaned(current)
             if current.unresponsive_pid and not orphaned:
-                raise EmbeddedLemonadeError(
+                raise EmbeddedLemonadeNotAnswering(
                     f"GAIA's Lemonade Server (pid {current.unresponsive_pid}) is "
-                    "running but not answering; it may still be loading a model. "
-                    f"Wait and retry, or run `gaia init` to restart it. Its log is "
-                    f"{embedded.log_path}."
+                    "running but stuck: it answers nothing, or its model backends "
+                    "have done no work for over 5 minutes. Run `gaia init` to "
+                    f"restart it. Its log is {embedded.log_path}."
                 )
             if current.running and current.version == embedded.version:
                 return self._claim(embedded, current)
@@ -222,6 +267,7 @@ class EmbeddedLemonadeOwner:
                 port=status.port,
                 version=status.version,
                 started=True,
+                pid=status.pid,
             )
 
     def _claim(self, embedded, current) -> EnsuredLemonade:
@@ -243,6 +289,7 @@ class EmbeddedLemonadeOwner:
             port=current.port,
             version=current.version,
             started=False,
+            pid=current.pid,
         )
 
     def ensure_in_background(self) -> threading.Thread:
@@ -301,6 +348,27 @@ class EmbeddedLemonadeOwner:
             action = "starting_gaia_lemonade"
         return {**target, "action": action}
 
+    def activity(self) -> Optional[LemonadeActivity]:
+        """What GAIA's own server is doing, or None when none is running.
+
+        A recorded server that does not answer counts as busy: it may be
+        loading a large model, and it is never stopped for being idle.
+
+        Never touches a server ``LEMONADE_BASE_URL`` names.
+        """
+        if self.configured_url():
+            return None
+        recorded, health = self._factory().recorded_health()
+        if not recorded:
+            return None
+        if health is None:
+            return LemonadeActivity(
+                busy=True,
+                marker=("unanswered",),
+                detail="not answering its health check",
+            )
+        return activity_from_health(health)
+
     def unload_models(self, still_wanted: Callable[[], bool] = lambda: True) -> bool:
         """Unload every model from GAIA's own server; the server keeps running.
 
@@ -336,8 +404,9 @@ class EmbeddedLemonadeOwner:
 
         Args:
             reason: Why, for the log.
-            still_wanted: Checked once the start lock is held, so a client that
-                registered since the caller decided keeps its server.
+            still_wanted: Checked under the start lock as the last step before
+                the stop, so a client that registered, or a request that
+                arrived, since the caller decided keeps its server.
 
         Returns:
             True if a server was stopped.
@@ -354,11 +423,12 @@ class EmbeddedLemonadeOwner:
             )
             return False
         try:
-            if not still_wanted():
-                return False
             embedded = self._factory()
             current = embedded.status()
             if not (current.running or current.unresponsive_pid):
+                return False
+            # Last, right before the signal, so a request that just landed wins.
+            if not still_wanted():
                 return False
             logger.info(
                 "daemon: stopping embedded Lemonade (pid %s) because %s",

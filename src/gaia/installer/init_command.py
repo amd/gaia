@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
@@ -71,7 +71,9 @@ def is_embedding_model_id(model_id: str) -> bool:
 _TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
 
 
-def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> str:
+def hub_unreachable_message(
+    agent_id: str, hub_url: str, exc: BaseException, retry: str = "gaia init"
+) -> str:
     """One self-contained line: what failed, what to do, and where to look.
 
     One line because the Agent UI setup wizard shows the last error line as
@@ -89,9 +91,9 @@ def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> 
     else:
         remedy = "Check your internet connection, proxy settings, or GAIA_HUB_URL."
     return (
-        f"Could not install the '{agent_id}' agent: the Agent Hub at {hub_url} "
-        f"could not be reached ({cause}). {remedy} Then run "
-        f"`gaia hub install {agent_id}`. Log: {log_manager.log_file}; help: "
+        f"Could not install the '{agent_id}' agent: its download server at "
+        f"{hub_url} could not be reached ({cause}). {remedy} Then run "
+        f"`{retry}` again. Log: {log_manager.log_file}; help: "
         f"{_TROUBLESHOOTING_URL}"
     )
 
@@ -105,7 +107,7 @@ def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> 
 HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
 # The agent the Agent UI and gaia-tui talk to. Profiles that don't install it
-# say so in their completion message and name `gaia hub install gaia`.
+# say so in their completion message and name `gaia init`, which installs it.
 FLAGSHIP_AGENT_ID = "gaia"
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
@@ -288,6 +290,8 @@ class ModelLoad:
     size_gb: Optional[float]
     loaded: bool
     error: Optional[str] = None
+    #: Whether the server already has it; None when not checked.
+    downloaded: Optional[bool] = None
 
 
 @dataclass
@@ -634,18 +638,25 @@ def check_setup_status(
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
     reasons = []
+    downloaded: Dict[str, bool] = {}
     for model_id in model_ids:
         try:
             available = client.check_model_available(model_id)
         except LemonadeClientError as e:
             reasons.append(f"Could not check model '{model_id}': {e}")
             continue
+        downloaded[model_id] = bool(available)
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
     if reasons:
-        # Sizes let a caller say what the download will cost before it starts.
-        models = [_describe_model(client, m) for m in model_ids] if load else []
+        # Sizes let a caller say what the download will cost before it starts;
+        # ``downloaded`` lets it leave out models the server already has.
+        models = (
+            [_describe_model(client, m, downloaded.get(m)) for m in model_ids]
+            if load
+            else []
+        )
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
         return SetupStatus(ready=True, reasons=[])
@@ -667,16 +678,18 @@ def check_setup_status(
     return SetupStatus(ready=True, reasons=[], models=models)
 
 
-def _describe_model(client, model_id: str) -> "ModelLoad":
-    """A not-yet-downloaded model and its download size."""
+def _describe_model(
+    client, model_id: str, downloaded: Optional[bool] = None
+) -> "ModelLoad":
+    """A model setup needs, its download size, and whether the server has it."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
     role = "embedding" if is_embedding_model_id(model_id) else "chat"
     try:
         size_gb = client.get_model_info(model_id)["size_gb"]
     except LemonadeClientError as e:
-        return ModelLoad(model_id, role, None, False, str(e))
-    return ModelLoad(model_id, role, size_gb, False)
+        return ModelLoad(model_id, role, None, False, str(e), downloaded)
+    return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
 def _load_model_once(client, model_id: str) -> "ModelLoad":
@@ -828,6 +841,8 @@ class InitCommand:
         self.lemonade_url = lemonade_url
         self.gaia_lemonade = gaia_lemonade
         self._chose_now = False
+        # GAIA's own was chosen; saved only once that server is running.
+        self._gaia_choice_pending = False
         self.profile = profile.lower()
         # This machine's chat model, resolved once so download and verify agree.
         self._chat_choice: Optional[ChatModelChoice] = None
@@ -1227,21 +1242,22 @@ class InitCommand:
             # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
             try:
-                from gaia.config import GaiaConfig, GaiaConfigError
+                from gaia.config import GaiaConfig
 
-                # Load-then-update so a user-set default_model (or any future
-                # field) survives re-running `gaia init`. init is also the
-                # natural recovery path, so if the existing file is corrupt,
-                # reset to a fresh config rather than leaving the bad file.
-                try:
-                    config = GaiaConfig.load()
-                except GaiaConfigError as e:
-                    self._print_warning(f"Resetting unreadable config: {e}")
-                    config = GaiaConfig()
-                config.profile = self.profile
-                config.default_device = "npu" if self.profile == "npu" else "gpu"
-                self._record_chat_choice(config)
-                config.save()
+                def _apply_profile(config) -> None:
+                    config.profile = self.profile
+                    config.default_device = "npu" if self.profile == "npu" else "gpu"
+                    self._record_chat_choice(config)
+
+                # Read under the lock, so a default_model another process saved
+                # during this long-running init survives. init is the recovery
+                # path, so a corrupt file is reset rather than left in place.
+                GaiaConfig.update(
+                    _apply_profile,
+                    on_unreadable=lambda e: self._print_warning(
+                        f"Resetting unreadable config: {e}"
+                    ),
+                )
             except Exception as e:
                 self._print_error(
                     f"Failed to save profile '{self.profile}' to "
@@ -1299,8 +1315,8 @@ class InitCommand:
 
         try:
             if self.gaia_lemonade:
-                choice.use_gaia()
-                self._print_success("Using GAIA's own Lemonade Server (saved).")
+                self._gaia_choice_pending = True
+                self._print("   Using GAIA's own Lemonade Server.")
             elif self.lemonade_url:
                 if not self._adopt_external(self.lemonade_url):
                     return False
@@ -1313,7 +1329,12 @@ class InitCommand:
             return False
         if not self._tell_daemon():
             return False
-        self._lemonade_base_url = configured_lemonade_url()
+        # GAIA's own, chosen but not yet running, wins over a saved server;
+        # LEMONADE_BASE_URL still wins over both.
+        if self._gaia_choice_pending and choice.env_override_note() is None:
+            self._lemonade_base_url = None
+        else:
+            self._lemonade_base_url = configured_lemonade_url()
         if self._lemonade_base_url:
             hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
             if hostname not in ("localhost", "127.0.0.1", "::1"):
@@ -1325,7 +1346,7 @@ class InitCommand:
         from gaia.daemon.errors import DaemonError
         from gaia.llm.lemonade_choice import apply_to_daemon
 
-        if not (self.lemonade_url or self.gaia_lemonade or self._chose_now):
+        if not (self.lemonade_url or self._chose_now) or self._gaia_choice_pending:
             return True
         try:
             apply_to_daemon()
@@ -1372,8 +1393,8 @@ class InitCommand:
         self._chose_now = True
         if self._prompt_yes_no("Use your Lemonade Server?", default=True):
             return self._adopt_external(found.url)
-        choice.use_gaia()
-        self._print("   Setting up GAIA's own Lemonade Server (saved).")
+        self._gaia_choice_pending = True
+        self._print("   Setting up GAIA's own Lemonade Server.")
         return True
 
     def _adopt_external(self, url: str) -> bool:
@@ -1505,6 +1526,13 @@ class InitCommand:
         self._print_success(
             f"Lemonade Server v{status.version} running on port {status.port}"
         )
+        if self._gaia_choice_pending:
+            # Saved only now: until it runs, "GAIA's own" would name nothing.
+            from gaia.llm.lemonade_choice import use_gaia
+
+            use_gaia()
+            self._gaia_choice_pending = False
+            self._print_success("Saved: GAIA uses its own Lemonade Server.")
         self._hand_server_to_daemon()
         return True
 
@@ -1889,13 +1917,16 @@ class InitCommand:
                 min_ctx = resolve_ctx_size(
                     model=model_id, device="npu" if self.profile == "npu" else "gpu"
                 )
-                # A user's own server keeps its other models and saved options.
+                # A user's own server keeps its models and saved options; one
+                # saved with "Use mine" is never unloaded either.
                 users_server = bool(self._lemonade_base_url)
                 # Unload just this model so its recipe_options are saved; the
                 # embedder stays loaded instead of being reloaded after it.
                 # Wait until it is gone, or the load's free-memory check would
                 # count its memory as neither free nor its own.
-                if client.check_model_loaded(model_id):
+                if not self._uses_saved_server() and client.check_model_loaded(
+                    model_id
+                ):
                     client.unload_model(model_id)
                     client._wait_model_state(
                         model_id,
@@ -2287,19 +2318,36 @@ class InitCommand:
         """Whether this profile installs the flagship agent itself."""
         return INIT_PROFILES[self.profile].get("agent") == FLAGSHIP_AGENT_ID
 
+    def _flagship_install_command(self) -> str:
+        """The init run that installs the flagship and keeps this profile's models.
+
+        A bare `gaia init` would switch an `npu` machine to the default
+        profile's models, so a profile that installs the flagship names itself.
+        """
+        if (
+            self.profile == DEFAULT_INIT_PROFILE
+            or not self._profile_installs_flagship()
+        ):
+            return "gaia init"
+        return f"gaia init --profile {self.profile}"
+
     def _agent_install_note(self) -> Optional[str]:
         """What to tell the user when no chat agent is installed, else None.
 
-        Every profile gets the same supported remedy, `gaia hub install gaia`:
-        the Agent UI and gaia-tui list no agent without the flagship (#2972).
+        Every profile gets the same supported remedy, `gaia init`, which
+        installs the flagship when it is missing: the Agent UI and gaia-tui list
+        no agent without it (#2972).
         """
         if self._is_hub_agent_available(FLAGSHIP_AGENT_ID):
             return None
         if self._profile_installs_flagship():
-            return "GAIA agent not installed yet -- run: gaia hub install gaia"
+            return (
+                "GAIA agent not installed yet -- run: "
+                f"{self._flagship_install_command()}"
+            )
         return (
             f"No chat agent is installed: the '{self.profile}' profile sets up "
-            "models only. Install the GAIA agent with: gaia hub install gaia"
+            "models only. Install the GAIA agent with: gaia init"
         )
 
     def _ensure_hub_agent_installed(self) -> None:
@@ -2343,20 +2391,24 @@ class InitCommand:
             catalog_result = hub_catalog.load_index()
         except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
             log.debug("Agent Hub catalog fetch failed", exc_info=True)
-            self._print_error(hub_unreachable_message(agent_id, hub_url, exc))
+            self._print_error(
+                hub_unreachable_message(
+                    agent_id, hub_url, exc, retry=self._flagship_install_command()
+                )
+            )
             return
 
         if not any(agent.get("id") == agent_id for agent in catalog_result.agents):
             self._print_error(
-                f"The Agent Hub at {hub_url} does not list the '{agent_id}' "
-                f"agent, so it was not installed. Check GAIA_HUB_URL, then run "
-                f"`gaia hub install {agent_id}`."
+                f"The download server at {hub_url} does not list the "
+                f"'{agent_id}' agent, so it was not installed. Check GAIA_HUB_URL, "
+                f"then run `{self._flagship_install_command()}` again."
             )
             return
 
         from gaia.hub import installer as hub_installer
 
-        self._print(f"   Installing '{agent_id}' from the Agent Hub...")
+        self._print(f"   Installing the '{agent_id}' agent...")
         # Curated first-run profile agent: a hardcoded INIT_PROFILES id, not user
         # input, so GAIA's own curation is the trust decision. Pass the trust
         # opt-in explicitly — every non-verified agent now needs it, and the
@@ -2379,14 +2431,15 @@ class InitCommand:
             # was attempted and failed must stay loud.
             self._no_hub_build_for_machine = True
             self._print_warning(
-                f"'{agent_id}' has no Agent Hub build for this machine: {exc}"
+                f"The '{agent_id}' agent has no build for this machine: {exc}"
             )
             self._print_warning(
-                f"Everything else is set up. Install it with "
-                f"`gaia hub install {agent_id}` once a build is available."
+                f"Everything else is set up. Run "
+                f"`{self._flagship_install_command()}` again once a build is "
+                f"available."
             )
             return
-        self._print_success(f"Installed '{agent_id}' from the Agent Hub")
+        self._print_success(f"Installed the '{agent_id}' agent")
 
         # No AgentRegistry exists in this process to hot-register into (we
         # deliberately don't construct one just for this), so mirror the
@@ -2456,8 +2509,8 @@ class InitCommand:
         Returns False when the headline says setup is incomplete, which
         ``run()`` turns into a non-zero exit.
         """
-        # The flagship is a hub BINARY, so the remedy names the hub, never a
-        # pip install from a git checkout.
+        # The flagship is a downloaded BINARY, so the remedy is `gaia init`,
+        # never a pip install from a git checkout.
         agent_note = self._agent_install_note()
         has_tui = self._tui_installed()
         tui_install_note = (
@@ -2474,7 +2527,7 @@ class InitCommand:
         elif agent_missing and installs_flagship:
             headline = (
                 f"GAIA initialization complete, except the '{FLAGSHIP_AGENT_ID}' "
-                "agent: the Agent Hub has no build for this machine"
+                "agent: it has no build for this machine yet"
             )
         elif agent_missing:
             headline = "GAIA initialization complete - no chat agent installed"

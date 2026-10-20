@@ -97,7 +97,7 @@ func TestConfirmationOtherKeysDoNothing(t *testing.T) {
 
 func TestConfirmationTimeoutDeniesWithWarning(t *testing.T) {
 	m := NewConfirmationModel("run-1", "send_now", "Send to bob@example.com", "")
-	updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+	updated, cmd := m.ResolveTimeout(m.ExpiryMsg())
 	if updated.State() != ConfirmationTimedOut {
 		t.Fatalf("state = %v, want TimedOut", updated.State())
 	}
@@ -116,7 +116,7 @@ func TestConfirmationTimeoutDeniesWithWarning(t *testing.T) {
 // A timer for a DIFFERENT (superseded) confirmation must never resolve this one.
 func TestConfirmationTimeoutIgnoresAnotherRun(t *testing.T) {
 	m := NewConfirmationModel("run-1", "send_now", "", "")
-	updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-2"})
+	updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-2", Seq: m.Seq()})
 	if updated.State() != ConfirmationPending {
 		t.Errorf("state = %v, want still Pending (the timer was for a different run)", updated.State())
 	}
@@ -142,7 +142,7 @@ func TestConfirmationResolvedIgnoresFurtherInput(t *testing.T) {
 		t.Error("a resolved confirmation must not emit a second decision")
 	}
 
-	updated, cmd = m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+	updated, cmd = m.ResolveTimeout(m.ExpiryMsg())
 	if updated.State() != ConfirmationApproved {
 		t.Errorf("a resolved confirmation flipped to %v on a late timeout", updated.State())
 	}
@@ -354,7 +354,7 @@ func TestAlwaysIsInertWithoutALiveChannel(t *testing.T) {
 func TestTimeoutNeverApproves(t *testing.T) {
 	t.Run("undeliverable expires to denied", func(t *testing.T) {
 		m := NewConfirmationModel("run-1", "send_draft", "x", "")
-		updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+		updated, cmd := m.ResolveTimeout(m.ExpiryMsg())
 		if cmd == nil {
 			t.Fatal("the timeout produced no decision")
 		}
@@ -374,7 +374,7 @@ func TestTimeoutNeverApproves(t *testing.T) {
 	t.Run("live prompt expires on the long clock, and denies", func(t *testing.T) {
 		m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
 			WithLiveChannel("cid-1", "gh issue list")
-		updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+		updated, cmd := m.ResolveTimeout(m.ExpiryMsg())
 		if cmd == nil {
 			t.Fatal("a live prompt must still be bounded")
 		}
@@ -442,27 +442,6 @@ func TestAlwaysPromisesOnlyTheScopeTheAgentNamed(t *testing.T) {
 	}
 }
 
-// A script in the agent's scratch folder offers "always" for that folder, so
-// one answer covers the next exploration script instead of a prompt per step.
-func TestAScratchScriptOffersAlwaysForTheScratchFolder(t *testing.T) {
-	const scope = "Python scripts in GAIA's scratch folder"
-	m := NewConfirmationModel("run-1", "execute_python_file",
-		`~\AppData\…\gaia-scratch-081b3eddb56c\explore.py`, "").
-		WithLiveChannel("cid-1", scope).WithRisk("execute")
-	m.SetWidth(160)
-
-	view := stripANSI(m.View())
-	if !strings.Contains(view, "a always: "+scope+" (this session)") {
-		t.Errorf("a scratch script must offer always for the scratch folder:\n%s", view)
-	}
-
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	msg := cmd().(ConfirmationDecidedMsg)
-	if !msg.Always || msg.AlwaysScope != scope {
-		t.Errorf("decision = %+v, want always for %q", msg, scope)
-	}
-}
-
 // A `pwd` must not be badged the same as a permanent delete: a badge that
 // reads DESTRUCTIVE on everything stops carrying information.
 func TestKnownToolsAreClassifiedRatherThanAllDestructive(t *testing.T) {
@@ -522,7 +501,7 @@ func TestConfirmationViewDoesNotPanicWhenResolved(t *testing.T) {
 		case ConfirmationDenied:
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 		case ConfirmationTimedOut:
-			m, _ = m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+			m, _ = m.ResolveTimeout(m.ExpiryMsg())
 		}
 		_ = m.View() // must not panic
 	}
@@ -671,7 +650,7 @@ func TestTheKeysAreProminentAndNothingIsRed(t *testing.T) {
 // Timing out is not the user saying no, and the modal must not say it was.
 func TestATimedOutPromptSaysTimedOutNotDenied(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command", "pytest", "").WithLiveChannel("cid", "")
-	m, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+	m, cmd := m.ResolveTimeout(m.ExpiryMsg())
 	msg := cmd().(ConfirmationDecidedMsg)
 	if !msg.TimedOut || msg.Approved {
 		t.Fatalf("decision = %+v, want a timed-out non-approval", msg)
@@ -701,5 +680,30 @@ func TestDestructiveWarningForCodeRunnersPointsAtTheCode(t *testing.T) {
 		if got := ClassifyActionRisk(tool); got != RiskWrite {
 			t.Errorf("ClassifyActionRisk(%q) = %v, want write", tool, got)
 		}
+	}
+}
+
+// Every prompt carries its own number, so one run's earlier timer cannot
+// resolve a later prompt on the same run.
+func TestATimerOnlyResolvesThePromptItWasArmedFor(t *testing.T) {
+	a := NewConfirmationModel("run-1", "run_shell_command", "ls", "").WithLiveChannel("cid-A", "")
+	b := NewConfirmationModel("run-1", "run_shell_command", "pytest", "").WithLiveChannel("cid-B", "")
+	if a.Seq() == 0 || a.Seq() == b.Seq() {
+		t.Fatalf("prompt numbers must be non-zero and distinct: a=%d b=%d", a.Seq(), b.Seq())
+	}
+
+	updated, cmd := b.ResolveTimeout(a.ExpiryMsg())
+	if cmd != nil || !updated.Pending() {
+		t.Fatal("A's timer resolved B")
+	}
+	if cmd := b.TimeoutCmd(); cmd == nil {
+		t.Fatal("B has no timer of its own")
+	}
+	updated, cmd = b.ResolveTimeout(b.ExpiryMsg())
+	if cmd == nil || updated.State() != ConfirmationTimedOut {
+		t.Fatal("B's own timer did not time B out")
+	}
+	if msg := cmd().(ConfirmationDecidedMsg); msg.Seq != b.Seq() || msg.ConfirmID != "cid-B" {
+		t.Errorf("decision = %+v, want it to name B", msg)
 	}
 }

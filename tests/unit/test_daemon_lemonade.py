@@ -77,6 +77,7 @@ class TestEnsure:
 
         assert ensured.started is True
         assert ensured.port == 60000
+        assert ensured.pid == 7
         embedded.start.assert_called_once_with(
             install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
         )
@@ -91,13 +92,23 @@ class TestEnsure:
         embedded.start.assert_not_called()
 
     def test_slow_server_is_reported_never_killed(self):
-        """A server busy loading a big model can miss a health check."""
+        """A server that stopped answering is reported; only `gaia init`,
+        which the user runs, restarts it."""
         embedded = _embedded(_status(port=1, unresponsive_pid=9))
         with pytest.raises(EmbeddedLemonadeError, match="pid 9"):
             _owner(embedded).ensure()
 
         embedded.stop.assert_not_called()
         embedded.start.assert_not_called()
+
+    def test_a_stuck_server_is_not_called_loading(self):
+        """A loading server now reads as running and busy, so one that is not
+        answering is stuck: waiting will not help, restarting will."""
+        embedded = _embedded(_status(port=1, unresponsive_pid=9))
+        with pytest.raises(EmbeddedLemonadeError) as exc:
+            _owner(embedded).ensure()
+        assert "loading" not in str(exc.value)
+        assert "gaia init" in str(exc.value)
 
     def test_not_installed_names_gaia_init(self):
         embedded = _embedded(_status(installed=False), installed=False)
@@ -292,6 +303,7 @@ class TestRoute:
             "port": 51234,
             "version": VERSION,
             "started": False,
+            "pid": 7,
         }
 
     def test_nothing_to_start_is_409_with_the_remedy(self):

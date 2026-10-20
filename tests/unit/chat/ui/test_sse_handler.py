@@ -14,6 +14,7 @@ import time
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.ui import sse_handler as sse_module
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _fix_double_escaped,
@@ -379,6 +380,23 @@ class TestPrintPlan:
         assert "query='test'" in step
         assert "directory='/src'" in step
 
+    def test_plan_carries_one_plain_line_per_step(self, handler):
+        plan = [
+            {"tool": "read_file", "tool_args": {"file_path": "notes.txt"}},
+            {"tool": "list_skills"},
+            {"description": "Compare the two lists"},
+            "Write the summary",
+        ]
+        handler.print_plan(plan, current_step=1)
+        event = _drain(handler)[0]
+        assert event["step_narrations"] == [
+            "Reading file: notes.txt",
+            "Checking your installed skills",
+            "Compare the two lists",
+            "Write the summary",
+        ]
+        assert len(event["step_narrations"]) == len(event["steps"])
+
 
 # ===========================================================================
 # SSEOutputHandler.print_tool_usage
@@ -408,6 +426,7 @@ class TestPrintToolUsage:
             "type": "tool_start",
             "tool": "search_file",
             "detail": _tool_description("search_file"),
+            "narration": "Searching file",
         }
 
     def test_emits_tool_start_unknown_tool_empty_detail(self, handler):
@@ -450,6 +469,11 @@ class TestPrettyPrintJsonArguments:
         assert event["tool"] == "search_file"
         assert event["args"] == args
         assert "query" in event["detail"]
+
+    def test_tool_args_event_says_what_the_call_does(self, handler):
+        handler._last_tool_name = "read_file"
+        handler.pretty_print_json({"file_path": "C:/notes.txt"}, title="Arguments")
+        assert _drain(handler)[0]["narration"] == "Reading file: C:/notes.txt"
 
     def test_returns_early_for_arguments_title(self, handler):
         """Arguments title should emit tool_args, not tool_result."""
@@ -1024,6 +1048,7 @@ class TestPrintCommandExecuting:
             "type": "tool_start",
             "tool": "run_shell_command",
             "detail": "git status",
+            "narration": "Running command: git status",
         }
 
 
@@ -1239,16 +1264,26 @@ class TestResponseEnvelopeNeverStreamsRaw:
             handler.print_streaming_text(piece)
             assert _content(_drain(handler)) == [], handler._stream_buffer[:80]
 
-    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler):
+    def test_huge_envelope_token_by_token_is_not_quadratic(self, handler, monkeypatch):
         """A 400 KB file write streamed 4 chars at a time scans each char once."""
         content = 'x \\"{y}\\" ' * 40_000
         envelope = (
             '{"thought": "t", "tool": "write_file", '
             f'"tool_args": {{"file_path": "a.md", "content": "{content}"}}}}'
         )
-        started = time.monotonic()
+        # Counted, not timed: a rescan per token is ~2e10 chars, a resumed scan
+        # ~4e5, and wall time on a loaded runner can't tell them apart reliably.
+        scanned = []
+        real_scan = sse_module._json_object_end
+
+        def counting_scan(text, start, resume=None):
+            scanned.append(len(text) - (resume[0] if resume else start))
+            return real_scan(text, start, resume)
+
+        monkeypatch.setattr(sse_module, "_json_object_end", counting_scan)
         assert _content(_stream(handler, _pieces(envelope, 4))) == []
-        assert time.monotonic() - started < 5
+        assert len(scanned) > len(envelope) // 8, "the envelope was never scanned"
+        assert sum(scanned) <= 2 * len(envelope), sum(scanned)
 
     def test_think_tag_inside_an_envelope_string_is_content(self, handler):
         envelope = (
@@ -1301,15 +1336,30 @@ class TestResponseEnvelopeNeverStreamsRaw:
         """No tool and no answer: nothing to show, and no raw JSON either."""
         assert _stream(handler, ['{"thought": "hmm", ', '"goal": "think"}']) == []
 
-    def test_thought_plus_answer_emits_only_the_answer(self, handler):
+    def test_thought_plus_answer_streams_only_the_answer(self, handler):
         envelope = (
             '{"thought": "done", "goal": "reply", '
             '"answer": "Roy Fielding, \\"UC Irvine\\", 2000."}'
         )
         events = _stream(handler, _pieces(envelope, 4))
-        assert events == [
-            {"type": "answer", "content": 'Roy Fielding, "UC Irvine", 2000.'}
-        ]
+        assert {e["type"] for e in events} == {"chunk"}
+        assert _shown(events) == 'Roy Fielding, "UC Irvine", 2000.'
+
+    @pytest.mark.parametrize("size", [1, 4, 64])
+    def test_answer_after_a_tool_key_is_not_streamed(self, handler, size):
+        envelope = (
+            '{"thought": "t", "tool": "x", "tool_args": {"answer": "no"}, '
+            '"answer": "not yet"}'
+        )
+        assert _shown(_stream(handler, _pieces(envelope, size))) == ""
+
+    @pytest.mark.parametrize("size", [1, 4, 64])
+    def test_nested_answer_key_is_not_the_answer(self, handler, size):
+        envelope = (
+            '{"thought": "t", "goal": {"answer": "inner"}, '
+            '"tool": "x", "tool_args": {}}'
+        )
+        assert _content(_stream(handler, _pieces(envelope, size))) == []
 
     def test_answer_that_contains_json_still_shows(self, handler):
         envelope = '{"thought": "t", "answer": "Use {\\"thought\\": \\"x\\"} here."}'
@@ -1545,6 +1595,16 @@ class TestFormatToolArgs:
     def test_more_than_two_parts_newline_joined(self):
         result = _format_tool_args("tool", {"a": "1", "b": "2", "c": "3"})
         assert result == "a: 1\nb: 2\nc: 3"
+
+    def test_list_value_reads_as_a_plain_list(self):
+        result = _format_tool_args(
+            "extract_document_items", {"fields": ["owner", "task", "due"]}
+        )
+        assert result == "fields: owner, task, due"
+
+    def test_value_holding_a_comma_forces_one_row_per_argument(self):
+        result = _format_tool_args("tool", {"fields": ["a", "b"], "file": "x.html"})
+        assert result == "fields: a, b\nfile: x.html"
 
     def test_numeric_values(self):
         result = _format_tool_args("tool", {"count": 42})
