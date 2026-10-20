@@ -193,6 +193,10 @@ describe('a new chat', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't be set to work in \/home\/u.*home directory/);
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // Still on the new-chat screen with the pick, and the empty chat is gone.
+        expect(mocked.deleteSession).toHaveBeenCalledWith('sess-new-0001');
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+        expect(useChatStore.getState().draftWorkingFolder).toBe('/home/u');
     });
 
     it('does not send the message when the permission mode could not be set', async () => {

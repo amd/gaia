@@ -128,8 +128,13 @@ def working_folder() -> Dict[str, Any]:
     """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it."""
     from gaia.ui import _chat_helpers as chat
 
-    cwd = chat.default_working_dir()
-    if chat._unsafe_directory_grant_reason(cwd):
+    try:
+        cwd = chat.default_working_dir()
+    except chat.WorkingDirEnvError as e:
+        # GAIA_WORKING_DIR went bad after startup; a turn names the fix.
+        logger.warning("Showing the GAIA folder as the working folder: %s", e)
+        cwd = None
+    if cwd is None or chat._unsafe_directory_grant_reason(cwd):
         folder, own = chat._managed_documents_dir(), True
     else:
         folder, own = cwd, False

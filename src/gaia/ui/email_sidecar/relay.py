@@ -325,8 +325,9 @@ def _add_scope(body: Dict[str, Any], scope: Optional[Dict[str, Any]]) -> None:
         return
     body["folders"] = list(scope.get("folders") or [])
     body["withheld_folders"] = list(scope.get("withheld") or [])
-    if scope.get("working_folder"):
-        body["working_folder"] = scope["working_folder"]
+    working_folder = scope.get("working_folder") or scope.get("default_working_folder")
+    if working_folder:
+        body["working_folder"] = working_folder
 
 
 def _best_effort_cancel(proxy: Any, rid: str) -> None:
@@ -363,7 +364,8 @@ def relay_query(
     *documents* — absolute paths of the chat's attached files, for a sidecar
     the caller has established takes them (``profiles.documents_supported``).
 
-    *scope* — the chat's ``folders``, ``withheld`` and ``working_folder``, for
+    *scope* — the chat's ``folders``, ``withheld`` and ``working_folder`` (else
+    ``default_working_folder``), for
     a sidecar the caller has established takes them
     (``profiles.folders_supported``).
 

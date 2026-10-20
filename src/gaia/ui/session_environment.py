@@ -109,14 +109,21 @@ def _require_folders_reach(db: ChatDatabase, session_id: str) -> None:
 
 
 def relayed_scope(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
-    """The folder settings a relayed agent is sent each turn to apply itself."""
-    from ._chat_helpers import _project_root
+    """The folder settings a relayed agent is sent each turn to apply itself.
+
+    ``working_folder`` is the chat's own pick; ``default_working_folder`` is
+    ``GAIA_WORKING_DIR`` (or ``--working-dir``), kept apart so a sidecar too
+    old to take folders is stopped only by settings the chat itself made.
+    """
+    from ._chat_helpers import env_working_dir
 
     env = load(db, session_id)
+    default = None if env["working_folder"] else env_working_dir()
     return {
         "folders": list(env["folders"]),
         "withheld": list(env["withheld"]),
-        "working_folder": _project_root(env["working_folder"]),
+        "working_folder": env["working_folder"],
+        "default_working_folder": str(default) if default else None,
     }
 
 
@@ -165,15 +172,29 @@ def _computed_scope(
     db: ChatDatabase, session: Dict[str, Any], env: Dict[str, Any]
 ) -> List[str]:
     """The scope a new agent for this chat would get, before the user's changes."""
-    from ._chat_helpers import _compute_allowed_paths, _resolve_rag_paths
+    from ._chat_helpers import (
+        WorkingDirEnvError,
+        _compute_allowed_paths,
+        _managed_documents_dir,
+        _resolve_rag_paths,
+    )
 
     rag, library = _resolve_rag_paths(db, session.get("document_ids", []))
-    return _compute_allowed_paths(rag + library, env["working_folder"])
+    try:
+        return _compute_allowed_paths(rag + library, env["working_folder"])
+    except WorkingDirEnvError as e:
+        # Only reached with no documents and no pick: the GAIA folder alone.
+        logger.warning("No default working folder to show: %s", e)
+        return [str(_managed_documents_dir())]
 
 
 def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     """What the session panel shows: every folder and file the chat may touch."""
-    from ._chat_helpers import _managed_documents_dir, default_working_dir
+    from ._chat_helpers import (
+        WorkingDirEnvError,
+        _managed_documents_dir,
+        default_working_dir,
+    )
 
     session_id = session["id"]
     env = load(db, session_id)
@@ -193,7 +214,14 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
-    cwd = _norm(env["working_folder"] or str(default_working_dir()))
+    cwd = env["working_folder"]
+    if not cwd:
+        try:
+            cwd = str(default_working_dir())
+        except WorkingDirEnvError as e:
+            # The panel still lists the chat's folders; the turn says what to fix.
+            logger.warning("No default working folder to show: %s", e)
+    cwd = _norm(cwd) if cwd else None
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)

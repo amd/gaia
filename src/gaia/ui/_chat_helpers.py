@@ -1945,12 +1945,37 @@ def _dispatch_sidecar_query(
 
     relayed_scope = None
     if scope and any(scope.values()) and profile.min_folders_api_version is not None:
-        if not folders_supported(profile, handle.api_version):
+        if folders_supported(profile, handle.api_version):
+            relayed_scope = scope
+        elif (
+            scope.get("folders") or scope.get("withheld") or scope.get("working_folder")
+        ):
+            # The chat's own folder settings: answering without them would
+            # quietly widen or narrow what the agent may touch.
             sse_handler._emit(
                 {"type": "agent_error", "content": profile.folders_upgrade_message}
             )
             return
-        relayed_scope = scope
+        else:
+            # Only the GAIA_WORKING_DIR default: the agent keeps its own
+            # folder, as it did before folders could be sent. Say so.
+            logger.warning(
+                "%s sidecar (contract %s) can't take %s=%s; it works in its own folder",
+                agent_type,
+                handle.api_version,
+                WORKING_DIR_ENV,
+                scope.get("default_working_folder"),
+            )
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": profile.default_folder_ignored_message.format(
+                        folder=scope.get("default_working_folder"),
+                        env=WORKING_DIR_ENV,
+                    ),
+                }
+            )
 
     proxy = handle.proxy()
 
@@ -3011,6 +3036,10 @@ async def _get_chat_response(
         # scope cut, #2109) — propagate as a real HTTP status, never
         # flattened into a friendly chat-text fallback below.
         raise
+    except WorkingDirEnvError as e:
+        # GAIA_WORKING_DIR went bad after startup: its remedy is the answer.
+        logger.error("Chat error: %s", e)
+        return str(e)
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         # Surface the typed Lemonade error's friendly user_message
@@ -4215,9 +4244,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
-        logger.error("Chat streaming error: %s", e, exc_info=True)
         await _cleanup_stream()
-        error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        if isinstance(e, WorkingDirEnvError):
+            # GAIA_WORKING_DIR went bad after startup (the folder was deleted):
+            # the remedy, not a generic retry.
+            logger.error("Chat streaming error: %s", e)
+            error_msg = str(e)
+        else:
+            logger.error("Chat streaming error: %s", e, exc_info=True)
+            error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
         except Exception as exc:

@@ -372,6 +372,25 @@ function App() {
             setFlagshipRefused(false);
             void loadAgents().catch((err) => log.api.warn('Agent list unavailable', err));
         }
+        // Before the chat opens: a refused folder keeps the user on the new-chat
+        // screen with the pick and the text, instead of in a chat that ignores it.
+        const folder = store.draftWorkingFolder;
+        if (folder) {
+            try {
+                await api.setWorkingFolder(session.id, folder);
+            } catch (err) {
+                try {
+                    await api.deleteSession(session.id);
+                } catch (e) {
+                    log.api.warn('Could not remove the chat its folder was refused for', e);
+                }
+                throw new Error(
+                    `GAIA couldn't be set to work in ${folder}, so your message was not sent: ${
+                        err instanceof Error ? err.message : err} Pick another folder, or clear it to use the default.`,
+                );
+            }
+            useChatStore.getState().setDraftWorkingFolder(null);
+        }
         // The chip may still show a guess if startup never reached the backend; the saved default wins.
         if (!store.defaultPermissionModeKnown) {
             await loadDefaultPermissionMode()
@@ -383,18 +402,6 @@ function App() {
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
-        if (store.draftWorkingFolder) {
-            try {
-                await api.setWorkingFolder(session.id, store.draftWorkingFolder);
-            } catch (err) {
-                setCreateError(
-                    `The chat was created, but it couldn't be set to work in ${store.draftWorkingFolder}, so your message was not sent: ${
-                        err instanceof Error ? err.message : err}`,
-                );
-                return;
-            }
-            store.setDraftWorkingFolder(null);
-        }
         // Always sent, so the chat runs in exactly the mode its chip showed.
         try {
             await api.setPermissionMode(session.id, store.draftPermissionMode);

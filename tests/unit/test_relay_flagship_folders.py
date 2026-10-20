@@ -60,6 +60,20 @@ def test_the_scope_is_sent_whole_in_the_query_body():
     assert untouched == {}
 
 
+def test_the_default_working_folder_is_sent_when_none_was_picked():
+    body: dict = {}
+    relay._add_scope(
+        body,
+        {
+            "folders": [],
+            "withheld": [],
+            "working_folder": None,
+            "default_working_folder": "/d",
+        },
+    )
+    assert body["working_folder"] == "/d"
+
+
 def _fake_handle(monkeypatch, version):
     class _Handle:
         api_version = version
@@ -107,6 +121,68 @@ def test_an_older_flagship_without_folders_still_chats(monkeypatch):
     assert kwargs["scope"] is None
 
 
+def _drain(handler):
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    return events
+
+
+_DEFAULT_ONLY = {
+    "folders": [],
+    "withheld": [],
+    "working_folder": None,
+    "default_working_folder": "/env/project",
+}
+
+
+def test_an_older_flagship_still_chats_with_only_the_env_default(monkeypatch):
+    """GAIA_WORKING_DIR alone must not stop every chat on a 2.17 agent."""
+    calls = _fake_handle(monkeypatch, "2.17")
+    handler = _dispatch(_DEFAULT_ONLY)
+    [kwargs] = calls
+    assert kwargs["scope"] is None
+    events = _drain(handler)
+    assert not any(e.get("type") == "agent_error" for e in events), events
+    [warning] = [e for e in events if e.get("status") == "warning"]
+    assert "GAIA_WORKING_DIR" in warning["message"]
+    assert "/env/project" in warning["message"]
+
+
+def test_an_older_flagship_with_a_picked_folder_says_it_needs_an_update(
+    monkeypatch,
+):
+    calls = _fake_handle(monkeypatch, "2.17")
+    handler = _dispatch({**_DEFAULT_ONLY, "working_folder": "/picked"})
+    assert calls == []
+    assert any("contract 2.18" in json.dumps(e) for e in _drain(handler))
+
+
+def test_a_current_flagship_is_sent_the_env_default(monkeypatch):
+    calls = _fake_handle(monkeypatch, "2.18")
+    _dispatch(_DEFAULT_ONLY)
+    [kwargs] = calls
+    assert kwargs["scope"] == _DEFAULT_ONLY
+
+
+def test_the_relayed_scope_keeps_the_pick_apart_from_the_env_default(
+    monkeypatch, chat, tmp_path  # noqa: F811
+):
+    env_dir = tmp_path / "env"
+    env_dir.mkdir()
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(env_dir))
+    scope = session_environment.relayed_scope(chat.db, chat.session_id)
+    assert scope["working_folder"] is None
+    assert scope["default_working_folder"] == str(env_dir.resolve())
+
+    picked = tmp_path / "picked"
+    picked.mkdir()
+    session_environment.set_working_folder(chat.db, chat.session_id, str(picked))
+    scope = session_environment.relayed_scope(chat.db, chat.session_id)
+    assert scope["working_folder"] == str(picked.resolve())
+    assert scope["default_working_folder"] is None
+
+
 def test_folders_added_to_a_relayed_chat_reach_the_flagship(
     monkeypatch, live_gaia_sidecar, chat, tmp_path  # noqa: F811
 ):
@@ -130,3 +206,24 @@ def test_folders_added_to_a_relayed_chat_reach_the_flagship(
     session_environment.remove_folder(db, chat.session_id, str(project))
     chat.send("and now?")
     assert not validator.is_path_allowed(str(project / "x.txt"), prompt_user=False)
+
+
+def test_a_working_dir_deleted_after_startup_names_the_fix(
+    monkeypatch, chat, tmp_path  # noqa: F811
+):
+    """The remedy reaches the user, not a generic "try again"."""
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.setenv("GAIA_WORKING_DIR", str(gone))
+    gone.rmdir()
+    events = chat.send("hi")
+    [error] = [e for e in events if e.get("type") == "error"]
+    assert "GAIA_WORKING_DIR" in error["content"]
+    assert "is not a folder" in error["content"]
+
+    # The panel and the start screen still load.
+    session = chat.db.get_session(chat.session_id)
+    assert session_environment.describe(chat.db, session)["session_id"]
+    from gaia.ui.start_screen import working_folder
+
+    assert working_folder()["gaia_folder"] is True

@@ -323,7 +323,9 @@ and where that model runs.
   may read and write it, treats it as the project, and runs commands there.
   Without a pick, chats work in `GAIA_WORKING_DIR` (or
   `gaia chat --ui --working-dir <path>`), else the folder GAIA started in,
-  unless that is your home folder.
+  unless that is your home folder. A GAIA agent older than contract 2.18
+  can't be given folders: a chat with a picked or added folder asks you to
+  update it, and otherwise it works in its own folder and says so.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
 - **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
