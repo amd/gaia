@@ -10,7 +10,6 @@ confirm this is done" although the file was saved with the right content.
 
 import asyncio
 import json
-import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -239,7 +238,7 @@ def test_finished_work_is_reported_saved_not_unconfirmed(
         f"Cloud authentication or access was denied (HTTP {status})"
     ), answer
     assert "can't confirm" not in answer and "unfinished" not in answer, answer
-    assert f"Saved before the error: `{os.path.normcase(target)}`" in answer
+    assert f"Saved before the error: `{target}`" in answer
     assert "temporary" not in answer
     assert result["status"] == "failed", "the turn still ended on an error"
     # The flagship sidecar serves the TUI: the loop keeps the TUI's advice.
@@ -252,7 +251,7 @@ def test_a_429_after_finished_work_still_reports_the_save(agent, tmp_path):
     assert "HTTP 429" in answer
     assert "Cloud authentication" not in answer
     assert "can't confirm" not in answer
-    assert f"Saved before the error: `{os.path.normcase(target)}`" in answer
+    assert f"Saved before the error: `{target}`" in answer
 
 
 def test_a_failed_write_is_still_reported_unfinished(agent, tmp_path):
@@ -422,7 +421,7 @@ def test_gaia_chat_cli_error_names_both_front_ends(capsys):
     out = capsys.readouterr().out
     assert "HTTP 403" in out
     assert TUI_PROVIDER_AUTH_HINT not in out
-    assert CLI_PROVIDER_AUTH_HINT in out
+    assert out.count(CLI_PROVIDER_AUTH_HINT) == 1, "the remedy is printed once"
 
 
 def test_gaia_llm_cli_stream_error_names_both_front_ends(capsys):
@@ -439,5 +438,12 @@ def test_gaia_llm_cli_stream_error_names_both_front_ends(capsys):
         return [chunk async for chunk in client.send_message("hi")]
 
     chunks = asyncio.run(collect())
-    assert chunks and CLI_PROVIDER_AUTH_HINT in chunks[-1]
+    assert chunks and chunks[-1].count(CLI_PROVIDER_AUTH_HINT) == 1
     assert TUI_PROVIDER_AUTH_HINT not in chunks[-1]
+
+
+def test_a_cli_error_with_a_different_cause_keeps_its_details():
+    from gaia.cli import _cli_error_text
+
+    text = _cli_error_text(RuntimeError("Error: model 'Qwen3-0.6B-GGUF' was not found"))
+    assert "Details: Error: model 'Qwen3-0.6B-GGUF' was not found" in text

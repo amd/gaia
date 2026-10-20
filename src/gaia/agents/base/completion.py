@@ -485,6 +485,8 @@ class CompletionEvidence:
         # (ledger sequence, what the run named) for runs that printed something.
         self.summaries: list[tuple[int, str]] = []
         self._exec_started = 0
+        # key -> the path as the write tool reported it, for showing the user.
+        self.written_as: dict[str, str] = {}
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -627,6 +629,7 @@ class CompletionEvidence:
                 continue
             key = self.key(path, args.get("project_dir"))
             self.removed.discard(key)
+            self.written_as[key] = path
             self.files[key] = FileEvidence(
                 key,
                 self.sequence if successful else 0,

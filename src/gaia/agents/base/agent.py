@@ -8585,9 +8585,12 @@ Do NOT wrap conversational replies in JSON.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
             answer += "\n\n" + inventory
-        saved = self._completion_evidence.written_files() if model_failed else []
+        evidence = self._completion_evidence
+        saved = evidence.written_files() if model_failed else []
         if saved and answer:
-            answer += "\n\n" + saved_before_error(saved)
+            answer += "\n\n" + saved_before_error(
+                [evidence.written_as.get(key, key) for key in saved]
+            )
         return answer, gaps
 
     #: What warm_up primes with. Short and fixed, so the priming call itself
