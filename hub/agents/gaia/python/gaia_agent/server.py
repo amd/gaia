@@ -610,6 +610,7 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
     if mode == "on":
         if getattr(agent, "_memory_store", None) is not None:
             agent._incognito = False
+            agent._incognito_reason = None
         return
     agent._incognito = True
     agent._incognito_reason = "private" if mode == "private" else "memory_off"

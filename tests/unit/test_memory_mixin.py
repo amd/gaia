@@ -1888,6 +1888,21 @@ class TestProcessQueryCacheInvalidation:
 
         assert mixin_host._memory_post_init_pending is False
 
+    def test_post_init_waits_out_a_private_turn(self, mixin_host):
+        """Upkeep reads existing memories with the turn's model, so a private or
+        memory-off turn leaves it pending for the first memory-on turn."""
+        mixin_host._incognito = True
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("private query")
+            mock_post.assert_not_called()
+        assert mixin_host._memory_post_init_pending is True
+
+        mixin_host._incognito = False
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("memory-on query")
+            mock_post.assert_called_once()
+        assert mixin_host._memory_post_init_pending is False
+
     def test_post_init_not_called_on_second_query(self, mixin_host):
         """_run_memory_post_init() is NOT called again on subsequent queries."""
         with patch.object(mixin_host, "_run_memory_post_init"):

@@ -3342,9 +3342,12 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def warm_up(self, progress=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
-        if not getattr(self, "_incognito", False):
+        incognito = getattr(self, "_incognito", False)
+        if not incognito:
             self._finish_deferred_memory_init()
-        if getattr(self, "_memory_post_init_pending", False):
+        # Upkeep reads existing memories with the chat's model; a private or
+        # memory-off agent keeps it pending for its first memory-on turn.
+        if not incognito and getattr(self, "_memory_post_init_pending", False):
             if progress:
                 progress("Tidying memory")
             self._memory_post_init_pending = False
@@ -3377,8 +3380,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             # before the first turn; report failures through the current handler.
             self.report_memory_unavailable()
 
-            # Run deferred LLM startup tasks on first real query (after self.chat exists)
-            if getattr(self, "_memory_post_init_pending", False):
+            # Run deferred LLM startup tasks on first real query (after self.chat
+            # exists). Not in a private or memory-off turn: upkeep sends existing
+            # memories to this turn's model, so it waits for a memory-on turn.
+            if not getattr(self, "_incognito", False) and getattr(
+                self, "_memory_post_init_pending", False
+            ):
                 self._memory_post_init_pending = False
                 with turn_metrics.pre_turn_span(self, "memory_post_init"):
                     self._run_memory_post_init()

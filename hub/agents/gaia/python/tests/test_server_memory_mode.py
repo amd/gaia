@@ -96,7 +96,8 @@ def test_a_retained_session_follows_the_mode_each_turn(built):
         assert _query(client, **fields).status_code == 200
     assert len(agents) == 1
     # Omitting the field leaves the session as the last turn set it.
-    assert [incognito for incognito, _ in agents[0].seen] == [True, False, False]
+    # "on" clears the reason too, so the two fields never disagree.
+    assert agents[0].seen == [(True, "private"), (False, None), (False, None)]
 
 
 def test_on_never_turns_on_memory_the_agent_has_no_store_for(built, monkeypatch):
