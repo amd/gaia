@@ -119,6 +119,36 @@ def test_full_access_answers_the_path_prompt(layout):
     assert _read(agent, layout["file"])["status"] == "success"
 
 
+@pytest.mark.parametrize("approved", [True, False])
+def test_pre_approved_tools_ask_for_the_path_when_someone_can_answer(layout, approved):
+    """The relayed Agent UI under Full access: pre-approved, and watched."""
+    handler = SSEOutputHandler()
+    handler.auto_approve_gated_tools = True
+    handler.answers_confirmations = True
+    agent = _ReadAgent(layout["scope"], handler)
+    results = {}
+
+    worker = threading.Thread(
+        target=lambda: results.update(read=_read(agent, layout["file"]))
+    )
+    worker.start()
+    requests = _answer_next_prompt(handler, approved=approved)
+    worker.join(timeout=5)
+
+    assert [r["tool"] for r in requests] == [PATH_ACCESS_PROMPT_TOOL]
+    assert requests[0]["args"]["path"] == str(layout["file"].resolve())
+    assert (results["read"]["status"] == "success") is approved
+
+
+def test_pre_approval_still_answers_ordinary_prompts_when_watched():
+    handler = SSEOutputHandler()
+    handler.auto_approve_gated_tools = True
+    handler.answers_confirmations = True
+
+    assert handler.confirm_tool_execution("write_file", {"file_path": "a"}) is True
+    assert handler._confirm_event is None
+
+
 def test_path_prompt_offers_no_always():
     assert grant_scope(PATH_ACCESS_PROMPT_TOOL, {"path": "/home/u/Documents"}) is None
 

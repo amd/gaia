@@ -350,6 +350,14 @@ class OutputHandler(ABC):
     edit_roots: Tuple[str, ...] = ()
     """Folders "accept edits" may write into — the session's workspace."""
 
+    answers_confirmations: bool = False
+    """A person can answer a confirmation on this run even while tools are pre-approved.
+
+    Set by a transport whose caller declared someone is watching (the relayed
+    Agent UI). Without :attr:`full_access`, pre-approval never widens the file
+    scope; this lets an out-of-scope path be asked about instead of refused.
+    """
+
     _last_denial: Optional[Denial] = None
     """The most recent denial (#2210).
 

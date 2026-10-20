@@ -3034,7 +3034,11 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Full access is on: granting %s without asking", path)
             return True
         auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
-        if callable(auto_approves) and auto_approves():
+        if (
+            callable(auto_approves)
+            and auto_approves()
+            and not getattr(console, "answers_confirmations", False)
+        ):
             logger.warning(
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )

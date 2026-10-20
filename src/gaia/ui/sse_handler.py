@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
-from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.base.tool_outcome import FAILED_STATUSES
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
@@ -1713,7 +1713,9 @@ class SSEOutputHandler(OutputHandler):
         # emitted: neither has a question to ask, so putting a modal up would be
         # theatre. Checked per call, so toggling full access mid-run takes effect on
         # the very next gated tool.
-        if self.auto_approve_confirmations_enabled():
+        # Pre-approval answers tool prompts; only full access widens the file scope.
+        widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
+        if self.auto_approve_confirmations_enabled() and not widens_scope:
             self.log_auto_approval(tool_name)
             self._emit(
                 {
