@@ -1,11 +1,11 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** The rail beside the answer: sources, files, and where the turn's data went (#5222). */
+/** "This answer" in the session panel: sources, files, and where the turn's data went (#5222). */
 
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FILE_RECHECK_MS, SideRail, SIDE_RAIL_FOLD_QUERY, liveDataFailed } from '../SideRail';
+import { FILE_RECHECK_MS, ThisAnswer, liveDataFailed } from '../SideRail';
 import type { Message, TurnSummary } from '../../types';
 import * as api from '../../services/api';
 
@@ -36,26 +36,18 @@ function turn(s: TurnSummary | undefined, id = 2): Message[] {
     ];
 }
 
-function stubWindowWidth(narrow: boolean) {
-    Object.defineProperty(window, 'matchMedia', {
-        configurable: true,
-        value: (query: string) => ({
-            matches: query === SIDE_RAIL_FOLD_QUERY && narrow,
-            media: query,
-            addEventListener: vi.fn(),
-            removeEventListener: vi.fn(),
-        }),
-    });
+/** Rendered inside a stand-in panel, as SessionPanel hosts it. */
+function rail() {
+    return screen.getByTestId('host');
 }
 
-function rail() {
-    return screen.getByRole('complementary', { name: 'Sources and turn details' });
+function Host(props: Parameters<typeof ThisAnswer>[0]) {
+    return <div data-testid="host"><ThisAnswer {...props} /></div>;
 }
 
 beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
-    stubWindowWidth(false);
     mockedApi.openFileInApp.mockResolvedValue({ status: 'ok', path: '' });
     mockedApi.openFileOrFolder.mockResolvedValue({ status: 'ok', path: '' });
     mockedApi.getFileStatus.mockImplementation(async (paths) => ({
@@ -64,47 +56,46 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    delete (window as { matchMedia?: unknown }).matchMedia;
     vi.useRealTimers();
 });
 
 const USER_FOLLOW_UP: Message = { id: 9, session_id: 's', role: 'user', content: 'next', created_at: '', rag_sources: null };
 
-describe('SideRail', () => {
+describe('ThisAnswer', () => {
     it('stays hidden until a turn has something to show', () => {
-        const { container, rerender } = render(<SideRail messages={[]} />);
-        expect(container).toBeEmptyDOMElement();
-        rerender(<SideRail messages={turn(undefined)} />);
-        expect(container).toBeEmptyDOMElement();
-        rerender(<SideRail messages={[USER_FOLLOW_UP]} busy />);
-        expect(container).toBeEmptyDOMElement();
+        const { rerender } = render(<Host messages={[]} />);
+        expect(rail()).toBeEmptyDOMElement();
+        rerender(<Host messages={turn(undefined)} />);
+        expect(rail()).toBeEmptyDOMElement();
+        rerender(<Host messages={[USER_FOLLOW_UP]} busy />);
+        expect(rail()).toBeEmptyDOMElement();
     });
 
     it("tracks the latest turn, not an older one's summary", () => {
         const messages = [...turn(summary()), ...turn(undefined, 4)];
-        const { container } = render(<SideRail messages={messages} />);
-        expect(container).toBeEmptyDOMElement();
+        render(<Host messages={messages} />);
+        expect(rail()).toBeEmptyDOMElement();
     });
 
     it("never shows the previous answer's data while a new turn runs", () => {
         const before = summary({ model: CLOUD_MODEL, sites: ['amd.com'] });
-        const { rerender } = render(<SideRail messages={turn(before)} />);
+        const { rerender } = render(<Host messages={turn(before)} />);
         expect(rail()).toHaveTextContent('Fireworks AI (cloud)');
 
-        rerender(<SideRail messages={[...turn(before), USER_FOLLOW_UP]} busy />);
+        rerender(<Host messages={[...turn(before), USER_FOLLOW_UP]} busy />);
         expect(rail()).toHaveTextContent('Working on this answer');
         expect(rail()).not.toHaveTextContent('Fireworks AI');
         expect(rail()).not.toHaveTextContent('amd.com');
     });
 
     it("hides a previous answer's data when the latest message has no answer yet", () => {
-        const { container } = render(<SideRail messages={[...turn(summary()), USER_FOLLOW_UP]} />);
-        expect(container).toBeEmptyDOMElement();
+        render(<Host messages={[...turn(summary()), USER_FOLLOW_UP]} />);
+        expect(rail()).toBeEmptyDOMElement();
     });
 
     it('shows a file an Undo removed as gone, with nothing to open', async () => {
         vi.useFakeTimers();
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             files: [{ path: 'C:/out/report.md', name: 'report.md', openable: true, mtime: 100 }],
         }))} />);
         await act(async () => { await Promise.resolve(); });
@@ -119,7 +110,7 @@ describe('SideRail', () => {
 
     it('marks a file restored or edited after the turn as changed', async () => {
         mockedApi.getFileStatus.mockResolvedValue({ files: [{ path: 'C:/out/data.csv', exists: true, mtime: 250 }] });
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             files: [{ path: 'C:/out/data.csv', name: 'data.csv', openable: true, mtime: 100 }],
         }))} />);
         expect(await screen.findByText('Changed since this turn')).toBeInTheDocument();
@@ -128,14 +119,14 @@ describe('SideRail', () => {
 
     it('says so when the files cannot be re-checked', async () => {
         mockedApi.getFileStatus.mockRejectedValue(new Error('server down'));
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             files: [{ path: 'C:/out/a.md', name: 'a.md', openable: true, mtime: 1 }],
         }))} />);
         expect(await screen.findByText(/Couldn't check whether these files changed: server down/)).toBeInTheDocument();
     });
 
     it('lists the pages a web-research answer used, as links', () => {
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             pages: [
                 { url: 'https://en.wikipedia.org/wiki/Kestrel', title: 'Kestrel - Wikipedia', kind: 'page' },
                 { url: 'https://www.audubon.org/kestrel', title: null, kind: 'search_result' },
@@ -157,7 +148,7 @@ describe('SideRail', () => {
         'file:///C:/Windows/System32/calc.exe',
         'vbscript:msgbox(1)',
     ])('never makes a page with an unsafe address %s clickable', (url) => {
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             pages: [{ url, title: 'Looks harmless', kind: 'page' }],
         }))} />);
         expect(screen.getByText('Looks harmless')).toBeInTheDocument();
@@ -166,7 +157,7 @@ describe('SideRail', () => {
     });
 
     it('names document passages by file, with pages and counts', () => {
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             documents: [{ name: 'kestrel-plan.pdf', path: 'C:/u/uploads/f27f.pdf', pages: [1, 2], passages: 3 }],
         }))} />);
         expect(screen.getByText('kestrel-plan.pdf')).toBeInTheDocument();
@@ -176,7 +167,7 @@ describe('SideRail', () => {
     });
 
     it('says a local turn ran on this PC with no cloud charges', () => {
-        render(<SideRail messages={turn(summary())} />);
+        render(<Host messages={turn(summary())} />);
         const facts = within(rail());
         expect(facts.getByText('This PC')).toBeInTheDocument();
         expect(facts.getByText('No cloud charges')).toBeInTheDocument();
@@ -184,7 +175,7 @@ describe('SideRail', () => {
     });
 
     it('names the cloud provider, says passages were sent there, and shows the estimate', () => {
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             model: CLOUD_MODEL,
             cost: { kind: 'estimate', usd: 0.0123 },
             documents: [{ name: 'plan.docx', path: '/d/plan.docx', pages: [], passages: 1 }],
@@ -196,14 +187,14 @@ describe('SideRail', () => {
     });
 
     it('reports an unknown location instead of assuming this PC', () => {
-        render(<SideRail messages={turn(summary({ model: null, cost: { kind: 'unknown' } }))} />);
+        render(<Host messages={turn(summary({ model: null, cost: { kind: 'unknown' } }))} />);
         expect(screen.getByText('Not reported')).toBeInTheDocument();
         expect(screen.queryByText('This PC')).not.toBeInTheDocument();
         expect(screen.getByText('Not known')).toBeInTheDocument();
     });
 
     it('opens a written file or shows it in its folder', async () => {
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             files: [
                 { path: 'C:/out/recommendation.md', name: 'recommendation.md', openable: true },
                 { path: 'C:/out/build.py', name: 'build.py', openable: false },
@@ -219,7 +210,7 @@ describe('SideRail', () => {
 
     it('says so when a file cannot be opened', async () => {
         mockedApi.openFileInApp.mockRejectedValue(new Error('Path not found'));
-        render(<SideRail messages={turn(summary({
+        render(<Host messages={turn(summary({
             files: [{ path: 'C:/out/gone.md', name: 'gone.md', openable: true }],
         }))} />);
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open' })); });
@@ -231,35 +222,13 @@ describe('SideRail', () => {
         expect(liveDataFailed(failed)).toBe(true);
         expect(liveDataFailed(summary({ live_data: { attempted: 2, failed: 1 } }))).toBe(false);
         expect(liveDataFailed(summary())).toBe(false);
-        render(<SideRail messages={turn(failed)} />);
+        render(<Host messages={turn(failed)} />);
         expect(screen.getByRole('status')).toHaveTextContent("Couldn't get live data");
     });
 
     it('says when the summary could not be built instead of claiming no sites', () => {
-        render(<SideRail messages={turn({ cost: { kind: 'unknown' }, error: 'KeyError: model' })} />);
+        render(<Host messages={turn({ cost: { kind: 'unknown' }, error: 'KeyError: model' })} />);
         expect(screen.getByRole('alert')).toHaveTextContent('KeyError: model');
         expect(screen.queryByText('Websites')).not.toBeInTheDocument();
-    });
-
-    it('collapses to a button and remembers it', () => {
-        const { unmount } = render(<SideRail messages={turn(summary())} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Hide sources and turn details' }));
-        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
-        unmount();
-        render(<SideRail messages={turn(summary())} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Show sources and turn details' }));
-        expect(rail()).toHaveClass('side-rail-docked');
-    });
-
-    it('folds away on a narrow window and opens as an overlay', () => {
-        stubWindowWidth(true);
-        render(<SideRail messages={turn(summary({ live_data: { attempted: 1, failed: 1 } }))} />);
-        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
-        const tab = screen.getByRole('button', { name: 'Show sources and turn details' });
-        expect(tab).toHaveTextContent("Couldn't get live data");
-        fireEvent.click(tab);
-        expect(rail()).toHaveClass('side-rail-overlay');
-        fireEvent.click(screen.getByRole('button', { name: 'Hide sources and turn details' }));
-        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     });
 });

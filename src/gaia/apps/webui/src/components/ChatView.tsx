@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolActiveLabel } from './AgentActivity';
@@ -29,10 +29,13 @@ import { RetryWithMenu } from './RetryWithMenu';
 import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
-import { SideRail } from './SideRail';
+import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
+import { OfflineNotice } from './session-panel/OfflineNotice';
+import { useSessionPanelStore } from '../stores/sessionPanelStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
+import { useJumpToMessage } from '../hooks/useJumpToMessage';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
@@ -532,6 +535,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         isNearBottomRef.current = distFromBottom <= 80;
         setShowScrollBtn(distFromBottom > 200);
     }, []);
+
+    const panelWidth = useSessionPanelStore((s) => s.width);
+    const revealPanelSection = useSessionPanelStore((s) => s.reveal);
+
+    const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
@@ -1680,6 +1688,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     return (
         <main
             className={`task-view ${isDragOver ? 'drag-active' : ''}`}
+            style={{ '--session-panel-w': `${panelWidth}px` } as CSSProperties}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -1724,6 +1733,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <button className="btn-icon-sm" onClick={handleExport} title="Export as Markdown" aria-label="Export chat">
                         <Download size={15} />
                     </button>
+                    <SessionPanelToggle messages={messages} busy={isStreaming} />
                 </div>
             </header>
 
@@ -1803,7 +1813,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             && !msg.stopState && !isErrorContent(msg.content);
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
-                            <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                            <div
+                                key={msg.id}
+                                className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}
+                                data-message-id={msg.id}
+                                data-role={msg.role}
+                            >
                                 {notice && <HistoryNotice text={notice} />}
                                 <MessageBubble
                                     message={msg}
@@ -1859,7 +1874,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             </div>
 
-            <SideRail messages={messages} busy={isStreaming} />
+            <SessionPanel
+                sessionId={sessionId}
+                messages={messages}
+                busy={busy}
+                onUsage={showContextUsage}
+                onJumpToMessage={jumpToMessage}
+            />
 
             {showScrollBtn && (
                 <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
@@ -1908,6 +1929,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
+                    <OfflineNotice sessionId={sessionId} />
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
@@ -1931,7 +1953,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
                         rightControls={(
                             <>
-                                <ContextMeter usage={contextUsage} unavailable={contextUnavailable} sessionId={sessionId} busy={busy} onUsage={showContextUsage} />
+                                <ContextMeter
+                                    usage={contextUsage}
+                                    unavailable={contextUnavailable}
+                                    sessionId={sessionId}
+                                    busy={busy}
+                                    onUsage={showContextUsage}
+                                    onDetails={() => revealPanelSection('context')}
+                                />
                                 <ModelChip />
                             </>
                         )}

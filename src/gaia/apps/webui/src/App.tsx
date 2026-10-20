@@ -21,6 +21,7 @@ import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
 import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
+import { announceMobileAccess, useMobileAccessRequests } from './utils/mobileAccessEvents';
 import { getSessionHash } from './utils/format';
 import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
@@ -90,6 +91,7 @@ function App() {
     const [createError, setCreateError] = useState<string | null>(null);
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
+    const [newChatFocus, setNewChatFocus] = useState(0);
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
@@ -342,6 +344,7 @@ function App() {
         store.setShowSchedules(false);
         setCurrentSession(null);
         setMessages([]);
+        setNewChatFocus((n) => n + 1);
     }, [setCurrentSession, setMessages]);
 
     // ── Desktop tray: its icon follows this window; its menu acts here ──
@@ -443,6 +446,10 @@ function App() {
         }
     }, []);
 
+    // The session panel's Phone access toggle drives the same flow.
+    useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
+    useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
+
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
 
     // A PC set up before can chat while the check runs; a new one waits, so
@@ -473,7 +480,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={draftText} onSend={startChat} initialText={draftText} />
+        <NewChat key={draftText} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
     );
 
     return (

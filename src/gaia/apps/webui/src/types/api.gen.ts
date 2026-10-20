@@ -24,6 +24,7 @@ export interface ApiSchemas {
   ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
+  CommitRequest: CommitRequest;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
@@ -46,6 +47,7 @@ export interface ApiSchemas {
   FileStatusRequest: FileStatusRequest;
   FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
+  FolderRequest: FolderRequest;
   FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
@@ -59,6 +61,7 @@ export interface ApiSchemas {
   InferenceStatsResponse: InferenceStatsResponse;
   InitTaskInfo: InitTaskInfo;
   InstallRequest: InstallRequest;
+  InternetRequest: InternetRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
   LimitRequest: LimitRequest;
@@ -75,6 +78,7 @@ export interface ApiSchemas {
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
+  PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
   RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
@@ -106,6 +110,7 @@ export interface ApiSchemas {
   TurnSummaryFile: TurnSummaryFile;
   TurnSummaryLiveData: TurnSummaryLiveData;
   TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryOutput: TurnSummaryOutput;
   TurnSummaryPage: TurnSummaryPage;
   TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
@@ -319,6 +324,14 @@ export interface ChatRequest {
   session_id: string;
   stream?: boolean;
 }
+export interface CommitRequest {
+  /**
+   * True only after the user saw and confirmed the commit.
+   */
+  confirmed?: boolean;
+  message: string;
+  root: string;
+}
 export interface ConfigureRequest {
   config?: {
     [k: string]: unknown | undefined;
@@ -524,6 +537,12 @@ export interface FileUploadResponse {
   size: number;
   url: string;
 }
+export interface FolderRequest {
+  /**
+   * An absolute folder path.
+   */
+  path: string;
+}
 export interface FollowUpRequest {
   session_id: string;
   text: string;
@@ -634,6 +653,9 @@ export interface InstallRequest {
   trust_native?: boolean;
   version?: string | null;
 }
+export interface InternetRequest {
+  on: boolean;
+}
 export interface KnowledgeCreate {
   category?: string;
   content: string;
@@ -724,6 +746,7 @@ export interface TurnSummaryResponse {
   files?: TurnSummaryFile[];
   live_data?: TurnSummaryLiveData;
   model?: TurnSummaryModel | null;
+  outputs?: TurnSummaryOutput[];
   pages?: TurnSummaryPage[];
   sites?: string[];
 }
@@ -767,6 +790,17 @@ export interface TurnSummaryModel {
   provider: string;
   provider_name: string;
   remote: boolean;
+}
+/**
+ * Something the turn made besides a file: an image, an indexed document,
+ * a memory or a scheduled task.
+ */
+export interface TurnSummaryOutput {
+  detail?: string | null;
+  kind: string;
+  name: string;
+  path?: string | null;
+  ref?: string | null;
 }
 /**
  * A web page the turn read, or a search hit when it read none.
@@ -870,6 +904,15 @@ export interface PreflightReport {
   required_memory_gb?: number;
   tier?: string;
   warnings?: string[];
+}
+export interface PullRequestRequest {
+  body?: string;
+  /**
+   * True only after the user saw and confirmed the PR.
+   */
+  confirmed?: boolean;
+  root: string;
+  title: string;
 }
 /**
  * ``confirm`` is required to reload a model on a server GAIA does not run.

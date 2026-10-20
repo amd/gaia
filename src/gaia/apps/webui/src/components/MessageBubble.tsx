@@ -12,7 +12,8 @@ import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats } from './AnswerStats';
-import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
+import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
@@ -98,6 +99,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     // One clock for the whole silent wait: a repeated or retried phase must not restart it.
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
+    const place = useInferencePlace();
 
     if (phase === 'done') return null;
 
@@ -111,7 +113,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
             )}
             {active && <span className="cursor" />}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{MODEL_WAIT_HINT}</span>
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
             )}
         </span>
     );
@@ -413,6 +415,7 @@ function formatFullTimestamp(iso: string): string {
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+    useModelNames();
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -582,7 +585,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
-                                <span title="This answer was kept from Retry with…">{message.stats.model}</span>
+                                <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} />
                         </div>

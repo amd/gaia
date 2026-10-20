@@ -725,6 +725,8 @@ export interface TunnelStatus {
     startedAt: string | null;
     error: string | null;
     publicIp: string | null;
+    /** The device behind the latest authenticated remote request. */
+    device?: { name: string; lastSeen: string } | null;
 }
 
 // ── Agent Activity Types ──────────────────────────────────────────────────

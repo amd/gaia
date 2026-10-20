@@ -31,6 +31,18 @@ interface ModelState {
 const RESTORE_RETRY_MS = 5_000;
 const RESTORE_RETRIES = 24;
 let restoreRetries = 0;
+let namesRequested = false;
+
+/** Local models' friendly names, read once so every surface names a model as the chip does. */
+async function loadLocalNames(remember: ModelState['rememberNames']): Promise<void> {
+    try {
+        const r = await api.listProviderModels('local');
+        if (r?.models) remember(r.models);
+    } catch (err) {
+        namesRequested = false;
+        log.system.warn('Model names unavailable; raw model ids show until the model list loads', err);
+    }
+}
 
 export const useModelStore = create<ModelState>((set, get) => ({
     active: null,
@@ -40,6 +52,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
     queueError: null,
     names: {},
     refresh: async () => {
+        if (!namesRequested) {
+            namesRequested = true;
+            void loadLocalNames(get().rememberNames);
+        }
         try {
             const active = await api.getActiveModel();
             const r = active.restore;
@@ -100,6 +116,11 @@ useChatStore.subscribe((state, prev) => {
         void useModelStore.getState().applyQueued();
     }
 });
+
+/** Re-render when friendly names arrive; pair with displayModelName in render. */
+export function useModelNames(): Record<string, string> {
+    return useModelStore((s) => s.names);
+}
 
 /** The friendly name the backend gave a model, else its short id. */
 export function displayModelName(model: string): string {

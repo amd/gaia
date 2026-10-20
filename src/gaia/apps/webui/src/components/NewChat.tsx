@@ -11,7 +11,8 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { shortModelName } from '../stores/modelStore';
+import { displayModelName, useModelNames } from '../stores/modelStore';
+import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
@@ -23,7 +24,12 @@ interface NewChatProps {
     onSend: (text: string) => Promise<void>;
     /** Text to start the message box with, e.g. a task picked at the end of setup. */
     initialText?: string;
+    /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
+    focusRequest?: number;
 }
+
+/** How often the new-chat cards are asked for again while they are unavailable. */
+export const START_RETRY_MS = 15_000;
 
 export function greeting(now: Date = new Date()): string {
     const h = now.getHours();
@@ -34,7 +40,7 @@ export function greeting(now: Date = new Date()): string {
 export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
     if (!model) return `Getting GAIA ready… ${seconds}s`;
     const where = deviceLabel(device);
-    return `Loading ${shortModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
+    return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
 }
 
 /** No suggestions: one plain sentence, a retry, and the full error behind Details. */
@@ -55,7 +61,7 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
 }
 
 /** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
-export function NewChat({ onSend, initialText = '' }: NewChatProps) {
+export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const [text, setText] = useState(initialText);
     const [error, setError] = useState<string | null>(null);
@@ -65,15 +71,17 @@ export function NewChat({ onSend, initialText = '' }: NewChatProps) {
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const attachments = useAttachments();
     const warming = useWarmUp();
+    useModelNames();
 
     const live = useRef(true);
-    const loadStart = useCallback(() => {
-        setStartError(null);
+    // A background retry leaves the current reason up until there is a new answer.
+    const loadStart = useCallback((retrying = false) => {
+        if (!retrying) setStartError(null);
         api.getStartScreen()
             .then((s) => {
                 if (!live.current) return;
                 setStart(s);
-                if (s.skills_error) setStartError(s.skills_error);
+                setStartError(s.skills_error ?? null);
             })
             .catch((err) => {
                 log.api.warn('New-chat suggestions unavailable', err);
@@ -86,6 +94,12 @@ export function NewChat({ onSend, initialText = '' }: NewChatProps) {
         loadStart();
         return () => { live.current = false; };
     }, [loadStart]);
+
+    // The assistant may still be starting: keep asking while the reason is on screen.
+    useEffect(() => {
+        if (!startError) return;
+        return setVisibleInterval(() => loadStart(true), START_RETRY_MS);
+    }, [startError, loadStart]);
 
     const send = useCallback(async (message: string) => {
         if (!message || sending) return;
@@ -103,6 +117,10 @@ export function NewChat({ onSend, initialText = '' }: NewChatProps) {
     }, [attachments, onSend, sending]);
 
     const submit = useCallback(() => send(attachments.compose(text.trim())), [attachments, send, text]);
+
+    useEffect(() => {
+        if (focusRequest) inputRef.current?.focus();
+    }, [focusRequest]);
 
     const pick = useCallback((card: StartCard) => {
         if (!card.needs_input) {
@@ -148,7 +166,7 @@ export function NewChat({ onSend, initialText = '' }: NewChatProps) {
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {start && <StartCards cards={start.cards} onPick={pick} disabled={starting || sending} />}
-                {startError && <SuggestionsUnavailable detail={startError} onRetry={loadStart} />}
+                {startError && <SuggestionsUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
     );

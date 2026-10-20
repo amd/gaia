@@ -47,7 +47,9 @@ beforeEach(() => {
     memoryEnabled = true;
     mockedApi.getMemoryStats.mockResolvedValue(STATS);
     mockedApi.getMemoryActivity.mockResolvedValue([]);
-    mockedApi.getKnowledge.mockResolvedValue({ items: [TEAL, CALGARY, SECRET], total: 3, offset: 0, limit: 200 });
+    // A store, not a fixed list: a forget's refresh must not bring the item back.
+    let items = [TEAL, CALGARY, SECRET];
+    mockedApi.getKnowledge.mockImplementation(async () => ({ items, total: items.length, offset: 0, limit: 200 }));
     mockedApi.getToolSummary.mockResolvedValue([]);
     mockedApi.getMemoryConversations.mockResolvedValue([]);
     mockedApi.getUpcomingItems.mockResolvedValue([]);
@@ -58,7 +60,10 @@ beforeEach(() => {
     mockedApi.getMemorySettings.mockImplementation(async () => ({
         memory_enabled: memoryEnabled, mcp_memory_enabled: false, system_discovery_consent: false,
     }));
-    mockedApi.deleteKnowledge.mockResolvedValue({ status: 'deleted' });
+    mockedApi.deleteKnowledge.mockImplementation(async (id: string) => {
+        items = items.filter((i) => i.id !== id);
+        return { status: 'deleted' };
+    });
     mockedApi.editKnowledge.mockResolvedValue({ status: 'updated', knowledge_id: 'k2' });
     mockedApi.createKnowledge.mockResolvedValue({ status: 'created', knowledge_id: 'k9' });
 });
