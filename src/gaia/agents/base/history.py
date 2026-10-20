@@ -298,8 +298,12 @@ def _is_cloud(agent: Any) -> bool:
 
 
 def context_window(agent: Any) -> int:
-    """The context window, in tokens, the agent's model is admitted with."""
-    from gaia.llm.lemonade_client import GPU_CTX_SIZE, resolve_ctx_size
+    """The context window, in tokens, the agent's model is admitted with.
+
+    Re-read each call: the local window can shrink to the memory free now, and
+    the reply cap (``Agent._max_output_tokens``) is sized from this same value.
+    """
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, LemonadeClient, resolve_ctx_size
 
     if getattr(agent, "_use_claude", False):
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
@@ -308,10 +312,22 @@ def context_window(agent: Any) -> int:
     if _is_cloud(agent):
         # Remote admission policy, not a claim about the provider's context ceiling.
         return GPU_CTX_SIZE
-    return resolve_ctx_size(
-        model=getattr(agent, "model_id", None),
-        device=getattr(agent, "device", None),
-    )
+    chat = getattr(agent, "chat", None)
+    backend = getattr(getattr(chat, "llm_client", None), "_backend", None)
+    # A client pinned to an exact window loads every model at that size.
+    pin = getattr(backend, "ctx_size_override", None)
+    if (
+        isinstance(backend, LemonadeClient)
+        and isinstance(pin, int)
+        and not isinstance(pin, bool)
+        and pin > 0
+    ):
+        return pin
+    # The model actually sent, so a mid-session switch is sized correctly.
+    model = getattr(chat, "effective_model", None)
+    if not isinstance(model, str) or not model:
+        model = getattr(agent, "model_id", None)
+    return resolve_ctx_size(model=model, device=getattr(agent, "device", None))
 
 
 def _reply_reserve(agent: Any) -> int:
