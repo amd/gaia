@@ -193,7 +193,7 @@ class TestOwnerPasswordOnlyPDF:
         pdf = tmp_path / "10k.pdf"
         _write_owner_only_pdf(pdf, "Total net revenue was 17606 million")
 
-        def fake_encode(texts, show_progress=False):
+        def fake_encode(texts, show_progress=False, wait_callback=None):
             return np.ones((len(texts), 8), dtype="float32")
 
         with (

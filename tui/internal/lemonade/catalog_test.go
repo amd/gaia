@@ -307,7 +307,7 @@ func TestQwenFlashNeedsANewEnoughLemonade(t *testing.T) {
 	for version, want := range map[string]bool{"2026.39.1": true, "2026.40.0~3.abc": true, "11.9.0": false, "": false} {
 		halo.ServerVersion = version
 		for _, e := range BuildEntries("local", nil, halo, nil) {
-			if e.Recommended == nil || e.Recommended.RegisterAs == "" {
+			if e.Recommended == nil || e.Recommended.RegisterAs == "" || e.Recommended.MinLemonade == "" {
 				continue
 			}
 			if e.Selectable() != want || e.NeedsUpgrade == want {

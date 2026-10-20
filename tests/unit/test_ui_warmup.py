@@ -106,6 +106,83 @@ def test_a_turn_waits_for_the_running_warm_up(monkeypatch):
     assert waited.is_set()
 
 
+def test_the_status_names_the_model_and_device_being_loaded():
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("a")
+    warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+    snap = warmer.snapshot()
+    assert (snap["model"], snap["device"]) == ("Qwen3.6-35B-A3B-GGUF", "gpu")
+    release.set()
+    warmer.wait(5)
+
+
+def test_a_new_warm_up_forgets_the_last_model():
+    warmer = warmup.PrefixWarmer(lambda: None)
+    warmer.set_target("Gemma-4-E4B-it-GGUF", "gpu")
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.snapshot()["model"] is None
+
+
+def test_no_warm_up_before_first_run_setup_finishes(monkeypatch, tmp_path):
+    """It would load the floor model on a PC where setup picks another (#5181)."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    calls = []
+    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: calls.append(1)))
+    assert warmup.request_warm_up("startup") is False
+    assert calls == []
+
+    from gaia.ui.setup_runner import mark_initialized
+
+    mark_initialized()
+    assert warmup.request_warm_up("startup") is True
+    warmup._warmer.wait(5)
+    assert calls == [1]
+
+
+class _Lemonade:
+    """Lemonade's catalog and /system-info, as the device check reads them."""
+
+    def __init__(self, recipe="llamacpp", default_backend="vulkan", error=None):
+        self.recipe, self.default_backend, self.error = recipe, default_backend, error
+
+    def list_models(self, show_all=False):
+        if self.error:
+            raise self.error
+        return {"data": [{"id": "Qwen3.6-35B-A3B-GGUF", "recipe": self.recipe}]}
+
+    def get_system_info(self, timeout=None):
+        return {"recipes": {"llamacpp": {"default_backend": self.default_backend}}}
+
+
+@pytest.mark.parametrize(
+    "lemonade, chosen, device",
+    [
+        (_Lemonade(default_backend="vulkan"), None, "gpu"),
+        (_Lemonade(default_backend="rocm"), None, "gpu"),
+        # A GPU in the PC doesn't mean the model runs there.
+        (_Lemonade(default_backend="cpu"), None, "cpu"),
+        (_Lemonade(default_backend="vulkan"), "cpu", "cpu"),
+        (_Lemonade(default_backend=None), None, None),
+        (_Lemonade(recipe="ryzenai-llm"), None, None),
+    ],
+)
+def test_device_follows_the_llamacpp_backend(monkeypatch, lemonade, chosen, device):
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "preferred_llamacpp_backend", lambda: chosen)
+    assert warmup._device_for(lemonade, "Qwen3.6-35B-A3B-GGUF") == device
+
+
+def test_device_for_an_npu_model_and_an_unreachable_server():
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    assert warmup._device_for(_Lemonade(), "gemma4-it-e2b-FLM") == "npu"
+    down = _Lemonade(error=LemonadeClientError("down"))
+    assert warmup._device_for(down, "Qwen3.6-35B-A3B-GGUF") is None
+
+
 class _NoAgentsRegistry:
     """A registry with the flagship registered that must never be built."""
 
@@ -326,3 +403,19 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
         f"  warm: {before[max(0, at - 60): at + 120]!r}\n"
         f"  turn: {after[max(0, at - 60): at + 120]!r}"
     )
+
+
+def test_a_turn_never_races_a_warm_up_that_overruns(monkeypatch):
+    import threading
+
+    from gaia.ui import warmup as warmup_mod
+
+    release = threading.Event()
+    warmer = warmup_mod.PrefixWarmer(lambda: release.wait(10) and None)
+    monkeypatch.setattr(warmup_mod, "_warmer", warmer)
+    try:
+        assert warmer.request("test")
+        with pytest.raises(TimeoutError, match="did not start"):
+            warmup_mod.wait_for_warm_up(timeout=0.3)
+    finally:
+        release.set()

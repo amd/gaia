@@ -40,6 +40,28 @@
       "kv_bytes_per_token": 16384
     },
     {
+      "id": "ggml-gpt-oss-20b-MXFP4-GGUF",
+      "register_as": "user.ggml-gpt-oss-20b-MXFP4-GGUF",
+      "provider": "local",
+      "label": "gpt-oss 20B",
+      "note": "optional: reasons before it answers, no vision; needs ~15 GB for models",
+      "size_gb": 12.1,
+      "checkpoint": "ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-MXFP4.gguf",
+      "recipe": "llamacpp",
+      "reasoning": true,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 24576
+    },
+    {
+      "id": "gpt-oss-120b-mxfp-GGUF",
+      "provider": "local",
+      "label": "gpt-oss 120B",
+      "note": "optional: reasons before it answers, no vision; needs ~70 GB for models (Strix Halo 128 GB)",
+      "size_gb": 63.4,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 36864
+    },
+    {
       "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
       "provider": "local",
       "label": "Qwen3 Coder 30B A3B"

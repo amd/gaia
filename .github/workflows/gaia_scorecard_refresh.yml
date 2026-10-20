@@ -30,9 +30,8 @@
 # enforce:true breach blocks the refresh from committing a regressed card.
 #
 # Runner-only by construction (`gaia eval agent` needs Lemonade + the Agent UI
-# backend on AMD hardware; the dev boxes must never start Lemonade). Shares
-# the serial `lemonade-eval` slot; a full refresh occupies it for many hours —
-# check `gh run list` before dispatching.
+# backend on AMD hardware; the dev boxes must never start Lemonade). Runs on
+# the ephemeral devlab-dispatch pool, so it holds no `lemonade-eval` slot.
 #
 # KNOWN RESIDUAL GAP (same as email): this workflow can only govern what IT
 # commits; a hand-edited SCORECARD.md in an unrelated PR bypasses these guards
@@ -48,9 +47,9 @@ on:
         required: false
         default: ''
       eval_model:
-        description: 'Driver + judge model for the eval harness'
+        description: 'Driver + judge model for the eval harness. Blank = the model the flagship baseline was captured under (tests/fixtures/eval_baselines/gaia-flagship/meta.json)'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: ''
       model:
         description: 'The AGENT model under test (stamped on the card)'
         required: false
@@ -70,10 +69,9 @@ on:
         default: ''
 
 concurrency:
-  # The serial Lemonade slot — shared with every other self-hosted eval so two
-  # runs never race-evict each other's model. Declared at the workflow level
-  # only (single job; declaring it at BOTH levels is a self-deadlock).
-  group: lemonade-eval
+  # One refresh per branch at a time, so two runs never race the card commit.
+  # Not `lemonade-eval`: each run gets its own ephemeral machine and Lemonade.
+  group: gaia-scorecard-refresh-${{ github.ref }}
   cancel-in-progress: false
   queue: max
 
@@ -86,7 +84,8 @@ env:
   # gaia_email is not in this serial default (its budget is unsized here);
   # eval_flagship.yml's gaia-email lane measures it. Name it to include it.
   EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
-  EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
+  # The model itself is resolved per job from the baseline's meta.json.
+  EVAL_MODEL_OVERRIDE: ${{ inputs.eval_model }}
   MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   CTX_SIZE: ${{ inputs.ctx_size || '65536' }}
   REBASELINE: ${{ inputs.rebaseline }}
@@ -95,6 +94,9 @@ env:
   # (a category subset would silently downgrade the published sample basis).
   IS_FULL: ${{ (inputs.categories || '') == '' }}
   BACKEND_URL: http://127.0.0.1:4200
+  # The checkout is outside this runner's home, so without this every
+  # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   FIXTURE_PORT: '8765'
   GAIA_HUB_URL: http://127.0.0.1:8765/fixture_hub
   GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'
@@ -116,7 +118,7 @@ env:
 jobs:
   refresh:
     name: Re-run gaia eval, refresh-or-reject scorecard
-    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         shell: powershell
@@ -135,6 +137,23 @@ jobs:
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0   # full history for git describe (cross-version baseline)
+
+      # The Claude model drives every scenario as well as judging it, so it must
+      # be the one the committed flagship baseline was captured under: its
+      # meta.json is the single source. A dispatch input overrides it.
+      - name: Resolve the eval driver model
+        run: |
+          $model = $env:EVAL_MODEL_OVERRIDE
+          if (-not $model) {
+            $meta = 'tests/fixtures/eval_baselines/gaia-flagship/meta.json'
+            $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
+            if (-not $model) {
+              Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: restore eval_model in $meta, or dispatch with the eval_model input."
+              exit 1
+            }
+          }
+          "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "Eval driver and judge model: $model"
 
       - name: Preflight — judge credential
         env:

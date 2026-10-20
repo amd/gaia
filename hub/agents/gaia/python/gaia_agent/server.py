@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import os
 import queue
@@ -41,7 +42,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
@@ -60,6 +61,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 from gaia.version import LEMONADE_MIN_VERSION
@@ -777,6 +779,26 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+@router.get("/debug/turns", include_in_schema=False)
+async def debug_turns(limit: int = 20) -> Dict[str, Any]:
+    """The last *limit* turn records, newest last — dev mode only.
+
+    Off the contract on purpose: it exists only while ``GAIA_TURN_LOG`` is set,
+    and its shape is the turn log's (``gaia.turn/1``), not a versioned API.
+    """
+    from gaia.agents.base.turn_metrics import RECENT_TURNS, TURN_LOG_ENV, turn_log_path
+
+    if turn_log_path() is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Turn recording is off. Set {TURN_LOG_ENV}=<path> before "
+            "starting the agent to record turns.",
+        )
+    if limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be 1 or more")
+    return {"turns": list(RECENT_TURNS)[-limit:]}
+
+
 @router.get("/skills")
 async def skills() -> Dict[str, Any]:
     """The skills this agent can load, for the Agent UI's Skills settings.
@@ -882,22 +904,66 @@ def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
 STOPPED_TURN_WAIT_S = 240.0
 
 
-async def _acquire_turn(session: Any) -> bool:
-    """Take *session*'s run lock; ``False`` when another turn is still live.
+async def _off_loop(
+    fn: Callable[..., Any],
+    *args: Any,
+    on_abandon: Optional[Callable[[Any], None]] = None,
+) -> Any:
+    """Run blocking *fn* on a worker thread so other runs keep streaming.
+
+    The thread can't be stopped, so if the request is cancelled while it runs,
+    *on_abandon* is called once it finishes — with its result, or ``None`` if
+    it raised — to release whatever the abandoned call took. It runs on a
+    thread of its own: closing an agent blocks, and the loop must not.
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if on_abandon is not None:
+
+            def _release(result: Any) -> None:
+                try:
+                    on_abandon(result)
+                except Exception:  # pylint: disable=broad-except
+                    # A failed release leaks a lock or agent; leave a trace.
+                    logger.exception("Releasing an abandoned /query setup failed")
+
+            def _cleanup(done: "asyncio.Future") -> None:
+                failed = done.cancelled() or done.exception() is not None
+                threading.Thread(
+                    target=_release,
+                    args=(None if failed else done.result(),),
+                    name="query-setup-cleanup",
+                    daemon=True,
+                ).start()
+
+            task.add_done_callback(_cleanup)
+        raise
+
+
+def _checkout_turn(session_id: str, **kwargs: Any) -> Tuple[Any, bool]:
+    """The session for *session_id* and whether this request took its turn.
 
     A turn the user already stopped still holds the lock until its model call
     returns, which for a long answer is most of a minute. Refusing the next
     message for all that time made Stop look broken, so a stopped turn is
     waited out instead. A turn that is NOT stopped is still refused at once.
+    Blocking: run it with ``_off_loop``.
     """
-    if session.run_lock.acquire(blocking=False):
-        return True
+    session, took = session_registry.checkout(session_id, **kwargs)
+    if took:
+        return session, True
     stopping = session.active_cancel
     if stopping is None or not stopping.is_set():
-        return False
-    return await asyncio.to_thread(
-        session.run_lock.acquire, True, STOPPED_TURN_WAIT_S
-    )
+        return session, False
+    # Eviction must take the lock too, so holding it means still registered.
+    return session, session.run_lock.acquire(True, STOPPED_TURN_WAIT_S)
+
+
+def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
+    if checked_out is not None and checked_out[1]:
+        checked_out[0].run_lock.release()
 
 
 @router.post("/query")
@@ -965,8 +1031,13 @@ async def query(request: QueryRequest):
             # than a throwaway. Whatever the turn puts on the instance — most
             # visibly Agent.loaded_skills — vanishes next turn otherwise, while
             # the model goes on telling the user the skill is still loaded.
-            session = session_registry.get_or_create(request.session_id, **kwargs)
-            if not await _acquire_turn(session):
+            # Building an agent takes seconds; on the loop it would freeze
+            # every other run's stream, heartbeats included.
+            session, took_turn = await _off_loop(
+                functools.partial(_checkout_turn, request.session_id, **kwargs),
+                on_abandon=_release_abandoned_turn,
+            )
+            if not took_turn:
                 session = None  # not ours to release
                 raise HTTPException(
                     status_code=409,
@@ -983,7 +1054,12 @@ async def query(request: QueryRequest):
                 # loaded skill — the two things a retained session exists to
                 # keep. run_lock is held here, so no turn is mid-inference.
                 try:
-                    display = session.switch_model(target)
+                    # Builds the new client and checks its server is reachable.
+                    display = await _off_loop(
+                        session.switch_model,
+                        target,
+                        on_abandon=lambda _display: _unwind_setup(),
+                    )
                 except RuntimeError as exc:
                     # The switch is all-or-nothing: the session is still on its
                     # previous model, so this is a failed request, not a broken
@@ -1027,7 +1103,10 @@ async def query(request: QueryRequest):
             # No session handle — a genuine one-shot. Nothing persists past this
             # turn, and the agent is told so rather than over-promising. Nothing
             # else will ever reference it either, so this run owns its teardown.
-            agent = build_query_agent(**kwargs)
+            agent = await _off_loop(
+                functools.partial(build_query_agent, **kwargs),
+                on_abandon=lambda built: built is not None and close_agent(built),
+            )
             one_shot_agent = agent
         agent.console = handler
         if request.can_answer_questions is False:
@@ -1124,7 +1203,16 @@ async def query(request: QueryRequest):
             if one_shot_agent is not None:
                 close_agent(one_shot_agent)
 
-    thread = threading.Thread(target=_run_agent, daemon=True)
+    def _run_turn() -> None:
+        # The user's turn: it leases ahead of background work, a wait for the
+        # model reaches this stream, and /cancel ends that wait.
+        with interactive_turn(
+            on_wait_event=lambda event: handler._emit(queue_status_event(event)),
+            cancel=run.cancel_event,
+        ):
+            _run_agent()
+
+    thread = threading.Thread(target=_run_turn, daemon=True)
     try:
         thread.start()
     except Exception as exc:

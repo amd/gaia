@@ -1,0 +1,6 @@
+{
+  "redirects": [
+    { "source": "/hub", "destination": "/#install", "type": 301 },
+    { "source": "/hub/**", "destination": "/#install", "type": 301 }
+  ]
+}

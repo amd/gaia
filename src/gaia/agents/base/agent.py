@@ -40,6 +40,7 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base import turn_metrics
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
@@ -63,7 +64,10 @@ from gaia.agents.base.context_eviction import (
     evict_keep_from_env,
     evict_min_batch_from_env,
     evict_threshold_from_env,
+    overflow_numbers,
+    request_tokens,
     resolve_context_eviction,
+    shrink_for_overflow,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -146,7 +150,9 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
+    RECONNECTING_MESSAGE,
     budget_for_ctx,
     is_context_overflow_error,
     resolve_default_chat_model,
@@ -164,6 +170,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
@@ -542,7 +549,10 @@ class TurnCancel(threading.Event):
 
 
 class _UserWaitClock:
-    """Time a tool body spends blocked on the user, which its timeout excludes."""
+    """Time a tool body spends blocked on the user, which its timeout excludes.
+
+    Read on the same awake clock as the tool's timeout.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -551,15 +561,15 @@ class _UserWaitClock:
 
     def begin(self) -> None:
         with self._lock:
-            self._open.append(time.monotonic())
+            self._open.append(awake_clock.monotonic())
 
     def end(self) -> None:
         with self._lock:
-            self._done += time.monotonic() - self._open.pop()
+            self._done += awake_clock.monotonic() - self._open.pop()
 
     def waited(self) -> float:
         """Seconds waited so far, including a question still on screen."""
-        now = time.monotonic()
+        now = awake_clock.monotonic()
         with self._lock:
             return self._done + sum(now - started for started in self._open)
 
@@ -1941,6 +1951,15 @@ class Agent(abc.ABC):
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
+    # The sealed recorder, kept until process_query returns so post-answer
+    # work (memory writes) is timed too.
+    _sealed_turn_recorder: Optional[Any] = None
+    # The thread's recorder before this turn's, restored when it ends, so a
+    # nested turn does not cut off the one around it.
+    _outer_turn_recorder: Optional[Any] = None
+    # (name, start, end) perf_counter spans a mixin timed before the turn
+    # opened — e.g. memory recall — folded into the next record.
+    _pre_turn_spans: Optional[List[Any]] = None
     # Per-step timing for the running turn (always on); ``None`` between turns.
     _step_timer: Optional[StepTimer] = None
 
@@ -2023,6 +2042,9 @@ class Agent(abc.ABC):
     # the model's next response as the final answer.  Designed for action-only
     # agents (e.g. the OEM MCP) that execute exactly one tool per user request.
     single_tool_per_turn: bool = False
+
+    # Set by a host (the Agent UI's session panel); checked on every tool call.
+    internet_off: bool = False
 
     # T-X2 (issue #915): declarative external-OAuth scope requirement.
     # Subclasses override this to declare which provider+scopes their tool
@@ -2332,6 +2354,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn (#4447).
         self._denied_effects = DeniedEffects()
+        # (turn, path) for each access prompt declined or left unanswered.
+        self._refused_paths: List[Tuple[int, Path]] = []
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -2345,6 +2369,7 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeUnresponsiveError,
                 cloud_model_provider,
                 resolve_ctx_size,
             )
@@ -2356,7 +2381,10 @@ Do NOT wrap conversational replies in JSON.
 
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
-                LemonadeClient(base_url=base_url, verbose=False).health_check()
+                try:
+                    LemonadeClient(base_url=base_url, verbose=False).health_check()
+                except LemonadeUnresponsiveError:
+                    LemonadeManager.report_busy(base_url, quiet=silent_mode)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -2482,6 +2510,8 @@ Do NOT wrap conversational replies in JSON.
         )
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, int]] = None
+        # What the last overflow shrink put away.
+        self._last_overflow_items: List[Dict[str, Any]] = []
 
         chat_config = AgentConfig(
             model=model_id or resolve_default_chat_model(),
@@ -2672,6 +2702,8 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.turn_metrics import TurnRecorder, turn_log_path
 
+        pre_spans = self._pre_turn_spans or []
+        self._pre_turn_spans = None
         if turn_log_path() is None:
             return None
         try:
@@ -2688,10 +2720,21 @@ Do NOT wrap conversational replies in JSON.
                 ),
                 skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
                 history_messages=len(getattr(self, "conversation_history", []) or []),
+                started=min((t0 for _, t0, _ in pre_spans), default=None),
+                prompt_fragments={
+                    origin: len(text)
+                    for text, origin in (self._mixin_prompt_origins or {}).items()
+                    # A subclass may filter a fragment out of the final prompt.
+                    if text in self.system_prompt
+                },
             )
+            for name, t0, t1 in pre_spans:
+                recorder.add_span(name, t0, t1, {})
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("could not start turn record: %s", e)
             return None
+        self._outer_turn_recorder = turn_metrics.current()
+        turn_metrics.activate(recorder)
         chat = getattr(self, "chat", None)
         if chat is not None:
             chat.turn_recorder = recorder
@@ -2713,6 +2756,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = None
         if recorder is None:
             return None
+        self._sealed_turn_recorder = recorder
         try:
             record = recorder.finish(answer=answer or "", steps=steps_taken)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
@@ -2722,6 +2766,31 @@ Do NOT wrap conversational replies in JSON.
 
         logger.info("[turn] %s", format_summary(record))
         return record
+
+    def _record_step_stats(
+        self,
+        response_stats: Optional[Dict[str, Any]],
+        step: int,
+        step_timer: StepTimer,
+        conversation: List[Dict[str, Any]],
+    ) -> None:
+        """Append this step's backend stats, timed by *step_timer*, to the trace."""
+        perf_stats = response_stats or self.chat.get_stats()
+        # A step whose backend reported no stats still took model time.
+        if not (perf_stats or step_timer.has_llm_calls()):
+            return
+        stats_record = {
+            "type": "stats",
+            "step": step,
+            "performance_stats": perf_stats or {},
+        }
+        step_timer.attach(stats_record)
+        if self._pending_eviction is not None:
+            stats_record.update(self._pending_eviction)
+            self._pending_eviction = None
+        if self._context_evictor is not None:
+            self._context_evictor.note_prompt_tokens(perf_stats)
+        conversation.append({"role": "system", "content": stats_record})
 
     def _attach_step_timer(self) -> StepTimer:
         """Start this turn's step timer and route the SDK's call timings to it."""
@@ -2970,6 +3039,19 @@ Do NOT wrap conversational replies in JSON.
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
             return False
+        # One prompt per path per turn: a user who stepped away is not asked
+        # again, and made to wait out the timeout again, for what is inside it.
+        turn = self._turn_seq
+        refused = self._refused_paths
+        target = Path(path).resolve()
+        for seen_turn, denied in refused:
+            if seen_turn == turn and (target == denied or denied in target.parents):
+                logger.info(
+                    "Not asking again this turn about %s (%s was declined)",
+                    target,
+                    denied,
+                )
+                return False
         args = {"path": str(path)}
         # Lets the prompt say "file" or "folder" instead of a catch-all.
         if path.is_dir():
@@ -2981,10 +3063,13 @@ Do NOT wrap conversational replies in JSON.
         if clock is not None:
             clock.begin()
         try:
-            return (
+            granted = (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
+            if not granted:
+                refused.append((turn, target))
+            return granted
         finally:
             if clock is not None:
                 clock.end()
@@ -3106,7 +3191,7 @@ Do NOT wrap conversational replies in JSON.
                 validator = self._read_validator()
                 return ledger.run(
                     file_path,
-                    lambda path: read_snapshot(path, validator),
+                    lambda path: read_snapshot(path, validator, prompt_user=True),
                     ask,
                     check,
                     fields,
@@ -4388,6 +4473,8 @@ Do NOT wrap conversational replies in JSON.
                     self.console.report_phase(
                         "downloading_model", f"Downloading {model}"
                     )
+                elif state == "reconnecting":
+                    self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
                 else:
                     self.console.report_phase(
                         "loading_model", f"Loading {model} into memory"
@@ -5103,6 +5190,10 @@ Do NOT wrap conversational replies in JSON.
                     prop["description"] = desc
                 if param_info.get("enum"):
                     prop["enum"] = list(param_info["enum"])
+                if prop["type"] == "array":
+                    # gpt-oss's chat template reads ``items`` on every array;
+                    # without it Lemonade answers every request with HTTP 500.
+                    prop["items"] = dict(param_info.get("items") or {})
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
@@ -5814,10 +5905,11 @@ Do NOT wrap conversational replies in JSON.
         )
         worker.start()
         # Time spent on a question the body raised (e.g. path access) is the
-        # user's, not the tool's: abandoning there strands a live prompt.
-        started = time.monotonic()
+        # user's, not the tool's: abandoning there strands a live prompt. Time
+        # the PC sleeps is nobody's: the awake clock leaves it out.
+        started = awake_clock.monotonic()
         while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - time.monotonic()
+            remaining = started + timeout + user_wait.waited() - awake_clock.monotonic()
             if remaining <= 0:
                 break
             worker.join(min(remaining, 0.5))
@@ -5888,6 +5980,14 @@ Do NOT wrap conversational replies in JSON.
         like :meth:`_call_is_pre_authorized` — a host that implements
         ``policy_refusal_for_call``.
         """
+        if self.internet_off:
+            from gaia.agents.base.offline import offline_refusal
+
+            refusal = offline_refusal(
+                tool_name, tool_args, self._tools_registry.get(tool_name)
+            )
+            if refusal is not None:
+                return refusal
         # Before the falsy-args guard: a tool whose arguments all default
         # (``update_gaia_md()``) still has a target, and must not be approved
         # only to be refused by its own body a moment later.
@@ -6744,6 +6844,8 @@ Do NOT wrap conversational replies in JSON.
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools
         no_calls = {"tool_choice": "none"} if tools else {}
+        # The same effort as the loop: a change rewrites the prompt's start.
+        no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
@@ -7580,62 +7682,115 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _shrink_messages_for_overflow(
-        self, messages: List[Dict[str, Any]]
+        self, messages: List[Dict[str, Any]], store=None
     ) -> List[Dict[str, Any]]:
-        """Aggressively shrink the messages array after a context-overflow.
+        """The sent list after the backend refused it as too long.
 
-        Strategy: keep the original user query, keep recent assistant tool_calls
-        and the LATEST tool result intact, but replace older tool-result
-        contents with a short stub. This preserves the structural shape of
-        the conversation (so the model can still reason about what tools have
-        been called) while dropping the bulk of the bytes.
-
-        Used by ``process_query``'s LLM-call retry loop when the model
-        reports ``exceed_context_size``. Returns a new list — the caller
-        must rebind ``messages``.
+        Every older tool result is put away (archived whole, re-readable via
+        ``read_tool_output``); a large result from the latest step keeps a
+        head preview and a handle to the rest, since it is often the one that
+        overflowed (#2780). Refusals, user and assistant turns stay; verbose
+        assistant text is clipped. Returns a new list — the caller must rebind
+        ``messages``.
         """
         if not messages:
             return messages
-        first = messages[0]  # user query
-        rest = messages[1:]
-        # Find indices of tool-result entries
-        tool_indices = [i for i, m in enumerate(rest) if m.get("role") == "tool"]
-        keep_intact = set(tool_indices[-1:]) if tool_indices else set()
-        shrunk_rest: List[Dict[str, Any]] = []
-        for i, m in enumerate(rest):
-            if m.get("role") == "tool" and i not in keep_intact:
-                # Replace bulky tool result with a stub — the model only
-                # needs to know SOMETHING was returned at this point.
-                shrunk_rest.append(
-                    {
-                        "role": "tool",
-                        "name": m.get("name", "unknown"),
-                        "tool_call_id": m.get("tool_call_id", "stub"),
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "[tool result omitted — context "
-                                    "overflow recovery; see latest result]"
-                                ),
-                            }
-                        ],
-                    }
-                )
-            elif (
+        from gaia.agents.base.artifacts import store_for
+
+        shrunk, self._last_overflow_items = shrink_for_overflow(
+            messages, store if store is not None else store_for(self)
+        )
+        clipped: List[Dict[str, Any]] = []
+        for m in shrunk:
+            if (
                 m.get("role") == "assistant"
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought, but keep the
-                # rest of the turn — dropping ``tool_calls`` here orphans the
-                # tool results that follow it.
-                shrunk = dict(m)
-                shrunk["content"] = m["content"][:800] + "... (truncated)"
-                shrunk_rest.append(shrunk)
+                # Keep ``tool_calls``: dropping them orphans the results after.
+                clipped.append({**m, "content": m["content"][:800] + "... (truncated)"})
             else:
-                shrunk_rest.append(m)
-        return self._with_overflow_note([first] + shrunk_rest)
+                clipped.append(m)
+        return self._with_overflow_note(clipped)
+
+    def _shrink_for_overflow_retry(
+        self, messages: List[Dict[str, Any]], error_text: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """``(shrunk messages, report)``; the report says whether a retry fits.
+
+        A retry is worth it only when the shrink freed more than the request
+        was over by, or, with no numbers in the error, a tenth of the prompt.
+        Retrying a request that cannot fit only repeats the refusal (#2780).
+        """
+        from gaia.agents.base.artifacts import ArtifactStore
+
+        system_prompt, tools = self.system_prompt, self._openai_tools
+        before = request_tokens(messages, system_prompt, tools)
+        # Sized in a throwaway store first: nothing is archived for a retry that won't run.
+        # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
+        trial = self._shrink_messages_for_overflow(messages, ArtifactStore())
+        after = request_tokens(trial, system_prompt, tools)
+        freed = max(0, before - after)
+        report: Dict[str, Any] = {
+            "freed_tokens_est": freed,
+            "evicted_results": len(self._last_overflow_items),
+        }
+        numbers = overflow_numbers(error_text)
+        if numbers is not None:
+            requested, available = numbers
+            # Freed is in our tokens; the backend counted in its own.
+            projected = (
+                requested - int(freed * requested / before) if before else requested
+            )
+            report.update(
+                requested_tokens=requested,
+                available_tokens=available,
+                projected_tokens=projected,
+                fits=projected <= int(available * 0.95),
+            )
+        else:
+            report["fits"] = before > 0 and freed >= before * 0.1
+        shrunk = (
+            self._shrink_messages_for_overflow(messages) if report["fits"] else trial
+        )
+        return shrunk, report
+
+    def _retry_after_overflow_shrink(
+        self, messages: List[Dict[str, Any]], error: BaseException, step: int
+    ) -> bool:
+        """Shrink *messages* in place for one retry; False when it still cannot fit."""
+        shrunk, report = self._shrink_for_overflow_retry(messages, str(error))
+        if not report["fits"]:
+            self.error_history.append(
+                {
+                    "step": step,
+                    "error": str(error),
+                    "type": "llm_context_overflow_unrecoverable",
+                    **report,
+                }
+            )
+            logger.warning(
+                "Context overflow: putting older results away frees ~%d tokens, "
+                "not enough for the request to fit (%s); not retrying",
+                report["freed_tokens_est"],
+                report,
+            )
+            return False
+        messages[:] = shrunk
+        self.error_history.append(
+            {
+                "step": step,
+                "error": str(error),
+                "type": "llm_context_overflow_trimmed",
+                **report,
+            }
+        )
+        logger.warning(
+            "Context overflow: put %d results away (~%d tokens freed); retrying once",
+            report["evicted_results"],
+            report["freed_tokens_est"],
+        )
+        return True
 
     def _with_overflow_note(
         self, messages: List[Dict[str, Any]]
@@ -7734,6 +7889,11 @@ Do NOT wrap conversational replies in JSON.
                     block["text"] += _SINGLE_TOOL_DONE_SUFFIX
                     break
         return msg
+
+    def _reasoning_request_kwargs(self) -> Dict[str, Any]:
+        """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
+        chosen = getattr(self, "reasoning_effort_kwargs", None)
+        return chosen() if chosen is not None else {}
 
     def _history_for_request(self) -> List[Dict[str, Any]]:
         """``conversation_history``, with earlier requests' reasoning stripped.
@@ -8243,6 +8403,13 @@ Do NOT wrap conversational replies in JSON.
             return None
         return verify_after_change_correction(changed)
 
+    def _request_text(self, query: Optional[str]) -> str:
+        """The user's own words this turn, without the memory context prepended.
+
+        A file a recalled memory names is not one the user asked to have read.
+        """
+        return getattr(self, "_original_user_input", None) or query or ""
+
     def _grounding_findings(
         self, answer: Optional[str], query: str, history: str
     ) -> list:
@@ -8256,7 +8423,7 @@ Do NOT wrap conversational replies in JSON.
         roots = [os.getcwd(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
-            query or "",
+            self._request_text(query),
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
@@ -8320,7 +8487,7 @@ Do NOT wrap conversational replies in JSON.
         if answer and answer.strip():
             findings += self._deliverable_findings(
                 strip_verification_scope(answer),
-                query or "",
+                self._request_text(query),
                 history,
                 [os.getcwd(), self._verification_project_root()],
             )
@@ -8503,6 +8670,10 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        # A level the model chose for the last request must not carry into this one.
+        reset_effort = getattr(self, "reset_reasoning_effort", None)
+        if reset_effort is not None:
+            reset_effort()
         # Only a console with a Stop button can cancel a client backoff wait.
         console = getattr(self, "console", None)
         stoppable = getattr(console, "cancelled", None) is not None
@@ -8523,6 +8694,24 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
             self._detach_step_timer()
+            self._flush_post_turn_record()
+            # Spans a mixin parked for a turn that never opened must not
+            # backdate the next one.
+            self._pre_turn_spans = None
+
+    def _flush_post_turn_record(self) -> None:
+        """Write the post-answer spans and stop routing waits to this turn."""
+        recorder = self._sealed_turn_recorder
+        self._sealed_turn_recorder = None
+        if recorder is not None and turn_metrics.current() is recorder:
+            turn_metrics.activate(self._outer_turn_recorder)
+        self._outer_turn_recorder = None
+        if recorder is None:
+            return
+        try:
+            recorder.write_post()
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("could not write post-turn record: %s", e)
 
     #: How a mid-turn follow-up is framed for the model. It is the user
     #: speaking, so it goes in as a user message — but unlabelled, a user
@@ -8918,9 +9107,10 @@ Do NOT wrap conversational replies in JSON.
                 from gaia.agents.base.artifacts import store_for
 
                 # Only the sent list changes; ``conversation`` keeps every result.
-                self._pending_eviction = self._context_evictor.evict(
-                    messages, steps_taken, store_for(self)
-                )
+                with turn_metrics.span("context_evict"):
+                    self._pending_eviction = self._context_evictor.evict(
+                        messages, steps_taken, store_for(self)
+                    )
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -9339,6 +9529,7 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._reasoning_request_kwargs(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -9450,6 +9641,10 @@ Do NOT wrap conversational replies in JSON.
                             f"*Technical details: {str(e)}*"
                         )
                         break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        cancelled_by_console = True
+                        break
                     except Exception as e:
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
@@ -9482,21 +9677,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop (streaming) — "
-                                "shrunk messages to %d entries and retrying",
-                                len(messages),
-                            )
                             _retried_after_trim_stream = True
-                            continue
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9595,6 +9780,7 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._reasoning_request_kwargs(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -9640,6 +9826,11 @@ Do NOT wrap conversational replies in JSON.
                             f"*Technical details: {str(e)}*"
                         )
                         break
+                    except LeaseWaitCancelled:
+                        # Stopped while queued for the model: not an LLM error.
+                        self.console.stop_progress()
+                        cancelled_by_console = True
+                        break
                     except Exception as e:
                         self.console.stop_progress()
                         if self.debug:
@@ -9682,25 +9873,11 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim:
-                            # Aggressive shrink: keep all message slots so the
-                            # model still sees its tool-call history, but cap
-                            # any single tool-result content to 500 chars and
-                            # drop all-but-last-2 tool results entirely.
-                            messages[:] = self._shrink_messages_for_overflow(messages)
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_context_overflow_trimmed",
-                                }
-                            )
-                            logger.warning(
-                                "Context overflow mid-loop — shrunk messages "
-                                "to %d entries and retrying once",
-                                len(messages),
-                            )
                             _retried_after_trim = True
-                            continue  # retry with smaller payload
+                            if self._retry_after_overflow_shrink(
+                                messages, e, steps_taken
+                            ):
+                                continue  # retry with smaller payload
 
                         # A transient endpoint failure the client already
                         # retried: wait, then ask again with the conversation
@@ -9816,7 +9993,8 @@ Do NOT wrap conversational replies in JSON.
             # 1000+ char arguments. Don't fail the whole turn: log the error,
             # nudge the model to retry with simpler args, and continue the loop.
             try:
-                parsed = self._parse_llm_response(response)
+                with turn_metrics.span("parse_response"):
+                    parsed = self._parse_llm_response(response)
                 # Budget is consecutive: a clean parse gives the retries back.
                 parse_failures = 0
                 markup_retries = 0
@@ -9979,6 +10157,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._reasoning_request_kwargs(),
                     )
 
                     for chunk_response in stream_gen:
@@ -10023,6 +10202,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._reasoning_request_kwargs(),
                     )
                     plan_response = chat_response.text
                     plan_reasoning = _response_reasoning(chat_response)
@@ -10442,6 +10622,9 @@ Do NOT wrap conversational replies in JSON.
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
+                    )
                     continue
 
                 # Otherwise fall through to stats / answer / next iter.
@@ -10694,27 +10877,19 @@ Do NOT wrap conversational replies in JSON.
                     self.console.print_state_info(
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
+                    # The step still made its model call and ran its tool.
+                    self._record_step_stats(
+                        response_stats, steps_taken, step_timer, conversation
+                    )
 
                     # Break out of tool execution to trigger error recovery prompt
                     continue
 
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
-            perf_stats = response_stats or self.chat.get_stats()
-            # A step whose backend reported no stats still took model time.
-            if perf_stats or step_timer.has_llm_calls():
-                stats_record = {
-                    "type": "stats",
-                    "step": steps_taken,
-                    "performance_stats": perf_stats or {},
-                }
-                step_timer.attach(stats_record)
-                if self._pending_eviction is not None:
-                    stats_record.update(self._pending_eviction)
-                    self._pending_eviction = None
-                if self._context_evictor is not None:
-                    self._context_evictor.note_prompt_tokens(perf_stats)
-                conversation.append({"role": "system", "content": stats_record})
+            self._record_step_stats(
+                response_stats, steps_taken, step_timer, conversation
+            )
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
@@ -11634,7 +11809,8 @@ Do NOT wrap conversational replies in JSON.
         # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
         if hasattr(self, "_after_process_query"):
             try:
-                self._after_process_query(user_input, result.get("result", ""))
+                with turn_metrics.span("after_process_query"):
+                    self._after_process_query(user_input, result.get("result", ""))
             except Exception as e:
                 logger.warning(f"Post-query hook failed: {e}")
 

@@ -8,12 +8,15 @@ import re
 import time
 from typing import Callable, Iterator, List, Optional, Tuple, Union
 
+from gaia.utils import perf_trace
+
 from ..base_client import LLMClient
 from ..inference_location import provider_phrase
 from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
     LemonadeAuthError,
     LemonadeClient,
@@ -143,7 +146,10 @@ class LemonadeError(ValueError):
 
 class LemonadeModelNotLoadedError(LemonadeError):
     retryable = True
-    user_message = "Reloading the model — give it a few seconds and try again."
+    user_message = (
+        "The model was unloaded before it could answer. Send your message again: "
+        "GAIA loads it first."
+    )
 
 
 class LemonadeContextOverflowError(LemonadeError):
@@ -152,16 +158,41 @@ class LemonadeContextOverflowError(LemonadeError):
     ``retryable`` is dynamic — set in ``_classify_lemonade_response`` based
     on the reported ``n_ctx``. When n_ctx is smaller than the active device
     profile's window (``active_profile_ctx_size``), the model was loaded with
-    the wrong ctx_size; reloading via the pre-flight helper will fix it, so we
-    mark retryable so the chat layer auto-recovers. When n_ctx is already at
-    the profile's full size, this is a genuine "conversation too big"
-    situation and retry won't help.
+    the wrong ctx_size; the next turn's pre-flight reloads it at the right
+    size, so sending the message again works (``reloadable``). When n_ctx is
+    already at the profile's full size, this is a genuine "conversation too
+    big" situation and sending it again won't help.
     """
 
     retryable = False  # set True dynamically below the profile's window
     user_message = (
         "This conversation got too long for the model's context window. "
         "Start a fresh task to keep going."
+    )
+
+    def mark_reloadable(self) -> "LemonadeContextOverflowError":
+        """The model was loaded with too small a window: say to send it again."""
+        self.retryable = True
+        self.user_message = (
+            "The model was loaded with a smaller context window than GAIA uses. "
+            "Send your message again: GAIA reloads it at the right size first."
+        )
+        return self
+
+
+class LemonadeKVCacheSharedError(LemonadeError):
+    """Requests running at once on one model outgrew its shared KV cache.
+
+    Not a long conversation: llama.cpp fails every request active at that
+    moment, and the same request fits once the other one ends. The client has
+    already retried it; trimming the history would not help.
+    """
+
+    retryable = True
+    user_message = (
+        "The model ran out of working memory, most likely because another "
+        "request was using it at the same time. Send your message again; if "
+        "it keeps happening, the conversation may be too long for the model."
     )
 
 
@@ -216,9 +247,8 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
       and the first inference cold-start exceeds Lemonade's internal
       upstream timeout.
 
-    We mark this *non-retryable* because the chat layer's blind retry
-    will hit the same hung backend; surface a useful remediation
-    instead.
+    We mark this *non-retryable* because sending it again hits the same
+    hung backend; surface a useful remediation instead.
     """
 
     retryable = False
@@ -387,14 +417,16 @@ def _classify_lemonade_response(
 
     if "model_not_loaded" in type_blob or "no model loaded" in msg_blob:
         return LemonadeModelNotLoadedError(payload=response), True
+    if any(phrase in msg_blob for phrase in KV_CACHE_SHARED_PHRASES):
+        return LemonadeKVCacheSharedError(payload=response), True
     if any(
         phrase in type_blob or phrase in msg_blob for phrase in CONTEXT_OVERFLOW_PHRASES
     ):
         # Mark retryable when the model was loaded with an unexpectedly
         # small ctx (typical: 4096 from a pre-restart leftover, or 32K
         # from a Lemonade `lemonade load Gemma-4-E4B-it-GGUF` without
-        # ``--ctx-size``). The chat layer's auto-reload at the expected
-        # ctx will fix it, so let it try. The threshold is the ACTIVE
+        # ``--ctx-size``). The next turn's pre-flight reloads at the
+        # expected ctx, so sending it again works. The threshold is the ACTIVE
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
@@ -409,7 +441,7 @@ def _classify_lemonade_response(
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
         if _loaded_below_profile(n_ctx_reported, model):
-            err_instance.retryable = True
+            err_instance.mark_reloadable()
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,
     # hung llama-server child) from "Lemonade unreachable" (true network
@@ -515,6 +547,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     ):
         m = re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
         return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
+    if any(phrase in text for phrase in KV_CACHE_SHARED_PHRASES):
+        return LemonadeKVCacheSharedError()
     if any(phrase in text for phrase in CONTEXT_OVERFLOW_PHRASES):
         err = LemonadeContextOverflowError()
         m = re.search(r"context size \((\d+) tokens?\)", text)
@@ -523,7 +557,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         # Same threshold as ``_classify_lemonade_response``: below the active
         # profile's window the model was loaded wrong and a reload fixes it.
         if m and _loaded_below_profile(int(m.group(1))):
-            err.retryable = True
+            err.mark_reloadable()
         return err
     # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
     # hung) from real connectivity failures (#1030). The user-facing remediation
@@ -631,6 +665,20 @@ class LemonadeProvider(LLMClient):
     def current_base_url(self) -> str:
         """The Lemonade URL this client talks to now (see ``LemonadeClient``)."""
         return self._backend.current_base_url()
+
+    @property
+    def follows_gaia_lemonade(self) -> bool:
+        """Whether this client is aimed at GAIA's own server (see ``LemonadeClient``)."""
+        return self._backend.follows_gaia_lemonade
+
+    def wait_for_gaia_lemonade(
+        self,
+        model: Optional[str] = None,
+        *,
+        on_status: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """Wait for GAIA's own server to answer again (see ``LemonadeClient``)."""
+        return self._backend.wait_for_gaia_lemonade(model, on_status=on_status)
 
     def refresh_model_catalog(self, show_all: bool = True) -> None:
         """Read the Lemonade catalog once so ``cloud_model_provider`` can
@@ -882,6 +930,7 @@ class LemonadeProvider(LLMClient):
             (timings or {}).get("predicted_per_second") or 0.0
         )
         self._last_usage = captured
+        perf_trace.note_server_timings(timings)
 
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
@@ -944,7 +993,7 @@ class LemonadeProvider(LLMClient):
             # stream_options request in lemonade_client.
             if chunk.get("usage"):
                 usage_seen = True
-                self._capture_usage(chunk["usage"], timings=None)
+                self._capture_usage(chunk["usage"], timings=chunk.get("timings"))
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason

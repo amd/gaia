@@ -149,7 +149,7 @@ func (e *StartError) Brief() string {
 // about the daemon. Reporting the first as the second sends the user to check a
 // remote service over a local restart.
 type RouteMissingError struct {
-	// Op is what the caller was trying to do, e.g. "read the Agent Hub catalog".
+	// Op is what the caller was trying to do, e.g. "read the agent catalog".
 	Op string
 	// Path is the route the daemon does not have.
 	Path string
@@ -197,10 +197,26 @@ func IsRouteMissing(path string, status int, detail string) bool {
 type RequestError struct {
 	Op     string
 	Detail string
+	// Err is the transport error behind Detail, when there is one.
+	Err error
 }
 
 func (e *RequestError) Error() string {
 	return fmt.Sprintf(
 		"could not %s: %s. Check `gaia daemon status` and the daemon log at %s.",
 		e.Op, e.Detail, logPathForMessage())
+}
+
+func (e *RequestError) Unwrap() error { return e.Err }
+
+// DaemonRestartedError is a call about a run or session that a daemon restart
+// ended: the new daemon starts fresh sidecars, so there is nothing to send it to.
+type DaemonRestartedError struct {
+	Op string
+}
+
+func (e *DaemonRestartedError) Error() string {
+	return fmt.Sprintf(
+		"could not %s: GAIA's daemon restarted, which ended the agent session this belonged to. "+
+			"Nothing was sent; your next message starts a fresh session", e.Op)
 }

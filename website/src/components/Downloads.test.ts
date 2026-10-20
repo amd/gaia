@@ -341,7 +341,7 @@ describe('Downloads.astro', () => {
     const h2s = all.filter((e) => e.tag === 'h2');
     expect(h2s).toHaveLength(1);
     expect(String(h2s[0].attrs.class ?? '')).toContain('sr-only');
-    expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual(['Desktop app', 'Terminal']);
+    expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual(['GAIA Agent UI', 'GAIA Terminal UI']);
   });
 });
 
@@ -410,8 +410,8 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect('hidden' in cards[0].attrs).toBe(false);
     expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual([
       'GAIA for Windows',
-      'Desktop app',
-      'Terminal',
+      'GAIA Agent UI',
+      'GAIA Terminal UI',
     ]);
 
     const invented = descendants(rendered.root)

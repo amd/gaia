@@ -33,17 +33,31 @@ USER_STOP_WORDS = "stopped before it finished"
 
 
 class _Clock:
-    """A monotonic clock the agent thread moves forward by hand."""
+    """The PC's clocks, which the agent thread moves forward by hand.
+
+    ``monotonic`` counts sleep, as ``time.monotonic`` does on Windows;
+    ``awake`` does not. :meth:`advance` is awake time, :meth:`sleep` is not.
+    """
 
     def __init__(self):
         self._now = 1000.0
+        self._awake = 1000.0
         self._lock = threading.Lock()
 
     def monotonic(self):
         with self._lock:
             return self._now
 
+    def awake(self):
+        with self._lock:
+            return self._awake
+
     def advance(self, seconds):
+        with self._lock:
+            self._now += seconds
+            self._awake += seconds
+
+    def sleep(self, seconds):
         with self._lock:
             self._now += seconds
 
@@ -79,7 +93,10 @@ class _ScriptedAgent:
 def clock():
     fake = _Clock()
     fake_time = SimpleNamespace(monotonic=fake.monotonic, time=fake.monotonic)
-    with patch.object(helpers, "_time", fake_time):
+    with (
+        patch.object(helpers, "_time", fake_time),
+        patch.object(helpers, "_awake_clock", SimpleNamespace(monotonic=fake.awake)),
+    ):
         yield fake
 
 
@@ -398,6 +415,37 @@ async def test_non_streaming_silent_turn_is_stopped_and_told_why(runtime, clock)
     assert not isinstance(agent.console, helpers._ActivityConsole)
 
 
+@pytest.mark.asyncio
+async def test_non_streaming_silence_counts_from_the_turn_start(runtime, clock):
+    """A turn that goes quiet before the watchdog's first look is still stopped."""
+    advanced = threading.Event()
+
+    def script(agent):
+        clock.advance(301)
+        advanced.set()
+        return agent.wait_for_cancel()
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    loop = asyncio.get_running_loop()
+    real_run_in_executor = loop.run_in_executor
+
+    def worker_runs_first(executor, func, *args):
+        # The worker thread wins the race: the clock moves before this returns.
+        future = real_run_in_executor(executor, func, *args)
+        if getattr(func, "__name__", "") == "_do_chat":
+            assert advanced.wait(5)
+        return future
+
+    with (
+        patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 300),
+        patch.object(loop, "run_in_executor", worker_runs_first),
+    ):
+        answer = await _ask(runtime, session)
+
+    assert answer.startswith("This turn ran for 5 minutes without progress")
+
+
 # ---------------------------------------------------------------------------
 # The limit itself
 # ---------------------------------------------------------------------------
@@ -462,3 +510,67 @@ def test_non_streaming_tool_ends_on_its_result_like_the_sse_handler():
     console.pretty_print_json({"status": "success"}, title="Tool Result")
     assert console.tool_running is False
     assert console.last_progress == clock.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# A PC that sleeps mid-turn
+# ---------------------------------------------------------------------------
+
+
+EIGHT_HOURS = 8 * 60 * 60
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_pc_slept_through_carries_on_after_waking(runtime, clock):
+    def script(agent):
+        agent.console.print_info("started")
+        _wait_until_read(agent.console)
+        clock.sleep(EIGHT_HOURS)
+        time.sleep(0.5)  # the loop looks at the clock after waking
+        agent.console.print_info("still going after the sleep")
+        _wait_until_read(agent.console)
+        return "Finished after the PC woke up."
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 300):
+        events = await _stream(runtime, session, agent)
+
+    assert _done(events)["content"] == "Finished after the PC woke up."
+    assert "without progress" not in _all_text(events)
+    assert agent._cancel_event.message is None
+
+
+@pytest.mark.asyncio
+async def test_a_non_streaming_turn_the_pc_slept_through_carries_on(runtime, clock):
+    def script(agent):
+        agent.console.print_info("started")
+        clock.sleep(EIGHT_HOURS)
+        time.sleep(0.5)
+        agent.console.print_info("still going after the sleep")
+        return "Finished after the PC woke up."
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 300):
+        assert await _ask(runtime, session) == "Finished after the PC woke up."
+    assert agent._cancel_event.message is None
+
+
+@pytest.mark.asyncio
+async def test_silence_after_waking_still_stops_the_turn(runtime, clock):
+    def script(agent):
+        agent.console.print_info("started")
+        _wait_until_read(agent.console)
+        clock.sleep(EIGHT_HOURS)
+        time.sleep(0.5)
+        # Awake again, and silent past the window.
+        clock.advance(30)
+        return agent.wait_for_cancel()
+
+    agent = _ScriptedAgent(script)
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 20):
+        events = await _stream(runtime, session, agent)
+
+    assert "without progress" in _done(events)["content"]

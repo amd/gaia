@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.document_text import (
@@ -31,7 +32,7 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
-from gaia.agents.tools.path_access import readable_entry
+from gaia.agents.tools.path_access import missing_file_error, readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -457,7 +458,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -684,6 +685,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(file_path, "write_python_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -804,7 +806,7 @@ class FileIOToolsMixin:
 
                 # Read current content
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -862,6 +864,7 @@ class FileIOToolsMixin:
                 if backup:
                     backup_path = path_validator.create_backup(str(file_path))
 
+                before_change(file_path, "edit_python_file")
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
@@ -1109,6 +1112,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(file_path, "write_markdown_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -1211,6 +1215,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(path, "write_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if path.exists():
@@ -1345,7 +1350,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not path.exists():
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 reads = file_read_record(self)
                 refusal = reads.refusal(path)
@@ -1379,6 +1384,7 @@ class FileIOToolsMixin:
                     )
                 )
 
+                before_change(path, "edit_file")
                 # Write updated content
                 _write_exact(path, updated_content)
                 reads.note(path)
@@ -1544,6 +1550,7 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                before_change(gaia_path, "update_gaia_md")
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
 
@@ -1630,7 +1637,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -1705,6 +1712,7 @@ class FileIOToolsMixin:
                 if misplaced:
                     return {"status": "error", "error": misplaced}
 
+                before_change(file_path, "replace_function")
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)

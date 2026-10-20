@@ -1045,6 +1045,32 @@ def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
         )
 
 
+def _hide_subcommands(subparsers, names) -> None:
+    """Drop subcommands from ``-h`` while they keep parsing and dispatching.
+
+    ``add_parser(help=argparse.SUPPRESS)`` is not enough before Python 3.14:
+    the name stays in the ``{a,b,c}`` metavar and prints ``==SUPPRESS==``.
+    argparse's "invalid choice" error still lists hidden names; dropping them
+    from ``choices`` would stop them dispatching.
+    """
+    hidden = set(names)
+    unknown = hidden - set(subparsers.choices)
+    if unknown:
+        raise ValueError(f"cannot hide unknown subcommands: {sorted(unknown)}")
+    # pylint: disable=protected-access
+    subparsers._choices_actions = [
+        a for a in subparsers._choices_actions if a.dest not in hidden
+    ]
+    visible = [n for n in subparsers.choices if n not in hidden]
+    subparsers.metavar = "{" + ",".join(visible) + "}"
+
+
+# Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
+# publishing agents is no longer a user-facing feature (#5172).
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1991,6 +2017,11 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
         action="store_true",
         help="Kill Lemonade server (port 13305)",
     )
+    kill_parser.add_argument(
+        "--daemons",
+        action="store_true",
+        help="List running GAIA daemons and stop those whose home folder is gone",
+    )
 
     # Add LLM app command
     llm_parser = subparsers.add_parser(
@@ -2556,6 +2587,64 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
         default=None,
         help="Where repositories and indexes live (default: $GAIA_BENCH_WORK_ROOT "
         "or <tmp>/gaia-bench, shared with `gaia eval tasks`)",
+    )
+
+    # Long-horizon memory benchmark: gaia eval memory
+    memory_eval_parser = eval_subparsers.add_parser(
+        "memory",
+        help="Memory over months of chats: changing facts, forgets, lessons, injection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval memory --suite pr
+  gaia eval memory --suite pr --gate tests/fixtures/eval_baselines/memory-bench/pr.json
+  gaia eval memory --suite full --scenario maya_moves_and_changes_jobs
+  gaia eval memory --list
+
+Each scenario is one person's chats over weeks or months, replayed through the
+real memory pipeline on a simulated clock: a fresh agent per chat, extraction
+after every turn, consolidation of old chats, explicit remember/forget calls,
+tool mistakes that should become lessons. Probes then check what the agent is
+shown, and what is stored, at points in time.
+
+`pr` is offline and deterministic (a scripted model and a hashed embedder), so
+it gates PRs: a check that passes in the baseline must still pass. `full` uses
+the local model for extraction, consolidation and answers, with the real
+embedder; it needs Lemonade and takes the machine-wide eval lock.
+""",
+    )
+    memory_eval_parser.add_argument(
+        "--suite",
+        choices=["pr", "full"],
+        default="pr",
+        help="Which suite (default: pr)",
+    )
+    memory_eval_parser.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        help="Run only this scenario id (repeatable)",
+    )
+    memory_eval_parser.add_argument(
+        "--model",
+        default=None,
+        help="full suite: chat model (default: GAIA's default chat model)",
+    )
+    memory_eval_parser.add_argument(
+        "--gate", default=None, help="Baseline results.json to gate against"
+    )
+    memory_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/memory-<suite>-<time>)",
+    )
+    memory_eval_parser.add_argument(
+        "--list", action="store_true", help="List the scenarios and exit"
+    )
+    memory_eval_parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Keep the replayed memory databases for inspection",
     )
 
     # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
@@ -3267,7 +3356,7 @@ Examples:
     # Agent Hub command (install/uninstall agents through the daemon)
     hub_parser = subparsers.add_parser(
         "hub",
-        help="Browse, install and uninstall agents from the GAIA Agent Hub",
+        help="Install and uninstall agents",
     )
     hub_subparsers = hub_parser.add_subparsers(
         dest="hub_action", help="Hub action to perform"
@@ -3402,7 +3491,7 @@ Examples:
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Author and manage agents (init/version/test, export/import)",
+        help="Test and manage agents (test, export/import, install)",
     )
     agent_subparsers = agent_parser.add_subparsers(
         dest="agent_action", help="Agent action to perform"
@@ -3445,7 +3534,7 @@ Examples:
     # the Agent Hub. The headless equivalent of the Agent UI's Install button.
     agent_install_parser = agent_subparsers.add_parser(
         "install",
-        help="Install a published agent from the Agent Hub into ~/.gaia/agents/",
+        help="Install a published agent into ~/.gaia/agents/",
     )
     agent_install_parser.add_argument(
         "agent_id",
@@ -3471,8 +3560,9 @@ Examples:
     # errors resolves to a real command).
     agent_subparsers.add_parser(
         "list",
-        help="List installed agents and agents available from the Agent Hub",
+        help="List installed agents and the agents available to install",
     )
+    _hide_subcommands(agent_subparsers, HIDDEN_AGENT_COMMANDS)
 
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
     # MCP-server connectors + per-agent grants. The subparser tree lives in
@@ -3782,6 +3872,7 @@ Examples:
     )
 
     _register_uninstall_subparser(subparsers, parent_parser)
+    _hide_subcommands(subparsers, HIDDEN_TOP_LEVEL_COMMANDS)
     return parser
 
 
@@ -3944,6 +4035,58 @@ def _handle_eval_retrieval(args):
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
     if failed:
+        sys.exit(1)
+
+
+def _handle_eval_memory(args):
+    """gaia eval memory — see gaia.eval.memory.runner."""
+    from gaia.eval.memory import runner
+    from gaia.eval.memory.scenario import load_scenarios
+
+    if args.model and args.suite != "full":
+        print(
+            f"--model applies only to --suite full; the {args.suite} suite runs "
+            "a scripted model. Drop --model, or add --suite full."
+        )
+        sys.exit(2)
+    if args.list:
+        for scenario in load_scenarios(args.scenario):
+            print(
+                f"{scenario.id:42} {len(scenario.sessions):3} chats  "
+                f"{len(scenario.probes):3} probes  {scenario.title}"
+            )
+        return
+    out_dir = Path(
+        args.out or f"eval/results/memory-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+    )
+    if args.suite == "full":
+        from gaia.eval.eval_lock import exclusive_eval
+
+        with exclusive_eval(f"gaia eval memory --suite {args.suite}"):
+            result = runner.run_suite(
+                args.suite,
+                only=args.scenario,
+                model=args.model,
+                keep_workdir=args.keep_work,
+            )
+    else:
+        result = runner.run_suite(
+            args.suite, only=args.scenario, keep_workdir=args.keep_work
+        )
+    gated = None
+    if args.gate:
+        baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
+        gated = runner.gate(result, baseline)
+    runner.write_outputs(result, out_dir, gated)
+    print((out_dir / "report.md").read_text(encoding="utf-8"))
+    print(f"[OUTPUT] {(out_dir / 'results.json').resolve()}")
+    if gated is not None and not gated.passed:
+        print(
+            f"[GATE] FAILED: {len(gated.regressions)} regression(s), "
+            f"{len(gated.missing_checks)} baseline check(s) no longer run. "
+            "See report.md; if a change is intended, replace the baseline with "
+            "this run's results.json in the same PR."
+        )
         sys.exit(1)
 
 
@@ -4331,6 +4474,7 @@ def _handle_schedule(args):
             print(
                 f"{s.name}  [{state}]  cron={s.cron!r}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
+                + (f"  missed={s.missed_count}" if s.missed_count else "")
             )
         return
 
@@ -4341,8 +4485,24 @@ def _handle_schedule(args):
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
         print(f"sink:       {s.sink}  args={s.sink_args}")
         print(f"enabled:    {s.enabled}")
-        print(f"created_at: {s.created_at}")
+        from datetime import datetime as _datetime
+
+        def _local(stamp):
+            # Local time, like next_fire.
+            return _datetime.fromisoformat(stamp).astimezone().isoformat()
+
+        print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
+        if s.missed_count:
+            runs = "run" if s.missed_count == 1 else "runs"
+            count = (
+                f"at least {s.missed_count}" if s.missed_at_least else s.missed_count
+            )
+            print(
+                f"missed:     {count} {runs} in all while the PC was off or "
+                "asleep, or the schedule daemon wasn't running "
+                f"(latest due {_local(s.last_missed)})"
+            )
         return
 
     if action == "remove":
@@ -4535,6 +4695,14 @@ def main():
                     )
                     sys.exit(2)
 
+            try:
+                from gaia.stream_timeout import stream_timeout_from_env
+
+                stream_timeout_from_env()
+            except ValueError as e:
+                # A bad GAIA_STREAM_TIMEOUT: the remedy, not a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
             try:
                 run_telegram(
                     token=args.token,
@@ -4813,6 +4981,8 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
+        if args.daemons:
+            sys.exit(kill_stray_daemons())
         if args.lemonade:
             # Use lemonade-server stop for graceful shutdown
             try:
@@ -4858,9 +5028,10 @@ Let me know your answer!
             print("     --lemonade        stop Lemonade Server (port 13305)")
             print("     --port <number>   kill the GAIA/Lemonade process")
             print("                       listening on <number>")
+            print("     --daemons         list GAIA daemons, stop orphaned ones")
             print(
-                "   Both target a port. A stray GAIA process that is not "
-                "holding a port must be killed by PID."
+                "   A stray GAIA process that is none of these must be killed "
+                "by PID."
             )
             sys.exit(1)
         return
@@ -5349,6 +5520,11 @@ Let me know your answer!
             print(f"[OUTPUT] {report_path.resolve()}")
             return
 
+        # Long-horizon memory benchmark: gaia eval memory
+        if getattr(args, "eval_command", None) == "memory":
+            _handle_eval_memory(args)
+            return
+
         # Retrieval benchmarks: gaia eval retrieval [--component rag|code]
         if getattr(args, "eval_command", None) == "retrieval":
             _check_retrieval_args(args)
@@ -5749,7 +5925,10 @@ Let me know your answer!
     # Handle install command
     if args.action == "install":
         if args.lemonade:
-            from gaia.installer.lemonade_installer import LemonadeInstaller
+            from gaia.installer.lemonade_installer import (
+                LemonadeInstaller,
+                discard_download,
+            )
             from gaia.version import LEMONADE_VERSION
 
             installer = LemonadeInstaller()
@@ -5790,6 +5969,11 @@ Let me know your answer!
                     installer_path = installer.download_installer()
                     print("Installing...")
                 result = installer.install(installer_path, silent=args.silent)
+                # A failed install keeps the file: its retry hint names it.
+                if installer_path is not None and result.success:
+                    discard_download(installer_path)
+                elif installer_path is not None:
+                    print(f"   The downloaded installer is kept at {installer_path}")
 
                 if result.success:
                     # Verify installation
@@ -5823,6 +6007,63 @@ Let me know your answer!
     log.error(f"Unknown action specified: {args.action}")
     parser.print_help()
     return
+
+
+def kill_stray_daemons() -> int:
+    """``gaia kill --daemons``: list every GAIA daemon, stop the orphaned ones.
+
+    Orphaned means its home folder or instance.json is gone, so no client can
+    reach it. The daemon of this shell's own home is never stopped here; use
+    ``gaia daemon stop`` for that.
+
+    Returns:
+        The exit code: 1 if an orphaned daemon would not stop.
+    """
+    from gaia.daemon import paths, strays
+    from gaia.daemon.instance import read_instance
+
+    daemons = strays.find_daemons()
+    if not daemons:
+        print("No GAIA daemons are running.")
+        return 0
+    own_home = paths.host_dir()
+    # By pid too: an older daemon may not have honoured the GAIA_HOME it inherited.
+    own = read_instance()
+    orphaned = []
+    print(f"GAIA daemons running: {len(daemons)}")
+    for daemon in daemons:
+        if own is not None and own.pid in daemon.pids:
+            home, state = str(own_home), "this home, left running"
+        elif daemon.home is None:
+            home, state = "(home unknown: cannot read its environment)", "left running"
+        elif strays.same_home(daemon.home, own_home):
+            home, state = str(daemon.home), "this home, left running"
+        elif daemon.is_orphaned():
+            home, state = str(daemon.home), "orphaned"
+            orphaned.append(daemon)
+        else:
+            home, state = str(daemon.home), "left running"
+        print(
+            f"  pid {daemon.pid:<7} up {strays.format_age(daemon.age_seconds):<8} "
+            f"{state:<24} {home}"
+        )
+    if not orphaned:
+        print("No orphaned daemons to stop.")
+        return 0
+    failed = []
+    for daemon in orphaned:
+        if strays.stop_daemon(daemon):
+            print(f"✅ Stopped orphaned daemon pid {daemon.pid} ({daemon.home})")
+        else:
+            failed.append(daemon)
+            print(f"❌ Daemon pid {daemon.pid} ({daemon.home}) did not exit")
+    if failed:
+        print(
+            "   Kill the remaining pid(s) with your OS task manager, then re-run "
+            "`gaia kill --daemons`."
+        )
+        return 1
+    return 0
 
 
 def kill_process_by_port(port):
@@ -7104,7 +7345,7 @@ def _handle_memory_status():
                     "(re-embeds up to 100 per start),"
                 )
                 print(
-                    "      or use Rebuild Embeddings in the Memory Dashboard (gaia chat --ui)"
+                    "      or use Rebuild Embeddings on the Memory page's Advanced tab (gaia chat --ui)"
                 )
 
         # Conversations section
@@ -8192,8 +8433,8 @@ def handle_agent_command(args):
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
         print(
-            "Available actions: init, version, test, configure, health, status, "
-            "export, import, install, list"
+            "Available actions: test, configure, health, status, export, import, "
+            "install, list"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -8212,7 +8453,7 @@ def handle_agent_command(args):
 
 
 def handle_agent_list(_args):
-    """List installed agents and agents available from the Agent Hub.
+    """List installed agents and the agents available to install.
 
     Read-only discovery for ``gaia agent install`` — degrades to an
     installed-only listing (with a loud note) if the hub catalog is unreachable,
@@ -8229,12 +8470,12 @@ def handle_agent_list(_args):
         available = result.agents
         offline = result.offline
     except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
-        print(f"⚠ Could not reach the Agent Hub catalog: {exc}", file=sys.stderr)
+        print(f"⚠ Could not reach the agent catalog: {exc}", file=sys.stderr)
 
     available_ids = {e.get("id") for e in available}
     if available:
         suffix = " (offline cache)" if offline else ""
-        print(f"Available from the Agent Hub{suffix}:")
+        print(f"Available to install{suffix}:")
         for entry in sorted(available, key=lambda a: a.get("id", "")):
             aid = entry.get("id", "?")
             ver = entry.get("latest_version", "?")
@@ -8253,12 +8494,12 @@ def handle_agent_list(_args):
 
     extra = [aid for aid in sorted(installed) if aid not in available_ids]
     if extra:
-        print("\nInstalled (not in the hub catalog):")
+        print("\nInstalled (not in the catalog):")
         for aid in extra:
             print(f"  {aid:<24} {installed[aid].version}")
 
     if not available and not installed:
-        print("No agents installed, and the Agent Hub catalog is unavailable.")
+        print("No agents installed, and the agent catalog is unavailable.")
     else:
         print("\nInstall one with: gaia agent install <id>")
         if any(
@@ -8512,13 +8753,25 @@ def _handle_daemon_start():
 def _handle_daemon_status():
     from gaia.daemon import client, paths
 
-    report = client.status_report()
+    report = client.status_report(
+        on_slow=lambda: print(
+            "GAIA daemon: slow to answer, waiting up to "
+            f"{client.BUSY_PROBE_TIMEOUT_S:.0f}s…"
+        )
+    )
     state = report["state"]
     if state == "not_running":
         print("GAIA daemon: not running")
         print("  Start it with `gaia daemon start`.")
         return
     inst = report["instance"]
+    if state == "busy":
+        print("GAIA daemon: running, but not answering (busy or stuck)")
+        print(f"  Registry: {paths.instance_path()} (pid {inst.pid}, port {inst.port})")
+        print("  It was left running. Retry in a moment; if it stays like this,")
+        print("  `gaia daemon restart` restarts it and its sidecar agents.")
+        print("  Where to look: `gaia daemon logs`.")
+        return
     if state == "stale":
         reason = {
             "pid_dead": "recorded pid is not alive",
@@ -8822,7 +9075,7 @@ def _resolve_sidecar_log(agent_id: str):
     try:
         from gaia.daemon import client
 
-        inst = client.attach()
+        inst = client.attach(patient=False)
         if inst is not None:
             for entry in _fetch_daemon_agents(inst):
                 if entry.get("agent_id") == agent_id and entry.get("port"):
@@ -8986,12 +9239,12 @@ def _handle_hub_list(args):
     body = r.json()
     agents = body.get("agents", [])
     if body.get("offline"):
-        print("⚠️  hub unreachable — showing the cached catalog")
+        print("⚠️  agent catalog unreachable — showing the cached copy")
     if not agents:
         print(
             "No agents installed."
             if getattr(args, "installed", False)
-            else "The Agent Hub catalog is empty."
+            else "The agent catalog is empty."
         )
         return
     print(f"{'AGENT':<14} {'LATEST':<10} {'INSTALLED':<12} {'SIZE':<8} NAME")
@@ -9023,7 +9276,7 @@ def _handle_hub_list(args):
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
         print(
-            f"\n{len(hidden)} hub agent(s) hidden — this GAIA build cannot run "
+            f"\n{len(hidden)} agent(s) hidden — this GAIA build cannot run "
             f"them yet: {', '.join(hidden)}"
         )
 
@@ -9383,6 +9636,8 @@ def _print_embedded_status(manager):
     print(f"Installed: {'yes' if status.installed else 'no'} ({manager.dist_dir})")
     if status.running:
         print(f"Running:   yes on {status.base_url} (pid {status.pid})")
+        if status.busy:
+            print("           busy loading or swapping a model; requests wait for it")
     elif status.unresponsive_pid:
         print(
             f"Running:   process {status.unresponsive_pid} is up on port "

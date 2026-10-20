@@ -1567,3 +1567,106 @@ def test_a_working_folder_in_the_prompt_is_not_a_source(tmp_path):
     )
     assert not state.enabled
     assert state.gaps() == []
+
+
+@pytest.fixture
+def askable(monkeypatch):
+    # pytest's tmp dirs sit under the OS temp folder, which is never offered.
+    monkeypatch.setattr(PathValidator, "_unaskable_reason", lambda self, path: None)
+
+
+def test_snapshot_asks_for_an_out_of_scope_source_only_when_told_to(tmp_path, askable):
+    source = tmp_path / "outside" / "notes.txt"
+    source.parent.mkdir()
+    source.write_text("alpha")
+    asked = []
+    validator = PathValidator(allowed_paths=[str(tmp_path / "scope")])
+    validator.set_access_prompt(lambda path: asked.append(path) or True)
+
+    with pytest.raises(ValueError, match="Access denied"):
+        read_snapshot(str(source), validator)
+    assert not asked
+
+    assert read_snapshot(str(source), validator, prompt_user=True) == "alpha"
+    assert len(asked) == 1
+    # Approved for the session: a later re-read needs no second prompt.
+    assert read_snapshot(str(source), validator) == "alpha"
+    assert len(asked) == 1
+
+
+def test_snapshot_refuses_when_the_user_declines(tmp_path, askable):
+    source = tmp_path / "outside.txt"
+    source.write_text("alpha")
+    validator = PathValidator(allowed_paths=[str(tmp_path / "scope")])
+    validator.set_access_prompt(lambda path: False)
+    with pytest.raises(ValueError, match="Access denied"):
+        read_snapshot(str(source), validator, prompt_user=True)
+    assert str(source.resolve()) not in {str(p) for p in validator.allowed_paths}
+
+
+def test_snapshot_never_offers_a_secret_file(tmp_path, askable):
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=1")
+    asked = []
+    validator = PathValidator(allowed_paths=[str(tmp_path)])
+    validator.set_access_prompt(lambda path: asked.append(path) or True)
+    with pytest.raises(ValueError):
+        read_snapshot(str(secret), validator, prompt_user=True)
+    assert not asked
+
+
+def _outside_source(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    source = outside / "minutes.txt"
+    source.write_text("alpha")
+    return source
+
+
+@pytest.mark.parametrize("approve", [True, False])
+def test_extraction_tool_asks_before_reading_an_out_of_scope_file(
+    agent, tmp_path, askable, approve
+):
+    source = _outside_source(tmp_path)
+    asked = []
+    agent.path_validator.set_access_prompt(lambda path: asked.append(path) or approve)
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {source}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    agent.chat.send_messages.side_effect = lambda **kw: MagicMock(
+        text=reply("alpha"), usage={"total_tokens": 10}, stats={}
+    )
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(source))
+
+    assert [Path(p).name for p in asked] == ["minutes.txt"]
+    if approve:
+        assert result.get("status") != "error", result
+        # The end-of-turn source check re-reads it without asking again.
+        agent._check_extraction_sources()
+        assert len(asked) == 1
+        assert not agent._extraction_ledger.errors
+    else:
+        assert result["status"] == "error"
+        assert "Access denied" in result["error"]
+
+
+def test_extraction_tool_reports_a_missing_source_without_asking(
+    agent, tmp_path, askable
+):
+    missing = tmp_path.parent / f"{tmp_path.name}-outside" / "minutes.txt"
+    asked = []
+    agent.path_validator.set_access_prompt(lambda path: asked.append(path) or True)
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {missing}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(missing))
+
+    assert result["status"] == "error"
+    assert "not found" in result["error"].lower(), result
+    assert asked == []

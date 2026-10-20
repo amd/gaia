@@ -162,6 +162,45 @@ def test_legacy_and_recorded_turns_do_not_duplicate_user_input():
     assert transcript_turns(records) == [_turn(0), trace]
 
 
+def test_unrecorded_turn_keeps_its_question_when_a_follow_up_was_added():
+    # A turn stopped after taking a mid-reply message saves no model messages.
+    records = [
+        {"role": "user", "content": "original question"},
+        {"role": "user", "content": "added mid-reply"},
+        {"role": "assistant", "content": "partial answer"},
+    ]
+    assert transcript_turns(records) == [
+        [
+            {"role": "user", "content": "original question\n\nadded mid-reply"},
+            {"role": "assistant", "content": "partial answer"},
+        ]
+    ]
+
+
+def test_follow_ups_do_not_leak_across_turns():
+    trace = _turn(0)
+    records = [
+        trace[0],
+        {"role": "user", "content": "added to turn 0"},
+        {**trace[1], "model_messages": trace},
+        {"role": "user", "content": "question-1"},
+        {"role": "user", "content": "added to turn 1"},
+        {"role": "user", "content": "added again"},
+        {"role": "assistant", "content": "answer-1"},
+        {"role": "user", "content": "current unanswered query"},
+    ]
+    assert transcript_turns(records) == [
+        trace,
+        [
+            {
+                "role": "user",
+                "content": "question-1\n\nadded to turn 1\n\nadded again",
+            },
+            {"role": "assistant", "content": "answer-1"},
+        ],
+    ]
+
+
 def test_autonomous_trace_is_retained():
     assert transcript_turns(
         [{"role": "autonomous", "content": "tick", "model_messages": _turn(0)}]

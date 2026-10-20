@@ -38,6 +38,11 @@ type fakeRelay struct {
 	// queryBody when that is set.
 	queryStatus int
 	queryBody   string
+	// queryDelay holds the /query response, headers included, this long.
+	queryDelay time.Duration
+	// statusExtra is appended to the /daemon/v1/status body, e.g. the relay
+	// budget a daemon advertises: `,"agent_read_timeout_s":0.4`.
+	statusExtra string
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
@@ -109,6 +114,9 @@ type fakeRelay struct {
 	bypassStatus   int
 	auths          []string
 	versionHits    int
+	// sidecarGone models a daemon that restarted: it has no sidecar, so every
+	// relay route answers 503 until the agent is ensured again.
+	sidecarGone bool
 }
 
 // confirmCall is one recorded POST .../query/{run_id}/confirm.
@@ -201,13 +209,25 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	f.mu.Lock()
+	gone := f.sidecarGone
+	f.mu.Unlock()
+	if gone && strings.HasPrefix(r.URL.Path, "/v1/") {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"detail":"no running sidecar for this agent. Start it first"}`))
+		return
+	}
+
 	switch {
 	case r.URL.Path == "/daemon/v1/status":
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d}`, os.Getpid())
+		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d%s}`, os.Getpid(), f.statusExtra)
 
 	case strings.HasSuffix(r.URL.Path, "/ensure"):
 		w.Header().Set("Content-Type", "application/json")
+		f.mu.Lock()
+		f.sidecarGone = false
+		f.mu.Unlock()
 		fmt.Fprintf(w, `{"port":51999,"token":%q,"state":"running"}`, sidecarBearer)
 		if f.onEnsure != nil {
 			f.onEnsure()
@@ -429,6 +449,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		time.Sleep(f.queryDelay)
 		if f.queryStatus != 0 {
 			w.WriteHeader(f.queryStatus)
 			body := f.queryBody
