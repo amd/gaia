@@ -50,6 +50,19 @@ describe('ModelServerPanel', () => {
         expect(screen.getByText(/embeddinggemma-300m-GGUF · Vulkan/)).toBeInTheDocument();
     });
 
+    it('names a cloud chat model without its routing prefix, keeping the id in the tooltip', async () => {
+        mockedApi.getModelServer.mockResolvedValue(info({
+            chat_model: {
+                name: 'fireworks.deepseek-v4p1-flash', recipe: 'cloud', device: null,
+                backend: 'remote', backend_source: null, ctx_size: null,
+            },
+        }));
+        render(<ModelServerPanel />);
+        const name = await screen.findByText('deepseek-v4p1-flash');
+        expect(name).toHaveAttribute('title', 'fireworks.deepseek-v4p1-flash');
+        expect(screen.queryByText('fireworks.deepseek-v4p1-flash')).not.toBeInTheDocument();
+    });
+
     it('says why the embedding model runs on the CPU with ROCm, and only then', async () => {
         const note = 'Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue.';
         mockedApi.getModelServer.mockResolvedValue(info({ embedding_note: note }));

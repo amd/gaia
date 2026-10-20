@@ -34,8 +34,8 @@ gaia-tui
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job, `gaia hub install <id>`.
-  An earlier version of the TUI opened on an Agent Hub browser that did all of that,
+  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email --trust` for the email agent).
+  An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
 
@@ -324,7 +324,12 @@ the installer instead of offering a key that would not work.
 
 A daemon-supervised sidecar agent goes through the same three screens, but its
 gate has more rows: background service, sidecar, Lemonade, and model. The
-flagship is one of these once setup has installed it as a hub package.
+flagship is one of these once `gaia init` has installed it.
+
+If the background service does not list the agent at all, the sidecar row names
+`gaia daemon restart`. The service reads its agent list only when it starts, so
+one started by an older GAIA does not see an agent installed since — the remedy
+also names the install command (`gaia init` for the flagship) in case it is missing.
 
 When the background service or the agent is simply not running — the usual
 state after a reboot — the gate starts it itself and shows `starting…` on that

@@ -48,6 +48,7 @@ beforeEach(() => {
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
@@ -151,7 +152,23 @@ describe('ChatView live status', () => {
             } as unknown as StreamEvent);
             capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'write_file' } as unknown as StreamEvent);
         });
-        expect(useChatStore.getState().liveStatus).toBe('Running write_file');
-        await liveLine('Running write_file');
+        expect(useChatStore.getState().liveStatus).toBe('Writing file');
+        await liveLine('Writing file');
+    });
+});
+
+describe('opening a chat', () => {
+    it("keeps a message sent before the chat's history arrives", async () => {
+        let deliver!: (v: { messages: never[]; total: number }) => void;
+        mockedApi.getMessages.mockReturnValueOnce(new Promise((r) => { deliver = r; }) as never);
+        await driveSend();
+        const userBubbles = () => useChatStore.getState().messages.filter((m) => m.role === 'user').map((m) => m.content);
+        expect(userBubbles()).toEqual(['send the drafted email']);
+
+        // The history load started before the send lands late, without that message.
+        mockedApi.getMessages.mockReturnValue(new Promise(() => {}));
+        await act(async () => { deliver({ messages: [], total: 0 }); });
+
+        expect(userBubbles()).toEqual(['send the drafted email']);
     });
 });

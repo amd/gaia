@@ -923,3 +923,85 @@ def test_session_construction_failure_is_502(app_client, monkeypatch):
     monkeypatch.setattr(agent_routes, "build_session_agent", _boom, raising=True)
     resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
     assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# A turn waiting for the model is shown as waiting and can be cancelled
+# ---------------------------------------------------------------------------
+
+_QUEUED = {
+    "event": "queued",
+    "scope": "daemon",
+    "position": 1,
+    "queue_length": 2,
+    "holder": "gaia",
+    "holder_model": "M-GGUF",
+    "held_for_s": 3.0,
+    "waited_s": 2.0,
+    "model": "M-GGUF",
+}
+
+
+class _QueuedFakeAgent(_HappyFakeAgent):
+    def process_query(self, query, max_steps=None):
+        from gaia.daemon import broker_client
+
+        self.priority = broker_client.current_priority()
+        broker_client.notify_wait(_QUEUED)
+        return super().process_query(query, max_steps)
+
+
+def test_a_queued_email_turn_streams_its_place_in_line(app_client, monkeypatch):
+    fake = _QueuedFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    resp = app_client.post("/v1/email/query", json=_req())
+
+    assert resp.status_code == 200, resp.text
+    queue = [e for e in _parse_sse(resp.text) if e.get("phase") == "model_queue"]
+    assert queue and queue[0]["queue"]["position"] == 1
+    assert "'gaia' is using it" in queue[0]["message"]
+    assert fake.priority == "interactive"
+
+
+class _WaitingFakeAgent(_HappyFakeAgent):
+    def __init__(self):
+        super().__init__()
+        self.waiting = threading.Event()
+        self.cancelled = None
+
+    def process_query(self, query, max_steps=None):
+        from gaia.daemon import broker_client
+
+        self.waiting.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                broker_client.check_cancelled("the model slot")
+            except broker_client.LeaseWaitCancelled:
+                self.cancelled = True
+                return {"answer": "stopped"}
+            time.sleep(0.02)
+        self.cancelled = False
+        return {"answer": "never stopped"}
+
+
+def test_cancel_ends_an_email_turn_waiting_for_the_model(monkeypatch):
+    fake = _WaitingFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    streamer = TestClient(export_openapi.build_app())
+    canceller = TestClient(export_openapi.build_app())
+    run_id = str(uuid.uuid4())
+
+    t = threading.Thread(
+        target=lambda: streamer.post(
+            "/v1/email/query", json={"query": "x", "run_id": run_id, "context": []}
+        ),
+        daemon=True,
+    )
+    t.start()
+    assert fake.waiting.wait(timeout=10)
+    assert canceller.post(f"/v1/email/query/{run_id}/cancel").status_code == 200
+    t.join(timeout=10)
+
+    assert fake.cancelled is True

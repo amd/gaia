@@ -1,0 +1,187 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Model state, device and fit marks shared by the composer chip, Settings › Model
+   and the sidebar's model status popover. */
+
+.popover-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.popover-row > .popover-item {
+    flex: 1;
+    min-width: 0;
+}
+
+.popover-item-note.is-warning,
+.model-row-meta.is-warning,
+.model-status-warning {
+    color: var(--accent-yellow);
+}
+
+.composer-chip.is-warning {
+    color: var(--accent-yellow);
+}
+
+.composer-chip-next {
+    color: var(--accent-blue);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.model-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    padding: 0 6px;
+    color: var(--text-secondary);
+    font-size: 11.5px;
+}
+
+.model-state.is-loaded {
+    width: 8px;
+    height: 8px;
+    margin: 0 8px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--accent-green);
+}
+
+.model-state-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+}
+
+.model-state-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.model-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 18px;
+    white-space: nowrap;
+}
+
+.model-badge.is-fit {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+.model-badge.is-loaded {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+.model-badge.is-ready {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+}
+
+.model-unavailable summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.model-unavailable .model-row {
+    opacity: 0.75;
+}
+
+/* Sidebar status popover */
+
+.model-status {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 6px 4px;
+    min-width: 320px;
+    font-size: 13px;
+}
+
+.model-status-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.model-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--text-muted);
+}
+
+.model-status-dot.is-loaded { background: var(--accent-green); }
+.model-status-dot.is-warming { background: var(--accent-yellow); }
+.model-status-dot.is-stopped { background: var(--danger); }
+
+.model-status-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0;
+}
+
+.model-status-grid dt {
+    color: var(--text-secondary);
+}
+
+.model-status-grid dd {
+    margin: 0;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.model-status-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.sb-location-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.sb-location-dot.is-loaded { background: var(--accent-green); }
+.sb-location-dot.is-warming { background: var(--accent-yellow); }
+.sb-location-dot.is-stopped { background: var(--danger); }
+
+.sb-location-wrap {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+}
+
+.sb-location-wrap > .sb-location {
+    width: 100%;
+}
+.sb-location-dot.is-idle { border: 1px solid var(--text-secondary); }
+
+.model-status-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--accent-yellow);
+}

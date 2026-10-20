@@ -67,6 +67,7 @@ from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
+from .routers import environment as environment_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import hub as hub_router_mod
@@ -214,6 +215,7 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid tunnel authentication token"},
             )
 
+        tunnel.note_device(request.headers.get("user-agent", ""))
         return await call_next(request)
 
 
@@ -806,6 +808,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
     app.include_router(changes_router_mod.router)
+    app.include_router(environment_router_mod.router)
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)

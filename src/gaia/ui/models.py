@@ -129,6 +129,8 @@ class SystemStatus(BaseModel):
     # One message per status probe that failed (catalog, stats, device info,
     # disk space); the matching fields keep their "unknown" defaults.
     probe_warnings: List[str] = Field(default_factory=list)
+    # The folder that holds the chat database; None for an in-memory one.
+    data_dir: Optional[str] = None
 
 
 class LoadedModelInfo(BaseModel):
@@ -193,6 +195,33 @@ class WarmUpStatus(BaseModel):
     error: Optional[str] = None
     model: Optional[str] = None  # what the warm-up loads, once resolved
     device: Optional[str] = None  # npu | gpu | cpu; None when unknown
+
+
+class RunningAnswer(BaseModel):
+    """A chat whose answer is still being written."""
+
+    session_id: str
+    title: Optional[str] = None
+
+
+class RunningIndexJob(BaseModel):
+    """A document still being indexed."""
+
+    document_id: str
+    filename: Optional[str] = None
+
+
+class WorkInProgress(BaseModel):
+    """Work that quitting or unloading the model would cut short."""
+
+    answers: List[RunningAnswer]
+    indexing: List[RunningIndexJob]
+
+
+class UnloadModelResponse(BaseModel):
+    """The model server dropped its models from memory."""
+
+    status: str  # unloaded
 
 
 class InitTaskInfo(BaseModel):
@@ -319,7 +348,7 @@ class AgentInfo(BaseModel):
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
-    # Agent Hub metadata — used by the frontend to render rich discovery cards.
+    # Display metadata in the /api/agents contract; the Agent UI renders none of it.
     category: str = "general"
     tags: List[str] = Field(default_factory=list)
     icon: str = ""  # lucide icon name
@@ -533,6 +562,12 @@ class InferenceStatsResponse(BaseModel):
     output_tokens: int = 0
     # The agent's own step count for the turn, not the number of activity rows.
     steps: Optional[int] = None
+    # Set when the answer was kept from "Retry with…": the model that wrote it,
+    # and how long it took, loading included.
+    model: Optional[str] = None
+    seconds: Optional[float] = None
+    # True only for an answer kept from "Retry with…".
+    retried: Optional[bool] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
 
@@ -565,6 +600,18 @@ class TurnSummaryFile(BaseModel):
     mtime: Optional[float] = None
 
 
+class TurnSummaryOutput(BaseModel):
+    """Something the turn made besides a file: an image, an indexed document,
+    a memory or a scheduled task."""
+
+    kind: str  # image | document | memory | schedule
+    name: str
+    path: Optional[str] = None
+    detail: Optional[str] = None
+    # The memory's id, so the panel can tell whether it was forgotten since.
+    ref: Optional[str] = None
+
+
 class TurnSummaryModel(BaseModel):
     """Where the turn's model ran."""
 
@@ -595,6 +642,7 @@ class TurnSummaryResponse(BaseModel):
     documents: List[TurnSummaryDocument] = Field(default_factory=list)
     files: List[TurnSummaryFile] = Field(default_factory=list)
     sites: List[str] = Field(default_factory=list)
+    outputs: List[TurnSummaryOutput] = Field(default_factory=list)
     live_data: TurnSummaryLiveData = Field(default_factory=TurnSummaryLiveData)
     cost: TurnSummaryCost
     # Absent when the turn's model location could not be determined.

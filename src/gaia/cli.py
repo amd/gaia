@@ -1045,6 +1045,32 @@ def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
         )
 
 
+def _hide_subcommands(subparsers, names) -> None:
+    """Drop subcommands from ``-h`` while they keep parsing and dispatching.
+
+    ``add_parser(help=argparse.SUPPRESS)`` is not enough before Python 3.14:
+    the name stays in the ``{a,b,c}`` metavar and prints ``==SUPPRESS==``.
+    argparse's "invalid choice" error still lists hidden names; dropping them
+    from ``choices`` would stop them dispatching.
+    """
+    hidden = set(names)
+    unknown = hidden - set(subparsers.choices)
+    if unknown:
+        raise ValueError(f"cannot hide unknown subcommands: {sorted(unknown)}")
+    # pylint: disable=protected-access
+    subparsers._choices_actions = [
+        a for a in subparsers._choices_actions if a.dest not in hidden
+    ]
+    visible = [n for n in subparsers.choices if n not in hidden]
+    subparsers.metavar = "{" + ",".join(visible) + "}"
+
+
+# Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
+# publishing agents is no longer a user-facing feature (#5172).
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -2563,6 +2589,64 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
         "or <tmp>/gaia-bench, shared with `gaia eval tasks`)",
     )
 
+    # Long-horizon memory benchmark: gaia eval memory
+    memory_eval_parser = eval_subparsers.add_parser(
+        "memory",
+        help="Memory over months of chats: changing facts, forgets, lessons, injection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval memory --suite pr
+  gaia eval memory --suite pr --gate tests/fixtures/eval_baselines/memory-bench/pr.json
+  gaia eval memory --suite full --scenario maya_moves_and_changes_jobs
+  gaia eval memory --list
+
+Each scenario is one person's chats over weeks or months, replayed through the
+real memory pipeline on a simulated clock: a fresh agent per chat, extraction
+after every turn, consolidation of old chats, explicit remember/forget calls,
+tool mistakes that should become lessons. Probes then check what the agent is
+shown, and what is stored, at points in time.
+
+`pr` is offline and deterministic (a scripted model and a hashed embedder), so
+it gates PRs: a check that passes in the baseline must still pass. `full` uses
+the local model for extraction, consolidation and answers, with the real
+embedder; it needs Lemonade and takes the machine-wide eval lock.
+""",
+    )
+    memory_eval_parser.add_argument(
+        "--suite",
+        choices=["pr", "full"],
+        default="pr",
+        help="Which suite (default: pr)",
+    )
+    memory_eval_parser.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        help="Run only this scenario id (repeatable)",
+    )
+    memory_eval_parser.add_argument(
+        "--model",
+        default=None,
+        help="full suite: chat model (default: GAIA's default chat model)",
+    )
+    memory_eval_parser.add_argument(
+        "--gate", default=None, help="Baseline results.json to gate against"
+    )
+    memory_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/memory-<suite>-<time>)",
+    )
+    memory_eval_parser.add_argument(
+        "--list", action="store_true", help="List the scenarios and exit"
+    )
+    memory_eval_parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Keep the replayed memory databases for inspection",
+    )
+
     # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
     tasks_eval_parser = eval_subparsers.add_parser(
         "tasks",
@@ -3272,7 +3356,7 @@ Examples:
     # Agent Hub command (install/uninstall agents through the daemon)
     hub_parser = subparsers.add_parser(
         "hub",
-        help="Browse, install and uninstall agents from the GAIA Agent Hub",
+        help="Install and uninstall agents",
     )
     hub_subparsers = hub_parser.add_subparsers(
         dest="hub_action", help="Hub action to perform"
@@ -3407,7 +3491,7 @@ Examples:
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Author and manage agents (init/version/test, export/import)",
+        help="Test and manage agents (test, export/import, install)",
     )
     agent_subparsers = agent_parser.add_subparsers(
         dest="agent_action", help="Agent action to perform"
@@ -3450,7 +3534,7 @@ Examples:
     # the Agent Hub. The headless equivalent of the Agent UI's Install button.
     agent_install_parser = agent_subparsers.add_parser(
         "install",
-        help="Install a published agent from the Agent Hub into ~/.gaia/agents/",
+        help="Install a published agent into ~/.gaia/agents/",
     )
     agent_install_parser.add_argument(
         "agent_id",
@@ -3476,8 +3560,9 @@ Examples:
     # errors resolves to a real command).
     agent_subparsers.add_parser(
         "list",
-        help="List installed agents and agents available from the Agent Hub",
+        help="List installed agents and the agents available to install",
     )
+    _hide_subcommands(agent_subparsers, HIDDEN_AGENT_COMMANDS)
 
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
     # MCP-server connectors + per-agent grants. The subparser tree lives in
@@ -3787,6 +3872,7 @@ Examples:
     )
 
     _register_uninstall_subparser(subparsers, parent_parser)
+    _hide_subcommands(subparsers, HIDDEN_TOP_LEVEL_COMMANDS)
     return parser
 
 
@@ -3949,6 +4035,58 @@ def _handle_eval_retrieval(args):
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
     if failed:
+        sys.exit(1)
+
+
+def _handle_eval_memory(args):
+    """gaia eval memory — see gaia.eval.memory.runner."""
+    from gaia.eval.memory import runner
+    from gaia.eval.memory.scenario import load_scenarios
+
+    if args.model and args.suite != "full":
+        print(
+            f"--model applies only to --suite full; the {args.suite} suite runs "
+            "a scripted model. Drop --model, or add --suite full."
+        )
+        sys.exit(2)
+    if args.list:
+        for scenario in load_scenarios(args.scenario):
+            print(
+                f"{scenario.id:42} {len(scenario.sessions):3} chats  "
+                f"{len(scenario.probes):3} probes  {scenario.title}"
+            )
+        return
+    out_dir = Path(
+        args.out or f"eval/results/memory-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+    )
+    if args.suite == "full":
+        from gaia.eval.eval_lock import exclusive_eval
+
+        with exclusive_eval(f"gaia eval memory --suite {args.suite}"):
+            result = runner.run_suite(
+                args.suite,
+                only=args.scenario,
+                model=args.model,
+                keep_workdir=args.keep_work,
+            )
+    else:
+        result = runner.run_suite(
+            args.suite, only=args.scenario, keep_workdir=args.keep_work
+        )
+    gated = None
+    if args.gate:
+        baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
+        gated = runner.gate(result, baseline)
+    runner.write_outputs(result, out_dir, gated)
+    print((out_dir / "report.md").read_text(encoding="utf-8"))
+    print(f"[OUTPUT] {(out_dir / 'results.json').resolve()}")
+    if gated is not None and not gated.passed:
+        print(
+            f"[GATE] FAILED: {len(gated.regressions)} regression(s), "
+            f"{len(gated.missing_checks)} baseline check(s) no longer run. "
+            "See report.md; if a change is intended, replace the baseline with "
+            "this run's results.json in the same PR."
+        )
         sys.exit(1)
 
 
@@ -4336,6 +4474,7 @@ def _handle_schedule(args):
             print(
                 f"{s.name}  [{state}]  cron={s.cron!r}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
+                + (f"  missed={s.missed_count}" if s.missed_count else "")
             )
         return
 
@@ -4346,8 +4485,24 @@ def _handle_schedule(args):
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
         print(f"sink:       {s.sink}  args={s.sink_args}")
         print(f"enabled:    {s.enabled}")
-        print(f"created_at: {s.created_at}")
+        from datetime import datetime as _datetime
+
+        def _local(stamp):
+            # Local time, like next_fire.
+            return _datetime.fromisoformat(stamp).astimezone().isoformat()
+
+        print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
+        if s.missed_count:
+            runs = "run" if s.missed_count == 1 else "runs"
+            count = (
+                f"at least {s.missed_count}" if s.missed_at_least else s.missed_count
+            )
+            print(
+                f"missed:     {count} {runs} in all while the PC was off or "
+                "asleep, or the schedule daemon wasn't running "
+                f"(latest due {_local(s.last_missed)})"
+            )
         return
 
     if action == "remove":
@@ -4540,6 +4695,14 @@ def main():
                     )
                     sys.exit(2)
 
+            try:
+                from gaia.stream_timeout import stream_timeout_from_env
+
+                stream_timeout_from_env()
+            except ValueError as e:
+                # A bad GAIA_STREAM_TIMEOUT: the remedy, not a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
             try:
                 run_telegram(
                     token=args.token,
@@ -5355,6 +5518,11 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Long-horizon memory benchmark: gaia eval memory
+        if getattr(args, "eval_command", None) == "memory":
+            _handle_eval_memory(args)
             return
 
         # Retrieval benchmarks: gaia eval retrieval [--component rag|code]
@@ -8265,8 +8433,8 @@ def handle_agent_command(args):
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
         print(
-            "Available actions: init, version, test, configure, health, status, "
-            "export, import, install, list"
+            "Available actions: test, configure, health, status, export, import, "
+            "install, list"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -8285,7 +8453,7 @@ def handle_agent_command(args):
 
 
 def handle_agent_list(_args):
-    """List installed agents and agents available from the Agent Hub.
+    """List installed agents and the agents available to install.
 
     Read-only discovery for ``gaia agent install`` — degrades to an
     installed-only listing (with a loud note) if the hub catalog is unreachable,
@@ -8302,12 +8470,12 @@ def handle_agent_list(_args):
         available = result.agents
         offline = result.offline
     except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
-        print(f"⚠ Could not reach the Agent Hub catalog: {exc}", file=sys.stderr)
+        print(f"⚠ Could not reach the agent catalog: {exc}", file=sys.stderr)
 
     available_ids = {e.get("id") for e in available}
     if available:
         suffix = " (offline cache)" if offline else ""
-        print(f"Available from the Agent Hub{suffix}:")
+        print(f"Available to install{suffix}:")
         for entry in sorted(available, key=lambda a: a.get("id", "")):
             aid = entry.get("id", "?")
             ver = entry.get("latest_version", "?")
@@ -8326,12 +8494,12 @@ def handle_agent_list(_args):
 
     extra = [aid for aid in sorted(installed) if aid not in available_ids]
     if extra:
-        print("\nInstalled (not in the hub catalog):")
+        print("\nInstalled (not in the catalog):")
         for aid in extra:
             print(f"  {aid:<24} {installed[aid].version}")
 
     if not available and not installed:
-        print("No agents installed, and the Agent Hub catalog is unavailable.")
+        print("No agents installed, and the agent catalog is unavailable.")
     else:
         print("\nInstall one with: gaia agent install <id>")
         if any(
@@ -9071,12 +9239,12 @@ def _handle_hub_list(args):
     body = r.json()
     agents = body.get("agents", [])
     if body.get("offline"):
-        print("⚠️  hub unreachable — showing the cached catalog")
+        print("⚠️  agent catalog unreachable — showing the cached copy")
     if not agents:
         print(
             "No agents installed."
             if getattr(args, "installed", False)
-            else "The Agent Hub catalog is empty."
+            else "The agent catalog is empty."
         )
         return
     print(f"{'AGENT':<14} {'LATEST':<10} {'INSTALLED':<12} {'SIZE':<8} NAME")
@@ -9108,7 +9276,7 @@ def _handle_hub_list(args):
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
         print(
-            f"\n{len(hidden)} hub agent(s) hidden — this GAIA build cannot run "
+            f"\n{len(hidden)} agent(s) hidden — this GAIA build cannot run "
             f"them yet: {', '.join(hidden)}"
         )
 

@@ -18,7 +18,9 @@ from pydantic import BaseModel, Field
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     _is_local_url,
+    _model_ids_match,
     cloud_model_provider,
+    find_model_requirement,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
@@ -36,13 +38,18 @@ from ..models import (
     ModelServerBackendRequest,
     ModelServerInfo,
     ModelStatus,
+    RunningAnswer,
+    RunningIndexJob,
     SettingsResponse,
     SettingsUpdateRequest,
     SystemStatus,
     TaskListResponse,
     TaskResponse,
+    UnloadModelResponse,
     WarmUpStatus,
+    WorkInProgress,
 )
+from ..run_manager import run_manager
 
 # "autonomous" is intentionally absent: its observation cycle is unimplemented
 # (#2005) and accepting it would silently behave as "goal_driven".
@@ -140,9 +147,20 @@ def _set_download_progress(model_name: str, payload: Dict[str, Any]) -> None:
 
 
 def _get_download_progress(model_name: str) -> Optional[Dict[str, Any]]:
-    """Return a copy of the latest progress dict, or None."""
+    """Return a copy of the latest progress dict, or None.
+
+    A pull registers a custom model as ``user.X`` and Lemonade then lists it as
+    ``X``, so either name finds the download.
+    """
     with _download_progress_lock:
-        entry = _download_progress.get(model_name)
+        entry = _download_progress.get(model_name) or next(
+            (
+                v
+                for k, v in _download_progress.items()
+                if _model_ids_match(k, model_name)
+            ),
+            None,
+        )
         return dict(entry) if entry else None
 
 
@@ -232,6 +250,13 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
 
     base_url = resolve_lemonade_base_url()
     payload: Dict[str, Any] = {"model_name": model_name, "stream": True}
+    requirement = find_model_requirement(model_name)
+    registration = requirement.pull_kwargs() if requirement is not None else {}
+    if registration:
+        # A custom model registers on its first pull, under its ``user.`` name;
+        # built-ins send nothing extra (#1655).
+        payload["model_name"] = requirement.model_id
+        payload.update({k: v for k, v in registration.items() if v is not None})
     if force:
         payload["force"] = True
 
@@ -508,6 +533,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         logger.warning("system status: %s", exc)
         status = SystemStatus(lemonade_url=None, config_error=str(exc))
     status.warm_up = WarmUpStatus(**warmup.warm_up_status())
+    if db.db_path != ":memory:":
+        status.data_dir = str(Path(db.db_path).parent)
 
     # Resolve how to start Lemonade on THIS host once, here, so every surface
     # renders the same answer. Never fatal: a banner losing its hint is far
@@ -1357,6 +1384,79 @@ async def load_model_endpoint(body: LoadModelRequest):
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {"status": "loading", "model": model_name, "ctx_size": ctx_size}
+
+
+def _running_index_ids(request: Request) -> List[str]:
+    """Documents being indexed now: uploads in the background and monitor re-indexes."""
+    ids = list(request.app.state.indexing_tasks)
+    monitor = getattr(request.app.state, "document_monitor", None)
+    if monitor is not None:
+        ids.extend(d for d in monitor.reindexing_docs if d not in ids)
+    return ids
+
+
+@router.get("/api/system/work-in-progress", response_model=WorkInProgress)
+async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db)):
+    """Answers still being written and documents still being indexed.
+
+    The desktop app asks this before it quits or frees the model's memory,
+    so it can warn that the work will be lost.
+    """
+    answers = []
+    for sid in run_manager.active_sessions():
+        session = db.get_session(sid)
+        answers.append(
+            RunningAnswer(session_id=sid, title=session["title"] if session else None)
+        )
+    indexing = []
+    for doc_id in _running_index_ids(request):
+        doc = db.get_document(doc_id)
+        indexing.append(
+            RunningIndexJob(
+                document_id=doc_id, filename=doc["filename"] if doc else None
+            )
+        )
+    return WorkInProgress(answers=answers, indexing=indexing)
+
+
+class UnloadModelRequest(BaseModel):
+    model_name: str = Field(min_length=1)
+
+
+@router.post("/api/system/unload-model", response_model=UnloadModelResponse)
+async def unload_model_endpoint(body: UnloadModelRequest, request: Request):
+    """Unload one model from the model server to free its memory.
+
+    Only the named model: the embedder and any other loaded model stay. The
+    next message loads it again. Refused with ``409`` while an answer is
+    running or a document is indexing in this app.
+    """
+    if run_manager.active_sessions():
+        raise HTTPException(
+            status_code=409,
+            detail="An answer is still being written. Stop it or wait for it "
+            "to finish, then free memory.",
+        )
+    if _running_index_ids(request):
+        raise HTTPException(
+            status_code=409,
+            detail="A document is still being indexed. Wait for it to finish, "
+            "then free memory.",
+        )
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+    try:
+        await asyncio.to_thread(
+            lambda: LemonadeClient(verbose=False).unload_model(body.model_name)
+        )
+    except (GaiaConfigError, LemonadeClientError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"The model server did not unload {body.model_name}: {exc}",
+        ) from exc
+    logger.info("Unloaded %s from the model server on request", body.model_name)
+    return UnloadModelResponse(status="unloaded")
 
 
 class DownloadModelRequest(BaseModel):

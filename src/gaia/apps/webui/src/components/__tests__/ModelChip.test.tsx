@@ -167,7 +167,7 @@ describe('ModelChip', () => {
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('amd');
         expect(within(dialog).getByRole('button', { name: /kimi-k2/ })).toBeInTheDocument();
         expect(within(dialog).getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ })).toHaveAttribute('aria-current', 'true');
-        expect(within(dialog).getByRole('button', { name: /Qwen3-8B-GGUF/ })).toBeDisabled();
+        expect(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' })).toBeInTheDocument();
     });
 
     it('asks before moving a local chat to a cloud model, then switches', async () => {

@@ -170,7 +170,7 @@ class TestStoreLevel:
 
         assert store.get_forgotten() == []
 
-    def test_a_v5_database_migrates_to_v6(self, tmp_path):
+    def test_a_v5_database_migrates_to_the_current_schema(self, tmp_path):
         path = tmp_path / "old.db"
         MemoryStore(db_path=path).close()
         conn = sqlite3.connect(path)
@@ -182,7 +182,7 @@ class TestStoreLevel:
         db = MemoryStore(db_path=path)
         try:
             version = db._conn.execute("SELECT version FROM schema_version").fetchone()
-            assert version[0] == 6
+            assert version[0] == 7
             db.forget(db.store(category="fact", content="User has a cat named Miso"))
             assert db.is_forgotten("User has a cat named Miso")
         finally:

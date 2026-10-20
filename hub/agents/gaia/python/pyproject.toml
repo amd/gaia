@@ -18,7 +18,8 @@ requires-python = ">=3.10"
 #   gaia.agents.tools.path_access, the allowed-folders check every file tool
 #   uses (#4656), and 0.25.0 is the first core that ships it. (0.24.1 was the
 #   first core whose daemon can supervise this sidecar, #2932.) Raise it in
-#   step with min_gaia_version, never ahead of a real release.
+#   step with min_gaia_version, never ahead of a real release. The chat agent's
+#   reasoning-effort tool needs 0.25.1: raise it then.
 # - gaia-agent-chat>=0.2.0: the first chat release with that floor.
 # - gaia-agent-chat is a HARD dependency, not an extra: GaiaAgent subclasses
 #   ChatAgent to inherit the doc prompt profile, RAG discovery, and session

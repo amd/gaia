@@ -286,12 +286,18 @@ _STEM_STOPWORDS = frozenset(
 
 
 def content_stems(text: str) -> set:
-    """Content words of *text*, cut to a 4-letter stem so "works" meets "working"."""
-    return {
-        w[:4]
-        for w in re.findall(r"[a-z0-9']+", text.lower())
-        if len(w) >= 3 and w not in _STEM_STOPWORDS
-    }
+    """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
+
+    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
+    7" are different memories.
+    """
+    stems = set()
+    for w in re.findall(r"[a-z0-9']+", text.lower()):
+        if any(ch.isdigit() for ch in w):
+            stems.add(w)
+        elif len(w) >= 3 and w not in _STEM_STOPWORDS:
+            stems.add(w[:4])
+    return stems
 
 
 def _as_datetime(iso: str) -> datetime:
@@ -473,8 +479,11 @@ CREATE TABLE IF NOT EXISTS knowledge (
     due_at      TEXT,
     reminded_at TEXT,
     embedding   BLOB,
-    superseded_by TEXT
+    superseded_by TEXT,
+    decayed_at  TEXT
 );
+-- knowledge.decayed_at (v7): when confidence decay last ran on the row, kept
+-- apart from updated_at, which the agent shows as "last confirmed".
 CREATE INDEX IF NOT EXISTS idx_knowledge_due ON knowledge(due_at)
     WHERE due_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_knowledge_context ON knowledge(context);
@@ -762,9 +771,9 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v6 schema.  Existing databases at v1–v5 are
-        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 through
-        v5→v6 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v7 schema.  Existing databases at v1–v6 are
+        migrated automatically (v1→v2 and v6→v7 via ALTER TABLE ADD COLUMN;
+        v2→v3 through v5→v6 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
         with self._locked():
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -781,12 +790,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v6)
+            # Initialize schema_version if empty (fresh install → v7)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (6, _now_iso()),
+                    (7, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -899,6 +908,21 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v6 complete")
             current_version = 6
+
+        if current_version < 7:
+            # v6 -> v7: knowledge.decayed_at, so confidence decay stops
+            # stamping updated_at ("last confirmed") on every idle memory.
+            try:
+                self._conn.execute("ALTER TABLE knowledge ADD COLUMN decayed_at TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+            self._conn.execute(
+                "UPDATE schema_version SET version = 7, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v7 complete")
+            current_version = 7
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -1502,10 +1526,14 @@ class MemoryStore:
         top_k: int = 5,
         time_from: str | None = None,
         time_to: str | None = None,
+        count_as_use: bool = True,
     ) -> List[Dict]:
         """FTS5 search. AND semantics, OR fallback. BM25 ranking.
 
-        Bumps confidence +0.02 and increments use_count on each recalled item.
+        Bumps confidence +0.02 and increments use_count on each recalled item,
+        unless *count_as_use* is False: a lookup nobody asked for (extraction
+        checking what is already known) must not make an old memory look
+        more trusted every turn.
         Filters by context/entity if provided. Excludes sensitive by default.
         Only returns active items (superseded_by IS NULL).
 
@@ -1552,29 +1580,41 @@ class MemoryStore:
             # Wrap in try/except so that a failure on any UPDATE rolls back
             # the whole batch — partial confidence bumps committed by a later
             # unrelated commit() would produce inconsistent use_count/confidence.
-            if results:
-                now = _now_iso()
-                try:
-                    for r in results:
-                        self._conn.execute(
-                            "UPDATE knowledge SET "
-                            "confidence = MIN(confidence + ?, 1.0), "
-                            "last_used = ?, "
-                            "use_count = use_count + 1 "
-                            "WHERE id = ?",
-                            (CONFIDENCE_BUMP_PER_RECALL, now, r["id"]),
-                        )
-                        r["confidence"] = min(
-                            r["confidence"] + CONFIDENCE_BUMP_PER_RECALL, 1.0
-                        )
-                        r["use_count"] = r["use_count"] + 1
-                        r["last_used"] = now
-                    self._conn.commit()
-                except Exception:
-                    self._conn.rollback()
-                    raise
+            if results and count_as_use:
+                self._count_use_locked(results)
 
         return results
+
+    def count_use(self, items: List[Dict]) -> None:
+        """Record that *items* were recalled: confidence, use count, last used.
+
+        ``updated_at`` is left alone: being looked up is not being confirmed.
+        """
+        if items:
+            with self._locked():
+                self._count_use_locked(items)
+
+    def _count_use_locked(self, items: List[Dict]) -> None:
+        # SQL-side arithmetic keeps each bump atomic across processes; one
+        # transaction, so a failure leaves no partial use counts.
+        now = _now_iso()
+        try:
+            for r in items:
+                self._conn.execute(
+                    "UPDATE knowledge SET "
+                    "confidence = MIN(confidence + ?, 1.0), "
+                    "last_used = ?, "
+                    "use_count = use_count + 1 "
+                    "WHERE id = ?",
+                    (CONFIDENCE_BUMP_PER_RECALL, now, r["id"]),
+                )
+                r["confidence"] = min(r["confidence"] + CONFIDENCE_BUMP_PER_RECALL, 1.0)
+                r["use_count"] = r.get("use_count", 0) + 1
+                r["last_used"] = now
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def _fts5_search_knowledge_locked(
         self,
@@ -1954,18 +1994,25 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def update_confidence(self, knowledge_id: str, delta: float) -> None:
-        """Adjust confidence by delta, clamped to [0.0, 1.0]."""
+    def update_confidence(
+        self, knowledge_id: str, delta: float, *, confirmed: bool = False
+    ) -> None:
+        """Adjust confidence by delta, clamped to [0.0, 1.0].
+
+        ``updated_at`` is what the agent shows as "last confirmed", so it only
+        moves when *confirmed*: a lesson whose fix just worked again. A
+        reconciliation nudge or a recall is not a confirmation.
+        """
         with self._locked():
             try:
                 self._conn.execute(
                     """
                     UPDATE knowledge SET
                         confidence = MIN(MAX(confidence + ?, 0.0), 1.0),
-                        updated_at = ?
+                        updated_at = CASE WHEN ? THEN ? ELSE updated_at END
                     WHERE id = ?
                     """,
-                    (delta, _now_iso(), knowledge_id),
+                    (delta, int(confirmed), _now_iso(), knowledge_id),
                 )
                 self._conn.commit()
             except Exception:
@@ -2097,6 +2144,61 @@ class MemoryStore:
         return bool(stems) and any(
             _mentions(stems, content_stems(c))
             for c, _ in self._forgotten_rows(said_before)
+        )
+
+    def is_current(
+        self, content: str, category: str, context: Optional[str] = None
+    ) -> bool:
+        """Whether a current memory in *category* already says *content*.
+
+        Unlike ``store()``'s dedup, this ignores entity, so a copy without an
+        entity tag is recognised as the same memory. *context* limits it to
+        that context plus global (None checks every context), matching what
+        the caller can read back. It matches on content words against the
+        larger of the two, so "User's sister lives in Calgary" is not "User
+        lives in Calgary".
+        """
+        stems = content_stems(content)
+        if not stems:
+            return False
+        sql = (
+            "SELECT content FROM knowledge WHERE category = ? "
+            "AND superseded_by IS NULL"
+        )
+        params: tuple = (category,)
+        if context is not None:
+            sql += " AND context IN (?, 'global')"
+            params += (context,)
+        with self._locked():
+            rows = self._conn.execute(sql, params).fetchall()
+        return any(_same_memory(stems, content_stems(r[0])) for r in rows)
+
+    def changed_since(
+        self, content: str, since: str, context: Optional[str] = None
+    ) -> bool:
+        """Whether *content* is a memory replaced by a newer one after *since*.
+
+        Supersession stamps the old row's ``updated_at``, so this finds a value
+        the user changed after an old conversation stated it. *context* is as
+        in ``is_current``.
+        """
+        stems = content_stems(content)
+        if not stems:
+            return False
+        moment = _as_datetime(since)
+        sql = (
+            "SELECT content, updated_at FROM knowledge "
+            "WHERE superseded_by IS NOT NULL"
+        )
+        params: tuple = ()
+        if context is not None:
+            sql += " AND context IN (?, 'global')"
+            params = (context,)
+        with self._locked():
+            rows = self._conn.execute(sql, params).fetchall()
+        return any(
+            _as_datetime(updated) >= moment and _same_memory(stems, content_stems(old))
+            for old, updated in rows
         )
 
     def _unforget_locked(self, content: str) -> None:
@@ -2997,14 +3099,15 @@ class MemoryStore:
             count_sql = f"SELECT COUNT(*) FROM knowledge k {fts_join} {where}"
             total = self._conn.execute(count_sql, tuple(params)).fetchone()[0]
 
-            # Paginated results
+            # Paginated results. Rows written in the same clock tick tie on
+            # their timestamp; insertion order breaks it, so newest-first holds.
             select_cols = ", ".join(
                 f"k.{c.strip()}" for c in self._KNOWLEDGE_COLS.split(",")
             )
             data_sql = f"""
                 SELECT {select_cols} FROM knowledge k {fts_join}
                 {where}
-                ORDER BY k.{sort_col} {order_dir}
+                ORDER BY k.{sort_col} {order_dir}, k.rowid {order_dir}
                 LIMIT ? OFFSET ?
             """
             data_params = tuple(params) + (limit, offset)
@@ -4214,12 +4317,13 @@ class MemoryStore:
                     """
                     UPDATE knowledge SET
                         confidence = confidence * ?,
-                        updated_at = ?
+                        decayed_at = ?
                     WHERE last_used IS NOT NULL AND last_used < ?
                           AND updated_at < ?
+                          AND (decayed_at IS NULL OR decayed_at < ?)
                           AND superseded_by IS NULL
                     """,
-                    (decay_factor, now, cutoff, cutoff),
+                    (decay_factor, now, cutoff, cutoff, cutoff),
                 )
                 rowcount = cursor.rowcount
                 self._conn.commit()

@@ -276,6 +276,57 @@ def test_title_runs_on_the_side_slot_under_the_lease(title_client):
     assert kwargs["auto_download"] is False
 
 
+def test_title_gives_up_on_a_long_model_queue(title_client, monkeypatch):
+    """A title waits at most 30 s for the model, then returns None instead of
+    holding a worker thread behind a long turn."""
+    client, _made, _posts = title_client
+    limits = []
+
+    @contextmanager
+    def busy_lease(model, **_kwargs):
+        limit, _source = broker_client.current_wait_limit()
+        limits.append(limit)
+        raise BrokerUnavailableError(
+            f"gave up waiting {limit}s for '{model}'", status_code=504
+        )
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(broker_client, "model_lease", busy_lease)
+
+    title = asyncio.run(
+        helpers._generate_session_title(
+            _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+        )
+    )
+
+    assert title is None
+    assert limits == [30.0]
+    client.chat_completions.assert_not_called()
+    # The cap is the title's alone; it does not leak into the caller's scope.
+    assert broker_client.current_wait_limit() == (None, None)
+
+
+def test_title_wait_cap_overrides_a_longer_env_limit(title_client, monkeypatch):
+    """GAIA_MODEL_LEASE_WAIT_S set high must not let a title wait longer."""
+    client, _made, _posts = title_client
+    monkeypatch.setenv(broker_client.LEASE_WAIT_LIMIT_ENV_VAR, "3600")
+    limits = []
+
+    @contextmanager
+    def lease(model, **_kwargs):
+        limits.append(broker_client.current_wait_limit()[0])
+        yield None
+
+    monkeypatch.setattr(broker_client, "model_lease", lease)
+    asyncio.run(
+        helpers._generate_session_title(
+            _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+        )
+    )
+
+    assert limits == [30.0]
+
+
 # ── Settings → Load: through the lease, and asks while a chat answers ────────
 
 
@@ -447,6 +498,82 @@ def test_a_turn_stopped_while_waiting_for_the_model_never_queries(
         assert done and done[-1].get("cancelled") is True
 
 
+# ── A turn whose performance can't be summarized still saves its answer ─────
+
+
+def _run_answered_turn(monkeypatch, summarize):
+    import json
+    from unittest.mock import AsyncMock
+
+    from gaia.ui import turn_insights
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.run_manager import RunManager
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="Mine-GGUF", agent_type="chat")
+    sid = session["id"]
+    helpers._agent_cache.clear()
+    helpers._store_agent(sid, "Mine-GGUF", [], _CountingAgent(), "chat")
+    monkeypatch.setattr("gaia.ui.run_manager.run_manager", RunManager())
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
+    monkeypatch.setattr(helpers, "_maybe_load_expected_model", lambda *a, **k: None)
+    monkeypatch.setattr(turn_insights, "summarize_turn", summarize)
+
+    async def run_turn():
+        events = []
+        request = ChatRequest(session_id=sid, message="hi", stream=True)
+        async for chunk in helpers._stream_chat_response(db, session, request):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[len("data: ") :]))
+        return events
+
+    try:
+        events = asyncio.run(run_turn())
+        answers = [m for m in db.get_messages(sid) if m["role"] == "assistant"]
+        performance = db.turn_performance(sid)
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+    return events, answers, performance
+
+
+@pytest.mark.parametrize("error", [KeyError, TypeError, ValueError])
+def test_a_turn_whose_performance_cannot_be_summarized_still_saves_its_answer(
+    lemonade, monkeypatch, error
+):
+    def broken(*_a, **_k):
+        raise error("malformed stats record")
+
+    events, answers, performance = _run_answered_turn(monkeypatch, broken)
+
+    assert [a["content"] for a in answers] == ["answered"]
+    assert not [e for e in events if e.get("type") == "error"]
+    # Unmeasured, never a guessed or partial record.
+    assert performance == []
+
+
+def test_an_unexpected_summary_failure_is_not_swallowed(lemonade, monkeypatch):
+    def broken(*_a, **_k):
+        raise RuntimeError("a bug in the summary, not a bad record")
+
+    events, _answers, performance = _run_answered_turn(monkeypatch, broken)
+
+    assert [e for e in events if e.get("type") == "error"]
+    assert performance == []
+
+
+def test_a_summarized_turn_records_its_performance(lemonade, monkeypatch):
+    _events, answers, performance = _run_answered_turn(
+        monkeypatch, lambda *_a, **_k: {"time": {"wall_seconds": 1.0}}
+    )
+
+    assert [a["content"] for a in answers] == ["answered"]
+    assert [p["time"] for p in performance] == [{"wall_seconds": 1.0}]
+
+
 # ── A restart still knows which models are the Agent UI's own ──────────────
 
 
@@ -593,7 +720,7 @@ def test_a_stop_during_the_retry_reload_does_not_run_the_query_again(
     monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
     preflights = []
 
-    def preflight(_model, handler=None, _cancel=None):
+    def preflight(_model, handler=None, _cancel=None, loads=None):
         preflights.append(1)
         if len(preflights) == 2:  # The retry's reload: the user presses Stop.
             handler.cancelled.set()
@@ -750,3 +877,71 @@ def test_a_copy_that_reports_no_window_is_reloaded(lemonade):
 
     lemonade["client"].unload_model.assert_called_once()
     lemonade["client"].load_model.assert_called_once()
+
+
+# ── The panel's load record names only what was really unloaded ──────────────
+
+
+def test_a_load_that_made_room_records_the_model_it_unloaded(lemonade):
+    helpers._maybe_load_expected_model("Mine-Old-GGUF")
+    lemonade["resident"].append(_model("Other-App-GGUF"))
+    attempts = []
+
+    def load(name, **_kwargs):
+        attempts.append(name)
+        if len(attempts) == 1:
+            raise InsufficientMemoryError("Not enough free memory to load it")
+        lemonade["resident"].append(_model(name))
+
+    lemonade["client"].load_model.side_effect = load
+    loads = []
+
+    helpers._maybe_load_expected_model("Mine-New-GGUF", loads=loads)
+
+    assert [(r["model"], r["replaced"]) for r in loads] == [
+        ("Mine-New-GGUF", ["Mine-Old-GGUF"])
+    ]
+
+
+def test_a_reload_at_a_bigger_window_records_the_copy_it_replaced(lemonade):
+    helpers.note_model_loaded("Mine-GGUF")
+    lemonade["resident"] = [_model("Mine-GGUF", ctx=32768), _model("Other-App-GGUF")]
+    loads = []
+
+    helpers._maybe_load_expected_model("Mine-GGUF", loads=loads)
+
+    assert [r["replaced"] for r in loads] == [["Mine-GGUF"]]
+
+
+@pytest.mark.parametrize("refusal", ["memory", "in_use"])
+def test_a_refused_load_records_nothing(lemonade, refusal):
+    if refusal == "memory":
+        lemonade["resident"] = [_model("Other-App-GGUF")]
+        lemonade["client"].load_model.side_effect = InsufficientMemoryError(
+            "Not enough free memory to load Mine-GGUF"
+        )
+        expected = InsufficientMemoryError
+    else:
+        lemonade["resident"] = [_model("Mine-GGUF", ctx=32768)]  # Another app's.
+        expected = helpers.ModelInUseError
+    loads = []
+
+    with pytest.raises(expected):
+        helpers._maybe_load_expected_model("Mine-GGUF", loads=loads)
+
+    assert loads == []
+
+
+def test_a_load_ended_by_stop_records_nothing(lemonade):
+    cancel = threading.Event()
+
+    def stop_then_fail(name, **_kwargs):
+        cancel.set()
+        raise RuntimeError("load interrupted")
+
+    lemonade["client"].load_model.side_effect = stop_then_fail
+    loads = []
+
+    helpers._maybe_load_expected_model("Mine-GGUF", None, cancel, loads=loads)
+
+    assert loads == []

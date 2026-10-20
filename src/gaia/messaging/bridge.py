@@ -31,10 +31,12 @@ import queue
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Set
 
 from gaia.logger import get_logger
+from gaia.stream_timeout import DEFAULT_STREAM_TIMEOUT_SECONDS, stream_timeout_from_env
 
 log = get_logger(__name__)
 
@@ -72,6 +74,49 @@ NEEDS_CONFIRMATION = "needs_confirmation"
 #: (``[project.scripts] gaia-agent = "gaia_agent.entry:main"``).
 DEFAULT_AGENT_BINARY = "gaia-agent"
 
+#: How long a turn may go without progress before it is stopped: the Agent
+#: UI's window, set by the same ``GAIA_STREAM_TIMEOUT``. A running tool or a
+#: pending approval is not idle; each has its own deadline.
+DEFAULT_TURN_IDLE_SECONDS = float(DEFAULT_STREAM_TIMEOUT_SECONDS)
+
+#: How many times one channel restarts a wedged agent within
+#: ``RESTART_WINDOW_SECONDS`` before it gives up.
+MAX_AGENT_RESTARTS = 3
+RESTART_WINDOW_SECONDS = 24 * 3600.0
+
+#: Added to the next answer of anyone whose conversation a restart wiped.
+RESTART_NOTICE = (
+    "(The agent was restarted after it stopped responding, so it no longer "
+    "remembers your earlier messages.)"
+)
+
+#: Said when a channel has given up on its agent; adapters pass their own.
+DEFAULT_RESTART_HINT = "Restart the messaging bridge to serve messages again."
+
+#: How long a stopped turn's child gets to acknowledge the stop before it is
+#: treated as wedged and shut down.
+DEFAULT_CANCEL_GRACE_SECONDS = 30.0
+
+#: How often the writer checks a running turn for progress.
+_IDLE_POLL_SECONDS = 0.5
+
+
+def _format_duration(seconds: float) -> str:
+    whole = int(seconds)
+    for unit, size in (("hour", 3600), ("minute", 60)):
+        if whole >= size and whole % size == 0:
+            count = whole // size
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{whole} second{'s' if whole != 1 else ''}"
+
+
+def turn_idle_message(seconds: float) -> str:
+    """What a messaging user is told when a turn is stopped for no progress."""
+    return (
+        f"This turn ran for {_format_duration(seconds)} without progress, so "
+        "GAIA stopped it."
+    )
+
 
 class AgentChannelError(RuntimeError):
     """The agent child could not be started, or died and cannot be used."""
@@ -98,8 +143,14 @@ class _TurnState:
     """Bookkeeping for the turn currently in flight."""
 
     turn: Turn
+    last_progress: float = 0.0
     saw_terminal: bool = False
     pending_confirm_ids: List[str] = field(default_factory=list)
+    #: Quiet by design, with deadlines of their own, so not idle.
+    tool_running: bool = False
+    awaiting_decision: bool = False
+    #: When the idle watchdog stopped this turn, if it did.
+    stopped_at: Optional[float] = None
 
 
 class StreamThrottle:
@@ -169,6 +220,15 @@ class AgentChannel:
     * the **reader** owns stdout and dispatches every event;
     * the **caller's** thread posts decisions, which must land *while* a turn is
       in flight — that is the only moment an approval is worth anything.
+
+    A turn that makes no progress for ``idle_limit`` seconds is stopped, so one
+    wedged child cannot hold every later message. The child is sent a cancel.
+    If it ends the turn within ``cancel_grace`` seconds, the user is told to
+    send "continue". If not, the child is replaced and the user is told the
+    conversation was reset; so is everyone else who had talked to it, on their
+    next answer. After ``max_restarts`` replacements within
+    ``restart_window`` seconds the channel stops answering, and every message
+    says how to restart it.
     """
 
     def __init__(
@@ -179,7 +239,32 @@ class AgentChannel:
         env: Optional[Dict[str, str]] = None,
         spawn: Optional[Callable[..., Any]] = None,
         on_busy: Optional[Callable[[Turn, int], None]] = None,
+        idle_limit: Optional[float] = None,
+        cancel_grace: float = DEFAULT_CANCEL_GRACE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        poll_seconds: float = _IDLE_POLL_SECONDS,
+        max_restarts: int = MAX_AGENT_RESTARTS,
+        restart_window: float = RESTART_WINDOW_SECONDS,
+        restart_hint: str = DEFAULT_RESTART_HINT,
     ) -> None:
+        if idle_limit is None:
+            idle_limit = float(stream_timeout_from_env())
+        for name, value in (
+            ("idle_limit", idle_limit),
+            ("cancel_grace", cancel_grace),
+            ("poll_seconds", poll_seconds),
+            ("restart_window", restart_window),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be > 0 seconds, got {value}")
+        self._idle_limit = idle_limit
+        self._max_restarts = max_restarts
+        self._restart_window = restart_window
+        self._restart_times: Deque[float] = deque()
+        self._restart_hint = restart_hint
+        self._cancel_grace = cancel_grace
+        self._clock = clock
+        self._poll_seconds = poll_seconds
         self._argv = list(argv) if argv else [DEFAULT_AGENT_BINARY]
         self._env = env
         self._on_event = on_event
@@ -188,8 +273,12 @@ class AgentChannel:
         # agent, which costs ~42s to build before it answers anything.
         self._spawn = spawn or self._default_spawn
         self._proc: Any = None
+        #: A child being shut down for a restart; its reader must not end the turn.
+        self._retiring: Any = None
         self._queue: "queue.Queue[Optional[Turn]]" = queue.Queue()
         self._active: Optional[_TurnState] = None
+        # Guards _active and _proc together, so an event is always matched to
+        # the turn that was current for the child that produced it.
         self._active_lock = threading.RLock()
         self._turn_done = threading.Event()
         self._write_lock = threading.Lock()
@@ -197,6 +286,12 @@ class AgentChannel:
         self._writer: Optional[threading.Thread] = None
         self._closing = threading.Event()
         self._depth = 0
+        #: Set once the channel has given up on its agent: why no turn can run.
+        self._dead: Optional[str] = None
+        #: Senders the current child has answered, and those whose conversation
+        #: a restart wiped and who have not been told yet.
+        self._senders: Set[str] = set()
+        self._reset_unannounced: Set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -235,13 +330,10 @@ class AgentChannel:
                 "rather than starting one twice."
             )
         self._proc = self._spawn()
-        self._reader = threading.Thread(
-            target=self._read_loop, name="gaia-bridge-reader", daemon=True
-        )
+        self._start_reader(self._proc)
         self._writer = threading.Thread(
             target=self._write_loop, name="gaia-bridge-writer", daemon=True
         )
-        self._reader.start()
         self._writer.start()
         log.info("Agent channel started: %s", " ".join(self._argv))
 
@@ -251,7 +343,9 @@ class AgentChannel:
             return
         self._closing.set()
         self._queue.put(None)
-        proc = self._proc
+        with self._active_lock:
+            # Whichever child is current, including one a restart just made.
+            proc = self._proc
         if proc is not None:
             try:
                 if proc.stdin is not None:
@@ -327,13 +421,13 @@ class AgentChannel:
     # ------------------------------------------------------------------
 
     def _write_line(self, line: str) -> None:
-        proc = self._proc
-        if proc is None or proc.stdin is None:
-            raise AgentChannelError(
-                "The agent child has no input stream — it was never started, "
-                "or it has already exited. Restart the adapter."
-            )
         with self._write_lock:
+            proc = self._proc
+            if proc is None or proc.stdin is None:
+                raise AgentChannelError(
+                    "The agent child has no input stream — it was never "
+                    "started, or it has already exited. Restart the adapter."
+                )
             try:
                 proc.stdin.write(line + "\n")
                 proc.stdin.flush()
@@ -349,8 +443,16 @@ class AgentChannel:
             if turn is None:
                 return
             self._turn_done.clear()
+            state = _TurnState(turn=turn, last_progress=self._clock())
+            if self._dead is not None:
+                # Never made active, so nothing the killed child flushed late
+                # can land in this turn's reply.
+                self._render_terminal_error(state, self._dead)
+                self._finish_turn()
+                continue
             with self._active_lock:
-                self._active = _TurnState(turn=turn)
+                self._active = state
+                self._senders.add(turn.sender)
             try:
                 # Always wrapped: a bare line carrying a newline would be read as
                 # several unrelated questions, and the agent would answer only
@@ -361,8 +463,133 @@ class AgentChannel:
                 self._finish_turn()
                 continue
             # The reader sets this on the turn's one terminal event.
-            self._turn_done.wait()
+            self._await_turn(state)
             self._finish_turn()
+
+    def _await_turn(self, state: _TurnState) -> None:
+        """Wait for ``state``'s terminal event, stopping it if it goes idle."""
+        while not self._turn_done.wait(self._poll_seconds):
+            if self._closing.is_set():
+                return
+            now = self._clock()
+            with self._active_lock:
+                if state.saw_terminal:
+                    continue  # its answer is being rendered
+                if state.stopped_at is None:
+                    if state.tool_running or state.awaiting_decision:
+                        state.last_progress = now
+                    idle = now - state.last_progress
+                    if idle < self._idle_limit:
+                        continue
+                    state.stopped_at = now
+                    wedged = False
+                else:
+                    wedged = now - state.stopped_at >= self._cancel_grace
+                    if not wedged:
+                        continue
+            if wedged:
+                self._replace_wedged_child(state)
+                return
+            log.warning("Agent turn made no progress for %.0fs; stopping it", idle)
+            try:
+                self.cancel()
+            except AgentChannelError as e:
+                # The reader sees the same dead pipe and ends the turn.
+                log.warning("Could not send the stop to the agent: %s", e)
+
+    def _start_reader(self, proc: Any) -> None:
+        self._reader = threading.Thread(
+            target=self._read_loop, args=(proc,), name="gaia-bridge-reader", daemon=True
+        )
+        self._reader.start()
+
+    @staticmethod
+    def _stop_child(proc: Any) -> None:
+        """Terminate ``proc`` and wait for it, killing it if it lingers."""
+        try:
+            proc.terminate()
+        except (OSError, AttributeError) as e:
+            log.debug("Agent child already gone: %s", e)
+        wait = getattr(proc, "wait", None)
+        if wait is None:
+            return
+        try:
+            wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                log.error(
+                    "Agent child pid %s survived a kill; it may need ending by hand",
+                    getattr(proc, "pid", "?"),
+                )
+
+    def _restart_budget_left(self) -> bool:
+        now = self._clock()
+        while (
+            self._restart_times and now - self._restart_times[0] > self._restart_window
+        ):
+            self._restart_times.popleft()
+        return len(self._restart_times) < self._max_restarts
+
+    def _replace_wedged_child(self, state: _TurnState) -> None:
+        """Replace a child that ignored a stop, a bounded number of times."""
+        log.error(
+            "Agent child did not end a stopped turn within %.0fs; shutting it down",
+            self._cancel_grace,
+        )
+        with self._active_lock:
+            self._retiring = self._proc
+        self._stop_child(self._retiring)
+        if self._closing.is_set():
+            return
+        if not self._restart_budget_left():
+            self._dead = (
+                f"The agent stopped responding {len(self._restart_times) + 1} "
+                "times and was shut down, so this message was not answered. "
+                f"{self._restart_hint}"
+            )
+            log.error(
+                "Agent restarted %d times within %.0fs; refusing messages until "
+                "the bridge is restarted",
+                len(self._restart_times),
+                self._restart_window,
+            )
+            self._render_terminal_error(state, self._dead)
+            return
+        try:
+            fresh = self._spawn()
+        except AgentChannelError as e:
+            self._dead = f"The agent could not be restarted: {e}"
+            log.error("Could not restart the agent child: %s", e)
+            self._render_terminal_error(state, self._dead)
+            return
+        with self._active_lock, self._write_lock:
+            if self._closing.is_set():
+                orphan, fresh = fresh, None  # closed while it started
+            else:
+                self._proc = fresh
+                self._restart_times.append(self._clock())
+                lost = self._senders - {state.turn.sender}
+                self._reset_unannounced |= lost
+                self._senders = set()
+        if fresh is None:
+            self._stop_child(orphan)
+            return
+        self._start_reader(fresh)
+        log.error(
+            "Restarted the agent child (%d in the last %.0fs); its conversation "
+            "starts over",
+            len(self._restart_times),
+            self._restart_window,
+        )
+        self._render_terminal_error(
+            state,
+            f"{turn_idle_message(self._idle_limit)} The agent did not respond to "
+            "the stop, so it was restarted and no longer remembers this "
+            "conversation. Send your message again.",
+        )
 
     def _finish_turn(self) -> None:
         with self._active_lock:
@@ -370,8 +597,7 @@ class AgentChannel:
             if self._depth:
                 self._depth -= 1
 
-    def _read_loop(self) -> None:
-        proc = self._proc
+    def _read_loop(self, proc: Any) -> None:
         stdout = getattr(proc, "stdout", None)
         if stdout is None:
             return
@@ -384,21 +610,31 @@ class AgentChannel:
                 line = raw.strip()
                 if not line:
                     continue
-                self._handle_line(line)
+                # Matched to its turn under the lock the child swap takes, so
+                # a replaced child's late line never reaches the next turn.
+                with self._active_lock:
+                    if proc is not self._proc or proc is self._retiring:
+                        return
+                    state = self._active
+                self._handle_line(line, state)
         except (OSError, ValueError) as e:
             log.debug("Agent stdout closed: %s", e)
+        with self._active_lock:
+            if proc is not self._proc or proc is self._retiring:
+                return  # replaced; the restart path ends the turn
         # The stream ended. If a turn was still running, it will never get its
         # terminal event from the child, so synthesize one — a turn that just
         # goes quiet is the failure mode the daemon relay exists to prevent.
         if not self._closing.is_set():
             self._dispatch_terminal_error(
-                "The agent stopped responding mid-answer and the reply is "
+                self._dead
+                or "The agent stopped responding mid-answer and the reply is "
                 "incomplete. It most likely crashed — check "
                 "~/.gaia/logs, then resend the message."
             )
         self._turn_done.set()
 
-    def _handle_line(self, line: str) -> None:
+    def _handle_line(self, line: str, state: Optional[_TurnState]) -> None:
         try:
             event = json.loads(line)
         except ValueError:
@@ -411,8 +647,6 @@ class AgentChannel:
             log.warning("Ignored a non-object event from the agent: %.200s", line)
             return
 
-        with self._active_lock:
-            state = self._active
         if state is None:
             # Events only flow between a query and its terminal event, so one
             # arriving outside a turn means the streams desynchronised.
@@ -424,6 +658,45 @@ class AgentChannel:
             return
 
         etype = event.get("type")
+        with self._active_lock:
+            if state.saw_terminal:
+                # Already ended for the user; only the child's own end of the
+                # turn still matters.
+                if etype in TERMINAL_EVENTS:
+                    self._turn_done.set()
+                return
+            if state.stopped_at is not None:
+                # Stopped for no progress: the child's late output is not shown.
+                # Its end of the turn (the stop acknowledged) is answered with
+                # the stop message, since the child kept its conversation.
+                if etype not in TERMINAL_EVENTS:
+                    return
+                state.saw_terminal = True
+                event = {
+                    "type": "error",
+                    "detail": f"{turn_idle_message(self._idle_limit)} Send "
+                    '"continue" to pick up where it left off.',
+                }
+            else:
+                state.last_progress = self._clock()
+                if etype == "tool_call":
+                    state.tool_running = True
+                elif etype == "tool_result":
+                    state.tool_running = False
+                state.awaiting_decision = etype == NEEDS_CONFIRMATION
+                if etype in TERMINAL_EVENTS:
+                    # Claimed before rendering, so a stop racing this answer
+                    # cannot render over it.
+                    state.saw_terminal = True
+            if (
+                event.get("type") == "final"
+                and state.turn.sender in self._reset_unannounced
+            ):
+                self._reset_unannounced.discard(state.turn.sender)
+                event = dict(event)
+                event["answer"] = (
+                    f"{RESTART_NOTICE}\n\n{event.get('answer') or ''}".rstrip()
+                )
         if etype == NEEDS_CONFIRMATION:
             confirm_id = event.get("confirm_id")
             if confirm_id:
@@ -437,17 +710,24 @@ class AgentChannel:
             log.exception("Messaging adapter raised while rendering an event")
 
         if etype in TERMINAL_EVENTS:
-            state.saw_terminal = True
             self._turn_done.set()
 
     def _dispatch_terminal_error(self, detail: str) -> None:
         with self._active_lock:
             state = self._active
-        if state is None or state.saw_terminal:
+        if state is None:
             return
-        state.saw_terminal = True
+        if self._render_terminal_error(state, detail):
+            self._turn_done.set()
+
+    def _render_terminal_error(self, state: _TurnState, detail: str) -> bool:
+        """End ``state`` for the user with ``detail``. False if already ended."""
+        with self._active_lock:
+            if state.saw_terminal:
+                return False
+            state.saw_terminal = True
         try:
             self._on_event({"type": "error", "detail": detail}, state.turn)
         except Exception:
             log.exception("Messaging adapter raised while rendering a crash")
-        self._turn_done.set()
+        return True

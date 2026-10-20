@@ -241,11 +241,8 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
      hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
    python util/check_component_core_api.py --release-version <version>
    ```
-
-   Finally, record what the **previous** release shipped in `RELEASED_DAEMON_API`
-   in [util/check_component_core_api.py](../../../util/check_component_core_api.py) — the
-   guard resolves an already-published version from that table, and a missing row
-   makes it fall back to trusting this tree, which is the drift it exists to catch.
+   The guard reads what each published release shipped straight from PyPI, so it
+   needs network access and there is no table of releases to update.
 
 7. **Confirm `__version__` is correct.**
    ```bash
@@ -568,4 +565,4 @@ Do not bundle two phases into one user prompt. The gates exist for review.
 - Hotfix releases (`v0.15.4.1`) follow the same flow; the `validate_release_notes.py` check accepts the four-part form.
 - Release candidates are `v<version>-rcN` only (Phase 3.5). There is no RC form of a four-part hotfix tag.
 - Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and migration notes if breaking. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.
-- If the publish run fails partway through (e.g. PyPI publishes but npm doesn't), do **not** delete the tag and start over. Resolve the failing job, rerun only that job (`gh run rerun <run-id> --failed`), and let the rest of the pipeline complete idempotently. The tag is the source of truth — preserve it.
+- If the publish run fails partway through (e.g. PyPI publishes but npm doesn't), do **not** delete the tag and start over. Resolve the failing job, rerun only that job (`gh run rerun <run-id> --failed`), and let the rest of the pipeline complete idempotently. The tag is the source of truth — preserve it. Every npm publish (`publish.yml` and the `release_agent_*.yml` agent releases) goes through `util/npm_publish_once.py`, so a re-run skips a version npm already holds with the same bytes and fails loudly if npm holds different bytes under it — that version can never be corrected; ship a new one.

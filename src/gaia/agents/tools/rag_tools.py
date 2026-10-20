@@ -19,6 +19,7 @@ from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import (
+    missing_file_error,
     read_access_error,
     readable_entry,
     write_access_error,
@@ -114,10 +115,16 @@ def _index_within_budget(
             jobs[path] = job
 
             def _run():
+                from gaia.daemon.broker_client import detached_from_turn
+
                 try:
-                    job.result = rag.index_document(
-                        path, progress_callback=job.progress, wait_callback=job.waiting
-                    )
+                    # Outlives the turn that started it: not its Stop, not its stream.
+                    with detached_from_turn():
+                        job.result = rag.index_document(
+                            path,
+                            progress_callback=job.progress,
+                            wait_callback=job.waiting,
+                        )
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
@@ -1468,7 +1475,7 @@ class RAGToolsMixin:
                     return denied
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)

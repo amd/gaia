@@ -1,8 +1,9 @@
 # GAIA Website
 
-Developer-focused landing page and Agent Hub for GAIA - Local AI Agents framework.
+Developer-focused landing page for GAIA - Local AI Agents framework.
 
-Serves `amd-gaia.ai` (landing page + `/hub`). The `/docs` tab is Mintlify, a
+Serves `amd-gaia.ai` (the landing page and its downloads). The retired `/hub`
+pages redirect to `/#install` (`public/serve.json`). The `/docs` tab is Mintlify, a
 separate origin — see [Deployment](#deployment) for how the two are stitched
 together.
 
@@ -31,28 +32,17 @@ npm run preview
 npm test
 ```
 
-## Hub catalog data (`HUB_CATALOG_URL`)
+## Download data (`HUB_CATALOG_URL`)
 
-The Agent Hub pages (`/hub`) are built **entirely from the live hub catalog**,
-fetched at build time from `${HUB_CATALOG_URL}/index.json` (the agent-hub Worker,
-`workers/agent-hub/`).
+The download links on the home page are built from what the download server
+(`hub.amd-gaia.ai`, the `workers/agent-hub/` Worker) actually published, fetched
+at build time from `${HUB_CATALOG_URL}/agents/<id>/manifest.json`.
 
 **`HUB_CATALOG_URL` is required. There is no bundled fixture and no offline
 path.** If it is unset, or the fetch fails, or the shape is wrong, the build
-**fails loudly** — it never falls back to stale data, so the site can never drift
-from what is actually published. This is deliberate; do not add a fallback.
-
-```bash
-HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
-```
-
-Consequences worth knowing before you debug a red build:
-
-- **A hub outage blocks every website build** — local, CI, and deploy alike.
-  A failing build here is often a hub problem, not a website problem. Check
-  `GET https://hub.amd-gaia.ai/health` first.
-- The entry shape is defined by `workers/agent-hub/schemas/index.schema.json`
-  and mirrored by the `Agent` interface in `src/data/catalog.ts`.
+**fails loudly** — it never falls back to stale filenames. This is deliberate;
+do not add a fallback. A download-server outage therefore blocks every website
+build; check `GET https://hub.amd-gaia.ai/health` first.
 
 ## Project Structure
 
@@ -61,30 +51,14 @@ website/
 ├── public/                          # Static assets
 │   ├── favicon.ico
 │   ├── gaia-icon.png
-│   └── robots.txt
+│   ├── robots.txt
+│   └── serve.json                   # `serve` redirects (retired /hub → /#install)
 ├── scripts/
 ├── src/
-│   ├── components/                  # 18 Astro components
-│   │   ├── AgentIcon.astro
-│   │   ├── AgentRow.astro
-│   │   ├── DocTabs.astro
-│   │   ├── Eyebrow.astro
-│   │   ├── FeaturedCard.astro
-│   │   ├── FileTree.astro
-│   │   ├── Footer.astro
-│   │   ├── Header.astro
-│   │   ├── InstallCard.astro
-│   │   ├── InstallCommand.astro
-│   │   ├── InstallMethods.astro
-│   │   ├── SidebarCard.astro
-│   │   ├── StarField.astro          # Mounts the background canvas
-│   │   ├── StatBlock.astro
-│   │   ├── Terminal.astro
-│   │   └── WayCard.astro
+│   ├── components/                  # Astro components (Downloads, Header, Footer, …)
 │   ├── data/
-│   │   ├── catalog.ts               # Live hub catalog access (build-time fetch)
-│   │   ├── fileTree.ts              # Nested tree from package file listings
-│   │   ├── markdown.ts              # Dependency-free Markdown → semantic HTML
+│   │   ├── catalog.ts               # Published-binary lookup for the downloads
+│   │   ├── github.ts                # Build-time GitHub / npm stats
 │   │   └── *.test.ts                # Vitest unit tests
 │   ├── design/
 │   │   ├── global.css               # Owns the @tailwind directives
@@ -94,9 +68,6 @@ website/
 │   ├── layouts/
 │   │   └── Layout.astro             # Base HTML layout
 │   ├── pages/
-│   │   ├── hub/
-│   │   │   ├── [id].astro           # Agent detail page (one per catalog entry)
-│   │   │   └── index.astro          # Agent Hub listing
 │   │   └── index.astro              # Landing page
 │   └── env.d.ts
 ├── .railwayignore                   # Excluded from the `railway up` upload
@@ -175,15 +146,10 @@ a degraded deploy:
 
 ### Deploys only fire on `website/**` changes
 
-Both `deploy_website.yml` and `website-ci.yml` are path-filtered to `website/**`.
-A commit that only adds an agent under `hub/agents/` therefore **does not redeploy
-the site** — and since `/hub` is built from the live catalog at deploy time, a
-newly published agent will not appear on its own.
-
-Release workflows work around this by dispatching the deploy explicitly after a
-successful publish (see the "Redeploy the website to publish the new catalog
-entry" step in `.github/workflows/release_agent_email.yml`). You can do the same
-by hand:
+Both `deploy_website.yml` and `website-ci.yml` are path-filtered. The download
+links are resolved at build time, so a release that publishes new binaries
+dispatches the deploy explicitly (see the release workflows). You can do the
+same by hand:
 
 ```bash
 gh workflow run deploy_website.yml --ref main
@@ -193,7 +159,7 @@ gh workflow run deploy_website.yml --ref main
 
 To take the Astro site off the apex, delete the `amd-gaia.ai/*` Worker route (in
 the Cloudflare dashboard, or `npx wrangler triggers`) — traffic falls back to the
-zone origin, Mintlify. `/docs` keeps working; `/` and `/hub` disappear. This is
+zone origin, Mintlify. `/docs` keeps working; `/` disappears. This is
 the fastest way to revert a bad website deploy without touching Railway.
 
 ### Manual deploy

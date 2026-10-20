@@ -8,6 +8,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
 export type SettingsSection =
@@ -82,6 +83,18 @@ function writePref(key: string, value: string): void {
     }
 }
 
+const QUEUES_KEY = 'gaia-chat-message-queues';
+
+/** Queued messages saved before a reload; unreadable ones are reported, not guessed at. */
+function readQueues(): Record<string, QueuedMessage[]> {
+    try {
+        return restoreQueues(JSON.parse(readPref(QUEUES_KEY, '{}')));
+    } catch (err) {
+        log.system.warn('Saved queued messages unreadable; starting with none.', err);
+        return {};
+    }
+}
+
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
 export interface LiveQuestion {
     sessionId: string;
@@ -92,12 +105,6 @@ interface ChatState {
     /** Registered agents; Settings → Connectors grants scopes to them. */
     agents: AgentInfo[];
     setAgents: (agents: AgentInfo[]) => void;
-
-    // Device selection (CPU / GPU / NPU)
-    activeDevice: string;
-    setActiveDevice: (device: string) => void;
-    detectedDevices: string[];
-    setDetectedDevices: (devices: string[]) => void;
 
     // Sessions
     sessions: Session[];
@@ -125,6 +132,13 @@ interface ChatState {
     activeRunsAt: number;
     /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
     setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
+    /** Messages typed while a chat answered, by chat. Each goes out when that
+     *  chat's turn ends, open or not, and survives a reload. */
+    messageQueues: Record<string, QueuedMessage[]>;
+    updateQueue: (sessionId: string, fn: (items: QueuedMessage[]) => QueuedMessage[]) => void;
+    /** Chats whose queued message found the chat busy, waiting a moment before trying again. */
+    queueHolds: Record<string, boolean>;
+    setQueueHold: (sessionId: string, hold: boolean) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -156,7 +170,9 @@ interface ChatState {
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
-    setLiveStatus: (status: string | null) => void;
+    /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
+    livePhase: string | null;
+    setLiveStatus: (status: string | null, phase?: string | null) => void;
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
@@ -237,15 +253,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
     setAgents: (agents) => set({ agents }),
 
-    // Device selection
-    activeDevice: readPref('gaia-active-device', 'gpu'),
-    setActiveDevice: (device) => {
-        writePref('gaia-active-device', device);
-        set({ activeDevice: device });
-    },
-    detectedDevices: ['gpu'],
-    setDetectedDevices: (devices) => set({ detectedDevices: devices }),
-
     // Sessions
     sessions: [],
     currentSessionId: null,
@@ -271,6 +278,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
             return next;
         }),
+    messageQueues: readQueues(),
+    updateQueue: (sessionId, fn) =>
+        set((state) => {
+            const before = state.messageQueues[sessionId] ?? [];
+            const after = fn(before);
+            if (after.length === before.length && after.every((m, i) => m === before[i])) return state;
+            const messageQueues = { ...state.messageQueues };
+            if (after.length) messageQueues[sessionId] = after;
+            else delete messageQueues[sessionId];
+            writePref(QUEUES_KEY, JSON.stringify(messageQueues));
+            return { messageQueues };
+        }),
+    queueHolds: {},
+    setQueueHold: (sessionId, hold) =>
+        set((state) => {
+            if (!!state.queueHolds[sessionId] === hold) return state;
+            const queueHolds = { ...state.queueHolds };
+            if (hold) queueHolds[sessionId] = true;
+            else delete queueHolds[sessionId];
+            return { queueHolds };
+        }),
     setSessions: (sessions) =>
         set((state) => ({
             // Filter out any sessions that are pending backend deletion so poll
@@ -283,12 +311,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
+    // The chat's queued messages go with it; the delete button says so first.
     removeSession: (id) =>
-        set((state) => ({
-            sessions: state.sessions.filter((s) => s.id !== id),
-            currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
-            messages: state.currentSessionId === id ? [] : state.messages,
-        })),
+        set((state) => {
+            const next: Partial<ChatState> = {
+                sessions: state.sessions.filter((s) => s.id !== id),
+                currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
+                messages: state.currentSessionId === id ? [] : state.messages,
+            };
+            if (state.messageQueues[id]) {
+                const messageQueues = { ...state.messageQueues };
+                delete messageQueues[id];
+                writePref(QUEUES_KEY, JSON.stringify(messageQueues));
+                next.messageQueues = messageQueues;
+            }
+            if (state.queueHolds[id]) {
+                const queueHolds = { ...state.queueHolds };
+                delete queueHolds[id];
+                next.queueHolds = queueHolds;
+            }
+            return next;
+        }),
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
@@ -322,7 +365,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -371,9 +414,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, awaitingUser: false }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
     liveStatus: null,
-    setLiveStatus: (status) => set({ liveStatus: status }),
+    livePhase: null,
+    setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},

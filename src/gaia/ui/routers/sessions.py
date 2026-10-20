@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
 
+from .. import answer_retry, followups
 from .. import permissions as session_permissions
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
@@ -188,12 +189,17 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     )
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
+    install = (
+        "`gaia init`"
+        if agent_type == "gaia"
+        else f"`gaia hub install {agent_type} --trust`"
+    )
     raise HTTPException(
         status_code=422,
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
             f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            "from the Agent Hub (`gaia hub`) and try again."
+            f"with {install} and try again."
         ),
     )
 
@@ -394,6 +400,8 @@ async def delete_session(
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
         session_permissions.forget_session(session_id)
+        followups.forget(session_id)
+        answer_retry.forget(session_id)
     try:
         await asyncio.to_thread(file_snapshots.delete_session, session_id)
     except OSError as e:

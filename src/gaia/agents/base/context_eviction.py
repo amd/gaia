@@ -23,8 +23,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from gaia.agents.base.tool_outcome import tool_result_dict
+from gaia.agents.base.turn_metrics import count_tokens
 from gaia.llm.cache_pricing import AUTO_EVICTION_MIN_RATIO, cached_input_price_ratio
 from gaia.logger import get_logger
 
@@ -43,17 +46,26 @@ DEFAULT_EVICT_MIN_BATCH_TOKENS = 30000
 #: Token estimate for text the backend has not measured.
 CHARS_PER_TOKEN = 3.6
 
+#: A worker's answer is the parent's only view of it.
+PROTECTED_TOOLS = frozenset({"delegate_task"})
 #: Their results are bounded pages or the parent's only view of a worker.
-NEVER_EVICTED_TOOLS = frozenset({"read_tool_output", "delegate_task"})
+NEVER_EVICTED_TOOLS = PROTECTED_TOOLS | {"read_tool_output"}
+
+#: Characters of the latest step's large result an overflow retry still shows.
+OVERFLOW_PREVIEW_CHARS = 2000
 
 _SUMMARY_VALUE_CHARS = 40
 _SUMMARY_CHARS = 100
+_OUTCOME_CHARS = 100
 
 #: Marks a message as already evicted. Checked against the message's own
 #: text rather than a remembered id: history keeps the pre-eviction copy, so
 #: a result replayed on a later turn comes back full-size under its original
 #: tool_call_id and must be judged fresh, not skipped as "already done".
 _EVICTED_STUB_PREFIX = "[evicted: "
+#: What the overflow retry leaves in place of a result it moved out.
+_PUT_AWAY_PREFIX = "[Not shown, put away to save context: "
+_SHORTENED_PREFIX = "[shortened to fit the context window: "
 
 
 def context_eviction_from_env() -> Optional[str]:
@@ -203,6 +215,245 @@ def _existing_handle(text: str, store) -> Optional[str]:
     return handle if isinstance(handle, str) and store.has(handle) else None
 
 
+def is_stub(text: str) -> bool:
+    """Whether *text* is what eviction or the overflow retry left for a result."""
+    return text.startswith((_EVICTED_STUB_PREFIX, _PUT_AWAY_PREFIX, _SHORTENED_PREFIX))
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _arguments_by_position(messages: List[Dict[str, Any]]) -> Dict[int, str]:
+    """Each tool result's call arguments, from the nearest call before it with its id.
+
+    Keyed by position: some backends reuse a ``tool_call_id`` across responses.
+    """
+    calls: Dict[str, str] = {}
+    found: Dict[int, str] = {}
+    for i, message in enumerate(messages):
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                if isinstance(call.get("id"), str):
+                    calls[call["id"]] = function.get("arguments") or ""
+        elif message.get("role") == "tool":
+            found[i] = calls.get(message.get("tool_call_id") or "", "")
+    return found
+
+
+def _outcome_line(text: str) -> str:
+    """What the result said, in a few words: its status and message, or its first line."""
+    parsed = tool_result_dict(text)
+    if parsed is not None:
+        parts = []
+        status = parsed.get("status")
+        if isinstance(status, str):
+            parts.append(status)
+        for key in ("error", "message", "summary", "answer"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+                break
+        for key, value in parsed.items():
+            if isinstance(value, list) and value:
+                parts.append(f"{len(value)} {key}")
+                break
+        if parts:
+            return _clip(", ".join(parts), _OUTCOME_CHARS)
+    stripped = text.lstrip()
+    if stripped.startswith("["):
+        try:
+            items = json.loads(stripped)
+        except ValueError:
+            items = None
+        if isinstance(items, list):
+            return f"{len(items)} items"
+    for line in text.splitlines():
+        if line.strip():
+            return _clip(line, _OUTCOME_CHARS)
+    return "empty"
+
+
+def _reread_page(text: str, store) -> Optional[Tuple[str, str]]:
+    """``(handle, call)`` that reads a ``read_tool_output`` page again, from its own fields."""
+    parsed = tool_result_dict(text)
+    if parsed is None:
+        return None
+    handle, offset, content = (
+        parsed.get("artifact"),
+        parsed.get("offset"),
+        parsed.get("content"),
+    )
+    if not (
+        isinstance(handle, str)
+        and store.has(handle)
+        and isinstance(offset, int)
+        and not isinstance(offset, bool)
+        and isinstance(content, str)
+    ):
+        return None
+    return handle, (
+        f"read_tool_output(artifact={handle}, offset={offset}, "
+        f"limit={max(1, len(content))})"
+    )
+
+
+def is_protected_result(message: Dict[str, Any]) -> bool:
+    """A refusal or a worker's answer: the model must keep seeing it whole."""
+    if message.get("name") in PROTECTED_TOOLS:
+        return True
+    text = _message_text(message)
+    parsed = tool_result_dict(text) if text is not None else None
+    if parsed is None:
+        return False
+    return (
+        parsed.get("status") == "denied"
+        or parsed.get("executed") is False
+        or "governance_decision" in parsed
+    )
+
+
+def _archive(text: str, store) -> Tuple[str, str]:
+    """``(handle, fetch call)`` for *text*, reusing an archive it already names."""
+    reread = _reread_page(text, store)
+    if reread is not None:
+        store.touch(reread[0])
+        return reread
+    handle = _existing_handle(text, store)
+    if handle is not None:
+        store.touch(handle)
+        # Its own index stays valid; the whole archive pages from 0.
+        return handle, f"read_tool_output(artifact={handle}, offset=0, limit=8000)"
+    handle = store.put_result(text)
+    return handle, f"read_tool_output(artifact={handle}, entry=1)"
+
+
+def message_tokens(message: Dict[str, Any]) -> int:
+    """Leans high on purpose: cl100k undercounts JSON and CJK (#5066)."""
+    text = json.dumps(message, ensure_ascii=False, default=str)
+    return max(count_tokens(text), -(-len(text.encode("utf-8", "surrogatepass")) // 3))
+
+
+def request_tokens(messages: List[Dict[str, Any]], system_prompt: str, tools) -> int:
+    """Count of everything a request carries, leaning high."""
+    overhead = count_tokens(system_prompt or "") + count_tokens(
+        json.dumps(tools or [], ensure_ascii=False, default=str)
+    )
+    return overhead + sum(message_tokens(m) for m in messages)
+
+
+def _put_away_item(message, name: str, summary: str, handle: str, text: str) -> dict:
+    return {
+        "tool": name,
+        "summary": summary,
+        "artifact": handle,
+        "chars": len(text),
+        "tokens": message_tokens(message),
+    }
+
+
+def put_away_stub(
+    message: Dict[str, Any], arguments: str, store
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """``(stub message, item)`` for one result, archiving it whole first."""
+    text = _message_text(message) or ""
+    name = message.get("name") or "tool"
+    handle, fetch = _archive(text, store)
+    summary = _arg_summary(arguments)
+    call = f"{name} {summary}" if summary else name
+    # Say outright the text is absent: a 4B model otherwise answers from the summary.
+    stub = (
+        f"{_PUT_AWAY_PREFIX}{call}; summary: {_outcome_line(text)}; "
+        f"{len(text)} chars. Call {fetch} to read it.]"
+    )
+    item = _put_away_item(message, name, summary, handle, text)
+    return {**message, "content": [{"type": "text", "text": stub}]}, item
+
+
+def shortened_result(
+    message: Dict[str, Any], arguments: str, store
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The latest result cut to a head preview, the rest one call away."""
+    text = _message_text(message) or ""
+    name = message.get("name") or "tool"
+    handle = store.put_result(text)
+    summary = _arg_summary(arguments)
+    call = f"{name} {summary}" if summary else name
+    head = (
+        f"{_SHORTENED_PREFIX}{call}; showing the first {OVERFLOW_PREVIEW_CHARS} of "
+        f"{len(text)} chars; read_tool_output(artifact={handle}, "
+        f"offset={OVERFLOW_PREVIEW_CHARS}) continues]\n"
+    )
+    item = _put_away_item(message, name, summary, handle, text)
+    preview = head + text[:OVERFLOW_PREVIEW_CHARS]
+    return {**message, "content": [{"type": "text", "text": preview}]}, item
+
+
+_OVERFLOW_NUMBERS = (
+    re.compile(
+        r"request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)"
+    ),
+    re.compile(r"n_prompt_tokens\W+(\d+).*?n_ctx\W+(\d+)", re.DOTALL),
+)
+
+
+def overflow_numbers(error_text: str) -> Optional[Tuple[int, int]]:
+    """``(requested, available)`` tokens from a backend's overflow error, if it says."""
+    for pattern in _OVERFLOW_NUMBERS:
+        match = pattern.search(error_text or "")
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def shrink_for_overflow(
+    messages: List[Dict[str, Any]], store
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Every older result put away, the latest step's large ones cut to a preview.
+
+    The last-resort path after the backend refused a request as too long. It
+    keeps refusals, worker answers and already-stubbed results as they are, and
+    every byte it moves out stays readable through ``read_tool_output`` (#2780).
+    Returns ``(new messages, items put away)``; *messages* is not mutated.
+    """
+    arguments = _arguments_by_position(messages)
+    last_assistant = max(
+        (i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1
+    )
+    shrunk: List[Dict[str, Any]] = []
+    items: List[Dict[str, Any]] = []
+    for i, message in enumerate(messages):
+        text = _message_text(message) if message.get("role") == "tool" else None
+        if text is None or is_stub(text) or is_protected_result(message):
+            shrunk.append(message)
+            continue
+        latest = i > last_assistant
+        if latest and message.get("name") == "read_tool_output":
+            # Already a bounded page; cutting it would undo the re-read just made.
+            shrunk.append(message)
+            continue
+        if len(text) <= (
+            OVERFLOW_PREVIEW_CHARS if latest else OVERFLOW_PREVIEW_CHARS // 4
+        ):
+            # Short enough to keep: a stub would save little or nothing.
+            shrunk.append(message)
+            continue
+        try:
+            new, item = (shortened_result if latest else put_away_stub)(
+                message, arguments.get(i, ""), store
+            )
+        except ValueError as e:
+            # The archive is full: keep this result whole rather than lose it.
+            logger.warning("Cannot put a tool result away: %s", e)
+            shrunk.append(message)
+            continue
+        shrunk.append(new)
+        items.append(item)
+    return shrunk, items
+
+
 class ContextEvictor:
     """Per-agent eviction state: which results were sent when, and which are gone."""
 
@@ -259,7 +510,7 @@ class ContextEvictor:
             if (
                 message.get("name") in NEVER_EVICTED_TOOLS
                 or text is None
-                or text.startswith(_EVICTED_STUB_PREFIX)
+                or is_stub(text)
             ):
                 continue
             if step - self._result_step[key] <= self.keep_steps:

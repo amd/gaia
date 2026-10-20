@@ -3,6 +3,7 @@
 
 import { useChatStore } from '../../stores/chatStore';
 import type { ThemePreference } from '../../utils/theme';
+import { DesktopAppSettings } from './DesktopAppSettings';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors } from '../../utils/palette';
 
 const THEMES: Array<{ value: ThemePreference; label: string }> = [
@@ -51,6 +52,7 @@ export function GeneralSettings() {
                     ))}
                 </div>
             </div>
+            <DesktopAppSettings />
             <div className="settings-field">
                 <span className="settings-label" id="palette-label">Colors</span>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">

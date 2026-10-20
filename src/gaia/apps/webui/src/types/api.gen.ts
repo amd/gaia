@@ -24,8 +24,10 @@ export interface ApiSchemas {
   ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
+  CommitRequest: CommitRequest;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
+  ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   DiscoveryCommit: DiscoveryCommit;
@@ -45,6 +47,8 @@ export interface ApiSchemas {
   FileStatusRequest: FileStatusRequest;
   FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
+  FolderRequest: FolderRequest;
+  FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
@@ -57,6 +61,7 @@ export interface ApiSchemas {
   InferenceStatsResponse: InferenceStatsResponse;
   InitTaskInfo: InitTaskInfo;
   InstallRequest: InstallRequest;
+  InternetRequest: InternetRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
   LimitRequest: LimitRequest;
@@ -73,7 +78,13 @@ export interface ApiSchemas {
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
+  PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
+  RestartRequest: RestartRequest;
+  RetryChoiceRequest: RetryChoiceRequest;
+  RetryWithRequest: RetryWithRequest;
+  RunningAnswer: RunningAnswer;
+  RunningIndexJob: RunningIndexJob;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -99,15 +110,19 @@ export interface ApiSchemas {
   TurnSummaryFile: TurnSummaryFile;
   TurnSummaryLiveData: TurnSummaryLiveData;
   TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryOutput: TurnSummaryOutput;
   TurnSummaryPage: TurnSummaryPage;
   TurnSummaryResponse: TurnSummaryResponse;
   UndoRequest: UndoRequest;
   UndoSettings: UndoSettings;
+  UnloadModelRequest: UnloadModelRequest;
+  UnloadModelResponse: UnloadModelResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   WarmUpStatus: WarmUpStatus;
+  WorkInProgress: WorkInProgress;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -309,6 +324,14 @@ export interface ChatRequest {
   session_id: string;
   stream?: boolean;
 }
+export interface CommitRequest {
+  /**
+   * True only after the user saw and confirmed the commit.
+   */
+  confirmed?: boolean;
+  message: string;
+  root: string;
+}
 export interface ConfigureRequest {
   config?: {
     [k: string]: unknown | undefined;
@@ -322,6 +345,13 @@ export interface ConnectRequest {
   auth_header_name?: string | null;
   auth_header_prefix?: string | null;
   base_url?: string | null;
+}
+/**
+ * ``ctx_size`` None returns the model to GAIA's automatic size.
+ */
+export interface ContextRequest {
+  ctx_size?: number | null;
+  model: string;
 }
 /**
  * Request to create a new scheduled task.
@@ -507,6 +537,16 @@ export interface FileUploadResponse {
   size: number;
   url: string;
 }
+export interface FolderRequest {
+  /**
+   * An absolute folder path.
+   */
+  path: string;
+}
+export interface FollowUpRequest {
+  session_id: string;
+  text: string;
+}
 /**
  * Body for ``POST /v1/connections/{provider}`` (#1292).
  *
@@ -589,8 +629,11 @@ export interface InferenceCommitItem {
  */
 export interface InferenceStatsResponse {
   input_tokens?: number;
+  model?: string | null;
   output_tokens?: number;
   place?: string | null;
+  retried?: boolean | null;
+  seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
@@ -609,6 +652,9 @@ export interface InstallRequest {
   id: string;
   trust_native?: boolean;
   version?: string | null;
+}
+export interface InternetRequest {
+  on: boolean;
 }
 export interface KnowledgeCreate {
   category?: string;
@@ -700,6 +746,7 @@ export interface TurnSummaryResponse {
   files?: TurnSummaryFile[];
   live_data?: TurnSummaryLiveData;
   model?: TurnSummaryModel | null;
+  outputs?: TurnSummaryOutput[];
   pages?: TurnSummaryPage[];
   sites?: string[];
 }
@@ -743,6 +790,17 @@ export interface TurnSummaryModel {
   provider: string;
   provider_name: string;
   remote: boolean;
+}
+/**
+ * Something the turn made besides a file: an image, an indexed document,
+ * a memory or a scheduled task.
+ */
+export interface TurnSummaryOutput {
+  detail?: string | null;
+  kind: string;
+  name: string;
+  path?: string | null;
+  ref?: string | null;
 }
 /**
  * A web page the turn read, or a search hit when it read none.
@@ -846,6 +904,45 @@ export interface PreflightReport {
   required_memory_gb?: number;
   tier?: string;
   warnings?: string[];
+}
+export interface PullRequestRequest {
+  body?: string;
+  /**
+   * True only after the user saw and confirmed the PR.
+   */
+  confirmed?: boolean;
+  root: string;
+  title: string;
+}
+/**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
+}
+export interface RetryChoiceRequest {
+  keep: "original" | "retry";
+  message_id: number;
+  session_id: string;
+}
+export interface RetryWithRequest {
+  message_id: number;
+  model: string;
+  session_id: string;
+}
+/**
+ * A chat whose answer is still being written.
+ */
+export interface RunningAnswer {
+  session_id: string;
+  title?: string | null;
+}
+/**
+ * A document still being indexed.
+ */
+export interface RunningIndexJob {
+  document_id: string;
+  filename?: string | null;
 }
 /**
  * List of scheduled tasks.
@@ -977,6 +1074,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
+  data_dir?: string | null;
   default_model_is_cloud?: boolean;
   default_model_name?: string | null;
   default_model_size_gb?: number | null;
@@ -1077,6 +1175,15 @@ export interface UndoSettings {
   max_mb: number;
   retention_days: number;
 }
+export interface UnloadModelRequest {
+  model_name: string;
+}
+/**
+ * The model server dropped its models from memory.
+ */
+export interface UnloadModelResponse {
+  status: string;
+}
 /**
  * Request to update a scheduled task.
  */
@@ -1106,4 +1213,11 @@ export interface UserInputRequest {
   request_id: string;
   session_id: string;
   value: string;
+}
+/**
+ * Work that quitting or unloading the model would cut short.
+ */
+export interface WorkInProgress {
+  answers: RunningAnswer[];
+  indexing: RunningIndexJob[];
 }

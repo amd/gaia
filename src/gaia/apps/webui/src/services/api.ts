@@ -3,10 +3,10 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, CloudPriceList, SpendingReport, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
-import type { ActiveRuns } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -100,7 +100,7 @@ export function redactSecrets(body: unknown): unknown {
 }
 
 /** Fetch wrapper with logging, timing, and error handling. */
-async function apiFetch<T>(
+export async function apiFetch<T>(
     method: string,
     path: string,
     body?: unknown,
@@ -323,8 +323,26 @@ export async function forgetProviderKey(provider: string): Promise<{ removed: bo
     return apiFetch('DELETE', `/providers/${encodeURIComponent(provider)}/key`);
 }
 
-export async function listProviderModels(provider: string): Promise<{ provider: string; models: ProviderModel[] }> {
+export async function listProviderModels(provider: string): Promise<ProviderModelsResponse> {
     return apiFetch('GET', `/providers/${encodeURIComponent(provider)}/models`);
+}
+
+export async function getContextChoice(model: string): Promise<ContextChoice> {
+    return apiFetch('GET', `/providers/local/context?model=${encodeURIComponent(model)}`);
+}
+
+/** Remember a context size for a model; null returns it to Automatic. */
+export async function setContextChoice(model: string, ctxSize: number | null): Promise<ContextChoice> {
+    return apiFetch('PUT', '/providers/local/context', { model, ctx_size: ctxSize });
+}
+
+export async function getLocalModelStatus(): Promise<LocalModelStatus> {
+    return apiFetch('GET', '/providers/local/status');
+}
+
+/** Start the model server if stopped, then reload the chat model. */
+export async function restartLocalModel(confirm = false): Promise<{ status: string; model: string; starting_server: boolean }> {
+    return apiFetch('POST', '/providers/local/restart', { confirm });
 }
 
 export async function selectModel(model: string): Promise<ActiveModel> {
@@ -357,203 +375,9 @@ export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Reco
     return apiFetch('GET', '/skills');
 }
 
-// -- Connections (issue #915) ---------------------------------------------------
+// -- Connections (issue #915): see connectorsApi.ts ----------------------------
 
-import type { AgentMcpServer, ConnectorRow } from '../types';
-
-// New framework endpoints (T-8b) — /api/connectors
-
-export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
-    return apiFetch('GET', '/connectors');
-}
-
-export async function getConnector(connectorId: string): Promise<ConnectorRow> {
-    return apiFetch('GET', `/connectors/${connectorId}`);
-}
-
-export async function authorizeConnector(
-    connectorId: string,
-    scopes: string[],
-    grantAgents: string[] = [],
-): Promise<{ flow_id: string; authorization_url: string }> {
-    // `grantAgents` (#2117) — namespaced agent ids to grant this connector the
-    // moment OAuth completes, so connecting a mailbox grants it to the email
-    // agent in the same flow. The backend resolves each agent's required scopes.
-    return apiFetch(
-        'POST',
-        `/connectors/${connectorId}/authorize`,
-        { scopes, grant_agents: grantAgents },
-        UI_HEADER,
-    );
-}
-
-export interface DeviceAuthInfo {
-    user_code: string;
-    verification_uri: string;
-    expires_in: number;
-    interval: number;
-    message: string;
-}
-
-export async function authorizeConnectorDevice(
-    connectorId: string,
-    scopes: string[],
-    grantAgents: string[] = [],
-): Promise<DeviceAuthInfo> {
-    // Device-code sign-in: no browser redirect / no Azure app registration.
-    // The server polls in the background and emits connector.oauth.completed /
-    // connector.oauth.error over SSE (useConnectorsSSE) when the user finishes,
-    // so the caller displays the code and waits for the same events the browser
-    // flow uses. `grantAgents` are committed atomically on success.
-    return apiFetch(
-        'POST',
-        `/connectors/${connectorId}/authorize-device`,
-        { scopes, grant_agents: grantAgents },
-        UI_HEADER,
-    );
-}
-
-export async function configureConnector(
-    connectorId: string,
-    config: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-    return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
-}
-
-export async function disconnectConnector(connectorId: string): Promise<void> {
-    await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
-}
-
-/**
- * Enable a previously-disabled MCP connector (#1004).
- *
- * Returns the updated ConnectorRow with `enabled: true`. The backend
- * triggers a live reload of every cached chat session's MCPClientManager
- * so the connector's tools materialize without restarting GAIA.
- *
- * Throws when called against a non-MCP connector (server returns 400).
- */
-export async function enableConnector(connectorId: string): Promise<ConnectorRow> {
-    return apiFetch('POST', `/connectors/${connectorId}/enable`, {}, UI_HEADER);
-}
-
-/**
- * Disable a configured MCP connector without clearing credentials (#1004).
- *
- * Credentials, the env-block ``$keyring`` references, and per-agent grants
- * are preserved. The backend triggers a live reload so the connector's
- * tools disappear from active agents' tool lists. Re-enable with
- * ``enableConnector`` to make tools available again.
- *
- * Throws when called against a non-MCP connector (server returns 400).
- */
-export async function disableConnector(connectorId: string): Promise<ConnectorRow> {
-    return apiFetch('POST', `/connectors/${connectorId}/disable`, {}, UI_HEADER);
-}
-
-/**
- * List MCP servers declared by custom Python agents (#1020).
- *
- * Returns a flat sorted list (enabled first, alphabetical) of server entries
- * from each custom agent's local mcp_servers.json. These are read-only — the
- * UI renders them without a toggle or disconnect action.
- */
-export async function listAgentMcps(): Promise<{ agent_mcps: AgentMcpServer[] }> {
-    return apiFetch('GET', '/connectors/agent-mcps');
-}
-
-export async function listConnectorGrants(connectorId: string): Promise<{
-    grants: Record<string, string[]>;
-}> {
-    return apiFetch('GET', `/connectors/${connectorId}/grants`);
-}
-
-export async function grantConnectorAgent(
-    connectorId: string,
-    agentId: string,
-    scopes: string[],
-): Promise<void> {
-    await apiFetch<unknown>(
-        'PUT',
-        `/connectors/${connectorId}/grants/${encodeURIComponent(agentId)}`,
-        { scopes },
-        UI_HEADER,
-    );
-}
-
-export async function revokeConnectorAgentGrant(
-    connectorId: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connectors/${connectorId}/grants/${encodeURIComponent(agentId)}`,
-        undefined,
-        UI_HEADER,
-    );
-}
-
-/**
- * List per-agent activations for a connector (issue #1005).
- *
- * Activations gate MCP tool visibility — an agent must be both granted
- * (credential access) AND activated (tool visibility) for an MCP server's
- * tools to appear in its system prompt. This endpoint is type-agnostic for
- * read convenience: OAuth connectors return ``{}`` because the mutating
- * routes refuse to write to them.
- */
-export async function listConnectorActivations(connectorId: string): Promise<{
-    activations: Record<string, boolean>;
-}> {
-    return apiFetch('GET', `/connectors/${connectorId}/activations`);
-}
-
-interface ActivateConnectorResponse {
-    connector_id: string;
-    agent_id: string;
-    active: boolean;
-    auto_granted: boolean;
-}
-
-/**
- * Activate an MCP-server connector for an agent. If no grant exists yet,
- * ``scopes`` is used to auto-create one (one-click convenience). Without
- * ``scopes`` the request returns 400 when no prior grant exists.
- *
- * Only valid for ``mcp_server`` connectors — calling this for an OAuth
- * provider returns ``400 Bad Request``. OAuth per-agent access is
- * controlled by the grants endpoints above. The Agent UI hides the
- * "Active for" section for OAuth tiles to surface this at the UI layer.
- */
-export async function activateConnectorAgent(
-    connectorId: string,
-    agentId: string,
-    scopes?: string[],
-): Promise<ActivateConnectorResponse> {
-    return apiFetch<ActivateConnectorResponse>(
-        'PUT',
-        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
-        scopes ? { scopes } : {},
-        UI_HEADER,
-    );
-}
-
-/**
- * Deactivate an MCP-server connector for an agent. Non-destructive — the
- * grant survives so a later re-activate is one click. Only valid for
- * ``mcp_server`` connectors (see :func:`activateConnectorAgent`).
- */
-export async function deactivateConnectorAgent(
-    connectorId: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
-        undefined,
-        UI_HEADER,
-    );
-}
+export * from './connectorsApi';
 
 // -- Sessions ------------------------------------------------------------------
 
@@ -649,6 +473,8 @@ export async function deleteMessagesFrom(sessionId: string, messageId: number): 
 
 // -- Chat (Streaming with Agent Events) ----------------------------------------
 
+export * from './chatTurnApi';
+
 /**
  * Callbacks for agent streaming events.
  *
@@ -675,6 +501,7 @@ const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
+    'followup_taken', 'followup_returned', 'context_usage',
 ]);
 
 export function sendMessageStream(
@@ -720,7 +547,7 @@ export function sendMessageStream(
         .then((res) => {
             headers.received();
             headers.connected();
-            return consumeSSEResponse(res, callbacks, t);
+            return consumeSSEResponse(res, callbacks, t, { silentCloseIsError: true });
         })
         .catch((err) => {
             headers.received();
@@ -834,13 +661,17 @@ async function consumeSSEResponse(
     res: Response,
     callbacks: StreamCallbacks,
     t: ReturnType<typeof log.stream.time>,
+    { silentCloseIsError = false }: { silentCloseIsError?: boolean } = {},
 ): Promise<void> {
     log.stream.info(`SSE connection opened -> HTTP ${res.status}`);
 
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
-        callbacks.onError(new ApiError(`HTTP ${res.status}: ${errText}`, res.status, errText, null));
+        // The server's own words when it gave any, never a raw JSON body.
+        const detail = parseErrorDetail(errText);
+        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }
 
@@ -955,6 +786,15 @@ async function consumeSSEResponse(
     // Only signal completion if no explicit done event was received during the stream
     if (!doneReceived) {
         log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
+        // A send that closes having said nothing would otherwise leave the
+        // message sitting there with no answer and no error.
+        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0 && !errorReceived) {
+            callbacks.onError(new Error(
+                'GAIA closed the connection before any answer arrived. Send the message again; ' +
+                'if it keeps happening, check the GAIA server log.',
+            ));
+            return;
+        }
         callbacks.onDone({ type: 'done' });
     }
 }
@@ -1012,61 +852,6 @@ export function attachToRun(
         });
 
     return controller;
-}
-
-/** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<ActiveRuns> {
-    return apiFetch('GET', '/chat/active');
-}
-
-// -- Tool Confirmation ---------------------------------------------------------
-
-/** Answer a tool confirmation: allow once, always allow this call in this chat, or deny. */
-export async function confirmTool(
-    sessionId: string,
-    approved: boolean,
-    options: { always?: boolean; confirmId?: string } = {},
-): Promise<{ status: string; approved: boolean; granted: string | null }> {
-    return apiFetch('POST', '/chat/confirm-tool', {
-        session_id: sessionId,
-        approved,
-        always: options.always ?? false,
-        ...(options.confirmId ? { confirm_id: options.confirmId } : {}),
-    });
-}
-
-export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
-    return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
-}
-
-export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
-    return apiFetch('GET', '/chat/permissions');
-}
-
-export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
-    return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
-}
-
-/** Revoke one "always allow" grant, or all of them when `key` is omitted. */
-export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
-    const q = key ? `?key=${encodeURIComponent(key)}` : '';
-    return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
-}
-
-/** Answer a pending mid-run `needs_input` question (#2595). The agent
- *  blocks server-side until this call lands, so the run continues once it
- *  resolves. */
-export async function respondToInput(
-    sessionId: string,
-    requestId: string,
-    value: string,
-): Promise<{ status: string; request_id: string }> {
-    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
-}
-
-/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
-export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
-    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
 }
 
 // -- Documents -----------------------------------------------------------------
@@ -1317,4 +1102,48 @@ export async function getUndoSettings(): Promise<UndoSettings> {
 
 export async function updateUndoSettings(retentionDays: number, maxMb: number): Promise<UndoSettings> {
     return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
+}
+
+// -- Session panel: Environment, Outputs, Changes (#5279) --------------------
+
+const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
+
+export async function getEnvironment(sessionId: string): Promise<SessionEnvironment> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/environment`);
+}
+
+export async function addEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
+}
+
+export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
+}
+
+export async function setInternet(sessionId: string, on: boolean): Promise<SessionEnvironment> {
+    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/internet`, { on });
+}
+
+export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
+}
+
+export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/total`);
+}
+
+export async function undoAllChanges(sessionId: string, force = false): Promise<UndoAllResult> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/undo`, { force });
+}
+
+export async function getSessionGit(sessionId: string): Promise<SessionGit> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
+}
+
+export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[]; ignored: string[] }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
+}
+
+export async function createPullRequest(sessionId: string, root: string, title: string, body: string): Promise<{ root: string; url: string }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/pr`, { root, title, body, confirmed: true });
 }
