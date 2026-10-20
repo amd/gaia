@@ -36,6 +36,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
+import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
@@ -580,8 +581,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Escape stops the reply. Ctrl+K is App's.
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            // An open permission prompt claims Escape first (it denies).
-            if (e.key === 'Escape' && isStreaming && !e.defaultPrevented) {
+            // Dialogs, menus, the rename field and the permission prompt claim Escape first.
+            if (e.key === 'Escape' && isStreaming && !isEscapeClaimed(e)) {
                 e.preventDefault();
                 handleStop();
             }
@@ -1705,8 +1706,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onBlur={saveTitle}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter') saveTitle();
-                                if (e.key === 'Escape') setEditingTitle(false);
+                                if (e.key === 'Escape') { e.preventDefault(); setEditingTitle(false); }
                             }}
+                            {...CLAIMS_ESCAPE}
                             autoFocus
                             aria-label="Chat title"
                         />

@@ -3,7 +3,7 @@
 
 import { renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { useEscapeToClose } from '../useEscapeToClose';
+import { isEscapeClaimed, useEscapeLayer, useEscapeToClose } from '../useEscapeToClose';
 
 function pressEscape(): KeyboardEvent {
     const e = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
@@ -51,5 +51,59 @@ describe('useEscapeToClose', () => {
         pressEscape();
 
         expect(onClose).not.toHaveBeenCalled();
+    });
+});
+
+describe('isEscapeClaimed', () => {
+    function escapeOn(target: Element): KeyboardEvent {
+        let seen: KeyboardEvent | null = null;
+        const grab = (e: KeyboardEvent) => { seen = e; };
+        window.addEventListener('keydown', grab, true);
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        window.removeEventListener('keydown', grab, true);
+        return seen!;
+    }
+
+    afterEach(() => { document.body.innerHTML = ''; });
+
+    it('is unclaimed with nothing open', () => {
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(false);
+    });
+
+    it('is claimed while any layer is open, and released once every layer closes', () => {
+        const a = renderHook(() => useEscapeLayer(true));
+        const b = renderHook(() => useEscapeLayer(true));
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(true);
+        a.unmount();
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(true);
+        b.unmount();
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(false);
+    });
+
+    it('counts a layer only while it is open', () => {
+        const { rerender, unmount } = renderHook(({ open }) => useEscapeLayer(open), { initialProps: { open: false } });
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(false);
+        rerender({ open: true });
+        rerender({ open: true });
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(true);
+        rerender({ open: false });
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(false);
+        unmount();
+        expect(isEscapeClaimed(escapeOn(document.body))).toBe(false);
+    });
+
+    it('is claimed for a field marked data-claims-escape, and anything inside one', () => {
+        document.body.innerHTML = '<div data-claims-escape><input id="inner" /></div><textarea id="composer"></textarea>';
+        expect(isEscapeClaimed(escapeOn(document.getElementById('inner')!))).toBe(true);
+        expect(isEscapeClaimed(escapeOn(document.getElementById('composer')!))).toBe(false);
+    });
+
+    it('keeps a busy dialog as a layer even while its Escape is disabled', () => {
+        const onClose = vi.fn();
+        const { unmount } = renderHook(() => useEscapeToClose(true, onClose, false));
+        const e = escapeOn(document.body);
+        expect(onClose).not.toHaveBeenCalled();
+        expect(isEscapeClaimed(e)).toBe(true);
+        unmount();
     });
 });

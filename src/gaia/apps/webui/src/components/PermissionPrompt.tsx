@@ -12,6 +12,7 @@ import {
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
+import { isEscapeClaimed } from '../hooks/useEscapeToClose';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -100,7 +101,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     // Capture phase, so this runs before ChatView's Escape-stops-the-reply.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape' || e.defaultPrevented) return;
+            if (e.key !== 'Escape' || isEscapeClaimed(e)) return;
             if (remaining !== null && remaining <= 0) return;
             // Claimed even mid-answer: a second Esc would otherwise stop the whole reply.
             e.preventDefault();

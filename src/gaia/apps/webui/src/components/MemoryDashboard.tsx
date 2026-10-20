@@ -9,6 +9,7 @@ import {
     Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeLayer } from '../hooks/useEscapeToClose';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -410,9 +411,11 @@ export function MemoryDashboard() {
     }, [showMaintenanceMenu]);
 
     // Close on Escape key
+    useEscapeLayer(true);
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
+            if (e.key === 'Escape' && !e.defaultPrevented) {
+                e.preventDefault();
                 if (betaConfirm) {
                     setBetaConfirm(null);
                 } else if (deleteConfirm) {
