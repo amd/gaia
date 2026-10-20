@@ -221,6 +221,63 @@ def test_a_repo_in_a_removed_folder_is_refused(client, session_id, repo, chat_ed
     assert "removed from this chat" in resp.json()["detail"]
 
 
+def _remove_folder(client, session_id, path):
+    resp = client.post(
+        f"/api/sessions/{session_id}/environment/folders/remove",
+        json={"path": str(path)},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_a_removed_subfolder_inside_the_repo_stays_out_of_the_commit(
+    client, session_id, repo
+):
+    _chat_writes(client, session_id, repo / "report.md", repo / "private" / "keys.md")
+    _remove_folder(client, session_id, repo / "private")
+
+    (r,) = client.get(f"/api/sessions/{session_id}/changes/git").json()["repos"]
+    assert r["files"] == ["report.md"]
+    assert "keys.md" not in r["draft"]["body"]
+
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    committed = _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert committed == ["report.md"]
+    assert "private/" in _git(repo, "status", "--porcelain", "--untracked-files=all")
+
+
+def test_a_removed_folder_sharing_a_name_prefix_filters_nothing_else(
+    client, session_id, repo
+):
+    _chat_writes(client, session_id, repo / "private" / "notes.md")
+    (repo / "priv").mkdir()
+    _remove_folder(client, session_id, repo / "priv")
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    committed = _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert committed == ["private/notes.md"]
+
+
+def test_only_removed_folder_changes_commit_nothing(client, session_id, repo):
+    before = _git(repo, "rev-parse", "HEAD")
+    _chat_writes(client, session_id, repo / "private" / "keys.md")
+    _remove_folder(client, session_id, repo / "private")
+    assert client.get(f"/api/sessions/{session_id}/changes/git").json()["repos"] == []
+    resp = client.post(
+        f"/api/sessions/{session_id}/changes/git/commit",
+        json={"root": str(repo), "message": "m", "confirmed": True},
+    )
+    assert resp.status_code == 400
+    assert "changed no files" in resp.json()["detail"]
+    assert _git(repo, "rev-parse", "HEAD") == before
+
+
 def test_commit_refused_while_a_turn_runs(client, session_id, repo, chat_edit):
     import asyncio
 

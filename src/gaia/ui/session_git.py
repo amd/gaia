@@ -115,8 +115,16 @@ def _ignored(root: str, rel: List[str]) -> List[str]:
     return [r for r, p in zip(rel, posix) if p in hits]
 
 
-def _changed_by_chat(session_id: str) -> List[str]:
-    return [f["path"] for f in file_snapshots.session_changes(session_id)["files"]]
+def _changed_by_chat(db: ChatDatabase, session_id: str) -> List[str]:
+    """The chat's changed files, minus any in a folder the user removed."""
+    from . import session_environment
+
+    withheld = session_environment.load(db, session_id)["withheld"]
+    return [
+        f["path"]
+        for f in file_snapshots.session_changes(session_id)["files"]
+        if not any(session_environment.within(f["path"], w) for w in withheld)
+    ]
 
 
 def _user_requests(db: ChatDatabase, session_id: str) -> Dict[int, str]:
@@ -191,7 +199,7 @@ def describe(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     if shutil.which("git") is None:
         return {"available": False, "repos": [], "reason": "Git is not installed."}
     by_root: Dict[str, List[str]] = {}
-    for path in _changed_by_chat(session_id):
+    for path in _changed_by_chat(db, session_id):
         parent = _existing_parent(path)
         root = _toplevel(parent) if parent else None
         if root:
@@ -254,7 +262,9 @@ def _check_repo(db: ChatDatabase, session_id: str, root: str) -> List[str]:
                 f"{root} is in {withheld}, which you removed from this chat."
             )
     files = [
-        f for f in _changed_by_chat(session_id) if session_environment.within(f, root)
+        f
+        for f in _changed_by_chat(db, session_id)
+        if session_environment.within(f, root)
     ]
     if not files:
         raise GitActionError(f"This chat changed no files in {root}.")

@@ -532,7 +532,9 @@ reads nothing.
   - **Internet:** turn it off and GAIA won't search the web, open pages,
     use the browser or connectors, or run commands that go online (such as
     `git push`, `pip install` or `npx`). Commands that talk only to this PC,
-    such as `curl http://localhost:3000`, still run. The message box says the
+    such as `curl http://localhost:3000`, still run. The check reads what a
+    command names, so a script that connects to the internet by itself (for
+    example `python fetch.py`) can still reach it. The message box says the
     chat is offline, with a button to turn it back on.
   - **Phone access:** turns mobile access on or off, shows the QR code, and
     names the phone that connected.
@@ -563,7 +565,8 @@ reads nothing.
     a message drafted from your requests in this chat, which you can edit.
     Nothing runs until you press the button in that dialog, whatever the
     permission mode. Commit includes only the files this chat changed, and
-    leaves out any that git ignores; the dialog names them.
+    leaves out any that git ignores (the dialog names them) or that sit in a
+    folder you removed.
     Create PR pushes the current branch (never forced) and opens the pull
     request with GitHub's `gh` tool; it isn't offered from the default branch
     or while the chat's internet is off.

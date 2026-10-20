@@ -897,8 +897,9 @@ Deleting a chat deletes its copies.
   <Accordion title="POST /api/sessions/{session_id}/changes/git/commit">
     **Request:** `{"root": "...", "message": "...", "confirmed": true}`
 
-    Stages only the files the chat changed in `root` (deletions included, names
-    taken literally, never as patterns) and
+    Stages only the files the chat changed in `root`, outside any folder removed
+    from the chat (deletions included, names taken literally, never as
+    patterns) and
     commits them with `message`; other staged or changed files are left alone
     and hooks run as usual. Files git ignores are left out and returned in
     `ignored`. Returns `{"root", "commit", "files", "ignored"}`. **400**
