@@ -62,6 +62,9 @@ three times.
    notes, an email or a chat restate is the same row, not a second one. Before
    saving, compare every pair of rows with the same owner and similar wording
    and fold any duplicates together, keeping every source in Evidence.
+   A note to chase someone else's item ("chase Sam for the budget", "follow
+   up with Sam on the budget") is not a new action: it belongs on Sam's row,
+   as a follow-up in Status or Evidence.
 6. **Set status only from what was said:**
    - `Open`: raised, no later mention.
    - `In progress`: a later meeting says it was started.
@@ -90,7 +93,9 @@ def words(t): return set(re.findall(r"[a-z0-9]{3,}", t.lower())) - {"the", "and"
 rows = tracker  # list of dicts with 'owner' and 'task'
 for a, b in itertools.combinations(range(len(rows)), 2):
     ra, rb = rows[a], rows[b]
-    if ra["owner"].split()[0].lower() != rb["owner"].split()[0].lower():
+    oa, ob = ra["owner"].split()[0].lower(), rb["owner"].split()[0].lower()
+    # same owner, or one row chases the other's owner ("follow up with Sam on ...")
+    if oa != ob and ob not in ra["task"].lower() and oa not in rb["task"].lower():
         continue
     wa, wb = words(ra["task"]), words(rb["task"])
     jacc = len(wa & wb) / max(1, len(wa | wb))
