@@ -180,7 +180,14 @@ async def test_switching_to_email_preserves_prior_pairs(transcript):
     captured = []
 
     def dispatch(
-        handler, request, history, model, agent_type, session_id=None, documents=None
+        handler,
+        request,
+        history,
+        model,
+        agent_type,
+        session_id=None,
+        documents=None,
+        scope=None,
     ):
         captured.extend(history)
         handler._emit({"type": "agent_done"})

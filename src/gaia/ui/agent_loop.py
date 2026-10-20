@@ -460,7 +460,10 @@ class AgentLoop:
                     rag_paths, lib_paths = _helpers._resolve_rag_paths(
                         db, session.get("document_ids", [])
                     )
-                    allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
+                    working_folder = _helpers._session_working_folder(db, session_id)
+                    allowed = _helpers._compute_allowed_paths(
+                        rag_paths + lib_paths, working_folder
+                    )
                     # Beta dynamic tool loader (#1798). Inert here: autonomous
                     # ticks use the default "full" prompt profile and the loader
                     # only activates on the "doc" profile — wired for future-
@@ -475,6 +478,7 @@ class AgentLoop:
                         device=session.get("device"),
                         min_context_size=device_ctx,
                         allowed_paths=allowed,
+                        project_root=_helpers._project_root(working_folder),
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),

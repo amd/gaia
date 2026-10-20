@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.17"`                  |
+| Contract version   | `API_VERSION = "2.18"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,7 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`) is optional.
+`documents`, `folders`, `withheld_folders`, `working_folder`) is optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -296,6 +296,17 @@ file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
 field, so probe `/version` before sending it.
+
+`folders` and `withheld_folders` (contract ≥ 2.18) carry the absolute folders
+the user gave the conversation and the ones they took away. Send both whole on
+every turn: each folder is granted read and write, and each withheld path is
+refused even under a wider grant. `working_folder` (≥ 2.18) is the folder the
+conversation works in; it is granted, mapped as the project, and is where shell
+commands start. It is read when the session's agent is built, so send it from
+the first turn. A relative path is a `422`; a folder that does not exist, or one
+too broad to grant (a filesystem root, the home folder, or one overlapping a
+protected directory), ends the turn with an `error`. Pre-2.18 binaries `422`
+these fields.
 
 ```json
 {

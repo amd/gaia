@@ -79,7 +79,9 @@ AGENT_ID = "gaia"
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
-API_VERSION = "2.17"
+#: 2.18 added ``/query``'s ``folders``, ``withheld_folders`` and
+#: ``working_folder`` fields.
+API_VERSION = "2.18"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -180,6 +182,52 @@ class QueryRequest(_Strict):
             "one attached mid-conversation is picked up on the next turn."
         ),
     )
+
+    folders: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Absolute folders the user gave this conversation (contract >= "
+            "2.18). Each is granted read and write. Send the full set every "
+            "turn, with withheld_folders, so a removed folder is refused."
+        ),
+    )
+    withheld_folders: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Absolute folders or files the user took away from this "
+            "conversation (contract >= 2.18). Refused even under a wider grant."
+        ),
+    )
+    working_folder: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute folder this conversation works in (contract >= 2.18): "
+            "granted, mapped as its project, and where shell commands start. "
+            "Read when the session's agent is built, so send it from turn one."
+        ),
+    )
+
+    @field_validator("folders", "withheld_folders")
+    @classmethod
+    def _folders_absolute(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        relative = [p for p in v if not p or not Path(p).is_absolute()]
+        if relative:
+            raise ValueError(
+                f"folders must be absolute paths; got {relative!r}. The agent's "
+                "working directory is not the caller's."
+            )
+        return list(dict.fromkeys(v))
+
+    @field_validator("working_folder")
+    @classmethod
+    def _working_folder_absolute(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not Path(v).is_absolute():
+            raise ValueError(f"working_folder must be an absolute path; got {v!r}.")
+        return v
 
     @field_validator("documents")
     @classmethod
@@ -524,6 +572,31 @@ def _attach_refusal(agent: Any, path: str) -> str:
         return "not a file; only individual files can be attached"
     blocked, reason = agent.path_validator.is_read_blocked(path)
     return reason if blocked else ""
+
+
+def _apply_folders(agent: Any, request: "QueryRequest") -> None:
+    """Hold the agent to the folders the caller's chat has (>= 2.18).
+
+    A folder too broad to grant (a root, home, or one overlapping a protected
+    directory) is refused here as well as by the caller.
+    """
+    from gaia.security import unsafe_directory_grant_reason
+
+    validator = agent.path_validator
+    granted = list(request.folders or [])
+    if request.working_folder:
+        granted.append(request.working_folder)
+    for folder in granted:
+        target = Path(folder).resolve()
+        if not target.is_dir():
+            raise ValueError(f"{target} is not a folder on this PC.")
+        reason = unsafe_directory_grant_reason(target)
+        if reason:
+            raise ValueError(f"{target} can't be granted: {reason}.")
+        validator.release_path(str(target))
+        validator.add_allowed_path(str(target))
+    for path in request.withheld_folders or []:
+        validator.withhold_path(path)
 
 
 def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
@@ -1022,6 +1095,8 @@ async def query(request: QueryRequest):
                 kwargs["claude_model"] = request.model
         elif request.model:
             kwargs["model_id"] = request.model
+        if request.working_folder:
+            kwargs["project_root"] = request.working_folder
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a
@@ -1160,6 +1235,12 @@ async def query(request: QueryRequest):
 
     def _run_agent() -> None:
         try:
+            if (
+                request.folders is not None
+                or request.withheld_folders is not None
+                or request.working_folder
+            ):
+                _apply_folders(agent, request)
             if request.documents:
                 _index_attached_documents(agent, request.documents, handler)
             if request.max_steps is not None:

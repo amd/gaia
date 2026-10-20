@@ -161,6 +161,21 @@
             "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs. Send the full set every turn: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn.",
             "title": "Documents"
           },
+          "folders": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute folders the user gave this conversation (contract >= 2.18). Each is granted read and write. Send the full set every turn, with withheld_folders, so a removed folder is refused.",
+            "title": "Folders"
+          },
           "max_steps": {
             "anyOf": [
               {
@@ -220,6 +235,33 @@
             ],
             "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
             "title": "Session Id"
+          },
+          "withheld_folders": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute folders or files the user took away from this conversation (contract >= 2.18). Refused even under a wider grant.",
+            "title": "Withheld Folders"
+          },
+          "working_folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute folder this conversation works in (contract >= 2.18): granted, mapped as its project, and where shell commands start. Read when the session's agent is built, so send it from turn one.",
+            "title": "Working Folder"
           }
         },
         "required": [
@@ -397,7 +439,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.17"
+    "version": "2.18"
   },
   "openapi": "3.1.0",
   "paths": {

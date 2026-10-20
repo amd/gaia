@@ -42,7 +42,9 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.providers.lemonade import classify_lemonade_exception
-from gaia.security import BLOCKED_DIRECTORIES
+from gaia.security import (
+    unsafe_directory_grant_reason as _unsafe_directory_grant_reason,
+)
 from gaia.stream_timeout import (
     DEFAULT_STREAM_TIMEOUT_SECONDS,
     MAX_STREAM_TIMEOUT_SECONDS,
@@ -55,6 +57,7 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     confirmations_supported,
     documents_supported,
+    folders_supported,
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -66,7 +69,7 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
-from .session_environment import apply_environment
+from .session_environment import apply_environment, relayed_scope
 from .sse_handler import (
     _ANSWER_JSON_SUB_RE,
     _RAG_RESULT_JSON_SUB_RE,
@@ -1464,29 +1467,47 @@ def _managed_documents_dir() -> Path:
     return managed_documents_dir().resolve()
 
 
-def _unsafe_directory_grant_reason(directory: Path) -> str:
-    """Why *directory* is too broad to hand a session, or ``""`` if it is fine.
+#: Overrides the folder a chat with no folder of its own works in.
+WORKING_DIR_ENV = "GAIA_WORKING_DIR"
 
-    Args:
-        directory: A resolved directory being considered as a session scope.
 
-    Returns:
-        A reason naming what the grant would expose, empty when it is safe.
+class WorkingDirEnvError(ValueError):
+    """``GAIA_WORKING_DIR`` names a folder GAIA can't work in."""
+
+
+def env_working_dir() -> Optional[Path]:
+    """The folder ``GAIA_WORKING_DIR`` names, or ``None`` when it is unset.
+
+    Raises:
+        WorkingDirEnvError: When it is not a folder, or is too broad to grant.
     """
-    if directory == Path(directory.anchor):
-        return "it is a filesystem root"
-    if directory == Path.home().resolve():
-        return "it is your home directory"
-    for blocked in BLOCKED_DIRECTORIES:
-        blocked_path = Path(blocked).resolve()
-        if directory == blocked_path or blocked_path.is_relative_to(directory):
-            return f"it contains the protected directory '{blocked}'"
-        if directory.is_relative_to(blocked_path):
-            return f"it is inside the protected directory '{blocked}'"
-    return ""
+    raw = os.environ.get(WORKING_DIR_ENV, "").strip()
+    if not raw:
+        return None
+    path = Path(os.path.expanduser(raw)).resolve()
+    if not path.is_dir():
+        raise WorkingDirEnvError(
+            f"{WORKING_DIR_ENV}={raw!r} is not a folder on this PC. Point it (or "
+            "--working-dir) at an existing folder, or unset it to use the folder "
+            "GAIA was started in."
+        )
+    reason = _unsafe_directory_grant_reason(path)
+    if reason:
+        raise WorkingDirEnvError(
+            f"{WORKING_DIR_ENV}={raw!r} can't be GAIA's working folder: {reason}. "
+            "Pick a narrower folder, such as a project folder."
+        )
+    return path
 
 
-def _compute_allowed_paths(rag_file_paths: list) -> list:
+def default_working_dir() -> Path:
+    """The folder a chat with no folder of its own works in, before safety checks."""
+    return env_working_dir() or Path.cwd().resolve()
+
+
+def _compute_allowed_paths(
+    rag_file_paths: list, working_folder: Optional[str] = None
+) -> list:
     """Derive a session's filesystem scope from its attached documents.
 
     Grants each document **file**, never the directory it sits in.
@@ -1499,12 +1520,15 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     somewhere to *write* — a bounded, GAIA-owned folder the Agent UI already
     surfaces, rather than whichever of the user's folders a document came from.
 
-    Falls back to the current working directory only when nothing is attached,
-    and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
+    A chat's own *working_folder* (picked when it was started) is always
+    granted. Without one, the default working folder (``GAIA_WORKING_DIR``,
+    else the current working directory) is granted only when nothing is
+    attached, and refused when it is a root, ``$HOME``, or overlaps a
     protected directory — a scope that broad is not a scope.
 
     Args:
         rag_file_paths: Paths of the documents attached to this session.
+        working_folder: The folder this chat was started in, already validated.
 
     Returns:
         The allowlist, always including the managed documents directory.
@@ -1518,22 +1542,40 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
         except (OSError, ValueError) as exc:
             logger.warning("Skipping unresolvable document path %r: %s", fp, exc)
     managed = str(_managed_documents_dir())
+    if working_folder:
+        allowed.add(str(Path(working_folder).resolve()))
     if allowed:
         allowed.add(managed)
         return sorted(allowed)
 
-    cwd = Path.cwd().resolve()
+    cwd = default_working_dir()
     reason = _unsafe_directory_grant_reason(cwd)
     if reason:
         logger.warning(
             "Refusing to grant this session file access to %s because %s. The "
             "session keeps only the managed documents directory. Attach "
-            "a document, or start the Agent UI backend from a project directory.",
+            "a document, pick a working folder for the chat, or set %s.",
             cwd,
             reason,
+            WORKING_DIR_ENV,
         )
         return [managed]
     return sorted({managed, str(cwd)})
+
+
+def _session_working_folder(db, session_id: Optional[str]) -> Optional[str]:
+    """The folder this chat was started in, or ``None`` for the default one."""
+    if not session_id:
+        return None
+    return db.get_session_environment(session_id)["working_folder"]
+
+
+def _project_root(working_folder: Optional[str]) -> Optional[str]:
+    """The folder a chat's agent maps and runs commands in, when one was picked."""
+    if working_folder:
+        return working_folder
+    picked = env_working_dir()
+    return str(picked) if picked else None
 
 
 def _with_attachments(allowed: list, attached: list) -> list:
@@ -1842,12 +1884,15 @@ def _dispatch_sidecar_query(
     agent_type: str,
     session_id: str | None = None,
     documents: list | None = None,
+    scope: dict | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
     the turn with an upgrade message rather than answer without them.
+    *scope* (``session_environment.relayed_scope``) is the chat's folders,
+    held to the same rule.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1897,6 +1942,15 @@ def _dispatch_sidecar_query(
             )
             return
         relayed_documents = [str(Path(p).resolve()) for p in documents]
+
+    relayed_scope = None
+    if scope and any(scope.values()) and profile.min_folders_api_version is not None:
+        if not folders_supported(profile, handle.api_version):
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.folders_upgrade_message}
+            )
+            return
+        relayed_scope = scope
 
     proxy = handle.proxy()
 
@@ -1990,6 +2044,7 @@ def _dispatch_sidecar_query(
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
         documents=relayed_documents,
+        scope=relayed_scope,
     )
 
 
@@ -2672,7 +2727,10 @@ async def _get_chat_response(
             )
 
         attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        working_folder = _session_working_folder(db, request.session_id)
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths, working_folder), attached
+        )
 
         model_id = session.get("model")
         custom_model = db.get_setting("custom_model")
@@ -2830,6 +2888,7 @@ async def _get_chat_response(
                         # drop it via dataclasses.fields filtering. None = scan every
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
+                        project_root=_project_root(working_folder),
                     )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -3088,7 +3147,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
 
         attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        working_folder = _session_working_folder(db, request.session_id)
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths, working_folder), attached
+        )
         model_id = session.get("model")
 
         # Use custom model override if set in user settings
@@ -3352,6 +3414,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         agent_type,
                         session_id=session_id,
                         documents=_relayed_documents(rag_file_paths, attached),
+                        scope=relayed_scope(db, session_id),
                     )
                     return
 
@@ -3419,6 +3482,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 # filtered out by non-email factories. None = scan
                                 # every connected mailbox (#1596).
                                 mail_provider=_session_mail_provider(session),
+                                project_root=_project_root(working_folder),
                             )
                         agent.console = sse_handler
                         logger.info(

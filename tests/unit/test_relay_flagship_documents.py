@@ -232,7 +232,7 @@ def chat(monkeypatch, sidecar_flagship_registry, tmp_path):
         )
         db.attach_document(session_id, doc["id"])
 
-    yield SimpleNamespace(send=send, attach=attach, session_id=session_id)
+    yield SimpleNamespace(send=send, attach=attach, session_id=session_id, db=db)
     session_permissions.reset_all()
 
 

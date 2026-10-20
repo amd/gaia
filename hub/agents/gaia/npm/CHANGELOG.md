@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A conversation can be given folders and a working folder.** `/query`
+  takes `folders`, `withheld_folders` and `working_folder` (contract **2.18**),
+  so a folder the user adds to or removes from an Agent UI chat now applies to
+  this agent too, and a chat started in a folder works there.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
   reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
   floor and `min_gaia_version` rise to it in that release; a release whose

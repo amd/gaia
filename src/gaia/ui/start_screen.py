@@ -11,7 +11,6 @@ costs nothing to open. A card only appears for a skill the agent has.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -129,7 +128,7 @@ def working_folder() -> Dict[str, Any]:
     """The folder a new chat's agent works in, as ``_compute_allowed_paths`` grants it."""
     from gaia.ui import _chat_helpers as chat
 
-    cwd = Path.cwd().resolve()
+    cwd = chat.default_working_dir()
     if chat._unsafe_directory_grant_reason(cwd):
         folder, own = chat._managed_documents_dir(), True
     else:
