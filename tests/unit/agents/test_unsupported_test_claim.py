@@ -361,6 +361,11 @@ def test_a_malformed_check_fails_loudly():
             "tests pass",
         ),
         ("To confirm, I checked: 12 passed.", "12 passed"),
+        # A negation exempts its own clause, not the claim beside it.
+        ("All 55 tests pass, but I did not run the linter.", "55 tests pass"),
+        ("I did not run lint, but all 55 tests pass.", "55 tests pass"),
+        ("The tests pass; however, coverage was not checked.", "tests pass"),
+        ("All 9 tests pass - I never ran the linter.", "9 tests pass"),
     ],
 )
 def test_a_concrete_test_outcome_is_a_claim(answer, expected):
@@ -385,6 +390,11 @@ def test_a_concrete_test_outcome_is_a_claim(answer, expected):
         "Next steps:\n- Run the full test suite\n- Tag a release",
         "I rewrote the loader and documented TOYBOX_CONFIG.",
         "Done. Both bugs are fixed.",
+        "Two tests still fail, but the discount one passes now.",
+        "The tests do not pass, but the build is green.",
+        "Not all tests pass, but most do.",
+        "I could not run the tests, but they should pass.",
+        "Although I didn't run the integration tests, the unit tests pass.",
         "",
     ],
 )
@@ -399,6 +409,8 @@ def test_the_broad_success_detector_lives_in_one_place():
     assert code_bench.claims_success is claims_success
     assert claims_success("Both bugs are fixed now.")
     assert not claims_success("I could not get the last test passing.")
+    # Sentence-wide negation on purpose: this one is an honest report.
+    assert not claims_success("Done, but two tests still fail.")
 
 
 # ---------------------------------------------------------------------------
@@ -647,14 +659,37 @@ def test_an_answer_without_a_claim_is_never_corrected(agent):
     assert _final_text(result) == HONEST
 
 
-def test_a_second_unsupported_answer_is_kept_with_a_caveat(agent):
+def test_a_repeated_unsupported_claim_is_kept_with_a_caveat(agent):
+    """The same claim after its correction is a disagreement, not a new slip."""
     repeats = [_answer(FABRICATED)] * (_MAX_TEST_CLAIM_CORRECTIONS + 2)
     sent = _stub_chat(agent, *repeats)
 
     result = agent.process_query("Fix the matrix lookup", max_steps=10)
 
-    assert len(sent) == _MAX_TEST_CLAIM_CORRECTIONS + 1
+    assert len(sent) == 2
     assert result["result"].startswith(FABRICATED)
+    assert "No tests were run this turn." in result["result"]
+    assert result["status"] == "incomplete"
+
+
+def test_a_new_false_claim_in_the_rewrite_is_corrected_too(agent):
+    rewrite = "Fixed the lookup. All 55 tests pass, but I did not run the linter."
+    sent = _stub_chat(agent, _answer(FABRICATED), _answer(rewrite), _answer(HONEST))
+
+    result = agent.process_query("Fix the matrix lookup", max_steps=10)
+
+    assert len(sent) == 3
+    assert "55 tests pass" in sent[2][-1]["content"]
+    assert _final_text(result) == HONEST
+
+
+def test_corrections_stop_at_the_cap(agent):
+    claims = [_answer(f"Fixed it. {n} passed.") for n in range(1, 6)]
+    sent = _stub_chat(agent, *claims)
+
+    result = agent.process_query("Fix the matrix lookup", max_steps=10)
+
+    assert len(sent) == _MAX_TEST_CLAIM_CORRECTIONS + 1
     assert "No tests were run this turn." in result["result"]
     assert result["status"] == "incomplete"
 
