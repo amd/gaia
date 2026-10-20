@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Workbooks are checked before they are handed over.** The new
+  `verify_workbook` tool recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`, `#NAME?`,
+  a circular reference, a SUM/SUMIFS over text or empty cells, or a criterion
+  that matches no row. It never writes the file. The bundled `office-docs`
+  skill teaches native charts in decks and workbook verification. 96 tools.
+- **Local models with a large window can write longer replies.** The output
+  cap is a quarter of the loaded window (16K at 64K) instead of a flat 8K, and
+  a reply cut off at the cap is told to write the file in smaller parts.
+- **`search_file_content` searches the workspace.** A relative or default
+  directory resolved against the sidecar's own folder and reported "0 files";
+  it now resolves against the workspace, searches text files of any extension,
+  and says when nothing was searched.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
   reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
   floor and `min_gaia_version` rise to it in that release; a release whose
@@ -14,7 +27,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reasoning, the agent gets `set_reasoning_effort` (low, medium or high) to
   choose how hard it thinks for the rest of the request; every new message
   starts again at medium. It is not registered on other models, so the
-  agent's 95 tools on Gemma and Qwen are unchanged.
+  agent's 96 tools on Gemma and Qwen are unchanged.
 - **The turn log says how busy the model server was.** With `GAIA_TURN_LOG`
   set, each model call records the server's own prefill, decode and cache-reuse
   figures and the time spent waiting on the model-slot lease, the slot lock and
