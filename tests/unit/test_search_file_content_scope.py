@@ -105,3 +105,17 @@ def test_a_relative_folder_outside_every_root_is_an_error(workspace):
 
     assert result["status"] == "error"
     assert "not under any workspace root" in result["error"]
+
+
+def test_dependency_and_vcs_folders_are_not_descended_into(workspace):
+    for skipped in ("node_modules/pkg", ".git/objects"):
+        folder = workspace / skipped
+        folder.mkdir(parents=True)
+        (folder / "copy.js").write_text("style_data(x)\n", encoding="utf-8")
+
+    result = _search(pattern=r"style_data\(")
+    assert "copy.js" not in _files(result)
+
+    # Searching one of them directly still works.
+    direct = _search(pattern=r"style_data\(", directory="node_modules")
+    assert _files(direct) == ["copy.js"]

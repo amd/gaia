@@ -54,6 +54,23 @@ from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
+#: Version-control and dependency folders content search does not descend into
+#: (thousands of files, none the user wrote); searching one directly still works.
+_CONTENT_SEARCH_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+    }
+)
+
 #: Never text, so content search skips them without opening them.
 _BINARY_SUFFIXES = frozenset(
     {
@@ -1231,9 +1248,17 @@ class FileSearchToolsMixin:
                     # text unless the first block holds a NUL byte.
                     return _looks_like_text(file_path)
 
-                candidates = [
-                    f for f in directory.rglob("*") if f.is_file() and wanted(f)
-                ]
+                def candidates():
+                    """Files to search, lazily, so a search that fills up early
+                    never walks (or sniffs) the rest of the tree."""
+                    for root, dirs, files in os.walk(directory):
+                        dirs[:] = sorted(
+                            d for d in dirs if d not in _CONTENT_SEARCH_SKIP_DIRS
+                        )
+                        for name in sorted(files):
+                            file_path = Path(root) / name
+                            if file_path.is_file() and wanted(file_path):
+                                yield file_path
 
                 matches = []
                 files_searched = 0
@@ -1298,7 +1323,7 @@ class FileSearchToolsMixin:
                         logger.warning("Could not search %s: %s", file_path, exc)
                         return True
 
-                for file_path in candidates:
+                for file_path in candidates():
                     files_searched += 1
                     if not search_file(file_path):
                         break  # Hit match limit
@@ -1309,7 +1334,7 @@ class FileSearchToolsMixin:
                 if _use_regex and not matches:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
-                    for _fp2 in candidates:
+                    for _fp2 in candidates():
                         if not search_file(_fp2):
                             break
 
