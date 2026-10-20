@@ -66,6 +66,44 @@ _UNASSERTED = re.compile(
 )
 
 
+#: A sentence that reports tests failing. Such a sentence is a mixed report
+#: as a whole ("The unit tests pass, but the integration test fails", "52
+#: passed; 3 failed"), so the clause split never isolates its pass half. A
+#: count of failures, a failure verb, or "do not pass" — not "the failing
+#: test" or "the failure" (names for what was fixed, as in "I fixed the
+#: failing test") and not a zero count ("0 failed", "no failures", which
+#: :data:`_NO_FAILURES` removes).
+_FAILURE = re.compile(
+    r"\b\d+\s+(?:[\w-]+\s+){0,2}?(?:fail(?:s|ed|ing|ures?)?|errors?|errored|broken)\b"
+    r"|\bfail(?:s|ed)?\b"
+    r"|\bfailing\b(?!\s+(?:[\w-]+\s+)?(?:tests?|cases?|specs?|checks?|ones?|"
+    r"assertions?|suites?)\b)"
+    r"|\b(?:do|does|did|is|are|was|were)\s*(?:n[o']t|\s+not)\s+"
+    r"(?:(?:yet|still|all|even)\s+)*pass(?:es|ed|ing)?\b"
+    r"|\bnot\s+(?:(?:yet|all)\s+)?pass(?:ing|ed)?\b",
+    re.IGNORECASE,
+)
+
+#: A zero failure count is part of a pass report, not a failure: "52 passed,
+#: 0 failed", "all green with no failures".
+_NO_FAILURES = re.compile(
+    r"\b(?:0|no|zero|none|nothing)\s+(?:[\w-]+\s+)?"
+    r"(?:fail(?:s|ed|ures?)?|errors?|errored)\b"
+    r"|\bnone\s+of\s+(?:the\s+)?(?:[\w-]+\s+){0,2}?fail(?:s|ed|ing)?\b"
+    r"|\bwithout\s+(?:any\s+)?(?:failures?|errors?)\b",
+    re.IGNORECASE,
+)
+
+
+def reports_test_failure(text: str) -> bool:
+    """True when *text* says some test failed or did not pass.
+
+    ``"52 passed; 3 failed"`` and ``"the integration test fails"`` → ``True``;
+    ``"52 passed, 0 failed"`` and ``"I fixed the failing test"`` → ``False``.
+    """
+    return bool(_FAILURE.search(_NO_FAILURES.sub(" ", text or "")))
+
+
 def _sentences(answer: str) -> List[str]:
     return re.split(r"(?<=[.!?])\s+|\n+", answer or "")
 
@@ -83,11 +121,21 @@ def _first_claim(
     the discount one passes now" claims nothing overall, and a whole-text match
     would read it as a success. *per_clause* narrows that to the clause on
     either side of a contrast ("All 55 tests pass, but I did not run lint"
-    still reports a pass). *reports_only* also skips advice and instructions
+    still reports a pass) — unless the sentence also reports a test failure
+    (:func:`reports_test_failure`), which makes the whole sentence an honest
+    mixed report. *reports_only* also skips advice and instructions
     (:data:`_UNASSERTED`).
     """
     for sentence in _sentences(answer):
-        for clause in _CONTRAST.split(sentence) if per_clause else [sentence]:
+        if not per_clause:
+            clauses = [sentence]
+        elif reports_test_failure(sentence):
+            # A sentence that also reports a failure is an honest mixed report.
+            continue
+        else:
+            # Zero failures belong to the pass report: "52 passed, 0 failed".
+            clauses = _CONTRAST.split(_NO_FAILURES.sub(" ", sentence))
+        for clause in clauses:
             match = claims.search(clause)
             if not match or _NEGATION.search(clause):
                 continue
@@ -132,7 +180,8 @@ def passing_test_claim(answer: str) -> Optional[str]:
     ``"Tests: 111 passed"`` → ``"111 passed"``; ``"3 failed"``, ``"the tests do
     not pass"`` and ``"run pytest to confirm the tests pass"`` → ``None``. A
     negation exempts only its own clause: ``"all 55 tests pass, but I did not
-    run lint"`` → ``"55 tests pass"``.
+    run lint"`` → ``"55 tests pass"``. A sentence that also reports a failure
+    is a mixed report, never a claim: ``"52 passed; 3 failed"`` → ``None``.
     Returns the matched words so a caller can quote the claim back.
     """
     return _first_claim(

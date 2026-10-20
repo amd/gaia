@@ -42,7 +42,7 @@ from gaia.agents.base.checks import (
     runner_summary,
 )
 from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
-from gaia.agents.base.claims import passing_test_claim
+from gaia.agents.base.claims import passing_test_claim, reports_test_failure
 
 #: How the note opens. Fixed, so a model's echo of it can be found and removed.
 VERIFICATION_NOTE_OPENER = "I haven't confirmed this works"
@@ -875,6 +875,10 @@ def unsupported_test_claim(
         return (claim, NO_TEST_RUN)
     passed = [(index, e) for index, e in latest.values() if not e.get("failed")]
     if not passed:
+        # "52 tests pass. 3 fail." after a failed run is the run reported
+        # honestly, split over two sentences.
+        if reports_test_failure(answer):
+            return None
         return (claim, TEST_RUN_FAILED)
     if all(index < last_mutation for index, _ in passed):
         return (claim, TEST_RUN_STALE)
