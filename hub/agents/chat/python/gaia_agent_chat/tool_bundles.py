@@ -336,6 +336,16 @@ FULL_BUNDLES = [
         ),
         description="Analyze CSV/Excel files and query SQL scratchpad tables.",
     ),
+    # run_python rides along: a workbook is built with it, then checked.
+    ToolBundle(
+        name="office_files",
+        members=frozenset({"verify_workbook", "run_python"}),
+        description=(
+            "Build and check Excel workbooks (.xlsx): recalculate formulas and "
+            "find #REF!, #VALUE!, #DIV/0!, #NAME?, circular references and "
+            "SUM/SUMIFS formulas pointing at the wrong cells."
+        ),
+    ),
     ToolBundle(
         name="web",
         members=frozenset(

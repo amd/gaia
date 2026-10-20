@@ -15,6 +15,7 @@ from .file_io_tools import FileIOToolsMixin
 from .file_monitor_tools import FileToolsMixin
 from .file_tools import FileSearchToolsMixin
 from .filesystem_tools import FileSystemToolsMixin
+from .office_tools import OfficeToolsMixin
 from .rag_tools import RAGToolsMixin
 from .reasoning_tools import ReasoningEffortToolsMixin
 from .scratchpad_tools import ScratchpadToolsMixin
@@ -32,6 +33,7 @@ __all__ = [
     "FileSearchToolsMixin",
     "FileToolsMixin",
     "FileSystemToolsMixin",
+    "OfficeToolsMixin",
     "RAGToolsMixin",
     "ReasoningEffortToolsMixin",
     "ScratchpadToolsMixin",

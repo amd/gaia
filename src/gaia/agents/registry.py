@@ -50,6 +50,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "cli_setup": ("gaia.agents.tools.cli_setup_tools", "CliSetupToolsMixin"),
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),
     "filesystem": ("gaia.agents.tools.filesystem_tools", "FileSystemToolsMixin"),
+    "office": ("gaia.agents.tools.office_tools", "OfficeToolsMixin"),
     "scratchpad": ("gaia.agents.tools.scratchpad_tools", "ScratchpadToolsMixin"),
     "browser": ("gaia.agents.tools.browser_tools", "BrowserToolsMixin"),
     "browser_use": (

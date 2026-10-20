@@ -64,6 +64,8 @@ TOOL_GROUP_REGISTRARS: Dict[str, Tuple[str, ...]] = {
     "full_screenshot": ("register_screenshot_tools",),
     "media_transcribe": ("register_audio_tools",),
     "loop_wait": ("register_wait_tools",),
+    # Read-only checks of the Office files the agent builds with run_python.
+    "office_check": ("register_office_tools",),
 }
 
 
@@ -128,13 +130,13 @@ PROFILE_SPECS: Dict[str, ProfileSpec] = {
             "discovery_rules_tail",
         ),
         capabilities=frozenset({"filesystem"}),
-        tool_groups=("file_fs",),
+        tool_groups=("file_fs", "office_check"),
         generic_file_ops=True,
     ),
     "data": ProfileSpec(
         prompt_blocks=("tool_rules", "scratchpad_section", "data_file_rules"),
         capabilities=frozenset({"scratchpad"}),
-        tool_groups=("data_scratch", "data_only_files"),
+        tool_groups=("data_scratch", "data_only_files", "office_check"),
         generic_file_ops=True,
     ),
     "web": ProfileSpec(
@@ -165,6 +167,7 @@ PROFILE_SPECS: Dict[str, ProfileSpec] = {
             "full_screenshot",
             "media_transcribe",
             "loop_wait",
+            "office_check",
         ),
         generic_file_ops=True,
         web_tools=True,
