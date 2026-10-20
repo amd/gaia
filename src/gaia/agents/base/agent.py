@@ -10387,6 +10387,8 @@ Do NOT wrap conversational replies in JSON.
                 fanout_repeat_break = False
                 post_tool_messages = []
 
+                # One response's calls are one attempt to the failure breaker.
+                self._turn_scope.begin_batch()
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
                     tool_args = tc["tool_args"]
@@ -10585,6 +10587,7 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+                self._turn_scope.end_batch()
 
                 # Anthropic and other spec-strict providers require all native
                 # tool results to immediately follow the assistant tool-call
