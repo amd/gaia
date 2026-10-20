@@ -425,25 +425,47 @@ def cancel_scheduled_job_impl(
         )
 
 
-def list_scheduled_jobs_impl(db, *, debug: bool = False) -> Dict[str, Any]:
-    """List pending one-shot jobs with their cancel handles."""
+#: How far back ``list_scheduled_jobs`` reports failed jobs. A failed send
+#: fired unattended, so the listing is where the user learns of it.
+RECENT_FAILURE_SECONDS = 7 * 24 * 3600
+
+
+def _job_entry(job: Dict[str, Any]) -> Dict[str, Any]:
+    entry: Dict[str, Any] = {
+        "job_id": job["job_id"],
+        "kind": job["kind"],
+        "due_at": _iso_local(job["due_at"]),
+        "mailbox": job["mailbox"],
+    }
+    if job["kind"] == schedule_store.KIND_SCHEDULED_SEND:
+        entry["to"] = job["payload"].get("to")
+        entry["subject"] = job["payload"].get("subject")
+    else:
+        entry["message_id"] = job["payload"].get("message_id")
+    return entry
+
+
+def list_scheduled_jobs_impl(
+    db, *, debug: bool = False, now: Optional[float] = None
+) -> Dict[str, Any]:
+    """List pending one-shot jobs with their cancel handles, plus the jobs that
+    failed in the last 7 days with the reason."""
     with log_tool_call("list_scheduled_jobs", {}, debug=debug) as st:
-        jobs = []
-        for job in schedule_store.list_jobs(db, status=schedule_store.STATUS_PENDING):
-            entry: Dict[str, Any] = {
-                "job_id": job["job_id"],
-                "kind": job["kind"],
-                "due_at": _iso_local(job["due_at"]),
-                "mailbox": job["mailbox"],
-            }
-            if job["kind"] == schedule_store.KIND_SCHEDULED_SEND:
-                entry["to"] = job["payload"].get("to")
-                entry["subject"] = job["payload"].get("subject")
-            else:
-                entry["message_id"] = job["payload"].get("message_id")
-            jobs.append(entry)
-        st["result_summary"] = {"pending": len(jobs)}
-        return {"pending": jobs, "count": len(jobs)}
+        jobs = [
+            _job_entry(job)
+            for job in schedule_store.list_jobs(
+                db, status=schedule_store.STATUS_PENDING
+            )
+        ]
+        since = (now if now is not None else time.time()) - RECENT_FAILURE_SECONDS
+        failed = []
+        for job in schedule_store.list_recent_failures(db, since=since):
+            entry = _job_entry(job)
+            entry["failed_at"] = _iso_local(job["fired_at"])
+            entry["error"] = job["error"]
+            failed.append(entry)
+        st["result_summary"] = {"pending": len(jobs), "failed": len(failed)}
+        return {"pending": jobs, "count": len(jobs), "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +609,8 @@ class ScheduleToolsMixin:
         @tool
         def list_scheduled_jobs() -> str:
             """List pending scheduled sends and snoozes with their job ids
-            (the cancel handles) and fire times."""
+            (the cancel handles) and fire times, and any that failed in the
+            last 7 days with the reason. Tell the user about failures."""
             try:
                 return _envelope_ok(list_scheduled_jobs_impl(db, debug=debug_flag))
             except Exception as exc:

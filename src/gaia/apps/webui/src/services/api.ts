@@ -3,8 +3,10 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
+import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -19,7 +21,7 @@ const API_BASE = getApiBase();
  * error objects* for request-validation failures (422) — interpolating one of
  * those into a message renders "[object Object]" in the UI.
  */
-function parseErrorDetail(errorText: string): string {
+export function parseErrorDetail(errorText: string): string {
     try {
         const parsed = JSON.parse(errorText).detail;
         if (Array.isArray(parsed)) {
@@ -98,11 +100,12 @@ export function redactSecrets(body: unknown): unknown {
 }
 
 /** Fetch wrapper with logging, timing, and error handling. */
-async function apiFetch<T>(
+export async function apiFetch<T>(
     method: string,
     path: string,
     body?: unknown,
     extraHeaders?: Record<string, string>,
+    signal?: AbortSignal,
 ): Promise<T> {
     const url = `${API_BASE}${path}`;
     const t = log.api.time();
@@ -118,6 +121,7 @@ async function apiFetch<T>(
         // Content-Type cannot be accidentally overridden for body requests.
         headers: { ...UI_HEADER, ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
     };
 
     let res: Response;
@@ -166,8 +170,8 @@ async function apiFetch<T>(
 
 // -- System --------------------------------------------------------------------
 
-export async function getSystemStatus(): Promise<SystemStatus> {
-    return apiFetch<SystemStatus>('GET', '/system/status');
+export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
+    return apiFetch<SystemStatus>('GET', '/system/status', undefined, undefined, signal);
 }
 
 /** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
@@ -199,8 +203,30 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
-export async function loadModel(modelName: string, ctxSize?: number): Promise<{ status: string; model: string; ctx_size: number }> {
-    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize });
+export async function loadModel(modelName: string, ctxSize?: number, force = false): Promise<{ status: string; model: string; ctx_size: number }> {
+    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize, force });
+}
+
+/**
+ * Load a model, asking first when a chat is answering: loading then can cut
+ * that answer off. Resolves false when the user chose to wait.
+ */
+export async function loadModelAskingFirst(
+    modelName: string,
+    ctxSize?: number,
+    confirmLoad: (question: string) => boolean = (q) => window.confirm(q),
+): Promise<boolean> {
+    try {
+        await loadModel(modelName, ctxSize);
+        return true;
+    } catch (err) {
+        if (!(err instanceof ApiError) || err.httpStatus !== 409) throw err;
+        if (!confirmLoad(`${err.detail}
+
+Load ${modelName} anyway?`)) return false;
+        await loadModel(modelName, ctxSize, true);
+        return true;
+    }
 }
 
 export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
@@ -211,6 +237,26 @@ export async function downloadModel(modelName: string, force = false): Promise<{
 
 export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
     return apiFetch('GET', '/agents');
+}
+
+/** Progress of a hub install, as ``GET /api/agents/{id}/install-status`` reports it. */
+export interface AgentInstallStatus {
+    id: string;
+    /** `queued`, a running phase, then `completed` or `failed`. */
+    status: string;
+    phase: string;
+    percent: number;
+    version: string | null;
+    error: string | null;
+}
+
+/** Start installing an agent from the Agent Hub (202); poll getAgentInstallStatus. */
+export async function installAgent(id: string): Promise<{ id: string; status: string }> {
+    return apiFetch('POST', '/agents/install', { id });
+}
+
+export async function getAgentInstallStatus(id: string): Promise<AgentInstallStatus> {
+    return apiFetch('GET', `/agents/${encodeURIComponent(id)}/install-status`);
 }
 
 // -- First-run setup (same `gaia init` the TUI runs) ----------------------------
@@ -232,6 +278,21 @@ export async function getSetupStatus(): Promise<SetupRunStatus> {
     return apiFetch('GET', '/setup/status');
 }
 
+/** The Lemonade, chat model and download setup will use. Loads nothing. */
+export async function getSetupPlan(): Promise<SetupPlan> {
+    return apiFetch('GET', '/setup/plan');
+}
+
+/** Pick setup's chat model before it starts; returns the new plan. */
+export async function chooseSetupChatModel(modelId: string): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/chat-model', { model_id: modelId });
+}
+
+/** A new chat's task cards and working folder. */
+export async function getStartScreen(): Promise<StartScreen> {
+    return apiFetch('GET', '/onboarding/start');
+}
+
 // -- Which Lemonade Server GAIA uses ---------------------------------------------
 
 export async function getLemonadeTarget(): Promise<LemonadeTarget> {
@@ -239,7 +300,8 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
 }
 
 /** A Lemonade the user already runs on this PC, or null. */
-export async function detectLemonade(): Promise<{ found: LemonadeFound | null }> {
+/** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
+export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
     return apiFetch('GET', '/lemonade/detect');
 }
 
@@ -281,12 +343,50 @@ export async function forgetProviderKey(provider: string): Promise<{ removed: bo
     return apiFetch('DELETE', `/providers/${encodeURIComponent(provider)}/key`);
 }
 
-export async function listProviderModels(provider: string): Promise<{ provider: string; models: ProviderModel[] }> {
+export async function listProviderModels(provider: string): Promise<ProviderModelsResponse> {
     return apiFetch('GET', `/providers/${encodeURIComponent(provider)}/models`);
+}
+
+export async function getContextChoice(model: string): Promise<ContextChoice> {
+    return apiFetch('GET', `/providers/local/context?model=${encodeURIComponent(model)}`);
+}
+
+/** Remember a context size for a model; null returns it to Automatic. */
+export async function setContextChoice(model: string, ctxSize: number | null): Promise<ContextChoice> {
+    return apiFetch('PUT', '/providers/local/context', { model, ctx_size: ctxSize });
+}
+
+export async function getLocalModelStatus(): Promise<LocalModelStatus> {
+    return apiFetch('GET', '/providers/local/status');
+}
+
+/** Start the model server if stopped, then reload the chat model. */
+export async function restartLocalModel(confirm = false): Promise<{ status: string; model: string; starting_server: boolean }> {
+    return apiFetch('POST', '/providers/local/restart', { confirm });
 }
 
 export async function selectModel(model: string): Promise<ActiveModel> {
     return apiFetch('POST', '/providers/select', { model });
+}
+
+// -- Cloud prices and spending (#5258) ------------------------------------------
+
+export async function getCloudPrices(provider: string): Promise<CloudPriceList> {
+    return apiFetch('GET', `/spending/prices/${encodeURIComponent(provider)}`);
+}
+
+export async function getSpending(): Promise<SpendingReport> {
+    return apiFetch('GET', '/spending');
+}
+
+/** Set the monthly limit for cloud chats; null removes it. */
+export async function setSpendingLimit(limitUsd: number | null): Promise<SpendingReport> {
+    return apiFetch('PUT', '/spending/limit', { limit_usd: limitUsd });
+}
+
+/** Let cloud chats go on past the limit until the month ends. */
+export async function allowSpendingThisMonth(): Promise<SpendingReport> {
+    return apiFetch('POST', '/spending/allow-month');
 }
 
 // -- Skills ----------------------------------------------------------------------
@@ -295,208 +395,29 @@ export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Reco
     return apiFetch('GET', '/skills');
 }
 
-// -- Connections (issue #915) ---------------------------------------------------
+// -- Connections (issue #915): see connectorsApi.ts ----------------------------
 
-import type { AgentMcpServer, ConnectorRow } from '../types';
-
-// New framework endpoints (T-8b) — /api/connectors
-
-export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
-    return apiFetch('GET', '/connectors');
-}
-
-export async function getConnector(connectorId: string): Promise<ConnectorRow> {
-    return apiFetch('GET', `/connectors/${connectorId}`);
-}
-
-export async function authorizeConnector(
-    connectorId: string,
-    scopes: string[],
-    grantAgents: string[] = [],
-): Promise<{ flow_id: string; authorization_url: string }> {
-    // `grantAgents` (#2117) — namespaced agent ids to grant this connector the
-    // moment OAuth completes, so connecting a mailbox grants it to the email
-    // agent in the same flow. The backend resolves each agent's required scopes.
-    return apiFetch(
-        'POST',
-        `/connectors/${connectorId}/authorize`,
-        { scopes, grant_agents: grantAgents },
-        UI_HEADER,
-    );
-}
-
-export interface DeviceAuthInfo {
-    user_code: string;
-    verification_uri: string;
-    expires_in: number;
-    interval: number;
-    message: string;
-}
-
-export async function authorizeConnectorDevice(
-    connectorId: string,
-    scopes: string[],
-    grantAgents: string[] = [],
-): Promise<DeviceAuthInfo> {
-    // Device-code sign-in: no browser redirect / no Azure app registration.
-    // The server polls in the background and emits connector.oauth.completed /
-    // connector.oauth.error over SSE (useConnectorsSSE) when the user finishes,
-    // so the caller displays the code and waits for the same events the browser
-    // flow uses. `grantAgents` are committed atomically on success.
-    return apiFetch(
-        'POST',
-        `/connectors/${connectorId}/authorize-device`,
-        { scopes, grant_agents: grantAgents },
-        UI_HEADER,
-    );
-}
-
-export async function configureConnector(
-    connectorId: string,
-    config: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-    return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
-}
-
-export async function disconnectConnector(connectorId: string): Promise<void> {
-    await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
-}
-
-/**
- * Enable a previously-disabled MCP connector (#1004).
- *
- * Returns the updated ConnectorRow with `enabled: true`. The backend
- * triggers a live reload of every cached chat session's MCPClientManager
- * so the connector's tools materialize without restarting GAIA.
- *
- * Throws when called against a non-MCP connector (server returns 400).
- */
-export async function enableConnector(connectorId: string): Promise<ConnectorRow> {
-    return apiFetch('POST', `/connectors/${connectorId}/enable`, {}, UI_HEADER);
-}
-
-/**
- * Disable a configured MCP connector without clearing credentials (#1004).
- *
- * Credentials, the env-block ``$keyring`` references, and per-agent grants
- * are preserved. The backend triggers a live reload so the connector's
- * tools disappear from active agents' tool lists. Re-enable with
- * ``enableConnector`` to make tools available again.
- *
- * Throws when called against a non-MCP connector (server returns 400).
- */
-export async function disableConnector(connectorId: string): Promise<ConnectorRow> {
-    return apiFetch('POST', `/connectors/${connectorId}/disable`, {}, UI_HEADER);
-}
-
-/**
- * List MCP servers declared by custom Python agents (#1020).
- *
- * Returns a flat sorted list (enabled first, alphabetical) of server entries
- * from each custom agent's local mcp_servers.json. These are read-only — the
- * UI renders them without a toggle or disconnect action.
- */
-export async function listAgentMcps(): Promise<{ agent_mcps: AgentMcpServer[] }> {
-    return apiFetch('GET', '/connectors/agent-mcps');
-}
-
-export async function listConnectorGrants(connectorId: string): Promise<{
-    grants: Record<string, string[]>;
-}> {
-    return apiFetch('GET', `/connectors/${connectorId}/grants`);
-}
-
-export async function grantConnectorAgent(
-    connectorId: string,
-    agentId: string,
-    scopes: string[],
-): Promise<void> {
-    await apiFetch<unknown>(
-        'PUT',
-        `/connectors/${connectorId}/grants/${encodeURIComponent(agentId)}`,
-        { scopes },
-        UI_HEADER,
-    );
-}
-
-export async function revokeConnectorAgentGrant(
-    connectorId: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connectors/${connectorId}/grants/${encodeURIComponent(agentId)}`,
-        undefined,
-        UI_HEADER,
-    );
-}
-
-/**
- * List per-agent activations for a connector (issue #1005).
- *
- * Activations gate MCP tool visibility — an agent must be both granted
- * (credential access) AND activated (tool visibility) for an MCP server's
- * tools to appear in its system prompt. This endpoint is type-agnostic for
- * read convenience: OAuth connectors return ``{}`` because the mutating
- * routes refuse to write to them.
- */
-export async function listConnectorActivations(connectorId: string): Promise<{
-    activations: Record<string, boolean>;
-}> {
-    return apiFetch('GET', `/connectors/${connectorId}/activations`);
-}
-
-interface ActivateConnectorResponse {
-    connector_id: string;
-    agent_id: string;
-    active: boolean;
-    auto_granted: boolean;
-}
-
-/**
- * Activate an MCP-server connector for an agent. If no grant exists yet,
- * ``scopes`` is used to auto-create one (one-click convenience). Without
- * ``scopes`` the request returns 400 when no prior grant exists.
- *
- * Only valid for ``mcp_server`` connectors — calling this for an OAuth
- * provider returns ``400 Bad Request``. OAuth per-agent access is
- * controlled by the grants endpoints above. The Agent UI hides the
- * "Active for" section for OAuth tiles to surface this at the UI layer.
- */
-export async function activateConnectorAgent(
-    connectorId: string,
-    agentId: string,
-    scopes?: string[],
-): Promise<ActivateConnectorResponse> {
-    return apiFetch<ActivateConnectorResponse>(
-        'PUT',
-        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
-        scopes ? { scopes } : {},
-        UI_HEADER,
-    );
-}
-
-/**
- * Deactivate an MCP-server connector for an agent. Non-destructive — the
- * grant survives so a later re-activate is one click. Only valid for
- * ``mcp_server`` connectors (see :func:`activateConnectorAgent`).
- */
-export async function deactivateConnectorAgent(
-    connectorId: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
-        undefined,
-        UI_HEADER,
-    );
-}
+export * from './connectorsApi';
 
 // -- Sessions ------------------------------------------------------------------
 
+/** The backend's largest page of chats. */
+export const SESSION_PAGE_SIZE = 200;
+
+/** Every chat, newest first, fetched page by page so none past the first page go missing. */
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
-    return apiFetch('GET', '/sessions');
+    const byId = new Map<string, Session>();
+    let total = 0;
+    for (let offset = 0; ; offset += SESSION_PAGE_SIZE) {
+        const page: { sessions: Session[]; total: number } = await apiFetch(
+            'GET', `/sessions?limit=${SESSION_PAGE_SIZE}&offset=${offset}`,
+        );
+        total = page.total;
+        // A chat updated between two page reads can shift into both; keep one.
+        for (const s of page.sessions) if (!byId.has(s.id)) byId.set(s.id, s);
+        if (page.sessions.length < SESSION_PAGE_SIZE || offset + SESSION_PAGE_SIZE >= total) break;
+    }
+    return { sessions: [...byId.values()], total };
 }
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
@@ -509,6 +430,19 @@ export async function updateSession(id: string, data: { title?: string; title_is
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function getSession(id: string): Promise<Session> {
+    return apiFetch('GET', `/sessions/${id}`);
+}
+
+export async function pinSession(id: string, pinned: boolean): Promise<Session> {
+    return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/** Clear the chat's unread mark. */
+export async function markSessionRead(id: string): Promise<Session> {
+    return apiFetch('POST', `/sessions/${id}/read`);
 }
 
 export async function toggleSessionPrivacy(id: string): Promise<Session> {
@@ -559,6 +493,8 @@ export async function deleteMessagesFrom(sessionId: string, messageId: number): 
 
 // -- Chat (Streaming with Agent Events) ----------------------------------------
 
+export * from './chatTurnApi';
+
 /**
  * Callbacks for agent streaming events.
  *
@@ -576,6 +512,8 @@ export interface StreamCallbacks {
     onError: (error: Error) => void;
     /** A new agent was created and registered — refresh the agent list. */
     onAgentCreated?: (event: StreamEvent) => void;
+    /** The backend answered the request; a wait shown before this is over. */
+    onConnected?: () => void;
 }
 
 /** Agent event types that represent activity rather than content. */
@@ -583,6 +521,7 @@ const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
+    'followup_taken', 'followup_returned', 'context_usage',
 ]);
 
 export function sendMessageStream(
@@ -612,6 +551,7 @@ export function sendMessageStream(
 
     log.stream.info(`Starting SSE stream for session=${sessionId}`, { messageLength: message.length });
 
+    const headers = watchHeaders(controller, callbacks, SEND_HEADER_TIMEOUT_MS, SEND_WAITING_NOTICE_MS);
     fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
         headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
@@ -624,9 +564,17 @@ export function sendMessageStream(
         }),
         signal: controller.signal,
     })
-        .then((res) => consumeSSEResponse(res, callbacks, t))
+        .then((res) => {
+            headers.received();
+            headers.connected();
+            return consumeSSEResponse(res, callbacks, t, { silentCloseIsError: true });
+        })
         .catch((err) => {
-            if (err.name === 'AbortError') {
+            headers.received();
+            if (headers.timedOut()) {
+                log.stream.error(`No answer to /chat/send within ${SEND_HEADER_TIMEOUT_MS / 1000}s`);
+                callbacks.onError(new StreamTimeoutError('send', SEND_HEADER_TIMEOUT_MS));
+            } else if (err.name === 'AbortError') {
                 log.stream.warn('Stream aborted by user');
             } else {
                 log.stream.error('Stream fetch error', err);
@@ -635,6 +583,93 @@ export function sendMessageStream(
         });
 
     return controller;
+}
+
+/** The backend sends a keepalive every 5 s, so this much silence means the connection is gone. */
+export const STREAM_IDLE_MS = 30_000;
+/** A turn waiting for the model hears nothing until its place in line changes. */
+export const QUEUED_IDLE_MS = 10 * 60_000;
+/** The backend may hold a send for 60 s while another chat has the model, then answers 429. */
+export const SEND_HEADER_TIMEOUT_MS = 90_000;
+/** When a send not yet started by the backend begins showing as waiting. */
+export const SEND_WAITING_NOTICE_MS = 3_000;
+export const SEND_WAITING_NOTICE_TEXT = 'Waiting for GAIA to start this answer…';
+/** An attach replays at once; a slower answer means the backend is stuck or unreachable. */
+export const ATTACH_HEADER_TIMEOUT_MS = 30_000;
+
+/** The stream went silent past STREAM_IDLE_MS; the run may still be going server-side. */
+export class StreamStalledError extends Error {
+    constructor(readonly idleMs: number) {
+        super(`The connection to GAIA went silent for ${Math.round(idleMs / 1000)} s.`);
+        this.name = 'StreamStalledError';
+    }
+}
+
+/** The connection broke after the run started (network switch, proxy reset, restart). */
+export class StreamDroppedError extends Error {
+    constructor(readonly cause: unknown) {
+        super(`The connection to GAIA was cut: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'StreamDroppedError';
+    }
+}
+
+/** The backend never started answering the request. */
+export class StreamTimeoutError extends Error {
+    constructor(readonly endpoint: 'send' | 'attach', readonly timeoutMs: number) {
+        super(`GAIA did not start answering within ${Math.round(timeoutMs / 1000)} s.`);
+        this.name = 'StreamTimeoutError';
+    }
+}
+
+/** Bound the wait for response headers, and say so when it runs long. */
+function watchHeaders(
+    controller: AbortController,
+    callbacks: StreamCallbacks,
+    timeoutMs: number,
+    noticeMs?: number,
+): { received: () => void; connected: () => void; timedOut: () => boolean } {
+    let timedOut = false;
+    const notice = noticeMs === undefined ? undefined : setTimeout(() => {
+        callbacks.onAgentEvent({
+            type: 'status',
+            status: 'working',
+            phase: 'waiting',
+            message: SEND_WAITING_NOTICE_TEXT,
+        } as StreamEvent);
+    }, noticeMs);
+    const limit = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, timeoutMs);
+    let settled = false;
+    return {
+        received: () => {
+            clearTimeout(notice);
+            clearTimeout(limit);
+        },
+        connected: () => {
+            if (settled) return;
+            settled = true;
+            callbacks.onConnected?.();
+        },
+        timedOut: () => timedOut,
+    };
+}
+
+/** The next chunk, or StreamStalledError after `idleMs` of silence. */
+async function readWithin(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    idleMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new StreamStalledError(idleMs)), idleMs);
+    });
+    try {
+        return await Promise.race([reader.read(), stalled]);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /**
@@ -646,13 +681,17 @@ async function consumeSSEResponse(
     res: Response,
     callbacks: StreamCallbacks,
     t: ReturnType<typeof log.stream.time>,
+    { silentCloseIsError = false }: { silentCloseIsError?: boolean } = {},
 ): Promise<void> {
     log.stream.info(`SSE connection opened -> HTTP ${res.status}`);
 
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
-        callbacks.onError(new Error(`HTTP ${res.status}: ${errText}`));
+        // The server's own words when it gave any, never a raw JSON body.
+        const detail = parseErrorDetail(errText);
+        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }
 
@@ -669,10 +708,33 @@ async function consumeSSEResponse(
     let chunkCount = 0;
     let totalChars = 0;
     let agentEventCount = 0;
+    let queued = false;
+    // An `error` event already closed the turn through onError.
+    let errorReceived = false;
+    // A fatal agent_error ends the turn; the closing `done` may never come.
+    let fatalAgentError = false;
 
     try {
         while (true) {
-            const { done, value } = await reader.read();
+            let next: ReadableStreamReadResult<Uint8Array>;
+            try {
+                next = await readWithin(reader, queued ? QUEUED_IDLE_MS : STREAM_IDLE_MS);
+            } catch (err) {
+                if ((err as Error)?.name === 'AbortError') throw err;
+                if (!(err instanceof StreamStalledError)) {
+                    log.stream.error('SSE connection cut mid-stream', err);
+                    if (doneReceived || errorReceived) return;
+                    if (fatalAgentError) break;
+                    throw new StreamDroppedError(err);
+                }
+                log.stream.error(`SSE stream silent for ${err.idleMs / 1000}s; dropping the connection`);
+                await reader.cancel().catch((cancelErr) => log.stream.warn('Could not cancel the stalled stream', cancelErr));
+                // The turn already ended for the caller; a dead connection after that changes nothing.
+                if (doneReceived || errorReceived) return;
+                if (fatalAgentError) break;
+                throw err;
+            }
+            const { done, value } = next;
             if (done) {
                 log.stream.debug('SSE reader done (stream ended)');
                 break;
@@ -688,6 +750,7 @@ async function consumeSSEResponse(
                     if (!raw) continue;
                     try {
                         const event: StreamEvent = JSON.parse(raw);
+                        queued = event.type === 'status' && event.phase === 'queued';
 
                         if (event.type === 'chunk') {
                             chunkCount++;
@@ -705,6 +768,7 @@ async function consumeSSEResponse(
                             callbacks.onDone(event);
                         } else if (event.type === 'error') {
                             log.stream.error(`Stream error event:`, event.content);
+                            errorReceived = true;
                             callbacks.onError(new Error(event.content || 'Unknown error'));
                         } else if (event.type === 'agent_created') {
                             log.stream.info(`Agent created: ${event.agent_id}`);
@@ -720,6 +784,9 @@ async function consumeSSEResponse(
                             }
                         } else if (AGENT_EVENT_TYPES.has(event.type)) {
                             agentEventCount++;
+                            if (event.type === 'agent_error' && !(event as { recoverable?: boolean }).recoverable) {
+                                fatalAgentError = true;
+                            }
                             log.stream.debug(`Agent event: ${event.type}`, event);
                             callbacks.onAgentEvent(event);
                         } else {
@@ -739,6 +806,15 @@ async function consumeSSEResponse(
     // Only signal completion if no explicit done event was received during the stream
     if (!doneReceived) {
         log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
+        // A send that closes having said nothing would otherwise leave the
+        // message sitting there with no answer and no error.
+        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0 && !errorReceived) {
+            callbacks.onError(new Error(
+                'GAIA closed the connection before any answer arrived. Send the message again; ' +
+                'if it keeps happening, check the GAIA server log.',
+            ));
+            return;
+        }
         callbacks.onDone({ type: 'done' });
     }
 }
@@ -761,14 +837,34 @@ export function attachToRun(
 
     log.stream.info(`Attaching to background run for session=${sessionId}`);
 
+    const headers = watchHeaders(controller, callbacks, ATTACH_HEADER_TIMEOUT_MS);
     fetch(`${API_BASE}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'GET',
         signal: controller.signal,
     })
-        .then((res) => consumeSSEResponse(res, callbacks, t))
+        .then((res) => {
+            headers.received();
+            headers.connected();
+            // The run ended between the active-runs poll and this attach: its
+            // answer is already saved, so close the view like any finished turn.
+            if (res.status === 404) {
+                log.stream.info(`Run for session=${sessionId} finished before the attach`);
+                callbacks.onDone({ type: 'done', content: '' } as StreamEvent);
+                return;
+            }
+            return consumeSSEResponse(res, callbacks, t);
+        })
         .catch((err) => {
-            if (err.name === 'AbortError') {
+            headers.received();
+            if (headers.timedOut()) {
+                log.stream.error(`No answer to /chat/attach within ${ATTACH_HEADER_TIMEOUT_MS / 1000}s`);
+                callbacks.onError(new StreamTimeoutError('attach', ATTACH_HEADER_TIMEOUT_MS));
+            } else if (err.name === 'AbortError') {
                 log.stream.warn('Run attach detached by client');
+            } else if (err instanceof TypeError) {
+                // The run lives server-side; a failed attach is a connection problem, not a lost run.
+                log.stream.error('Run attach could not connect', err);
+                callbacks.onError(new StreamDroppedError(err));
             } else {
                 log.stream.error('Run attach fetch error', err);
                 callbacks.onError(err);
@@ -776,61 +872,6 @@ export function attachToRun(
         });
 
     return controller;
-}
-
-/** List session ids that currently have a running chat turn (#1580). */
-export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
-    return apiFetch('GET', '/chat/active');
-}
-
-// -- Tool Confirmation ---------------------------------------------------------
-
-/** Answer a tool confirmation: allow once, always allow this call in this chat, or deny. */
-export async function confirmTool(
-    sessionId: string,
-    approved: boolean,
-    options: { always?: boolean; confirmId?: string } = {},
-): Promise<{ status: string; approved: boolean; granted: string | null }> {
-    return apiFetch('POST', '/chat/confirm-tool', {
-        session_id: sessionId,
-        approved,
-        always: options.always ?? false,
-        ...(options.confirmId ? { confirm_id: options.confirmId } : {}),
-    });
-}
-
-export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
-    return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
-}
-
-export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
-    return apiFetch('GET', '/chat/permissions');
-}
-
-export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
-    return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
-}
-
-/** Revoke one "always allow" grant, or all of them when `key` is omitted. */
-export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
-    const q = key ? `?key=${encodeURIComponent(key)}` : '';
-    return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
-}
-
-/** Answer a pending mid-run `needs_input` question (#2595). The agent
- *  blocks server-side until this call lands, so the run continues once it
- *  resolves. */
-export async function respondToInput(
-    sessionId: string,
-    requestId: string,
-    value: string,
-): Promise<{ status: string; request_id: string }> {
-    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
-}
-
-/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
-export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
-    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
 }
 
 // -- Documents -----------------------------------------------------------------
@@ -924,6 +965,18 @@ export async function indexFolder(folderPath: string, recursive: boolean = true)
 
 export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {
     return apiFetch('POST', '/files/open', { path, reveal });
+}
+
+/** Open a file in its default app. The server refuses scripts and programs. */
+export async function openFileInApp(path: string): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, launch: true });
+}
+
+/** Whether each path still exists and when it last changed (unchecked outside home). */
+export async function getFileStatus(paths: string[]): Promise<{
+    files: Array<{ path: string; exists?: boolean | null; mtime?: number | null }>;
+}> {
+    return apiFetch('POST', '/files/status', { paths });
 }
 
 /** Upload a file (image/document) to the server. */
@@ -1047,4 +1100,70 @@ export async function getScheduleResults(name: string, limit: number = 20): Prom
 
 export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
     return apiFetch('POST', '/schedules/parse', { input, timezone: browserTimeZone() });
+}
+
+// -- Undo a turn's file changes (#5225) --------------------------------------
+
+export async function listTurnChanges(sessionId: string): Promise<{ turns: TurnChanges[] }> {
+    return apiFetch('GET', `/sessions/${encodeURIComponent(sessionId)}/changes`);
+}
+
+export async function getTurnDiff(sessionId: string, turnId: string): Promise<{ turn_id: string; files: FileDiff[] }> {
+    return apiFetch('GET', `/sessions/${encodeURIComponent(sessionId)}/changes/${encodeURIComponent(turnId)}/diff`);
+}
+
+export async function undoTurn(sessionId: string, turnId: string, force = false): Promise<UndoResult> {
+    return apiFetch('POST', `/sessions/${encodeURIComponent(sessionId)}/changes/${encodeURIComponent(turnId)}/undo`, { force });
+}
+
+export async function getUndoSettings(): Promise<UndoSettings> {
+    return apiFetch('GET', '/settings/undo');
+}
+
+export async function updateUndoSettings(retentionDays: number, maxMb: number): Promise<UndoSettings> {
+    return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
+}
+
+// -- Session panel: Environment, Outputs, Changes (#5279) --------------------
+
+const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
+
+export async function getEnvironment(sessionId: string): Promise<SessionEnvironment> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/environment`);
+}
+
+export async function addEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
+}
+
+export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
+}
+
+export async function setInternet(sessionId: string, on: boolean): Promise<SessionEnvironment> {
+    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/internet`, { on });
+}
+
+export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
+}
+
+export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/total`);
+}
+
+export async function undoAllChanges(sessionId: string, force = false): Promise<UndoAllResult> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/undo`, { force });
+}
+
+export async function getSessionGit(sessionId: string): Promise<SessionGit> {
+    return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
+}
+
+export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[]; ignored: string[] }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
+}
+
+export async function createPullRequest(sessionId: string, root: string, title: string, body: string): Promise<{ root: string; url: string }> {
+    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/pr`, { root, title, body, confirmed: true });
 }

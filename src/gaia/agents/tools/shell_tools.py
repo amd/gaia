@@ -30,6 +30,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
+from gaia.agents.base.file_snapshots import note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -3264,6 +3265,20 @@ class ShellToolsMixin:
                 remaining -= slice_s
                 waited += slice_s
 
+    def _withheld_cwd_error(self, cwd: str) -> Optional[Dict[str, Any]]:
+        """The refusal for running in a folder the user removed, or None."""
+        validator = getattr(self, "path_validator", None)
+        withheld_root = getattr(validator, "withheld_root", None)
+        if not callable(withheld_root) or withheld_root(cwd) is None:
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": validator.access_denied_message(cwd)
+            + " Pass a working_directory in a folder this chat can still use.",
+            "has_errors": True,
+        }
+
     def _path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """Whether *path* is inside this agent's allowed paths.
 
@@ -4275,7 +4290,7 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
             Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
             'cd <dir> && b'. One approval covers the line; every part is
@@ -4365,6 +4380,12 @@ class ShellToolsMixin:
                     cwd = self.shell_session.cwd
                     session_scoped = True
 
+                # A folder the user removed from the chat is refused even under
+                # full access, and even as the folder a new session starts in.
+                withheld = self._withheld_cwd_error(cwd)
+                if withheld is not None:
+                    return withheld
+
                 # Operators, syntax, and the per-command whitelist, for every
                 # segment of every pipeline on the line. Shared with the
                 # pre-flight that runs before the confirmation prompt, so a
@@ -4380,6 +4401,8 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
+                # Only the read-only tier is known not to write files.
+                may_write = bool(error) or bypass
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:
@@ -4395,11 +4418,18 @@ class ShellToolsMixin:
                             ),
                             "has_errors": True,
                         }
+                    note_untracked("shell", command)
                     return self._run_approved_once(
                         command, cwd, steps, timeout, timeout_class, waited
                     )
 
                 granted = skill_granted_binaries(self)
+                # A skill-granted CLI is allowed without a prompt, not read-only.
+                may_write = may_write or any(
+                    _is_granted_segment(seg, granted)
+                    for st in steps
+                    for seg in st.segments
+                )
 
                 # A `cd` step moves the steps after it, so each step's directory
                 # — and what its arguments resolve against — is settled here,
@@ -4446,6 +4476,9 @@ class ShellToolsMixin:
                         "cancelled": True,
                         "cwd": cwd,
                     }
+
+                if may_write:
+                    note_untracked("shell", command)
 
                 start_time = time.monotonic()
                 deadline = start_time + timeout

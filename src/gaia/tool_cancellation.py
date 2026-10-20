@@ -36,6 +36,15 @@ def set_tool_cancel_event(event: Optional[threading.Event]) -> None:
     _cancellation.event = event
 
 
+def current_cancel_event() -> Optional[threading.Event]:
+    """The calling thread's cancellation flag, for a helper thread to poll.
+
+    The flag is thread-local, so code that waits on other threads (a child
+    process, a pipe reader) captures it here on the tool's own thread first.
+    """
+    return getattr(_cancellation, "event", None)
+
+
 def tool_cancelled() -> bool:
     """True once the agent has stopped waiting for this tool.
 

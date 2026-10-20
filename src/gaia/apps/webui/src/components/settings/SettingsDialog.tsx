@@ -10,6 +10,7 @@ import { PermissionsSettings } from './PermissionsSettings';
 import { SkillsSettings } from './SkillsSettings';
 import { MemorySettings } from './MemorySettings';
 import { PrivacySettings } from './PrivacySettings';
+import { NotificationSettings } from './NotificationSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
 
@@ -24,6 +25,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
     { id: 'skills', label: 'Skills' },
     { id: 'connectors', label: 'Connectors' },
     { id: 'memory', label: 'Memory' },
+    { id: 'notifications', label: 'Notifications' },
     { id: 'privacy', label: 'Privacy' },
     { id: 'advanced', label: 'Advanced' },
 ];
@@ -63,6 +65,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'skills': return <SkillsSettings onUseSkill={(name) => { close(); onUseSkill(name); }} />;
             case 'connectors': return <ConnectorsPane />;
             case 'memory': return <MemorySettings />;
+            case 'notifications': return <NotificationSettings />;
             case 'privacy': return <PrivacySettings />;
             case 'advanced': return <AdvancedPane />;
         }
@@ -80,7 +83,8 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                             data-section={s.id}
                             className={`settings-nav-item${section === s.id ? ' is-active' : ''}`}
                             aria-current={section === s.id ? 'page' : undefined}
-                            onClick={() => open(s.id)}
+                            // The focus ring follows the selection instead of staying on the tab focused at open.
+                            onClick={(e) => { e.currentTarget.focus(); open(s.id); }}
                         >
                             {s.label}
                         </button>

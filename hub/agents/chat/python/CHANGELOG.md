@@ -1,7 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
+  agent chooses how hard the model reasons for the rest of a request; each new
+  message starts again at the default. It registers per agent and only on a
+  model that grades its reasoning, so other models' agents never see it, even
+  in a server that ran gpt-oss earlier.
+- Needs core 0.25.1, the first release that ships
+  `gaia.agents.tools.reasoning_tools`, which the agent imports at start; on
+  0.25.0 it fails at import. The `amd-gaia` floor rises to 0.25.1 in that
+  release (a floor above the in-tree core cannot resolve), and
+  `tests/test_chat_dependency_floor.py` fails the release until it does.
+
 ## 0.2.0
 
+- A file copied or saved into a watched folder is reindexed once it has
+  finished being written, instead of at its first change, so search no longer
+  answers from a half-written copy. Reindexing runs off the file watcher's
+  thread, and `stop_watching` now stops it too.
 - When `generate_image` fails, the prompt asks for its error in a sentence or two
   instead of pointing at an `--sd` flag that does not exist.
 - Requires `amd-gaia>=0.25.0`, the first core release that ships

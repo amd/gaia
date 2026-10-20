@@ -266,27 +266,28 @@ canonical choices list):
 
 <Note>
 A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/memory
-embedder, and the flagship [GAIA agent](/guides/gaia) itself from the Agent Hub. It does
+embedder, and the flagship [GAIA agent](/guides/gaia) itself, installed from GAIA's download server if it is missing. It does
 **not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
 fetches and verifies both binaries with no Python required.
 
-If the Agent Hub cannot be reached, `gaia init` still finishes the other steps, then
-reports the setup incomplete and exits `1`, naming the hub URL and the error. Fix the
-network or proxy, then run `gaia hub install gaia`.
+If the download server cannot be reached, `gaia init` still finishes the other steps, then
+reports the setup incomplete and exits `1`, naming the URL and the error. Fix the
+network or proxy, then run `gaia init` again. `gaia init` does not upgrade an agent that
+is already installed.
 </Note>
 
 <Note>
 `gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
-the same flagship agent from the Agent Hub as a bare `gaia init`, and fails the same way
-when the hub can't be reached.
+the same flagship agent as a bare `gaia init`, and fails the same way
+when the download server can't be reached.
 </Note>
 
 <Note>
 Only the `gaia` and `npu` profiles install an agent. The other model profiles set up
 models only; when no agent is installed yet, they say so and name the fix,
-`gaia hub install gaia`.
+`gaia init`.
 </Note>
 
 <Note>
@@ -321,6 +322,14 @@ terminal UI's model picker; Lemonade downloads it on first use. `gaia init` refu
 on a PC that cannot hold it and names the memory it needs. To measure both on your
 own PC, speed, tool calling and (with `--tasks core`) agent quality, run
 `python util/compare_local_models.py` from a GAIA checkout.
+</Note>
+
+<Note>
+gpt-oss 20B (`user.ggml-gpt-oss-20b-MXFP4-GGUF`, a 12 GB download, ~15 GB for models)
+and gpt-oss 120B (`gpt-oss-120b-mxfp-GGUF`, 63 GB, ~70 GB for models, a 128 GB Strix
+Halo) are supported and never auto-selected. Choose one with
+`gaia config set default_model <id>`; see
+[gpt-oss 20B and 120B](/guides/ai-providers#gpt-oss-20b-and-120b).
 </Note>
 
 <Note>
@@ -444,6 +453,8 @@ gaia install --lemonade --silent
 If a different version of Lemonade is already installed, you'll be prompted to uninstall first.
 </Note>
 
+The installer is downloaded to a file of its own in the temp folder and checked against its expected size and SHA-256 before it runs. It is deleted after a successful install. After a failed one it is kept, and its path is printed so you can retry by hand. If Windows Installer still holds the file, GAIA can't delete it; it logs a warning with the path instead.
+
 ### Uninstall Command
 
 Tiered cleanup of GAIA components. By default, the OS-native uninstall (Add or Remove Programs, drag to Trash, `apt remove`) only removes the app — user data in `~/.gaia/` is preserved. This command lets you escalate cleanup as far as you want.
@@ -563,7 +574,7 @@ Author, version, validate, and share GAIA agents.
 
 #### Developer workflow: `init`, `version`, `test`
 
-Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`).
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`). `init` and `version` are hidden from `gaia agent -h` but still work.
 
 ```bash
 gaia agent init <name> [--language python|cpp] [--output DIR] [--layout flat|hub] [--force]
@@ -675,52 +686,7 @@ gaia agent status chat --json | jq -e --arg v healthy '.health == $v'
 
 #### Distribution: `pack`, `publish`, `login`
 
-Build a distributable wheel from a Python agent package, then dual-publish it to the Agent Hub (R2, the source for the Hub UI) **and** PyPI (the source for `pip install`).
-
-```bash
-gaia agent login [--hub-token TOKEN | --hub] [--pypi-token TOKEN | --pypi]
-gaia agent pack [PATH] [--output DIR]
-gaia agent publish [PATH] [--output DIR] [--hub-url URL] [--skip-r2] [--skip-pypi]
-```
-
-**`pack`** runs `python -m build --wheel` against the package's `pyproject.toml`, writing `gaia_agent_<id>-<version>-py3-none-any.whl` to `dist/` and printing its SHA-256. Python agents only — native (C++) agents ship a CMake-built binary, not a wheel.
-
-**`publish`** packs the wheel and uploads it to both targets. R2 receives a multipart POST (`gaia-agent.yaml` + wheel) authenticated with a Bearer token; PyPI receives a `twine upload` authenticated with an API token. Both enforce version immutability — bump the version with `gaia agent version` before re-publishing.
-
-**`login`** stores publisher tokens in your OS keyring. Tokens may also be supplied via the `GAIA_HUB_TOKEN` and `PYPI_TOKEN` environment variables (useful in CI), which take precedence over the keyring.
-
-| Option | Applies to | Description |
-|--------|------------|-------------|
-| `PATH` | `pack`, `publish` | Agent package directory (positional, default: current dir) |
-| `--output, -o` | `pack`, `publish` | Output directory for the wheel (default: `<package>/dist`) |
-| `--hub-url` | `publish` | R2 Worker origin (default: `GAIA_HUB_URL` or `https://hub.amd-gaia.ai`) |
-| `--skip-r2` | `publish` | Publish to PyPI only |
-| `--skip-pypi` | `publish` | Publish to R2 only |
-| `--hub-token` / `--hub` | `login` | Store the R2 Hub token (pass a value, or `--hub` to be prompted) |
-| `--pypi-token` / `--pypi` | `login` | Store the PyPI token (pass a value, or `--pypi` to be prompted) |
-
-The packaging toolchain (`build`, `twine`) ships in the `publish` extra:
-
-```bash
-pip install "amd-gaia[publish]"
-```
-
-**Examples:**
-
-<CodeGroup>
-```bash Build a wheel
-gaia agent pack hub/agents/email/python/
-```
-
-```bash Store tokens, then dual-publish
-gaia agent login --hub --pypi          # prompts for each token
-gaia agent publish hub/agents/email/python/
-```
-
-```bash Publish to PyPI only
-gaia agent publish --skip-r2
-```
-</CodeGroup>
+`gaia agent pack`, `gaia agent publish` and `gaia agent login` are maintainer release commands. They are hidden from `gaia -h` and not documented here.
 
 ##### Installing a published agent
 
@@ -742,19 +708,18 @@ uv pip install "gaia-agent-hello-world @ git+https://github.com/amd/gaia.git#sub
 ```
 </Note>
 
-The **Hub (R2)** path downloads the published, SHA-verified artifact into
-`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Use the Agent UI's
-discover/install panel when browsing the Hub, or install headlessly with:
+The download-server path fetches the published, SHA-verified artifact into
+`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Install headlessly with:
 
 ```bash
-gaia agent list                            # installed + available hub agents
+gaia agent list                            # installed + available to install
 gaia agent install <id>                    # latest published version
 gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what the hub offers (with an `[installed]` marker) so
-you know which id to pass. This is the supported way to provision a sidecar
+`gaia agent list` shows what is available to install (with an `[installed]`
+marker) so you know which id to pass. This is the supported way to provision a sidecar
 agent on a machine with no UI.
 
 <Note>
@@ -1392,6 +1357,17 @@ the bridge refuses any request whose `Origin` is not loopback (`localhost`,
 clients, n8n — are unaffected. To allow a browser app on another origin, list
 it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
 
+##### Concurrent requests and limits
+
+Each request runs on its own thread, so `/health` and `/status` answer while a
+`/llm` or `/chat` call waits on a busy model. Calls to the same tool take turns:
+`/chat` shares one conversation. A queued caller waits for the call ahead of it,
+which can run 15 minutes or more, so give clients such as n8n a generous HTTP
+timeout. A client that stops sending its headers or body
+for 30 s gets **408**. A request body over 1 MiB gets **413**; raise the limit with
+`GAIA_MCP_MAX_BODY_BYTES` (bytes). A request with any `Transfer-Encoding`
+(chunked or other) gets **411**; send a plain `Content-Length` body instead.
+
 ##### Authentication
 
 The bridge is **unauthenticated by default**. Anything that can reach the port
@@ -1622,7 +1598,8 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
-| `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
+| `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
+| `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
@@ -1631,6 +1608,8 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
+| `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
+| `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
 
 ### Full access
 
@@ -2025,7 +2004,22 @@ gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_basel
 | `--work-root` | `$GAIA_BENCH_WORK_ROOT` or `<tmp>/gaia-bench` | Repository cache and indexes |
 | `--keep-work` | off | Keep the indexes built during the run |
 
-[→ Full Evaluation Guide](/reference/eval)
+Benchmark memory over months of chats (changing facts, forgets, lessons, planted content):
+```bash
+gaia eval memory --suite pr --gate tests/fixtures/eval_baselines/memory-bench/pr.json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--suite` | `pr` | `pr` (offline, deterministic, a few seconds; gates PRs) or `full` (the local model and real embedder; needs Lemonade, takes the eval lock) |
+| `--scenario ID` | all | Run one scenario; repeat for more |
+| `--model` | GAIA's default chat model | `full` only: the chat model for extraction, consolidation and answers |
+| `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 if a check that passed there fails now |
+| `--out` | `eval/results/memory-<suite>-<time>` | Where `results.json` and `report.md` go |
+| `--list` | off | List the scenarios and exit |
+| `--keep-work` | off | Keep the replayed memory databases for inspection |
+
+[→ Full Evaluation Guide](/reference/eval#memory-benchmark)
 
 ---
 
@@ -2421,7 +2415,7 @@ Skills are discovered from three roots, highest precedence first:
 | `import <source>` | Copy a skill folder, `.zip`, or URL into `~/.gaia/skills/` |
 | `export <name>` | Export a skill to a `.zip` bundle |
 | `migrate <source>` | Convert an OpenClaw or Hermes skill to GAIA format |
-| `search [query]` | Search the Agent Hub's skills lane |
+| `search [query]` | Search GAIA's skill catalog |
 | `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
 | `remove <name>` | Delete an installed skill and drop its lock entry |
 | `promote <name>` | Trust a **captured** skill's code after a clean audit — until then its `tools.py` stays inert |
@@ -2983,6 +2977,8 @@ The running daemon reloads schedules every second, so adding, pausing, resuming,
 
 A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
 
+Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
+
 Only one `gaia schedule daemon` can run per schedule store. A second one exits immediately with an error instead of firing every schedule twice. The daemon holds `~/.gaia/schedules.lock` while it runs; the OS releases it when the process exits, even after a crash. On Windows that error names no pid — Windows refuses another process's read of the locked byte, so the holder is unknowable.
 
 ```bash
@@ -2994,8 +2990,8 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | Action | Description |
 |--------|-------------|
 | `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
-| `list` | List all schedules with their next fire time |
-| `show <name>` | Show one schedule's full configuration and next fire time |
+| `list` | List all schedules with their next fire time, and how many runs each missed |
+| `show <name>` | Show one schedule's full configuration, next fire time, and missed runs |
 | `remove <name>` | Delete a schedule |
 | `pause <name>` | Disable a schedule without deleting it |
 | `resume <name>` | Re-enable a paused schedule |
@@ -3227,6 +3223,17 @@ server's memory when GAIA is not in use:
   finds the server gone mid-request has the daemon start it again and sends
   the request once more, so the turn still answers. A stream already under way
   is not replayed.
+- **A server that is briefly not answering is waited for.** A request, a
+  `/model` switch, or a CLI command such as `gaia llm` that finds GAIA's server
+  unreachable shows "Reconnecting to the model server…" and waits up to 60
+  seconds from finding it gone while the daemon brings it back, then carries
+  on. A new agent session waits the same way while it starts, but only logs the
+  message. If the server is not back by then, the request fails with an error
+  that says so and points at `gaia daemon status`. A Lemonade you run yourself,
+  or one `LEMONADE_BASE_URL` names, is never waited on.
+- **Closing a TUI session never stops the server other sessions use.** On
+  Windows the daemon and GAIA's server leave the session's process group when
+  its agent starts them, so they keep running for every other session.
 - **`gaia daemon stop` stops the server, whoever started it,** including the one
   first-time setup starts. If the daemon is not running, it still stops GAIA's
   server.
@@ -3237,6 +3244,14 @@ Before stopping anything, GAIA checks that the process is its own server: the
 `lemond` binary under `~/.gaia/lemonade/dist/`, on the recorded port, with the
 recorded API key. A process that reused the recorded pid, or a Lemonade you
 run yourself, is never killed.
+
+If GAIA's server crashes, or is killed without its child processes, its
+model servers (`llama-server` and the like) can keep running and holding
+their memory. GAIA stops them the next time it starts its server, or when it
+finds the server gone. It stops a process only when it runs from
+`~/.gaia/lemonade/cache/bin` and the process that started it has exited. A
+tool from that folder that you run yourself, such as `llama-bench`, is left
+alone while the shell that started it is open.
 
 The daemon never installs Lemonade, never restarts a server that is slow to
 answer while its owner is running (it may be loading a model), and never
@@ -3252,9 +3267,32 @@ model **evicts** the first. The daemon therefore runs a **model-slot broker**
 that hands out one lease at a time, so model loads queue instead of racing.
 
 When a daemon is running, `gaia` commands and the Agent UI backend attach to it
-automatically and take a lease around each model load — you may see a brief
-`⏳ switching model…` while another process finishes. Interactive chat turns
-take priority over background work (embedder warm-ups, autonomous briefs).
+automatically and take a lease around each model load and request. Interactive
+chat turns take priority over background work (memory extraction, embedder
+warm-ups, autonomous briefs).
+
+A request that has to wait is **queued, not failed**:
+
+- It waits for as long as the request ahead of it holds the slot. The holder
+  renews its lease every 15 seconds. One that stops renewing for a minute (it
+  exited) is dropped and the queue moves on. One that keeps renewing past the
+  time its own request is allowed (its request timeout, the two-minute retry
+  window, and 15 minutes for a model load) is wedged, and loses the slot too.
+- Background work (memory extraction, document indexing) that has waited ten
+  minutes goes ahead of newer chat turns, so it is never starved.
+- While an **Agent UI** turn waits, it shows `Waiting for the model — <who> is
+  using it` with its place in line and seconds waited, updated every two
+  seconds, and the wait never counts toward the turn's idle stop. A `gaia`
+  command prints `⏳` once. The gaia agent's `/query` stream, which the
+  terminal UI reads, carries the same wait as a `model_queue` status (see
+  `docs/spec/agent-ui-query-sse-contract.md` §4.4).
+- Pressing Stop in the Agent UI, cancelling a `/query` run, pressing Ctrl+C, or
+  closing the app takes the request out of the queue, so the slot never goes to a caller that has left.
+  Indexing a turn started keeps going after the turn ends.
+- To cap the wait, set `GAIA_MODEL_LEASE_WAIT_S` to a number of seconds. Past
+  it, the request fails with where it stood in line and who held the model.
+- If the daemon stops sending queue updates for 30 seconds, the request fails
+  and names the daemon as the cause.
 
 With **no daemon running, nothing changes**: there are no sidecars, nothing else
 holds the slot, and loads proceed directly. Attaching never starts a daemon.
@@ -3264,6 +3302,16 @@ than doing a direct load that would evict another process's model — check
 `gaia daemon status`. A daemon left running at an incompatible version is
 reported as a warning and loads proceed unbrokered; `gaia daemon restart`
 restores serialization.
+
+A daemon that is running but slow to answer is **not killed** for it. GAIA
+gives it 10 more seconds, then reports it busy: commands fail with an error
+naming its pid, and `gaia daemon status` shows `running, but not answering`.
+Its status check waits on nothing else, so a daemon that has not answered it
+for two minutes, across probes no more than a minute apart, is hung: the next `gaia daemon start` (or any command that
+starts the daemon) replaces it, and `gaia daemon restart` does so at once. A
+daemon whose port refuses connections, answers as something else, or whose pid
+now belongs to another program is replaced right away. An exiting app does not
+wait on a busy daemon.
 
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running
@@ -3289,7 +3337,12 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 
 A daemon also shuts down on its own, logging why, within a few seconds of its
 home folder or `instance.json` being deleted, since no GAIA command can reach it
-after that. `gaia kill --daemons` finds and stops any that are still left.
+after that. A daemon for any home other than `~/.gaia` (a scratch `GAIA_HOME`,
+say) also shuts down after 120 minutes with no client connected, no sidecar busy
+and no scheduled job pending, and the next GAIA command starts a fresh one. Set
+`GAIA_DAEMON_IDLE_EXIT_MINUTES` to change that limit, or `0` to keep it running.
+The daemon for `~/.gaia` never idles out. `gaia kill --daemons` finds and stops
+any that are still left.
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
 contract; every route needs `Authorization: Bearer <token>` from
@@ -3310,7 +3363,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
 | `POST /daemon/v1/agents/{id}/stop` | tree-kill + verify the pid is gone |
-| `GET /daemon/v1/catalog` | Agent Hub catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
+| `GET /daemon/v1/catalog` | Download-server catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
 | `POST /daemon/v1/agents/{id}/install` | 202, queue an install (`{"version": "...", "trusted": true}`, both optional; `version` defaults to the newest version this core meets; `trusted` defaults to **false** → 403 for a non-verified agent; 409 when the version needs a newer core) |
 | `GET /daemon/v1/agents/{id}/install-status` | poll `queued\|running\|completed\|failed` + `error` |
 | `DELETE /daemon/v1/agents/{id}` | stop the sidecar, verify, then remove the install dir |
@@ -3320,57 +3373,39 @@ contract; every route needs `Authorization: Bearer <token>` from
 
 ### Hub Command
 
-Browse, install and uninstall agents from the [GAIA Agent Hub](https://hub.amd-gaia.ai).
-`gaia hub` is a thin client over the daemon's install routes, so the CLI, the
-Agent UI and the TUI share **one** installer, one SHA-256 check and one install
-lock — installing from two places at once is a clean 409, never a corrupt
-download. The daemon is started automatically if it is not already running.
-
-Agents install into `~/.gaia/agents/<id>/` (binary + `gaia-agent.yaml` +
-`.installed` sentinel). Every artifact is verified against the SHA-256 in the
-hub manifest before it is written; a mismatch fails the install and leaves
-nothing behind — there is no "use it anyway" path.
+`gaia hub` is hidden from `gaia -h` but still works. Use it for scripted installs of
+extra agents such as `email` from GAIA's download server (`https://hub.amd-gaia.ai`).
+The flagship GAIA agent comes from `gaia init`, not from here.
 
 ```bash
-gaia hub list                      # catalog + which agents are installed
+gaia hub list                      # what is available + what is installed
 gaia hub list --installed          # only what is installed (works offline)
-gaia hub list --refresh            # bypass the 5-minute catalog cache
 gaia hub install email --trust     # required: email is a non-verified agent
-gaia hub install email --version 0.5.0 --trust
 gaia hub uninstall email           # stops the sidecar first, then removes the dir
 ```
 
-| Action | Options | Description |
-|--------|---------|-------------|
-| `list` | `--installed`, `--refresh` | Print id, latest version, installed version (`↑` when an update is available), download size and name. Warns when the hub was unreachable and the cached catalog was used. `--installed` is answered from the local `.installed` sentinels and needs no network. |
-| `install <id>` | `--version`, `--trust` | Download + verify + install, printing each phase. Exit 1 on any failure, with the reason. `--trust` is required for any agent outside the `verified` security tier. |
-| `uninstall <id>` | — | Stop the agent's sidecar, verify its pid is gone, then remove `~/.gaia/agents/<id>/`. |
+Agents install into `~/.gaia/agents/<id>/`. Every artifact is checked against its
+SHA-256 before it is written; a mismatch fails the install and leaves nothing behind.
+Install and uninstall stop a running sidecar first, and two installs of the same agent
+never race (the second gets a clean "already in progress" error). Requires the daemon
+extras (`pip install "amd-gaia[api]"`).
 
-**Notes**
+A Python agent's install waits up to 5 minutes when another install holds uv's
+package cache (GAIA sets `UV_LOCK_TIMEOUT` for uv, keeping a shorter value of your
+own). While it waits, the install status reads "waiting for another install to
+finish"; if the cache is still taken, it stops with an error saying so. An install
+that does no work (no CPU or disk activity) for 900 seconds is stopped as stuck
+(`GAIA_HUB_PIP_TIMEOUT` changes that window), and one still running after 2 hours is
+stopped however busy it looks (`GAIA_HUB_PIP_MAX_SECONDS` changes that ceiling).
+Either way, everything the install started is stopped and the install is rolled back.
 
-- Install and uninstall both stop a running sidecar first — the install
-  directory *is* the sidecar's binary cache — and keep it stopped for the whole
-  operation, so nothing can respawn it mid-download. If the process survives the
-  tree-kill, the command aborts loudly and nothing is mutated.
-- Install and uninstall of the same agent are serialized: the second caller gets
-  a clean "already in progress" error instead of racing the first.
-- The catalog only lists agents this GAIA build can actually supervise; anything
-  else is reported as hidden rather than silently dropped.
-- **Trust gate.** Any agent outside the `verified` security tier runs
-  third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`, with the remedy named in the error. A manifest that omits
-  `security_tier` counts as `experimental` and is gated the same way. Nothing
-  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
-  this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[api]"`), same as `gaia daemon`.
+Any agent outside the `verified` security tier runs third-party code on your machine,
+so the daemon refuses it with **HTTP 403** until you pass `--trust`. The error shows
+the agent's publisher and security tier and names the `--trust` re-run.
 
 <Note>
-`gaia agent install <id>` does the same install **in-process**; `gaia hub
-install <id>` routes it through the daemon, which additionally stops the
-agent's running sidecar first and holds it stopped for the download. Prefer
-`gaia hub` when the daemon supervises that agent (today: `email`); `gaia agent`
-is the right call on a machine with no daemon extras installed. See the note
-under [Agent Command](#agent-command).
+`gaia agent install <id>` does the same install **in-process**, without the daemon.
+Prefer `gaia hub` when the daemon supervises the agent (today: `email`).
 </Note>
 
 ---
@@ -3414,35 +3449,8 @@ Options accepted by every `gaia tui` command:
 | `--trace[=<path>]` | off | Record every agent event to a JSONL file — see [TUI Event Trace](#tui-event-trace) |
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
-not browse or manage the Agent Hub catalog. Installing or removing a hub
-sidecar agent (`email`) is the Python CLI's job:
-
-```bash
-gaia hub list                 # what the Agent Hub offers, and what you have
-gaia hub install email --trust
-gaia hub uninstall email
-```
-
-An agent outside the `verified` security tier runs third-party code on your
-machine, so `gaia hub install` refuses it with **HTTP 403** from the daemon
-until you pass `--trust` — there is no bypass, and nothing retries on your
-behalf:
-
-```console
-$ gaia hub install email
-
-Refusing to install "email" without --trust.
-
-  Agent       email
-  Version     0.5.0
-  Publisher   AMD
-  Security    experimental (not verified by AMD)
-  Download    31.1 MB
-  Access      none declared
-
-If you trust the publisher, re-run:
-  gaia hub install email --trust
-```
+not install agents. Installing the email sidecar is the Python CLI's job
+(`gaia hub install email --trust`, see [Hub Command](#hub-command)).
 
 #### `run --query` is a real one-shot
 

@@ -1651,3 +1651,22 @@ def test_extraction_tool_asks_before_reading_an_out_of_scope_file(
     else:
         assert result["status"] == "error"
         assert "Access denied" in result["error"]
+
+
+def test_extraction_tool_reports_a_missing_source_without_asking(
+    agent, tmp_path, askable
+):
+    missing = tmp_path.parent / f"{tmp_path.name}-outside" / "minutes.txt"
+    asked = []
+    agent.path_validator.set_access_prompt(lambda path: asked.append(path) or True)
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {missing}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(missing))
+
+    assert result["status"] == "error"
+    assert "not found" in result["error"].lower(), result
+    assert asked == []

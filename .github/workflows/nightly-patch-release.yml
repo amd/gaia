@@ -286,7 +286,7 @@ jobs:
 
   draft:
     needs: check
-    if: needs.check.outputs.should_draft == 'true'
+    if: "!cancelled() && needs.check.result == 'success' && needs.check.outputs.should_draft == 'true'"
     runs-on: ubuntu-latest
     steps:
       - name: Show which Claude account this job uses
@@ -337,7 +337,7 @@ jobs:
           fi
 
       - name: Draft release notes and open the release PR
-        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967  # v1.0.252
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
