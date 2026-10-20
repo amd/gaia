@@ -109,3 +109,60 @@ def test_a_line_window_is_never_a_full_readback(tmp_path):
     whole = {"file_path": path, "content": "observed"}
     ledger.delivered("read_file", {"file_path": path}, whole, whole)
     assert ledger.gaps("Done.", lambda s: False) == []
+
+
+def test_past_the_end_says_how_long_the_file_is_and_where_its_end_is(
+    read_file, tmp_path
+):
+    """A model asked for line 100001 of a 100000-line log and got nothing to act on."""
+    path = tmp_path / "big.log"
+    path.write_text("\n".join(f"entry {i}" for i in range(1, 1001)), encoding="utf-8")
+    result = read_file(str(path), start_line=5000)
+    assert result["status"] == "error"
+    assert "1000 lines" in result["error"] and "start_line=951" in result["error"]
+    assert result["total_lines"] == 1000
+    assert result["suggested_start_line"] == 951
+    # A retry with the suggested start is a correction, not one more failure.
+    assert result["correctable"] is True
+    tail = read_file(str(path), start_line=result["suggested_start_line"])
+    assert tail["status"] == "success" and tail["end_line"] == 1000
+
+
+def test_a_partial_line_window_says_where_to_continue(read_file, tmp_path):
+    result = read_file(str(_code(tmp_path, 20)), start_line=3, end_line=4)
+    assert "lines 3-4 of 20" in result["note"]
+    assert "start_line=5" in result["note"]
+
+
+def _text(tmp_path, chars):
+    path = tmp_path / "notes.txt"
+    path.write_text("abcdefghi\n" * (chars // 10), encoding="utf-8")
+    return path
+
+
+def test_a_character_page_says_it_is_partial_and_how_big_the_file_is(
+    read_file, tmp_path
+):
+    path = _text(tmp_path, 20000)
+    result = read_file(str(path), limit=2000)
+    assert result["chars_returned"] == 2000
+    assert result["size_bytes"] == path.stat().st_size
+    assert result["next_offset"] == 2000
+    assert "Partial" in result["note"] and "offset=2000" in result["note"]
+    assert "warning" not in result
+
+
+@pytest.mark.parametrize("limit", [300, 50])
+def test_a_tiny_limit_warns_that_it_counts_characters(read_file, tmp_path, limit):
+    """``limit: 300`` meant 300 lines; it returned 300 characters."""
+    result = read_file(str(_text(tmp_path, 20000)), limit=limit)
+    assert result["status"] == "success"
+    assert len(result["content"]) == limit
+    assert "characters, not lines" in result["warning"]
+    assert "start_line" in result["warning"]
+
+
+def test_the_last_character_page_has_no_partial_note(read_file, tmp_path):
+    path = _text(tmp_path, 1000)
+    result = read_file(str(path), limit=8000)
+    assert result["next_offset"] is None and "note" not in result
