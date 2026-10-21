@@ -158,7 +158,6 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
     from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
-    from gaia.agents.tools.office_tools import OfficeToolsMixin
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
     from gaia.agents.tools.shell_tools import ShellToolsMixin
@@ -191,7 +190,6 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
         (WaitToolsMixin, "register_wait_tools"),
-        (OfficeToolsMixin, "register_office_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -443,7 +441,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
 
 
 def test_rss_digest_registers_its_declared_tool(pack_manager: SkillManager):
-    """The pack's one tool-providing skill really registers its @tool.
+    """A tool-providing skill really registers its @tool.
 
     Proves the manifest matches ``tools.py`` — the loader refuses on any
     signature drift, so this is a live contract check, not a formality.

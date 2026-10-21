@@ -90,13 +90,13 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **96 tools** — the 67 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+The default construction registers **95 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
 | Documents | `index_document`, `index_directory`, `query_documents`, `query_specific_file`, `search_indexed_chunks`, `list_indexed_documents`, `summarize_document`, `dump_document`, `rag_status`, `evaluate_retrieval` |
 | Files | `read_file`, `write_file`, `edit_file`, `find_files`, `search_file`, `search_file_content`, `list_files`, `list_recent_files`, `file_info`, `get_file_info`, `browse_directory`, `search_directory`, `tree`, `add_watch_directory`, `execute_python_file`, `run_python` |
-| Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table`, `verify_workbook` |
+| Data | `analyze_data_file`, `create_table`, `insert_data`, `query_data`, `list_tables`, `drop_table` |
 | Web | `search_web`, `fetch_page`, `fetch_webpage`, `open_url`, `download_file`, `bookmark`, `search_documentation` |
 | Live browser | `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_login`, `browser_sessions`, `browser_back`, `browser_find` |
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |

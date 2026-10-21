@@ -8,7 +8,9 @@ recalculated the file, so the agent reported it as done.
 """
 
 import hashlib
+import importlib.util
 import re
+import sys
 import zipfile
 from pathlib import Path
 
@@ -16,16 +18,28 @@ import pytest
 
 openpyxl = pytest.importorskip("openpyxl")
 
-from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
-from gaia.agents.registry import KNOWN_TOOLS  # noqa: E402
-from gaia.agents.tools import workbook_check  # noqa: E402
-from gaia.agents.tools.office_tools import OfficeToolsMixin  # noqa: E402
-from gaia.agents.tools.workbook_check import (  # noqa: E402
-    _criterion_matches,
-    check_workbook,
-    find_soffice,
-)
-from gaia.security import PathValidator  # noqa: E402
+SKILL_DIR = Path(__file__).resolve().parents[2] / "hub" / "skills" / "office-docs"
+
+
+def _load(name: str, filename: str):
+    """Import one of the skill's modules from its folder, as the loader does."""
+    spec = importlib.util.spec_from_file_location(name, SKILL_DIR / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SKILL_DIR))
+    try:
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SKILL_DIR))
+    return module
+
+
+# Registered under the name tools.py imports it by, so both see one module.
+workbook_check = _load("workbook_check", "workbook_check.py")
+office_tools = _load("office_docs_tools_under_test", "tools.py")
+_criterion_matches = workbook_check._criterion_matches
+check_workbook = workbook_check.check_workbook
+find_soffice = workbook_check.find_soffice
 
 
 def _static(path: Path) -> dict:
@@ -293,57 +307,58 @@ def test_libreoffice_recomputes_values_an_earlier_save_cached(tmp_path):
 # ── the tool ────────────────────────────────────────────────────────────────
 
 
-class _Host(OfficeToolsMixin):
-    def __init__(self, validator):
-        self.path_validator = validator
-
-
 @pytest.fixture
 def verify(tmp_path, monkeypatch):
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
     monkeypatch.setattr(workbook_check, "find_soffice", lambda: None)
-    allowed = tmp_path / "allowed"
-    allowed.mkdir()
-    validator = PathValidator(allowed_paths=[str(allowed)])
-    validator.set_access_prompt(lambda _p: False)
-    _Host(validator).register_office_tools()
-    yield _TOOL_REGISTRY["verify_workbook"]["function"], allowed
-    _TOOL_REGISTRY.clear()
-    _TOOL_REGISTRY.update(saved)
+    folder = tmp_path / "books"
+    folder.mkdir()
+    return office_tools.verify_workbook, folder
 
 
-def test_tool_checks_a_workbook_in_scope(verify, data_book):
-    tool, allowed = verify
+def test_tool_checks_a_workbook(verify, data_book):
+    tool, folder = verify
     data_book["Summary"]["B2"] = "=SUM(Data!A2:A4)"
-    result = tool(file_path=str(_save(data_book, allowed)))
+    result = tool(file_path=str(_save(data_book, folder)))
 
     assert result["status"] == "success"
     assert result["error_count"] == 1
 
 
-def test_tool_refuses_a_workbook_outside_scope(verify, data_book, tmp_path):
-    tool, _ = verify
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    result = tool(file_path=str(_save(data_book, outside)))
-
-    assert result["status"] == "error"
-    assert "not in allowed paths" in result["error"]
-
-
 def test_tool_rejects_other_formats_and_broken_files(verify):
-    tool, allowed = verify
-    (allowed / "notes.csv").write_text("a,b\n", encoding="utf-8")
-    (allowed / "broken.xlsx").write_bytes(b"not a zip")
+    tool, folder = verify
+    (folder / "notes.csv").write_text("a,b\n", encoding="utf-8")
+    (folder / "broken.xlsx").write_bytes(b"not a zip")
 
-    assert ".xlsx and .xlsm" in tool(file_path=str(allowed / "notes.csv"))["error"]
-    assert "Could not open" in tool(file_path=str(allowed / "broken.xlsx"))["error"]
-    assert tool(file_path=str(allowed / "missing.xlsx"))["status"] == "error"
+    assert ".xlsx and .xlsm" in tool(file_path=str(folder / "notes.csv"))["error"]
+    assert "Could not open" in tool(file_path=str(folder / "broken.xlsx"))["error"]
+    missing = tool(file_path=str(folder / "missing.xlsx"))
+    assert missing["status"] == "error"
+    assert "No file at" in missing["error"]
 
 
-def test_mixin_is_advertised_by_name():
-    assert KNOWN_TOOLS["office"] == (
-        "gaia.agents.tools.office_tools",
-        "OfficeToolsMixin",
+def test_the_skill_registers_verify_workbook_under_its_namespace(tmp_path):
+    """The manifest matches tools.py, so the loader registers the tool."""
+    import shutil
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.skills.loader import register_skill_tools, unregister_skill_tools
+    from gaia.skills.manager import SkillManager
+
+    root = tmp_path / "skills"
+    shutil.copytree(SKILL_DIR, root / "office-docs")
+    manager = SkillManager(
+        user_skills_root=root, claude_skill_dirs=[tmp_path / "claude-skills"]
     )
+    before = dict(_TOOL_REGISTRY)
+    try:
+        registered = register_skill_tools(manager.load("office-docs"))
+
+        assert set(registered) == {"office-docs/verify_workbook"}
+        entry = registered["office-docs/verify_workbook"]
+        assert entry["parameters"]["file_path"]["required"] is True
+        result = entry["function"](file_path=str(tmp_path / "missing.xlsx"))
+        assert result["status"] == "error"
+    finally:
+        unregister_skill_tools("office-docs")
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(before)

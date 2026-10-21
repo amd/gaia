@@ -6,9 +6,20 @@ version: 1.0.0
 metadata:
   gaia:
     security_tier: community
+    requirements:
+      python: ">=3.10"
     tools_required:
       - run_python
-      - verify_workbook
+    tools:
+      - name: verify_workbook
+        description: Recalculate a copy of an .xlsx workbook and report every broken formula, with the computed values. Never writes the file.
+        parameters:
+          file_path:
+            type: string
+            required: true
+        returns:
+          type: object
+        atomic: true
     provenance:
       source: starter-pack
 ---
@@ -66,12 +77,13 @@ right.
   apply `number_format` (`'#,##0'`, `'0.0%'`, `'yyyy-mm-dd'`) for display.
 - Charts come from `openpyxl.chart` (`BarChart`, `LineChart`, `PieChart`),
   referencing cells — never a pasted image.
-- openpyxl does not compute formulas. Run `verify_workbook` on the saved file:
-  it recalculates a copy, returns the computed values, and names every cell with
-  `#REF!`, `#VALUE!`, `#DIV/0!`, `#NAME?`, a circular reference, a SUM over text
-  or empty cells, or a criterion that matches no row. Fix the code that builds
-  the workbook, rebuild, and run `verify_workbook` again until it reports no
-  errors. Report numbers from its `computed_values`.
+- openpyxl does not compute formulas. Run this skill's own tool,
+  `office-docs/verify_workbook`, on the saved file: it recalculates a copy,
+  returns the computed values, and names every cell with `#REF!`, `#VALUE!`,
+  `#DIV/0!`, `#NAME?`, a circular reference, a SUM over text or empty cells, or
+  a criterion that matches no row. Fix the code that builds the workbook,
+  rebuild, and run it again until it reports no errors. Report numbers from its
+  `computed_values`.
 
 ```python
 from openpyxl import Workbook
@@ -110,7 +122,7 @@ wb.save(path)
 print(path)
 ```
 
-Then call `verify_workbook(file_path=path)`.
+Then call `office-docs/verify_workbook(file_path=path)`.
 
 ## PowerPoint (python-pptx)
 
