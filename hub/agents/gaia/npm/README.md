@@ -194,6 +194,14 @@ and eviction behavior.
 has not read yet before answering, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):
+`"private"` or `"off"` stops the turn saving anything to memory, including the
+errors and lessons the agent records on its own; omit it and memory stays as the
+agent has it. Send `allowed_paths` with the folders your UI shows the chat can
+read, so the agent works in the same scope. Binaries older than 2.18 reject both
+fields with `422`, so probe `/version` first. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.
