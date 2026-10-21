@@ -185,3 +185,15 @@ def test_the_terminal_shows_no_panel_for_a_call_without_arguments(args):
     console.pretty_print_json(args, "Arguments")
 
     console.console.print.assert_not_called()
+
+
+@pytest.mark.parametrize("args", [{}, None], ids=["empty", "none"])
+def test_the_api_debug_stream_shows_no_line_for_a_call_without_arguments(args):
+    from gaia.api.sse_handler import SSEOutputHandler as ApiSSEOutputHandler
+
+    handler = ApiSSEOutputHandler(debug_mode=True)
+    handler.pretty_print_json(args, "Arguments")
+    assert list(handler.queue) == []
+
+    handler.pretty_print_json({"file_path": "a.txt"}, "Arguments")
+    assert [e["data"]["data"] for e in handler.queue] == [{"file_path": "a.txt"}]
