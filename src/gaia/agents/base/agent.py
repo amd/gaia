@@ -11914,7 +11914,9 @@ Do NOT wrap conversational replies in JSON.
             )
             if self._turn_model_retries["failed"]:
                 # Name what the cut-off turn left undone (an unwritten file…).
-                final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
+                final_answer, completion_gaps = self._gate_unsealed_answer(
+                    final_answer, model_failed=True
+                )
                 self._announce_turn_failed()
             final_answer = self._with_verification_scope(final_answer)
             verification_scope_applied = True

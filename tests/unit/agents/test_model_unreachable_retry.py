@@ -189,7 +189,7 @@ def test_transient_failure_mid_run_does_not_end_the_run(agent, wrapped):
     result = agent.process_query("Check the ledger", max_steps=10)
 
     assert _ANSWER in result["result"]
-    assert "I stopped at step" not in result["result"]
+    assert "The model stopped responding" not in result["result"]
     # Progress was kept: the retry sent exactly what the failed call sent,
     # both tool results included.
     assert len(sent) == 4
@@ -263,7 +263,7 @@ def test_timeout_is_not_retried_at_the_step_level(agent, reason):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []
-    assert "I stopped at step" not in result["result"]
+    assert result["model_unreachable"] is False
 
 
 def test_stop_during_the_cool_down_cancels_the_turn(agent):
@@ -482,7 +482,7 @@ def test_permanent_error_still_ends_the_turn_promptly(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []
-    assert "I stopped at step" not in result["result"]
+    assert "The model stopped responding" not in result["result"]
     assert result["model_retries"]["step_retries"] == 0
     assert result["status"] == "failed"
 
@@ -506,7 +506,7 @@ def test_auth_error_is_not_retried(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 1
     assert agent.sleeps == []
-    assert "I stopped at step" not in result["result"]
+    assert "The model stopped responding" not in result["result"]
 
 
 def _overflow(tagged: bool):
