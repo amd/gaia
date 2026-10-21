@@ -17,8 +17,12 @@ PYTHON_VERSION="3.12"
 # attaches all six builds and gaia-tui-SHA256SUMS.txt to every release.
 GAIA_RELEASES_URL="${GAIA_RELEASES_URL:-https://github.com/amd/gaia/releases}"
 GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
-# Empty means the latest stable release; a tag such as v0.25.1-rc2 pins one.
+# Empty means the latest stable release. A tag pins the whole install to that
+# release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
+# Set by resolve_pin: the core package spec, and "", "final" or "rc".
+GAIA_PACKAGE_SPEC="amd-gaia[api]"
+PIN_KIND=""
 TUI_SUMS_FILE="gaia-tui-SHA256SUMS.txt"
 
 # The flagship agent ships on its own cadence through the Agent Hub, the same
@@ -215,7 +219,7 @@ install_gaia() {
 
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" --upgrade "amd-gaia[api]" --quiet; then
+        if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" --upgrade "$GAIA_PACKAGE_SPEC" --quiet; then
             print_error "Failed to update the GAIA package in $GAIA_VENV."
             echo "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean."
             exit 1
@@ -249,7 +253,7 @@ install_gaia() {
     # not `set -u` clean (it reads $OSTYPE, unset in dash) and noisily half-fails
     # under the documented `curl … | sh`. --compile-bytecode: uv skips it by
     # default, which leaves the first daemon start compiling all of GAIA.
-    if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" "amd-gaia[api]"; then
+    if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" "$GAIA_PACKAGE_SPEC"; then
         print_error "Failed to install GAIA package"
         exit 1
     fi
@@ -297,6 +301,44 @@ tui_asset_name() {
         return 1
     fi
     printf 'gaia-%s-%s\n' "$_os" "$_arch"
+}
+
+# Turn GAIA_RELEASE_TAG into one coherent release: the core package, the
+# terminal binary and the agent all from it. Sets GAIA_PACKAGE_SPEC and
+# PIN_KIND; refuses anything but vX.Y.Z or vX.Y.Z-rcN before anything installs.
+#   (unset)       latest everything
+#   v0.25.0       amd-gaia==0.25.0; the agent from the Agent Hub, as that
+#                 release's `gaia init` takes it
+#   v0.25.1-rc2   amd-gaia==0.25.1rc2; the agent frozen on that pre-release,
+#                 as an RC core takes it (gaia-agent-release.json)
+resolve_pin() {
+    GAIA_PACKAGE_SPEC="amd-gaia[api]"
+    PIN_KIND=""
+    _tag="$GAIA_RELEASE_TAG"
+    [ -n "$_tag" ] || return 0
+    _v="${_tag#v}"
+    # Character check first: grep matches line by line, so a newline in the
+    # value would otherwise let a valid first line through.
+    case "$_tag" in
+        *[!A-Za-z0-9.-]*) _v="" ;;
+        v*) ;;
+        *) _v="" ;;
+    esac
+    if [ -n "$_v" ] && printf '%s\n' "$_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        PIN_KIND="final"
+        GAIA_PACKAGE_SPEC="amd-gaia[api]==$_v"
+    elif [ -n "$_v" ] && printf '%s\n' "$_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*$'; then
+        PIN_KIND="rc"
+        GAIA_PACKAGE_SPEC="amd-gaia[api]==${_v%-rc*}rc${_v##*-rc}"
+    else
+        print_error "GAIA_RELEASE_TAG='$_tag' is not a GAIA release tag."
+        echo "  Expected vX.Y.Z (e.g. v0.25.0) or a candidate vX.Y.Z-rcN (e.g. v0.25.1-rc2)."
+        echo "  Fix:  unset it to install the latest release, or name one from"
+        echo "        $GAIA_RELEASES_URL"
+        exit 1
+    fi
+    print_step "Installing GAIA release $_tag ($GAIA_PACKAGE_SPEC)"
+    return 0
 }
 
 # Sets RELEASE_TAG. Asked once, so the checksums and the binary always come
@@ -382,6 +424,43 @@ if not digest:
 
 print("%s %s" % (version, digest))
 MANIFEST_PY
+}
+
+# Read one platform's agent version and SHA-256 out of a release candidate's
+# gaia-agent-release.json (util/flagship_rc_assets.py writes it), the file an RC
+# core installs its flagship from.
+#
+# Args: python, manifest path, platform key, filename. Echoes "<version> <sha256>".
+read_release_manifest() {
+    "$1" - "$2" "$3" "$4" <<'RELEASE_PY'
+import json
+import re
+import sys
+
+manifest_path, platform, filename = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+except (OSError, ValueError) as exc:
+    sys.exit("gaia-agent-release.json is not readable JSON: %s" % exc)
+
+version = manifest.get("agentVersion")
+if not version:
+    sys.exit("gaia-agent-release.json declares no agentVersion")
+
+entry = (manifest.get("platforms") or {}).get(platform)
+if not isinstance(entry, dict):
+    listed = ", ".join(sorted(manifest.get("platforms") or {})) or "none"
+    sys.exit("this release candidate carries no agent for %s (it carries: %s)" % (platform, listed))
+if entry.get("filename") != filename:
+    sys.exit("gaia-agent-release.json names %r for %s, expected %r" % (entry.get("filename"), platform, filename))
+
+digest = entry.get("sha256") or ""
+if not re.fullmatch(r"[0-9a-f]{64}", digest):
+    sys.exit("gaia-agent-release.json publishes %s with no valid SHA-256" % filename)
+
+print("%s %s" % (version, digest))
+RELEASE_PY
 }
 
 # Download one hub artifact and refuse to install it unless its SHA-256 matches
@@ -479,13 +558,15 @@ install_tui() {
         exit 1
     fi
 
-    # The checksum file is the only source for the digest: no entry, no install.
+    # The checksum file is the only source for the digest: exactly one entry of
+    # lowercase hex, or no install. A second line for the file is a newline in
+    # $want, which the character check below refuses.
     want="$(awk -v f="$filename" '$2 == f || $2 == "*" f { print $1 }' "$tmp/$TUI_SUMS_FILE")"
     case "$want" in
         *[!0-9a-f]*|"") want="" ;;
     esac
     if [ "${#want}" -ne 64 ]; then
-        print_error "$RELEASE_TAG publishes no SHA-256 for $filename — refusing to install unverified."
+        print_error "$RELEASE_TAG publishes no single valid SHA-256 for $filename — refusing to install unverified."
         echo "  Look: $release_url/$TUI_SUMS_FILE"
         echo "  Fix:  report it at https://github.com/amd/gaia/issues"
         exit 1
@@ -533,7 +614,14 @@ install_flagship_agent() {
     scratch_dir agent
     tmp="$SCRATCH"
 
-    manifest_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+    # A pinned candidate carries its own frozen agent; everything else takes
+    # the Agent Hub's, the same source as `gaia init`.
+    if [ "${PIN_KIND:-}" = "rc" ]; then
+        base_url="$GAIA_RELEASES_URL/download/$GAIA_RELEASE_TAG"
+        manifest_url="$base_url/gaia-agent-release.json"
+    else
+        manifest_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/manifest.json"
+    fi
     if ! fetch_file "$manifest_url" "$tmp/manifest.json"; then
         print_warning "Could not fetch the flagship agent manifest — skipping."
         echo "  URL:  $manifest_url"
@@ -542,7 +630,12 @@ install_flagship_agent() {
     fi
 
     resolved=""
-    if ! resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")"; then
+    if [ "${PIN_KIND:-}" = "rc" ]; then
+        resolved="$(read_release_manifest "$py" "$tmp/manifest.json" "$platform" "$filename")" || resolved=""
+    else
+        resolved="$(read_hub_manifest "$py" "$tmp/manifest.json" "$filename")" || resolved=""
+    fi
+    if [ -z "$resolved" ]; then
         print_warning "Could not resolve the flagship agent for $platform — skipping."
         echo "  Reported above by the manifest reader."
         echo "  Look: $manifest_url"
@@ -552,7 +645,11 @@ install_flagship_agent() {
     version="${resolved%% *}"
     want="${resolved##* }"
 
-    binary_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/$version/$filename"
+    if [ "${PIN_KIND:-}" = "rc" ]; then
+        binary_url="$base_url/$filename"
+    else
+        binary_url="$GAIA_HUB_BASE_URL/agents/$FLAGSHIP_AGENT_ID/$version/$filename"
+    fi
     print_step "Downloading GAIA agent $version for $platform"
     # `|| _rc=$?` rather than `if !`: `set -e` must stay armed, and the two
     # failure modes are not the same failure.
@@ -693,6 +790,9 @@ main() {
     # Check prerequisites
     detect_environment
     check_download_tool
+
+    # Before anything installs: a bad tag must not leave a half-pinned machine.
+    resolve_pin
 
     announce_elevation
 

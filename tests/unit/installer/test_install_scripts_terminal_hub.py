@@ -132,11 +132,45 @@ def _publish_tui_assets() -> set[str]:
     return names
 
 
-def test_publish_checksums_every_terminal_binary_it_attaches():
-    text = PUBLISH_YML.read_text(encoding="utf-8")
-    assert f"sha256sum gaia-* > {SUMS_FILE}" in text
+def _publish_jobs() -> dict:
+    return yaml.safe_load(PUBLISH_YML.read_text(encoding="utf-8"))["jobs"]
+
+
+def test_publish_checksums_exactly_the_six_binaries_it_builds():
+    """A failed or cancelled build-tui leg must stop the release: install.sh
+    and install.ps1 fetch these from the latest release, and a missing one is a
+    broken install for that platform until the next release."""
+    job = _publish_jobs()["github-release"]
+    assert "build-tui" in job["needs"]
+    assert "needs.build-tui.result == 'success'" in job["if"]
+    step = next(s for s in job["steps"] if s.get("name") == "Checksum TUI binaries")
+    listed = re.search(r"expected=\(([^)]*)\)", step["run"])
+    assert listed, "the checksum step no longer lists the binaries it expects"
+    assert set(listed.group(1).split()) == _publish_tui_assets()
+    assert 'sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt' in step["run"]
+    assert "exit 1" in step["run"]
     # The final and the RC release steps both attach release-assets/*.
-    assert text.count("release-assets/*") >= 2
+    assert PUBLISH_YML.read_text(encoding="utf-8").count("release-assets/*") >= 2
+
+
+def test_publish_windows_binaries_carry_icon_and_unprefixed_version():
+    steps = _publish_jobs()["build-tui"]["steps"]
+    by_name = {s.get("name"): s for s in steps}
+    winres = by_name["Generate Windows resources (icon + version)"]
+    check = by_name["Verify the Windows binary carries its icon and version"]
+    build = by_name["Build"]
+    assert "tui/scripts/gen-winres.sh" in winres["run"]
+    assert "util/check_pe_resources.py --expect-version" in check["run"]
+    # One version string for all three, without the tag's `v`, as
+    # tui_installers.yml stamps the copy inside the Windows setup.
+    for step in (winres, check, build):
+        assert step["env"]["VERSION"] == "${{ needs.validate.outputs.npm_version }}"
+    assert "version=${VERSION}" in build["run"]
+    assert "tag_name" not in build["run"]
+    names = [s.get("name") for s in steps]
+    assert (
+        names.index(winres["name"]) < names.index("Build") < names.index(check["name"])
+    )
 
 
 def test_sh_asks_for_assets_publish_builds(sh_text):
@@ -203,29 +237,46 @@ def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
 # ── the core install carries the daemon extras ─────────────────────────────
 
 
+SPEC_VAR = {"sh": '"$GAIA_PACKAGE_SPEC"', "ps1": "$PackageSpec"}
+
+
+def _core_call_sites(text: str, script: str) -> list[str]:
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if "uv pip install" in line and SPEC_VAR[script] in line
+    ]
+
+
 @pytest.mark.parametrize("script", ["sh", "ps1"])
 def test_every_core_install_requests_the_daemon_extras(sh_text, ps1_text, script):
     """gaia-tui is useless without `gaia daemon`, which bare amd-gaia can't run.
 
-    Both the fresh-install and the `--upgrade` call site must ask for [api];
-    dropping it from either leaves that path installing a core that refuses to
-    start the daemon (fastapi/uvicorn/psutil missing).
+    Both the fresh-install and the `--upgrade` call site install the one spec
+    the pin resolver builds, and every spec it can build must carry [api];
+    dropping it leaves a core that refuses to start the daemon
+    (fastapi/uvicorn/psutil missing).
     """
     text = sh_text if script == "sh" else ps1_text
-    call_sites = [
-        line.strip()
-        for line in text.splitlines()
-        if "uv pip install" in line and "amd-gaia" in line
-    ]
+    call_sites = _core_call_sites(text, script)
     assert len(call_sites) == 2, (
         f"expected the fresh-install and --upgrade pip call sites in "
         f"install.{script}; found {len(call_sites)}: {call_sites}"
     )
-    bare = [line for line in call_sites if '"amd-gaia[api]"' not in line]
+    # Any other line installing amd-gaia directly would bypass the pin.
+    direct = [
+        line.strip()
+        for line in text.splitlines()
+        if "uv pip install" in line and "amd-gaia" in line
+    ]
+    assert not direct, direct
+    specs = re.findall(r'"(amd-gaia[^"]*)"', text)
+    assert specs, f"install.{script} names no amd-gaia spec"
+    bare = [spec for spec in specs if not spec.startswith("amd-gaia[api]")]
     assert not bare, (
-        f"install.{script} installs amd-gaia without the [api] extra — the "
+        f"install.{script} builds an amd-gaia spec without the [api] extra — the "
         "daemon needs fastapi/uvicorn/psutil and no `gaia init` profile "
-        f"supplies them. Offending line(s): {bare}"
+        f"supplies them: {bare}"
     )
 
 
@@ -234,11 +285,7 @@ def test_every_core_install_compiles_bytecode(sh_text, ps1_text, script):
     """uv skips bytecode compilation by default, so the first daemon start
     compiled all of GAIA and overran its health wait on a fresh install."""
     text = sh_text if script == "sh" else ps1_text
-    call_sites = [
-        line.strip()
-        for line in text.splitlines()
-        if "uv pip install" in line and "amd-gaia" in line
-    ]
+    call_sites = _core_call_sites(text, script)
     assert call_sites
     missing = [line for line in call_sites if "--compile-bytecode" not in line]
     assert not missing, f"install.{script} skips bytecode compilation: {missing}"
@@ -290,10 +337,10 @@ def test_install_tui_never_soft_skips(sh_text):
 
 def test_install_tui_refuses_an_unverified_binary(sh_text, ps1_text):
     # No digest from the release's checksum file, no install.
-    assert "publishes no SHA-256 for $filename" in _shell_function_body(
+    assert "no single valid SHA-256 for $filename" in _shell_function_body(
         sh_text, "install_tui"
     )
-    assert "publishes no SHA-256 for $Filename" in _ps1_function_body(
+    assert "no single valid SHA-256 for $Filename" in _ps1_function_body(
         ps1_text, "Resolve-TuiAsset"
     )
     # The agent's digest comes from its hub manifest instead.
@@ -513,6 +560,15 @@ def test_ps1_never_calls_exit(ps1_text):
 
 RELEASE_TAG = "v0.99.0"
 OLDER_TAG = "v0.98.0"
+RC_TAG = "v0.99.1-rc1"
+RC_AGENT_VERSION = "9.9.9"
+RC_AGENT_PLATFORMS = (
+    "linux-x64",
+    "linux-arm64",
+    "darwin-x64",
+    "darwin-arm64",
+    "win32-x64",
+)
 TUI_ASSETS = (
     "gaia-linux-amd64",
     "gaia-linux-arm64",
@@ -538,9 +594,10 @@ def _make_handler(root: Path, state: dict):
             if self.path.rstrip("/") != "/releases/latest":
                 return False
             self.send_response(302)
-            self.send_header(
-                "Location", f"{state['base']}/releases/tag/{state['latest']}"
+            location = state.get("latest_location") or (
+                f"{state['base']}/releases/tag/{state['latest']}"
             )
+            self.send_header("Location", location)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return True
@@ -574,6 +631,7 @@ def fake_hub(tmp_path):
         omit_sums_for=(),
         sums_style="text",
         omit_sums_file=False,
+        raw_sums=None,
     ):
         tag_dir = root / "releases" / "download" / tag
         tag_dir.mkdir(parents=True, exist_ok=True)
@@ -591,8 +649,40 @@ def fake_hub(tmp_path):
         sums = tag_dir / SUMS_FILE
         if omit_sums_file:
             sums.unlink(missing_ok=True)
+        elif raw_sums is not None:
+            sums.write_text(raw_sums(lines), encoding="utf-8")
         else:
             sums.write_text("".join(lines), encoding="utf-8")
+
+    def rc_agent(tag=RC_TAG, digest_overrides=None, platforms=None):
+        """Stage a candidate's frozen agent + gaia-agent-release.json, the
+        shape util/flagship_rc_assets.py attaches to a pre-release."""
+        tag_dir = root / "releases" / "download" / tag
+        tag_dir.mkdir(parents=True, exist_ok=True)
+        entries = {}
+        for key in platforms or RC_AGENT_PLATFORMS:
+            filename = f"gaia-agent-{key}" + (".exe" if key.startswith("win") else "")
+            blob = f"#!/bin/sh\necho rc-agent {tag} {key}\n".encode()
+            (tag_dir / filename).write_bytes(blob)
+            entries[key] = {
+                "filename": filename,
+                "sha256": (digest_overrides or {}).get(
+                    key, hashlib.sha256(blob).hexdigest()
+                ),
+                "size": len(blob),
+            }
+        (tag_dir / "gaia-agent-release.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "agent": "gaia",
+                    "agentVersion": RC_AGENT_VERSION,
+                    "releaseTag": tag,
+                    "platforms": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def publish(
         agent_id,
@@ -641,6 +731,8 @@ def fake_hub(tmp_path):
 
     release()
     release(tag=OLDER_TAG)
+    release(tag=RC_TAG)
+    rc_agent()
     publish("gaia", "gaia-agent")
 
     server = http.server.ThreadingHTTPServer(
@@ -656,6 +748,8 @@ def fake_hub(tmp_path):
     fake = Fake()
     fake.release = release
     fake.publish = publish
+    fake.rc_agent = rc_agent
+    fake.state = state
     try:
         yield fake
     finally:
@@ -774,7 +868,7 @@ def test_a_binary_missing_from_the_checksums_is_refused(tmp_path, fake_hub):
     result, installed = _run_install_tui(tmp_path, fake_hub.base)
 
     assert result.returncode != 0
-    assert "publishes no SHA-256 for" in result.stdout
+    assert "no single valid SHA-256 for" in result.stdout
     assert not installed.exists()
 
 
@@ -993,7 +1087,7 @@ def test_ps1_refuses_a_binary_missing_from_the_checksums(tmp_path, fake_hub):
     result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
 
     assert result.returncode != 0
-    assert "publishes no SHA-256 for gaia-windows-amd64.exe" in result.stdout
+    assert "no single valid SHA-256 for gaia-windows-amd64.exe" in result.stdout
     assert not (bin_dir / "gaia-tui.exe").exists()
 
 
@@ -1019,6 +1113,263 @@ def test_ps1_a_tampered_agent_fails_the_install(tmp_path, fake_hub):
     assert result.returncode != 0
     assert "Checksum mismatch" in result.stdout
     assert not (bin_dir / "gaia-agent.exe").exists()
+
+
+# ── a pinned release: core, terminal and agent from the same release ───────
+
+
+PIN_CASES = [
+    ("", "", "amd-gaia[api]"),
+    ("v0.25.0", "final", "amd-gaia[api]==0.25.0"),
+    ("v0.25.1-rc2", "rc", "amd-gaia[api]==0.25.1rc2"),
+    ("v1.10.20-rc13", "rc", "amd-gaia[api]==1.10.20rc13"),
+]
+BAD_PINS = [
+    "0.25.0",
+    "v0.25",
+    "v0.25.1-rc0",
+    "v0.25.1-beta1",
+    "v0.25.0;id",
+    "v0.25.0\nv0.25.0",
+    "latest",
+]
+
+
+def _sh_with_tag(tmp_path, base_url, snippet, tag):
+    env = _channel_env(base_url)
+    env["GAIA_RELEASE_TAG"] = tag
+    return _run_sh_function(tmp_path, snippet, env)
+
+
+@posix_only
+@pytest.mark.parametrize("tag,kind,spec", PIN_CASES)
+def test_sh_pins_the_core_to_the_tag(tmp_path, tag, kind, spec):
+    result, _ = _sh_with_tag(
+        tmp_path,
+        "http://127.0.0.1:1",
+        'resolve_pin; echo "KIND=$PIN_KIND SPEC=$GAIA_PACKAGE_SPEC"',
+        tag,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"KIND={kind} SPEC={spec}" in result.stdout
+
+
+@posix_only
+@pytest.mark.parametrize("tag", BAD_PINS)
+def test_sh_refuses_a_tag_it_cannot_pin(tmp_path, tag):
+    result, home = _sh_with_tag(
+        tmp_path, "http://127.0.0.1:1", "resolve_pin; echo REACHED", tag
+    )
+    assert result.returncode != 0
+    assert "is not a GAIA release tag" in result.stdout
+    assert "REACHED" not in result.stdout
+    assert not (home / ".gaia").exists()
+
+
+def _rc_bootstrap_sh(tmp_path, base_url):
+    result, home = _sh_with_tag(
+        tmp_path,
+        base_url,
+        "DOWNLOAD_CMD=curl; resolve_pin; install_tui; install_flagship_agent; "
+        'echo "FLAGSHIP_INSTALLED=${FLAGSHIP_INSTALLED:-0}"',
+        RC_TAG,
+    )
+    bin_dir = home / ".gaia" / "bin"
+    return result, bin_dir / "gaia-tui", bin_dir / "gaia-agent"
+
+
+@posix_only
+@needs_curl
+def test_an_rc_pin_installs_the_candidates_own_agent(tmp_path, fake_hub):
+    """An RC core installs the flagship frozen on its pre-release, never the
+    hub's, so the bootstrap must hand it the same one."""
+    result, tui, agent = _rc_bootstrap_sh(tmp_path, fake_hub.base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert RC_TAG in tui.read_text(encoding="utf-8")
+    assert f"rc-agent {RC_TAG}" in agent.read_text(encoding="utf-8")
+    assert f"GAIA agent {RC_AGENT_VERSION} installed" in result.stdout
+    assert "FLAGSHIP_INSTALLED=1" in result.stdout
+
+
+@posix_only
+@needs_curl
+def test_an_rc_pin_never_installs_a_tampered_agent(tmp_path, fake_hub):
+    fake_hub.rc_agent(digest_overrides={k: "e" * 64 for k in RC_AGENT_PLATFORMS})
+
+    result, tui, agent = _rc_bootstrap_sh(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout + result.stderr
+    assert not agent.exists()
+
+
+@posix_only
+@needs_curl
+def test_an_rc_without_this_platforms_agent_still_installs_the_hub(tmp_path, fake_hub):
+    fake_hub.rc_agent(platforms=("win32-x64",))
+
+    result, tui, agent = _rc_bootstrap_sh(tmp_path, fake_hub.base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert tui.is_file()
+    assert not agent.exists()
+    assert "carries no agent for" in result.stdout + result.stderr
+    assert "FLAGSHIP_INSTALLED=0" in result.stdout
+
+
+@posix_only
+@needs_curl
+def test_a_duplicate_checksum_entry_is_refused(tmp_path, fake_hub):
+    fake_hub.release(raw_sums=lambda lines: "".join(lines + lines))
+
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "no single valid SHA-256" in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_an_uppercase_checksum_is_refused(tmp_path, fake_hub):
+    """sha256sum writes lowercase; both scripts accept exactly that."""
+    fake_hub.release(
+        raw_sums=lambda lines: "".join(l[:64].upper() + l[64:] for l in lines)
+    )
+
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "no single valid SHA-256" in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_latest_redirecting_to_something_other_than_a_tag_is_refused(
+    tmp_path, fake_hub
+):
+    fake_hub.state["latest_location"] = f"{fake_hub.base}/releases"
+
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Could not find the GAIA release" in result.stdout
+    assert not installed.exists()
+
+
+# ── PowerShell: the same pin and the same refusals ─────────────────────────
+
+
+@needs_powershell
+@pytest.mark.parametrize("tag,kind,spec", PIN_CASES)
+def test_ps1_pins_the_core_to_the_tag(tmp_path, tag, kind, spec):
+    result, _ = _run_ps1(
+        tmp_path,
+        "http://127.0.0.1:1",
+        '$p = Resolve-Pin; Write-Host "KIND=$($p.Kind) SPEC=$($p.Spec)"',
+        tag=tag,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"KIND={kind} SPEC={spec}" in result.stdout
+
+
+@needs_powershell
+@pytest.mark.parametrize("tag", [t for t in BAD_PINS if "\n" not in t])
+def test_ps1_refuses_a_tag_it_cannot_pin(tmp_path, tag):
+    result, bin_dir = _run_ps1(
+        tmp_path, "http://127.0.0.1:1", "$p = Resolve-Pin; Write-Host REACHED", tag=tag
+    )
+    assert result.returncode != 0
+    assert "is not a GAIA release tag" in result.stdout
+    assert "REACHED" not in result.stdout
+
+
+@needs_powershell
+def test_ps1_an_rc_pin_installs_the_candidates_own_agent(tmp_path, fake_hub):
+    result, bin_dir = _run_ps1(
+        tmp_path,
+        fake_hub.base,
+        "$p = Resolve-Pin; Install-Tui; $ok = Install-FlagshipAgent -Pin $p; "
+        'Write-Host "FLAGSHIP=$ok"',
+        tag=RC_TAG,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert RC_TAG in (bin_dir / "gaia-tui.exe").read_text(encoding="utf-8")
+    agent = (bin_dir / "gaia-agent.exe").read_text(encoding="utf-8")
+    assert f"rc-agent {RC_TAG} win32-x64" in agent
+    assert "FLAGSHIP=True" in result.stdout
+
+
+@needs_powershell
+def test_ps1_an_rc_pin_never_installs_a_tampered_agent(tmp_path, fake_hub):
+    fake_hub.rc_agent(digest_overrides={"win32-x64": "e" * 64})
+
+    result, bin_dir = _run_ps1(
+        tmp_path,
+        fake_hub.base,
+        "$p = Resolve-Pin; Install-FlagshipAgent -Pin $p",
+        tag=RC_TAG,
+    )
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout
+    assert not (bin_dir / "gaia-agent.exe").exists()
+
+
+@needs_powershell
+def test_ps1_fails_when_github_is_unreachable(tmp_path):
+    result, bin_dir = _run_ps1(tmp_path, "http://127.0.0.1:1", "Install-Tui")
+
+    assert result.returncode != 0
+    assert "Could not reach the GAIA releases" in result.stdout
+    assert not bin_dir.exists()
+
+
+@needs_powershell
+def test_ps1_refuses_a_release_without_its_checksum_file(tmp_path, fake_hub):
+    fake_hub.release(omit_sums_file=True)
+
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+
+    assert result.returncode != 0
+    assert "Could not fetch the GAIA Terminal UI checksums" in result.stdout
+    assert "still be uploading" in result.stdout
+    assert not bin_dir.exists()
+
+
+@needs_powershell
+def test_ps1_refuses_latest_redirecting_to_something_other_than_a_tag(
+    tmp_path, fake_hub
+):
+    fake_hub.state["latest_location"] = f"{fake_hub.base}/releases"
+
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+
+    assert result.returncode != 0
+    assert "Could not find the latest GAIA release" in result.stdout
+    assert not bin_dir.exists()
+
+
+@needs_powershell
+@pytest.mark.parametrize(
+    "mangle",
+    [
+        pytest.param(lambda lines: "".join(lines + lines), id="duplicate"),
+        pytest.param(
+            lambda lines: "".join(l[:64].upper() + l[64:] for l in lines),
+            id="uppercase",
+        ),
+    ],
+)
+def test_ps1_refuses_what_install_sh_refuses(tmp_path, fake_hub, mangle):
+    fake_hub.release(raw_sums=mangle)
+
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+
+    assert result.returncode != 0
+    assert "no single valid SHA-256" in result.stdout
+    assert not (bin_dir / "gaia-tui.exe").exists()
 
 
 # ── functional: add_to_path ────────────────────────────────────────────────

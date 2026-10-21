@@ -16,7 +16,8 @@ $PYTHON_VERSION = "3.12"
 # attaches all six builds and gaia-tui-SHA256SUMS.txt to every release.
 $GAIA_RELEASES_URL = if ($env:GAIA_RELEASES_URL) { $env:GAIA_RELEASES_URL } else { "https://github.com/amd/gaia/releases" }
 $GAIA_RELEASES_URL = $GAIA_RELEASES_URL.TrimEnd('/')
-# Empty means the latest stable release; a tag such as v0.25.1-rc2 pins one.
+# Empty means the latest stable release. A tag pins the whole install to that
+# release (Resolve-Pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 $GAIA_RELEASE_TAG = $env:GAIA_RELEASE_TAG
 $TUI_SUMS_FILE = "gaia-tui-SHA256SUMS.txt"
 
@@ -92,6 +93,7 @@ function Install-Uv {
 }
 
 function Install-Gaia {
+    param([string]$PackageSpec = "amd-gaia[api]")
     # Check if GAIA is already installed
     $gaiaExe = "$GAIA_VENV\Scripts\gaia.exe"
     if (Test-Path $gaiaExe) {
@@ -102,7 +104,7 @@ function Install-Gaia {
         # so the pip form fails on every re-run.
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        & uv pip install --native-tls --compile-bytecode --python "$GAIA_VENV\Scripts\python.exe" --upgrade "amd-gaia[api]" --quiet
+        & uv pip install --native-tls --compile-bytecode --python "$GAIA_VENV\Scripts\python.exe" --upgrade $PackageSpec --quiet
         if ($LASTEXITCODE -ne 0) {
             Write-GaiaError "Failed to update the GAIA package in $GAIA_VENV (exit $LASTEXITCODE)."
             Write-Host "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean." -ForegroundColor $COLOR_YELLOW
@@ -142,7 +144,7 @@ function Install-Gaia {
     # on disk, so a Restricted execution policy blocks it even though the
     # piped-in installer itself is exempt. --compile-bytecode: uv skips it by
     # default, which leaves the first daemon start compiling all of GAIA.
-    & uv pip install --native-tls --compile-bytecode --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]" --quiet
+    & uv pip install --native-tls --compile-bytecode --python "$GAIA_VENV\Scripts\python.exe" $PackageSpec --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-GaiaError "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
         Write-Host "  Fix:  re-run this installer; if it persists report it at" -ForegroundColor $COLOR_YELLOW
@@ -197,7 +199,7 @@ function Resolve-ReleaseTag {
             Write-Host "  Fix:  check your network (github.com must be reachable), then retry." -ForegroundColor $COLOR_YELLOW
             return $null
         }
-        if ($location -match '/releases/tag/([^/?#]+)$') { $tag = $Matches[1] }
+        if ($location -match '/releases/tag/([^/?#]+)\z') { $tag = $Matches[1] }
         if (-not $tag) {
             Write-GaiaError "Could not find the latest GAIA release."
             Write-Host "  URL:  $latestUrl (redirected to '$location')" -ForegroundColor $COLOR_YELLOW
@@ -205,13 +207,79 @@ function Resolve-ReleaseTag {
             return $null
         }
     }
-    if ($tag -notmatch '^v[0-9][A-Za-z0-9.-]*$') {
+    if ($tag -cnotmatch '^v[0-9][A-Za-z0-9.-]*\z') {
         Write-GaiaError "'$tag' is not a GAIA release tag (expected e.g. v0.25.0)."
         Write-Host "  Fix:  unset GAIA_RELEASE_TAG to install the latest release, or name one from" -ForegroundColor $COLOR_YELLOW
         Write-Host "        $GAIA_RELEASES_URL" -ForegroundColor $COLOR_YELLOW
         return $null
     }
     return $tag
+}
+
+# Turn GAIA_RELEASE_TAG into one coherent release: the core package, the
+# terminal binary and the agent all from it. Throws on anything but vX.Y.Z or
+# vX.Y.Z-rcN, before anything installs.
+#   (unset)       latest everything
+#   v0.25.0       amd-gaia==0.25.0; the agent from the Agent Hub, as that
+#                 release's `gaia init` takes it
+#   v0.25.1-rc2   amd-gaia==0.25.1rc2; the agent frozen on that pre-release,
+#                 as an RC core takes it (gaia-agent-release.json)
+function Resolve-Pin {
+    $tag = $GAIA_RELEASE_TAG
+    if (-not $tag) { return @{ Kind = ""; Spec = "amd-gaia[api]"; Tag = "" } }
+    if ($tag -cmatch '^v([0-9]+\.[0-9]+\.[0-9]+)\z') {
+        $pin = @{ Kind = "final"; Spec = "amd-gaia[api]==$($Matches[1])"; Tag = $tag }
+    }
+    elseif ($tag -cmatch '^v([0-9]+\.[0-9]+\.[0-9]+)-rc([1-9][0-9]*)\z') {
+        $pin = @{ Kind = "rc"; Spec = "amd-gaia[api]==$($Matches[1])rc$($Matches[2])"; Tag = $tag }
+    }
+    else {
+        Write-GaiaError "GAIA_RELEASE_TAG='$tag' is not a GAIA release tag."
+        Write-Host "  Expected vX.Y.Z (e.g. v0.25.0) or a candidate vX.Y.Z-rcN (e.g. v0.25.1-rc2)." -ForegroundColor $COLOR_YELLOW
+        Write-Host "  Fix:  unset it to install the latest release, or name one from" -ForegroundColor $COLOR_YELLOW
+        Write-Host "        $GAIA_RELEASES_URL" -ForegroundColor $COLOR_YELLOW
+        throw "GAIA install failed - see the error above."
+    }
+    Write-Step "Installing GAIA release $tag ($($pin.Spec))"
+    return $pin
+}
+
+# Resolve one platform's agent from a release candidate's gaia-agent-release.json
+# (util/flagship_rc_assets.py writes it), the file an RC core installs its
+# flagship from. Returns @{Version; Sha256; Url}, or $null after saying why.
+function Resolve-ReleaseAgent {
+    param(
+        [Parameter(Mandatory)][string]$Tag,
+        [Parameter(Mandatory)][string]$Platform,
+        [Parameter(Mandatory)][string]$Filename
+    )
+    $baseUrl = "$GAIA_RELEASES_URL/download/$Tag"
+    $manifestUrl = "$baseUrl/gaia-agent-release.json"
+    try {
+        $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
+    }
+    catch {
+        Write-GaiaError "Could not fetch the GAIA agent manifest for ${Tag}: $_"
+        Write-Host "  URL:  $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+    if ($manifest -is [string]) { $manifest = $manifest | ConvertFrom-Json }
+    $entry = $manifest.platforms.$Platform
+    if (-not $manifest.agentVersion -or -not $entry) {
+        Write-GaiaError "$Tag carries no GAIA agent for $Platform."
+        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+    if ($entry.filename -cne $Filename -or $entry.sha256 -cnotmatch '^[0-9a-f]{64}\z') {
+        Write-GaiaError "$Tag lists '$($entry.filename)' for $Platform with no valid SHA-256 (expected $Filename) - refusing to install unverified."
+        Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
+        return $null
+    }
+    return @{
+        Version = $manifest.agentVersion
+        Sha256  = $entry.sha256
+        Url     = "$baseUrl/$Filename"
+    }
 }
 
 # Resolve the terminal binary's URL and SHA-256 from the release's checksum
@@ -237,18 +305,20 @@ function Resolve-TuiAsset {
             Write-Host "        few minutes may still be uploading its files." -ForegroundColor $COLOR_YELLOW
             return $null
         }
-        $sha = $null
+        # Same rule as install.sh: exactly one line for the file, lowercase hex.
+        $found = @()
         foreach ($line in Get-Content -LiteralPath $sumsFile) {
             $parts = $line.Trim() -split '\s+', 2
-            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $Filename) { $sha = $parts[0] }
+            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -ceq $Filename) { $found += $parts[0] }
         }
+        $sha = if ($found.Count -eq 1) { $found[0] } else { $null }
     }
     finally {
         if (Test-Path $sumsFile) { Remove-Item -LiteralPath $sumsFile -Force }
     }
 
-    if ($sha -notmatch '^[0-9a-fA-F]{64}$') {
-        Write-GaiaError "$tag publishes no SHA-256 for $Filename - refusing to install unverified."
+    if ($sha -cnotmatch '^[0-9a-f]{64}\z') {
+        Write-GaiaError "$tag publishes no single valid SHA-256 for $Filename - refusing to install unverified."
         Write-Host "  Look: $sumsUrl" -ForegroundColor $COLOR_YELLOW
         Write-Host "  Fix:  report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
         return $null
@@ -432,6 +502,7 @@ function Install-Tui {
 # without it `gaia-tui` opens an agent list rather than a chat. ARM64 Windows
 # hits this every time — the sidecar publishes no build for it.
 function Install-FlagshipAgent {
+    param([hashtable]$Pin = @{ Kind = "" })
     Write-Step "Installing the GAIA flagship agent"
 
     $platform = Get-HubPlatform
@@ -443,7 +514,14 @@ function Install-FlagshipAgent {
     $lockPlatform = $platform -replace '^win-', 'win32-'
     $filename = "gaia-agent-$lockPlatform.exe"
 
-    $resolved = Resolve-HubArtifact -AgentId $FLAGSHIP_AGENT_ID -Filename $filename -Label "GAIA agent"
+    # A pinned candidate carries its own frozen agent; everything else takes
+    # the Agent Hub's, the same source as `gaia init`.
+    if ($Pin.Kind -eq "rc") {
+        $resolved = Resolve-ReleaseAgent -Tag $Pin.Tag -Platform $lockPlatform -Filename $filename
+    }
+    else {
+        $resolved = Resolve-HubArtifact -AgentId $FLAGSHIP_AGENT_ID -Filename $filename -Label "GAIA agent"
+    }
     $ok = Install-VerifiedBinary -Resolved $resolved -Filename $filename -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
     return [bool]$ok
 }
@@ -537,11 +615,14 @@ function Main {
         throw "GAIA install failed - see the error above."
     }
 
+    # Before anything installs: a bad tag must not leave a half-pinned machine.
+    $pin = Resolve-Pin
+
     # Install uv if needed
     Install-Uv
 
     # Install GAIA
-    Install-Gaia
+    Install-Gaia -PackageSpec $pin.Spec
 
     # Before the terminal hub, so a hard failure there still leaves the Python
     # CLI reachable.
@@ -552,7 +633,7 @@ function Main {
 
     # After Install-Tui so it lands in the same directory, which is where
     # the hub looks for its agent first.
-    $flagshipInstalled = Install-FlagshipAgent
+    $flagshipInstalled = Install-FlagshipAgent -Pin $pin
 
     # Show next steps
     Show-NextSteps -FlagshipInstalled:$flagshipInstalled

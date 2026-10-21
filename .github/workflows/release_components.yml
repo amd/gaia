@@ -447,8 +447,8 @@ jobs:
   # re-run replace rather than fail. It requests its own website redeploy, so
   # the installers show up however late the release appears or the job re-runs.
   #
-  # A dry run stops after writing the checksum file, so the file list and the
-  # checksums are proven without touching any release.
+  # A dry run stops after writing the checksum file and looking the release up,
+  # so the file list and the checksums are proven without touching any release.
   github-release-installers:
     name: Attach installers to the GitHub release
     needs: [version, tui, windows-setup]
@@ -514,17 +514,32 @@ jobs:
           cat dist/gaia-installers-SHA256SUMS.txt
           ls -l "${files[@]}"
 
-      # Bounded: publish.yml's release waits on a human approval, but a release
-      # that never appears is a failed publish run, not something to wait out.
-      - name: Wait for the GitHub release
-        if: needs.version.outputs.dry_run == 'false'
+      # On a tag push publish.yml creates the release behind its own approval,
+      # so wait for it, bounded: a release that never appears is a failed
+      # publish run, not something to wait out. A dispatch looks once: run
+      # before the release exists (publishing terminal-hub ahead of a flagship
+      # release, or a dry run), there is nothing to attach to yet.
+      - name: Find the GitHub release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.version.outputs.tui_version }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          exists() { gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; }
+          if [ "${EVENT}" = "workflow_dispatch" ]; then
+            if exists; then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "✓ release ${TAG} exists"
+            else
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::there is no GitHub release ${TAG} yet, so no installer is attached. publish.yml creates it on the tag; once it exists, re-run this job (it redeploys the website itself)."
+            fi
+            exit 0
+          fi
           deadline=$(( SECONDS + 3 * 3600 ))
-          until gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; do
+          until exists; do
             if [ "${SECONDS}" -ge "${deadline}" ]; then
               echo "::error::timed out after 3h waiting for the GitHub release ${TAG}. publish.yml creates it; check that run, then re-run this job (it redeploys the website itself). Nothing was attached, so the website offers no terminal installer for ${TAG}."
               exit 1
@@ -532,9 +547,10 @@ jobs:
             echo "waiting for release ${TAG}"
             sleep 60
           done
+          echo "exists=true" >> "$GITHUB_OUTPUT"
 
       - name: Attach the installers and their checksums
-        if: needs.version.outputs.dry_run == 'false'
+        if: needs.version.outputs.dry_run == 'false' && steps.release.outputs.exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.version.outputs.tui_version }}
@@ -546,7 +562,7 @@ jobs:
           echo "✓ attached ${#files[@]} installers to ${TAG}"
 
       - name: Redeploy the website to show them
-        if: needs.version.outputs.dry_run == 'false'
+        if: needs.version.outputs.dry_run == 'false' && steps.release.outputs.exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
