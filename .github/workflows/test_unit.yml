@@ -238,6 +238,9 @@ jobs:
       - name: Run Lemonade checksum pinning test
         env:
           GAIA_MEMORY_DISABLED: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A bump PR exists to refresh these pins, so a rate limit fails it instead of skipping.
+          GAIA_REQUIRE_RELEASE_API: ${{ startsWith(github.head_ref, 'deps/lemonade-') && '1' || '' }}
         run: |
           echo "=== Verifying Lemonade SHA-256 pins (embeddable + installers) against live upstream ==="
           echo "Catches a stale executable digest before embedded install reaches users"
