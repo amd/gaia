@@ -167,6 +167,27 @@ def test_after_shutdown_a_late_display_off_never_holds_the_clock():
     assert ledger.read() == pytest.approx(1060.0)
 
 
+def test_a_standby_that_ends_at_shutdown_is_still_left_out():
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.frozen(60.0)
+    ledger.detach()
+    assert ledger.read() == pytest.approx(1010.0)
+
+
+def test_a_monitor_beating_after_shutdown_leaves_nothing_out():
+    """A stop that timed out must not move the clock back later."""
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    ledger.detach()
+    pc.frozen(60.0)
+    seen = ledger.read()
+    ledger.beat()
+    assert ledger.read() == seen == pytest.approx(1060.0)
+
+
 def test_readings_never_go_backwards_through_standbys_and_pauses():
     pc = _Machine(0.0)
     ledger = pc.ledger()

@@ -117,7 +117,8 @@ class SleepLedger:
         frozen = raw - self._last_beat
         busy = cpu - self._last_cpu
         left_out = 0.0
-        if frozen > self.gap and not self._display_on and busy < frozen / 2:
+        standby = not self._display_on and busy < frozen / 2
+        if self._monitored and frozen > self.gap and standby:
             left_out = frozen - self.gap
             self.excluded += left_out
         self._last_beat, self._last_cpu = raw, cpu
@@ -521,6 +522,7 @@ if sys.platform == "win32":
         global _ledger, _monitor, _start_error, _shut_down
         with _state_lock:
             if _monitor is not None:
+                _ledger.detach()
                 _monitor.stop()
             _ledger, _monitor, _start_error, _shut_down = None, None, None, False
 
