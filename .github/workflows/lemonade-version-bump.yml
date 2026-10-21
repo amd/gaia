@@ -252,6 +252,27 @@ jobs:
                need to check the values yourself: the bump PR's CI runs
                tests/integration/test_lemonade_embeddable_assets.py, which compares every
                pin against the release API and fails on any mismatch.
+
+               Then update `tests/fixtures/lemonade/release_tags.txt`, which lists every
+               supported release, oldest first. Find every stable release newer than
+               `v${{ steps.detect.outputs.current_version }}`, up to and including the
+               target:
+                 ```
+                 gh api --paginate repos/lemonade-sdk/lemonade/releases \
+                   --jq '.[] | select(.draft or .prerelease | not) | .tag_name'
+                 ```
+               Append each of those tags to the end of the file in version order, ending
+               with `v${{ steps.detect.outputs.target_version }}`. Every one of them except
+               the target was skipped by GAIA, so pin its two MSIs at the end of
+               `LEGACY_MSI_SHA256` too, using the digests this prints for that `<tag>`:
+                 ```
+                 gh api repos/lemonade-sdk/lemonade/releases/tags/<tag> \
+                   --jq '.assets[] | select(.name == "lemonade.msi" or .name == "lemonade-server-minimal.msi") | "<tag>/\(.name) \(.digest | sub("^sha256:";""))"'
+                 ```
+               If a skipped release lacks either MSI or its digest, do NOT open a PR:
+               delete the branch and stop. tests/unit/test_lemonade_download_urls.py
+               fails when a listed tag has no pin, and the integration test fails when
+               upstream has a supported release the file does not list.
             4. Sync the hardcoded Lemonade version strings in the docs. CI runs
                `python util/check_doc_versions.py`, which FAILS the build when any doc or
                README under docs/, cpp/, tui/ or .claude/ still references the OLD Lemonade version (release
@@ -281,10 +302,10 @@ jobs:
                no formatting changes.)
 
             ## Commit
-            Stage version.py, lemonade_embedded.py, lemonade_installer.py, plus every doc file you
-            updated (`git add -u` picks up all modified tracked files — you have only edited
-            version.py, lemonade_embedded.py, lemonade_installer.py and flagged docs, so this
-            stays in scope):
+            Stage version.py, lemonade_embedded.py, lemonade_installer.py, release_tags.txt,
+            plus every doc file you updated (`git add -u` picks up all modified tracked files —
+            you have only edited version.py, lemonade_embedded.py, lemonade_installer.py,
+            release_tags.txt and flagged docs, so this stays in scope):
             ```
             git add -u
             git commit -m "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}"
@@ -392,7 +413,7 @@ jobs:
             - The only repo FILES you may change are src/gaia/version.py,
               src/gaia/llm/lemonade_embedded.py (the EMBEDDABLE_SHA256 dict only),
               src/gaia/installer/lemonade_installer.py (the INSTALLER_SHA256 and LEGACY_MSI_SHA256
-              dicts only), and the docs/README
+              dicts only), tests/fixtures/lemonade/release_tags.txt (append only), and the docs/README
               files under docs/, cpp/, tui/ or .claude/ that `util/check_doc_versions.py` flags for a Lemonade
               version update — and in those docs, only the version numbers. No other files, no
               drive-by edits. (Feature scouting creates GitHub issues only — it never edits files.)

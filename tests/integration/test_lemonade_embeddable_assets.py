@@ -20,15 +20,19 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 from gaia.installer.lemonade_installer import INSTALLER_SHA256, LEGACY_MSI_SHA256
 from gaia.llm.lemonade_embedded import _ASSET_TEMPLATES, EMBEDDABLE_SHA256
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION, parse_version
 
 RELEASE_API = (
     "https://api.github.com/repos/lemonade-sdk/lemonade/releases/tags/v{version}"
+)
+RELEASE_TAGS = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "lemonade" / "release_tags.txt"
 )
 
 
@@ -122,11 +126,11 @@ def test_pinned_installer_digest_matches_the_published_asset(published_digests, 
 
 
 @pytest.fixture(scope="module")
-def every_release_digest():
-    """Map ``v<tag>/<asset>`` -> sha256 hex for every published release."""
+def every_release():
+    """Every release lemonade-sdk/lemonade has published, as the API returns it."""
     if not _github_reachable():
         pytest.skip("GitHub is unreachable")
-    digests = {}
+    every = []
     page = 1
     while True:
         url = (
@@ -142,14 +146,46 @@ def every_release_digest():
                 pytest.skip("GitHub API rate limit reached")
             raise
         if not releases:
-            return digests
-        for release in releases:
-            for asset in release.get("assets", []):
-                digest = asset.get("digest") or ""
-                if digest.startswith("sha256:"):
-                    key = f"{release['tag_name']}/{asset['name']}"
-                    digests[key] = digest.split(":", 1)[1]
+            return every
+        every.extend(releases)
         page += 1
+
+
+@pytest.fixture(scope="module")
+def every_release_digest(every_release):
+    """Map ``v<tag>/<asset>`` -> sha256 hex for every published release."""
+    digests = {}
+    for release in every_release:
+        for asset in release.get("assets", []):
+            digest = asset.get("digest") or ""
+            if digest.startswith("sha256:"):
+                key = f"{release['tag_name']}/{asset['name']}"
+                digests[key] = digest.split(":", 1)[1]
+    return digests
+
+
+def test_release_tag_list_names_every_supported_release(every_release):
+    """The unit tests demand MSI pins for each tag this list names."""
+    listed = {
+        line.strip()
+        for line in RELEASE_TAGS.read_text(encoding="utf-8").splitlines()
+        if line.strip() and line[0] != "#"
+    }
+    oldest = parse_version(LEMONADE_MIN_VERSION)
+    newest = parse_version(LEMONADE_VERSION)
+    supported = {
+        release["tag_name"]
+        for release in every_release
+        if not release["draft"]
+        and not release["prerelease"]
+        and release["tag_name"].startswith("v")
+        and oldest <= (parse_version(release["tag_name"]) or ()) <= newest
+    }
+    missing = sorted(supported - listed, key=parse_version)
+    assert not missing, (
+        f"{RELEASE_TAGS} is missing {missing}. Add each tag, and pin both of its "
+        "MSIs in LEGACY_MSI_SHA256 (src/gaia/installer/lemonade_installer.py)."
+    )
 
 
 @pytest.mark.parametrize("key", sorted(LEGACY_MSI_SHA256))
