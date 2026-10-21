@@ -67,6 +67,11 @@ contract is now **2.18**; clients built for 2.17 keep working, and the new
 - **Saving a download asks about the file, not its folder.** A download into
   the home folder failed without asking, because the agent asked to grant the
   whole folder. It now asks about the one file it is about to create.
+- **A document another program has open is re-indexed once it is free.** On
+  Windows, a watched file that Word, PowerPoint or another program held locked
+  was read once, reported as corrupted, and never re-indexed. It is now retried
+  a few times, and if it stays locked the log says to close the program and
+  save the file again.
 
 ### Long and busy turns finish
 
