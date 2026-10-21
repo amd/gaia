@@ -75,6 +75,7 @@ NO_MEASUREMENT_COUNTERS = (
     "blocked",
     "budget_exceeded",
     "skipped",
+    "not_run",
 )
 
 
@@ -112,6 +113,10 @@ _ZERO_TOKENS_TEXT = (
 
 
 def _spent_no_tokens(result: dict) -> bool:
+    # The runner now names the outage itself: the scenario Claude cut off, and
+    # every one it then never started.
+    if result.get("claude_outage") or result.get("status") == "NOT_RUN":
+        return True
     if result.get("status") != "ERRORED":
         return False
     usage = result.get("driver_usage")
@@ -125,7 +130,7 @@ def _spent_no_tokens(result: dict) -> bool:
 
 
 def zero_token_errors(scorecard: dict) -> list:
-    """Scenario ids that ERRORED before Claude spent a token (quota exhausted)."""
+    """Scenario ids Claude never measured: quota or credential outage, not the agent."""
     return [
         s.get("scenario_id")
         for s in scorecard.get("scenarios") or []
@@ -289,8 +294,8 @@ def main(argv=None) -> int:
 
     if no_tokens:
         message = (
-            f"{len(no_tokens)} scenario(s) ERRORED before Claude spent a single "
-            f"token: {', '.join(no_tokens)}. Claude was never reached, so these are "
+            f"{len(no_tokens)} scenario(s) were cut off or never started because "
+            f"Claude was unavailable: {', '.join(no_tokens)}. These are "
             "not results. Usually the quota ran out: wait for the window to reset "
             "(or switch CLAUDE_ACCOUNT), then re-dispatch just these with the "
             "`scenarios` input. If the quota is fine, the driver failed before its "
