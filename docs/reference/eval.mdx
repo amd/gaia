@@ -126,19 +126,47 @@ wiring it into CI.
 ### When CI runs it
 
 The evals on the self-hosted AMD runners (`eval_flagship.yml`, `eval_retrieval.yml`,
-`eval_code_retrieval.yml`) run only on release and release-candidate tags (`v0.24.1`,
-`v0.25.0-rc14`) and on manual dispatch. They never run on pull requests or on a
-schedule. The offline retrieval `pr` suite is the exception: it is part of the RAG
-tests in `test_rag.yml`. None of them blocks publishing. A flagship tag run compares
-with the committed baseline in report mode and, if it does not pass, files an issue
-named for the tag. The flagship agent release (`release_agent_gaia.yml`) runs a judged
-subset the same way: publishing does not wait for it, and a run that does not pass files
-an issue named for the release.
+`eval_code_retrieval.yml`) run on release and release-candidate tags (`v0.24.1`,
+`v0.25.0-rc14`) and on manual dispatch, never on pull requests. The flagship eval also
+runs one weekly backlog lane (below). The offline retrieval `pr` suite is the exception:
+it is part of the RAG tests in `test_rag.yml`. None of them blocks publishing. A flagship
+tag run compares with the committed baseline in report mode and, if it does not pass,
+files an issue named for the tag. The flagship agent release (`release_agent_gaia.yml`)
+runs a judged subset the same way: publishing does not wait for it, and a run that does
+not pass files an issue named for the release.
+
+How much of the flagship suite runs depends on the trigger. The tiers and the reason
+each scenario is in one live in [`eval/ci_tiers.json`](https://github.com/amd/gaia/blob/main/eval/ci_tiers.json):
+
+| Trigger | Tier | What runs |
+|---|---|---|
+| RC tag | smoke | 30 stable scenarios, 13 of them security, honesty and injection, on 3 machines in about an hour |
+| RC tag with `[full eval]` in its annotation | full | Every lane except the weekly backlog's scenarios. Nominate the RC you will promote |
+| Final tag (`v0.25.0`) | verify | Nothing re-runs. The run checks that a full sweep measured this commit or one of its RCs, and files an issue if none did |
+| Weekly, Sunday 06:17 UTC | backlog | Scenarios that always fail or flip on most runs, on 3 machines, with a trend artifact |
+| Dispatch | `tier` input | `smoke` by default; `full` or `backlog` on request |
+
+The Strix Halo pool scores Qwen3.6-35B-A3B, the model `gaia init` installs on a 64 GB+
+Strix Halo. Each category's GAIA home pins it, and a scenario that ran another model is
+discarded. A run compares only against a baseline captured on the same model, and says
+"no baseline yet" until one exists. Gemma-4-E4B is scored on the Strix Point pool. A
+dispatch can pick `-f model=Gemma-4-E4B-it-GGUF` to re-run part of an earlier Gemma run
+against the Gemma baseline.
+
+Every flagship run fails when scenarios error before Claude spends a token. The quota
+ran out, so the run measured nothing from that point.
+
+The weekly backlog lane is owned by @kovtcharov-amd. Its `flagship-backlog-trend`
+artifact carries each week's results forward, and its job summary shows how many backlog
+scenarios pass this week, against the 80% target. When a scenario that left the full
+sweep passes reliably, drop its `leaves_full` in `eval/ci_tiers.json`. The lane is skipped,
+with a notice, while any other flagship run holds the pool.
 
 To measure a branch before it is tagged:
 
 ```bash
-gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch>
+gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch>             # smoke
+gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch> -f tier=full
 ```
 
 A dispatch can run part of the suite. `categories` and `scenarios` take
@@ -153,9 +181,8 @@ gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch> \
 
 A targeted run is labelled as one in its summary, its lane artifacts and every
 scorecard (`config.scenario_filter`). Its comparison judges only the selected
-scenarios and lists the rest as not run. A dispatch also fails, whatever
-`enforce` says, when scenarios errored before Claude spent a token: the quota ran
-out, so re-dispatch those scenarios once it resets.
+scenarios and lists the rest as not run. If the quota ran out mid-run,
+re-dispatch the errored scenarios once it resets.
 
 A release candidate can skip the evals. Put `[skip eval]` in an annotated tag's message:
 
@@ -165,7 +192,11 @@ git tag -a v0.25.0-rc16 -m "rc16 [skip eval]"
 
 The run then skips its lanes and says so in a notice and in the job summary. A
 lightweight tag, or one without the marker, runs the evals. A final release
-(`v0.25.0`) always runs them and ignores the marker.
+(`v0.25.0`) ignores the marker. To nominate an RC for the full sweep instead:
+
+```bash
+git tag -a v0.25.2-rc3 -m "rc3 [full eval]"
+```
 
 ### Require a complete comparison
 
