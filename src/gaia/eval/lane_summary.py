@@ -50,6 +50,33 @@ import json
 import sys
 from pathlib import Path
 
+# Stdlib only: CI runs this file directly on a hosted runner with no gaia
+# install. Same fields as gaia.eval.claude_usage.USAGE_FIELDS (a test pins it).
+USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "calls",
+    "cost_usd",
+    "duration_api_ms",
+)
+
+
+def empty_usage() -> dict:
+    record: dict = {field: 0 for field in USAGE_FIELDS}
+    record["cost_usd"] = 0.0
+    return record
+
+
+def add_usage(total: dict, record) -> dict:
+    if not record:
+        return total
+    for field in USAGE_FIELDS:
+        total[field] = total.get(field, 0) + (record.get(field) or 0)
+    return total
+
+
 # A scenario counted here ran but produced no score, so it is an absence rather
 # than a result. Same list as the integrity gate's, and for the same reason:
 # `skipped` (SKIPPED_NO_DOCUMENT) keeps its scenario id, so it slips past every
@@ -95,6 +122,8 @@ def collect_lane(lane: dict, artifacts_dir: Path, prefix: str) -> dict:
         "failed": 0,
         "unmeasured": 0,
         "missing_categories": [],
+        "claude": empty_usage(),
+        "claude_scenarios": 0,
     }
     if not root.is_dir():
         row["missing_categories"] = list(lane["categories"])
@@ -120,6 +149,10 @@ def collect_lane(lane: dict, artifacts_dir: Path, prefix: str) -> dict:
         row["unmeasured"] += sum(
             int(summary.get(key) or 0) for key in NO_MEASUREMENT_COUNTERS
         )
+        usage = scorecard.get("claude_usage") or {}
+        if usage.get("scenarios_with_usage"):
+            add_usage(row["claude"], usage.get("total"))
+            row["claude_scenarios"] += int(usage["scenarios_with_usage"])
     return row
 
 
@@ -207,7 +240,44 @@ def render(rows: list[dict], has_baseline: bool, selection: str | None = None) -
             )
         out.append("")
 
+    out += _claude_usage_section(rows)
     return "\n".join(out) + "\n"
+
+
+def _claude_usage_section(rows: list[dict]) -> list[str]:
+    """Claude tokens per lane and for the whole run, from each scorecard."""
+    used = [r for r in rows if r.get("claude_scenarios")]
+    if not used:
+        return []
+
+    def line(label, usage, scenarios):
+        return (
+            f"| {label} | {scenarios} | {usage.get('calls', 0):,} | "
+            f"{usage.get('input_tokens', 0):,} | "
+            f"{usage.get('cache_creation_input_tokens', 0):,} | "
+            f"{usage.get('cache_read_input_tokens', 0):,} | "
+            f"{usage.get('output_tokens', 0):,} | "
+            f"${float(usage.get('cost_usd') or 0):.2f} |"
+        )
+
+    out = [
+        "### Claude usage",
+        "",
+        "Tokens `claude -p` reported, over the scenarios that recorded usage. "
+        "Cost is at list price.",
+        "",
+        "| lane | scenarios | API calls | input | cache write | cache read | output | cost |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    total = empty_usage()
+    scenarios = 0
+    for row in used:
+        out.append(line(f"`{row['lane']}`", row["claude"], row["claude_scenarios"]))
+        add_usage(total, row["claude"])
+        scenarios += row["claude_scenarios"]
+    out.append(line("**total**", total, scenarios))
+    out.append("")
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
