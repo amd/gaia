@@ -156,11 +156,13 @@ from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
     is_context_overflow_error,
+    no_thinking_kwargs,
     resolve_default_chat_model,
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
+    NATIVE_TOOL_CALLS_PREFIX,
     LemonadeStreamCutOffError,
 )
 from gaia.llm.retry import (
@@ -8814,16 +8816,7 @@ Do NOT wrap conversational replies in JSON.
         """
         say = progress or (lambda _message: None)
         started = time.perf_counter()
-        # A turn renders skills through the per-turn filter; the primed prompt
-        # has to as well, or it diverges from the first turn's at the skills
-        # heading and everything after it — tools included — is re-read.
-        self._refresh_active_skill_filter(self.WARM_UP_PROMPT)
-        loader = getattr(self, "tool_loader", None)
-        if loader is not None:
-            say("Indexing tools")
-            core = loader.warm(self._tools_registry)
-            if core:
-                self._apply_tool_filter(core)
+        self._prepare_first_turn(self.WARM_UP_PROMPT, say)
         say(f"Loading {self.model_id} and reading its instructions")
         self.chat.send_messages(
             [{"role": "user", "content": self.WARM_UP_PROMPT}],
@@ -8832,6 +8825,10 @@ Do NOT wrap conversational replies in JSON.
             max_tokens=1,
         )
         result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
+        return self._with_prompt_usage(result)
+
+    def _with_prompt_usage(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Add the last call's prompt and cached token counts to *result*."""
         client = getattr(self.chat, "llm_client", None)
         usage_of = getattr(client, "get_last_usage", None)
         usage = usage_of() if callable(usage_of) else None
@@ -8839,6 +8836,84 @@ Do NOT wrap conversational replies in JSON.
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
         return result
+
+    def _prepare_first_turn(self, prompt: str, say: Callable[[str], None]) -> None:
+        """Render the prompt and tools exactly as a first turn on *prompt* would."""
+        # A turn renders skills through the per-turn filter; the primed prompt
+        # has to as well, or it diverges from the first turn's at the skills
+        # heading and everything after it — tools included — is re-read.
+        self._refresh_active_skill_filter(prompt)
+        loader = getattr(self, "tool_loader", None)
+        if loader is not None:
+            say("Indexing tools")
+            core = loader.warm(self._tools_registry)
+            if core:
+                self._apply_tool_filter(core)
+
+    #: Output budget for a greeting: two short sentences and room to finish.
+    GREETING_MAX_TOKENS = 96
+
+    def greeting_context(self) -> str:
+        """What the agent knows that a greeting may follow up on; "" by default."""
+        return ""
+
+    def greet(
+        self,
+        instruction: str,
+        on_text: Callable[[str], None],
+        progress: Optional[Callable[[str], None]] = None,
+        cancel: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Write the first message of a new chat, streaming it to *on_text*.
+
+        Sends the same system prompt and tools a first turn sends, so a greeting
+        also does everything :meth:`warm_up` does: the model is loaded and the
+        prefix is cached before the user types. Thinking is off and the budget
+        is small, so the reply starts at once and stays short.
+
+        Returns ``{"text", "seconds", "prompt_tokens", "cached_tokens"}``.
+
+        Raises:
+            RuntimeError: the model answered with a tool call or with nothing.
+            Whatever the LLM client raises for an unreachable or failing model.
+        """
+        say = progress or (lambda _message: None)
+        started = time.perf_counter()
+        context = self.greeting_context()
+        self._prepare_first_turn(instruction, say)
+        say(f"Loading {self.model_id} and reading its instructions")
+        content = f"{context}\n\n{instruction}" if context else instruction
+        parts: List[str] = []
+        stream = self.chat.send_messages_stream(
+            [{"role": "user", "content": content}],
+            system_prompt=self.system_prompt,
+            tools=self._openai_tools,
+            max_tokens=self.GREETING_MAX_TOKENS,
+            **no_thinking_kwargs(self.model_id),
+        )
+        try:
+            for chunk in stream:
+                if cancel is not None and cancel.is_set():
+                    break
+                text = chunk.text or ""
+                if text.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                    raise RuntimeError(
+                        f"{self.model_id} answered the greeting with a tool call "
+                        "instead of a message."
+                    )
+                if text:
+                    parts.append(text)
+                    on_text(text)
+        finally:
+            stream.close()
+        greeting = "".join(parts).strip()
+        if not greeting and not (cancel is not None and cancel.is_set()):
+            raise RuntimeError(f"{self.model_id} returned an empty greeting.")
+        result: Dict[str, Any] = {
+            "text": greeting,
+            "seconds": round(time.perf_counter() - started, 1),
+        }
+        return self._with_prompt_usage(result)
 
     def process_query(
         self,

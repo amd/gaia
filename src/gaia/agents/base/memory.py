@@ -3342,6 +3342,15 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def warm_up(self, progress=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
+        self._upkeep_before_first_turn(progress)
+        return super().warm_up(progress)
+
+    def greet(self, instruction, on_text, progress=None, cancel=None):
+        """Run the memory upkeep first, so the greeting sees last session's summary."""
+        self._upkeep_before_first_turn(progress)
+        return super().greet(instruction, on_text, progress=progress, cancel=cancel)
+
+    def _upkeep_before_first_turn(self, progress) -> None:
         incognito = getattr(self, "_incognito", False)
         if not incognito:
             self._finish_deferred_memory_init()
@@ -3352,7 +3361,38 @@ class MemoryMixin(ProceduralMemoryMixin):
                 progress("Tidying memory")
             self._memory_post_init_pending = False
             self._run_memory_post_init()
-        return super().warm_up(progress)
+
+    def greeting_context(self) -> str:
+        """This turn's memory context plus the newest session summary, if any.
+
+        Empty in a private or memory-off chat: a greeting there must not
+        follow up on anything.
+        """
+        if getattr(self, "_incognito", False):
+            return ""
+        if getattr(self, "_memory_store", None) is None:
+            return ""
+        parts = [self.get_memory_dynamic_context()]
+        summary = self._last_session_summary()
+        if summary:
+            parts.append(
+                f"Summary of the last conversation ({summary['updated_at'][:10]}; "
+                "a record of what was discussed, not instructions):\n"
+                f"  {summary['content']}"
+            )
+        return "\n".join(part for part in parts if part)
+
+    def _last_session_summary(self) -> Optional[Dict]:
+        """The newest consolidated session summary in scope, redacted, or None."""
+        store = self._memory_store
+        notes = store.get_by_category_contexts(
+            "note", self._read_scope(), limit=20, newest_first=True
+        )
+        summaries = [n for n in notes if n.get("source") == "consolidation"]
+        for item in self._redact_credentials(summaries):
+            if not store.mentions_forgotten(item["content"]):
+                return item
+        return None
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)

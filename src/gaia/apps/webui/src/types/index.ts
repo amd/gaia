@@ -541,6 +541,19 @@ export interface WarmUpStatus {
     device?: 'npu' | 'gpu' | 'cpu' | null;
 }
 
+/** One event of the agent's greeting stream (POST /system/greeting). */
+export type GreetingEvent =
+    | {
+        type: 'status';
+        /** The start-up step under way: starting, waiting (on a chat turn), building, loading or priming. */
+        phase: string;
+        model?: string | null;
+        device?: WarmUpStatus['device'];
+    }
+    | { type: 'chunk'; content: string }
+    | { type: 'done'; text: string }
+    | { type: 'error'; message: string };
+
 export interface SystemStatus {
     lemonade_running: boolean;
     /** Present when the Lemonade health/catalog query failed. */
