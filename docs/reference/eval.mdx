@@ -205,6 +205,31 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
+### Compare only the same model
+
+A scorecard records the local model the agent ran (`config.agent_model`) beside the
+Claude model that drove and judged it (`config.model`). `--compare` refuses to diff two
+scorecards that differ in either, because every delta would partly be the model swap. It
+reads the baseline's from the `meta.json` in its directory when there is one.
+
+| `--compare` exit | Meaning |
+|---|---|
+| 0 | No regression |
+| 2 | A regression (or, with `--require-complete`, a missing or unmeasured scenario) |
+| 3 | Not comparable: the baseline was measured with a different agent model or eval model |
+
+To score one model on a machine whose hardware would pick another, pin it and check it:
+
+```bash
+gaia config set default_model Qwen3.6-35B-A3B-GGUF
+gaia eval agent --category rag_quality --agent-model Qwen3.6-35B-A3B-GGUF
+```
+
+`--agent-model` does not change the model. It reads back each scenario's session and
+discards, as `INFRA_ERROR`, any scenario that ran something else. The committed
+`gaia-flagship/` baseline is Gemma-4-E4B, so on a 64 GB+ Strix Halo whose default is
+Qwen3.6, comparing against it exits 3 until you pin Gemma.
+
 ### One eval at a time
 
 `gaia eval agent` and `gaia eval tasks run` refuse to start while another of them is

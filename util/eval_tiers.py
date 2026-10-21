@@ -491,7 +491,11 @@ def gh_api(path: str) -> dict:
 
 
 def busy_runs(repo: str, current_run: str, api=gh_api) -> list[str]:
-    """Other runs of this workflow that are queued or running, except schedules."""
+    """Other runs of this workflow that are queued or running, except schedules.
+
+    A previous week's backlog run still going is not a release eval; the new
+    one queues behind it on the per-lane concurrency groups instead of skipping.
+    """
     busy = []
     for status in ("in_progress", "queued"):
         runs = api(
@@ -550,7 +554,13 @@ def verify_final(
             f"repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?head_sha={commit}&per_page=100"
         ).get("workflow_runs", [])
         for run in runs:
-            if str(run["id"]) == str(current_run) or run.get("status") != "completed":
+            # A failed sweep still measured (report mode fails on regressions);
+            # a cancelled one may have scored almost nothing.
+            if (
+                str(run["id"]) == str(current_run)
+                or run.get("status") != "completed"
+                or run.get("conclusion") == "cancelled"
+            ):
                 continue
             artifacts = api(
                 f"repos/{repo}/actions/runs/{run['id']}/artifacts?name={FULL_MARKER}"

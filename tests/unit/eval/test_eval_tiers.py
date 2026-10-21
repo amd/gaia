@@ -424,6 +424,19 @@ def test_verify_final_accepts_the_nominated_rc_commit_and_says_it_differs():
     assert "via v0.25.2-rc2" in text and "never evaluated" in text
 
 
+def test_verify_final_ignores_a_cancelled_full_sweep_but_counts_a_failed_one():
+    cancelled = {**_run(3), "conclusion": "cancelled"}
+    api = _fake_api({"fff": [cancelled]}, markers={3})
+    got = tiers.verify_final("amd/gaia", "v0.25.2", "fff", {}, "99", api)
+    assert not got.ok
+    # Report mode fails a sweep on regressions; it still measured the release.
+    failed = {**_run(4), "conclusion": "failure"}
+    api = _fake_api({"fff": [cancelled, failed]}, markers={3, 4})
+    got = tiers.verify_final("amd/gaia", "v0.25.2", "fff", {}, "99", api)
+    assert got.ok and "runs/4" in "\n".join(got.lines)
+    assert "runs/3" not in "\n".join(got.lines)
+
+
 def test_verify_final_fails_loudly_without_a_full_sweep():
     # A smoke run (no marker), an unfinished full sweep, and this run itself.
     api = _fake_api(
