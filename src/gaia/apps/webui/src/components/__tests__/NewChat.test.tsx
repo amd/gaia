@@ -188,6 +188,7 @@ describe('NewChat loading line', () => {
         expect(loadingLine({ ...base, phase: 'starting' })).toBe('Starting GAIA… 2s');
         expect(loadingLine({ ...base, phase: 'starting' }, 'Loading ML libraries')).toBe('Loading ML libraries… 2s');
         expect(loadingLine({ ...base, phase: 'waiting' })).toBe('Waiting for another chat to finish… 2s');
+        expect(loadingLine({ ...base, phase: 'model_queue' })).toBe('Waiting for the model: another app is using it… 2s');
         expect(loadingLine({ ...base, phase: 'building' })).toBe('Starting the agent… 2s');
         expect(loadingLine({ ...base, phase: 'loading' })).toBe('Loading the model… 2s');
         expect(loadingLine({ ...base, phase: 'priming' })).toBe('Reading GAIA’s instructions… 2s');

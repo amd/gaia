@@ -202,6 +202,13 @@ read, so the agent works in the same scope. Binaries older than 2.18 reject both
 fields with `422`, so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Opening a new chat? `POST /v1/gaia/greeting`** (contract ≥ 2.19) streams a
+first message the agent writes itself, following up on the last conversation
+when memory holds one. Writing it loads the model and caches the prompt, so
+the user's first question answers quickly. Send `memory` as for `/query`.
+Binaries older than 2.19 answer `404`, so probe `/version` first. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

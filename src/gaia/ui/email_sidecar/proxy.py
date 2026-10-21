@@ -255,7 +255,32 @@ class SidecarProxy:
         A malformed ``data:`` line (the sidecar emitting non-JSON) raises
         loudly — never silently dropped or swallowed into a placeholder event.
         """
-        path = f"{self.prefix}/query"
+        return self._event_stream(
+            f"{self.prefix}/query", body, read_timeout, on_response
+        )
+
+    def greeting_stream(
+        self,
+        body: dict,
+        *,
+        read_timeout: float = 300.0,
+        on_response: Optional[Callable[[Any], None]] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Stream ``POST /v1/<agent>/greeting`` (flagship, contract >= 2.19).
+
+        Same framing, failure and ``on_response`` rules as :meth:`query_stream`.
+        """
+        return self._event_stream(
+            f"{self.prefix}/greeting", body, read_timeout, on_response
+        )
+
+    def _event_stream(
+        self,
+        path: str,
+        body: dict,
+        read_timeout: float,
+        on_response: Optional[Callable[[Any], None]],
+    ) -> Iterator[Dict[str, Any]]:
         resp = self._session.post(
             f"{self.base_url}{path}",
             json=body,
@@ -291,7 +316,7 @@ class SidecarProxy:
                         event = _json.loads(payload)
                     except (ValueError, TypeError) as e:
                         raise SidecarError(
-                            f"{agent_id} sidecar /query sent a malformed SSE "
+                            f"{agent_id} sidecar {path} sent a malformed SSE "
                             f"event: {payload!r} ({e})"
                         ) from e
                     yield event

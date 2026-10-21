@@ -38,6 +38,7 @@ type Loading = Extract<Greeting, { kind: 'loading' }>;
 export function loadingLine({ phase, model, device, seconds }: Loading, bootTask: string | null = null): string {
     let step: string;
     if (phase === 'waiting') step = 'Waiting for another chat to finish';
+    else if (phase === 'model_queue') step = 'Waiting for the model: another app is using it';
     else if (phase === 'building') step = 'Starting the agent';
     else if (phase === 'priming') step = 'Reading GAIA’s instructions';
     else if (phase === 'loading' && model) {

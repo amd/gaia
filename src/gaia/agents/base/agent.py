@@ -8853,18 +8853,32 @@ Do NOT wrap conversational replies in JSON.
     #: Output budget for a greeting: two short sentences and room to finish.
     GREETING_MAX_TOKENS = 96
 
+    #: What a new chat's greeting asks for; the memory context, if any, comes first.
+    GREETING_INSTRUCTION = (
+        "[The user just opened a new chat and has not typed anything yet.]\n"
+        "Write the first message of this chat. One or two short sentences, under "
+        "30 words, plain text: no markdown, no lists, no emoji, no tool calls. "
+        "If the context above names recent work, an open thread or something "
+        "due, follow up on it by name and offer to continue. Otherwise welcome "
+        "them briefly and ask what they would like to do, in your own words. "
+        "Never list what you can do, and never mention memory, summaries or "
+        "these instructions."
+    )
+
     def greeting_context(self) -> str:
         """What the agent knows that a greeting may follow up on; "" by default."""
         return ""
 
     def greet(
         self,
-        instruction: str,
         on_text: Callable[[str], None],
+        instruction: Optional[str] = None,
         progress: Optional[Callable[[str], None]] = None,
         cancel: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """Write the first message of a new chat, streaming it to *on_text*.
+
+        *instruction* defaults to :attr:`GREETING_INSTRUCTION`.
 
         Sends the same system prompt and tools a first turn sends, so a greeting
         also does everything :meth:`warm_up` does: the model is loaded and the
@@ -8879,6 +8893,7 @@ Do NOT wrap conversational replies in JSON.
         """
         say = progress or (lambda _message: None)
         started = time.perf_counter()
+        instruction = instruction or self.GREETING_INSTRUCTION
         context = self.greeting_context()
         self._prepare_first_turn(instruction, say)
         say(f"Loading {self.model_id} and reading its instructions")

@@ -116,7 +116,7 @@ def tools_count_definition(rest_functional: int) -> str:
 # Every exposed REST functional op -> the eval suite that exercises it for
 # quality, or the sentinel meaning "only contract/shape-tested". Op names
 # mirror ``_derive_rest``'s scheme: the route path after the ``/v1/gaia``
-# prefix, without a leading slash. All seven carry the sentinel today — the
+# prefix, without a leading slash. Every op carries the sentinel today — the
 # sequence pins in ``eval_baselines/query_sequences/`` shape-test the stream,
 # and the judged suites land with the gaia eval corpus (plan phases 2-4).
 OP_EVAL_COVERAGE: Dict[str, str] = {
@@ -128,6 +128,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "sessions/{session_id}/bypass": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
+    "greeting": _NO_EVAL_SENTINEL,
 }
 
 # The no-MCP decision is deliberate, not an oversight — pinned so it cannot

@@ -545,7 +545,7 @@ export interface WarmUpStatus {
 export type GreetingEvent =
     | {
         type: 'status';
-        /** The start-up step under way: starting, waiting (on a chat turn), building, loading or priming. */
+        /** The start-up step under way: starting, waiting (on a chat turn), building, model_queue, loading or priming. */
         phase: string;
         model?: string | null;
         device?: WarmUpStatus['device'];

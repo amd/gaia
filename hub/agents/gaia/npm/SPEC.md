@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.18"`                  |
+| Contract version   | `API_VERSION = "2.19"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -273,6 +273,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
+| `POST` | `/v1/gaia/greeting`              | Stream the first message of a new chat (contract ≥ 2.19) |
 
 #### `/query` request body
 
@@ -342,6 +343,20 @@ roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
 folders — so a host without the Python package (the bundled skills live inside
 the binary) can still show them. A skill root that cannot be read is a `500`
 naming it.
+
+`POST /v1/gaia/greeting` (contract ≥ 2.19) writes the first message of a new
+chat and streams it as `text/event-stream`. The body is `{ "memory": "on" |
+"private" | "off" }` (optional; an unknown field is a `422`). The agent sends
+a first turn's real request (system prompt, tools, the turn's memory context
+and the newest session summary) with thinking off and a small output budget,
+so the model loads and the prompt prefix is cached before the user types; a
+greeting that arrives also shows the stack works. Under `"private"` or
+`"off"` it draws on no memory and is a plain welcome. It leases the model
+like a user's turn and writes no session history. Events: `status`
+(`phase`: `building`, `model_queue` while another client holds the model,
+then `priming`), `chunk` (`content`), then exactly one `done` (`text`) or
+`error` (`message`). Closing the connection stops it at its next step. The
+greeting's text is not logged.
 
 ### 5.2 `session_id` and agent retention
 

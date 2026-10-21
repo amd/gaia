@@ -84,7 +84,7 @@ def test_greet_streams_a_short_reply_on_the_first_turns_prompt():
     agent = _Agent()
     seen = []
 
-    result = agent.greet("Say hello.", seen.append)
+    result = agent.greet(seen.append, instruction="Say hello.")
 
     assert seen == ["Hi! ", "What are we building?"]
     assert result["text"] == "Hi! What are we building?"
@@ -106,7 +106,7 @@ def test_greet_puts_what_the_agent_knows_ahead_of_the_instruction():
             return "Current time: Tuesday"
 
     agent = _Knowing()
-    agent.greet("Say hello.", lambda _t: None)
+    agent.greet(lambda _t: None, instruction="Say hello.")
     [call] = agent.chat.calls
     assert call["messages"][0]["content"] == "Current time: Tuesday\n\nSay hello."
 
@@ -120,7 +120,7 @@ def test_greet_puts_what_the_agent_knows_ahead_of_the_instruction():
 )
 def test_greet_fails_loudly_rather_than_showing_something_else(chunks, error):
     with pytest.raises(RuntimeError, match=error):
-        _Agent(chunks=chunks).greet("Say hello.", lambda _t: None)
+        _Agent(chunks=chunks).greet(lambda _t: None, instruction="Say hello.")
 
 
 def test_greet_stops_when_cancelled():
@@ -131,9 +131,7 @@ def test_greet_stops_when_cancelled():
         seen.append(text)
         cancel.set()
 
-    result = _Agent(chunks=["Hi", " there", " friend"]).greet(
-        "Say hello.", on_text, cancel=cancel
-    )
+    result = _Agent(chunks=["Hi", " there", " friend"]).greet(on_text, cancel=cancel)
     assert seen == ["Hi"]
     assert result["text"] == "Hi"
 
@@ -212,7 +210,7 @@ def test_memory_upkeep_runs_before_the_greeting():
     _MemoryAgent.upkeep = 0
     agent = _MemoryAgent(_Store([]))
     agent._memory_post_init_pending = True  # pylint: disable=protected-access
-    agent.greet("Say hello.", lambda _t: None)
+    agent.greet(lambda _t: None, instruction="Say hello.")
     assert _MemoryAgent.upkeep == 1
     assert agent._memory_post_init_pending is False  # pylint: disable=protected-access
 
@@ -312,20 +310,129 @@ def test_no_greeting_before_first_run_setup(monkeypatch, tmp_path):
         greeting.write_greeting(_Db(), lambda _t: None)
 
 
-def test_a_sidecar_flagship_says_it_cannot_greet(monkeypatch, tmp_path):
+class _Proxy:
+    def __init__(self, events):
+        self.events = events
+        self.bodies = []
+
+    def greeting_stream(self, body, on_response=None):
+        self.bodies.append(body)
+        return iter(self.events)
+
+
+def _sidecar_flagship(monkeypatch, tmp_path, api_version, events):
+    """A flagship registered as its daemon sidecar, answering with *events*."""
     from gaia.agents.registry import AgentRegistry
     from gaia.ui import _chat_helpers as chat
+    from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.setup_runner import mark_initialized
 
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
     mark_initialized()
     registry = AgentRegistry()
     registry.register_sidecar("gaia", "GAIA", [])
-    monkeypatch.setattr(chat, "_agent_registry", registry)
-    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: None))
 
-    with pytest.raises(greeting.GreetingUnavailable, match="daemon sidecar"):
+    def must_not_build(*args, **kwargs):
+        raise AssertionError("built the sidecar flagship in-process")
+
+    monkeypatch.setattr(registry, "create_agent", must_not_build)
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+    warmer = warmup.PrefixWarmer(lambda: None)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    proxy = _Proxy(events)
+    handle = SimpleNamespace(api_version=api_version, proxy=lambda: proxy)
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda agent_id: handle)
+    return proxy, warmer
+
+
+def test_a_sidecar_flagship_greets_through_its_daemon(monkeypatch, tmp_path):
+    proxy, warmer = _sidecar_flagship(
+        monkeypatch,
+        tmp_path,
+        "2.19",
+        [
+            {"type": "status", "phase": "priming"},
+            {"type": "chunk", "content": "Welcome back. "},
+            {"type": "chunk", "content": "Finish the parser?"},
+            {"type": "done", "text": "Welcome back. Finish the parser?"},
+        ],
+    )
+    words = []
+
+    result = greeting.write_greeting(_Db(), words.append)
+
+    assert result == {"text": "Welcome back. Finish the parser?"}
+    assert words == ["Welcome back. ", "Finish the parser?"]
+    # Memory mode follows Settings, so a memory-off PC gets a plain welcome.
+    assert proxy.bodies == [{"memory": "on"}]
+    assert warmer.snapshot()["state"] == warmup.READY
+
+
+def test_a_sidecar_greeting_failure_is_raised(monkeypatch, tmp_path):
+    _sidecar_flagship(
+        monkeypatch,
+        tmp_path,
+        "2.19",
+        [{"type": "error", "message": "Local Lemonade Server is not reachable."}],
+    )
+    with pytest.raises(RuntimeError, match="not reachable"):
         greeting.write_greeting(_Db(), lambda _t: None)
+
+
+def test_a_sidecar_stream_that_ends_early_is_an_error(monkeypatch, tmp_path):
+    _sidecar_flagship(
+        monkeypatch, tmp_path, "2.19", [{"type": "chunk", "content": "Hel"}]
+    )
+    with pytest.raises(RuntimeError, match="ended without an answer"):
+        greeting.write_greeting(_Db(), lambda _t: None)
+
+
+def test_leaving_the_chat_unblocks_a_quiet_sidecar(monkeypatch, tmp_path):
+    """A user's message must not wait out a greeting stuck on the model."""
+    proxy, _ = _sidecar_flagship(monkeypatch, tmp_path, "2.19", [])
+    closed = threading.Event()
+
+    class _Resp:
+        def close(self):
+            closed.set()
+
+    def quiet_stream(body, on_response=None):
+        on_response(_Resp())
+
+        def events():
+            yield {"type": "status", "phase": "model_queue"}
+            # Nothing more until the connection is closed under the read.
+            assert closed.wait(5), "the relay never closed the response"
+            raise ConnectionError("response closed")
+
+        return events()
+
+    proxy.greeting_stream = quiet_stream
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    started = time.monotonic()
+
+    assert greeting.write_greeting(_Db(), lambda _t: None, cancel=cancel) is None
+    assert time.monotonic() - started < 3
+
+
+def test_the_sidecars_timing_reaches_the_warm_up_status(monkeypatch, tmp_path):
+    _, warmer = _sidecar_flagship(
+        monkeypatch,
+        tmp_path,
+        "2.19",
+        [{"type": "done", "text": "Hi.", "seconds": 4.2, "prompt_tokens": 19812}],
+    )
+    greeting.write_greeting(_Db(), lambda _t: None)
+    assert warmer.snapshot()["prompt_tokens"] == 19812
+
+
+@pytest.mark.parametrize("version", ["2.18", None])
+def test_a_sidecar_too_old_to_greet_says_how_to_update(monkeypatch, tmp_path, version):
+    proxy, _ = _sidecar_flagship(monkeypatch, tmp_path, version, [])
+    with pytest.raises(greeting.GreetingUnavailable, match="needs contract 2.19"):
+        greeting.write_greeting(_Db(), lambda _t: None)
+    assert proxy.bodies == []
 
 
 def test_no_greeting_before_the_server_has_started(monkeypatch):
@@ -439,3 +546,18 @@ def test_the_greeting_is_never_logged(monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG):
         _client(monkeypatch, write).post("/api/system/greeting")
     assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [("2.19", True), ("3.0", True), ("2.18", False), (None, False)],
+)
+def test_the_flagship_greets_from_contract_2_19(version, expected):
+    from gaia.ui.email_sidecar.profiles import (
+        EMAIL_PROFILE,
+        GAIA_PROFILE,
+        greeting_supported,
+    )
+
+    assert greeting_supported(GAIA_PROFILE, version) is expected
+    assert greeting_supported(EMAIL_PROFILE, "9.9") is False

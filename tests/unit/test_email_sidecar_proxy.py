@@ -809,3 +809,41 @@ def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
         park.set()
         server.shutdown()
         server_thread.join(timeout=5.0)
+
+
+# -- greeting_stream (flagship, contract 2.19) -----------------------------------
+
+
+def test_greeting_stream_posts_to_the_greeting_route_and_parses_events():
+    from gaia.ui.email_sidecar.proxy import SidecarProxy
+
+    resp = _SSERespLines(
+        [
+            b'data: {"type": "chunk", "content": "Hi."}',
+            b"",
+            b'data: {"type": "done", "text": "Hi."}',
+        ]
+    )
+    sess = _StreamSession(resp)
+    proxy = SidecarProxy("http://127.0.0.1:8141", agent_id="gaia", session=sess)
+    events = list(proxy.greeting_stream({"memory": "on"}))
+    url, kwargs = sess.posts[0]
+    assert url == "http://127.0.0.1:8141/v1/gaia/greeting"
+    assert kwargs["json"] == {"memory": "on"}
+    assert kwargs["stream"] is True
+    assert events == [
+        {"type": "chunk", "content": "Hi."},
+        {"type": "done", "text": "Hi."},
+    ]
+    assert resp.closed
+
+
+def test_greeting_stream_names_its_route_in_a_malformed_event_error():
+    from gaia.ui.email_sidecar.proxy import SidecarProxy
+
+    resp = _SSERespLines([b"data: not json"])
+    proxy = SidecarProxy(
+        "http://127.0.0.1:8141", agent_id="gaia", session=_StreamSession(resp)
+    )
+    with pytest.raises(SidecarError, match="/v1/gaia/greeting sent a malformed"):
+        list(proxy.greeting_stream({}))

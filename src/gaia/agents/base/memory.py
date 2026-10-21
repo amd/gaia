@@ -3345,10 +3345,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._upkeep_before_first_turn(progress)
         return super().warm_up(progress)
 
-    def greet(self, instruction, on_text, progress=None, cancel=None):
+    def greet(self, on_text, instruction=None, progress=None, cancel=None):
         """Run the memory upkeep first, so the greeting sees last session's summary."""
         self._upkeep_before_first_turn(progress)
-        return super().greet(instruction, on_text, progress=progress, cancel=cancel)
+        return super().greet(
+            on_text, instruction=instruction, progress=progress, cancel=cancel
+        )
 
     def _upkeep_before_first_turn(self, progress) -> None:
         incognito = getattr(self, "_incognito", False)

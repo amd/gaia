@@ -985,7 +985,8 @@ async def stream_greeting(request: Request, db: ChatDatabase = Depends(get_db)):
     """Stream the flagship's greeting for a new chat as SSE.
 
     Events: ``status`` (``phase``: starting, waiting for a running chat turn,
-    building, loading or priming, with the ``model`` and ``device`` once known)
+    building, model_queue (a relayed flagship waiting for the model), loading
+    or priming, with the ``model`` and ``device`` once known)
     until the text starts, then ``chunk`` (``content``), then one ``done``
     (``text``) or ``error`` (``message``). Closing the connection stops the
     greeting at its next step.
