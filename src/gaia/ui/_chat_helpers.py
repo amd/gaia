@@ -2340,27 +2340,37 @@ _EMPTY_ANSWER_LEMONADE_MSG = (
 )
 
 
+_NO_ANSWER_AFTER_TOOLS_MSG = (
+    "GAIA ran its tools but didn't write an answer. Send your message again, "
+    "or try another model."
+)
+
+
 def _empty_answer_outcome(
-    turn_cancelled: bool, has_steps: bool
+    turn_cancelled: bool, has_steps: bool, has_card: bool
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
 
-    Returns ``(content, sse_type, keep_steps)``:
+    Returns ``(content, sse_type, keep_steps)``; ``sse_type`` is ``done``,
+    ``failed`` (a ``done`` event marked failed) or ``error``:
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * no answer but steps/cards were produced → ``("", "done", True)`` — a
-        legitimately-empty final (e.g. the whole final turn was an echoed
-        render card the echo-guard stripped to empty); persist empty content
-        but keep the steps/cards so nothing is lost on rehydration.
+      * a render card was shown → ``("", "done", True)`` — the card is the
+        answer (e.g. an echoed card the echo-guard stripped to empty); keep
+        the steps so the card survives a reload.
+      * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
+        ran tools and ended without answering; say so and keep the steps.
       * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
         no cancel, no steps: the only case that warrants the Lemonade copy.
     """
     if turn_cancelled:
         return _CANCELLED_REPLY, "done", True
-    if has_steps:
+    if has_card:
         return "", "done", True
+    if has_steps:
+        return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
     return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
 
 
@@ -4317,12 +4327,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            # Distinguish a deliberate cancel and a legitimately-empty final
-            # (e.g. a card-echo the echo-guard stripped) from a genuine backend
-            # failure — only the last warrants the Lemonade copy, and the first
-            # two must keep the steps/cards taken before the empty answer.
             content, sse_type, keep_steps = _empty_answer_outcome(
-                turn_cancelled, bool(captured_steps)
+                turn_cancelled,
+                bool(captured_steps),
+                any(step.get("render") for step in captured_steps),
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
@@ -4331,6 +4339,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db.add_message(request.session_id, "assistant", content, ends_turn=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                failed = sse_type == "failed"
+                if failed:
+                    yield _sse({"type": "answer", "content": content})
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
@@ -4344,7 +4355,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     ends_turn=True,
                 )
                 done_event = _done_event(
-                    msg_id, content, turn_cancelled, turn_summary=turn_summary
+                    msg_id,
+                    content,
+                    turn_cancelled,
+                    turn_summary=turn_summary,
+                    failed=failed,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)
