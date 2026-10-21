@@ -661,6 +661,43 @@ def _expect(report: Report, ok: bool, what: str, why: str) -> None:
         report.errors.append(f"{what}: {why}")
 
 
+# What a malformed or truncated archive raises while it is read.
+_UNREADABLE = (
+    VerifyError,
+    OSError,
+    EOFError,
+    KeyError,
+    ValueError,
+    zipfile.BadZipFile,
+    tarfile.TarError,
+    lzma.LZMAError,
+)
+
+
+class _Reading:
+    """Record an unreadable artifact as a failed check and carry on with the rest."""
+
+    def __init__(self, report: Report, what: str):
+        self.report, self.what = report, what
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc is not None and isinstance(exc, _UNREADABLE):
+            self.report.errors.append(f"{self.what}: could not read it ({exc})")
+            return True
+        return False
+
+
+def member(path: Path, name: str) -> bytes:
+    """One file from an archive, or a VerifyError that names what is missing."""
+    files = archive_files(path)
+    if name not in files:
+        raise VerifyError(f"{path.name} has no {name}")
+    return files[name]
+
+
 def check_versions(
     report: Report,
     by_name: dict[tuple[str, str], Artifact],
@@ -672,36 +709,35 @@ def check_versions(
     for f in (rc, final):
         whl = by_name.get((f.name, f"amd_gaia-{f.pep440}-py3-none-any.whl"))
         if whl:
-            with zipfile.ZipFile(whl.path) as zf:
-                meta = next(
-                    n for n in zf.namelist() if n.endswith(".dist-info/METADATA")
+            with _Reading(report, whl.name):
+                meta = f"amd_gaia-{f.pep440}.dist-info/METADATA"
+                text = member(whl.path, meta).decode()
+                _expect(
+                    report,
+                    f"\nVersion: {f.pep440}\n" in text,
+                    f"{whl.name} METADATA says {f.pep440}",
+                    "it does not",
                 )
-                text = zf.read(meta).decode()
-            _expect(
-                report,
-                f"\nVersion: {f.pep440}\n" in text,
-                f"{whl.name} METADATA says {f.pep440}",
-                "it does not",
-            )
         sdist = by_name.get((f.name, f"amd_gaia-{f.pep440}.tar.gz"))
         if sdist:
-            files = archive_files(sdist.path)
-            pkg_info = files.get(f"amd_gaia-{f.pep440}/PKG-INFO", b"").decode()
-            _expect(
-                report,
-                f"\nVersion: {f.pep440}\n" in pkg_info,
-                f"{sdist.name} PKG-INFO says {f.pep440}",
-                "it does not",
-            )
+            with _Reading(report, sdist.name):
+                pkg_info = member(sdist.path, f"amd_gaia-{f.pep440}/PKG-INFO").decode()
+                _expect(
+                    report,
+                    f"\nVersion: {f.pep440}\n" in pkg_info,
+                    f"{sdist.name} PKG-INFO says {f.pep440}",
+                    "it does not",
+                )
         tgz = by_name.get((f.name, f"amd-gaia-agent-ui-{f.npm}.tgz"))
         if tgz:
-            pkg = json.loads(archive_files(tgz.path)["package/package.json"])
-            _expect(
-                report,
-                pkg.get("version") == f.npm,
-                f"{tgz.name} package.json says {f.npm}",
-                f"it says {pkg.get('version')}",
-            )
+            with _Reading(report, tgz.name):
+                pkg = json.loads(member(tgz.path, "package/package.json"))
+                _expect(
+                    report,
+                    pkg.get("version") == f.npm,
+                    f"{tgz.name} package.json says {f.npm}",
+                    f"it says {pkg.get('version')}",
+                )
         for feed in ("latest.yml", "latest-mac.yml", "latest-linux.yml"):
             a = by_name.get((f.name, feed))
             if a:
@@ -731,13 +767,14 @@ def check_versions(
                 )
     npm = by_name.get(("final", f"amd-gaia-gaia-{agent_ver}.tgz"))
     if npm:
-        pkg = json.loads(archive_files(npm.path)["package/package.json"])
-        _expect(
-            report,
-            pkg.get("version") == agent_ver,
-            f"{npm.name} package.json says {agent_ver}",
-            f"it says {pkg.get('version')}",
-        )
+        with _Reading(report, npm.name):
+            pkg = json.loads(member(npm.path, "package/package.json"))
+            _expect(
+                report,
+                pkg.get("version") == agent_ver,
+                f"{npm.name} package.json says {agent_ver}",
+                f"it says {pkg.get('version')}",
+            )
 
 
 def check_lock(
@@ -777,13 +814,14 @@ def check_lock(
                 ),
             )
     if flagship_tgz and flagship_tgz.is_file():
-        shipped = json.loads(archive_files(flagship_tgz)["package/binaries.lock.json"])
-        _expect(
-            report,
-            shipped == lock,
-            f"{flagship_tgz.name} ships the generated lock",
-            "its binaries.lock.json differs",
-        )
+        with _Reading(report, flagship_tgz.name):
+            shipped = json.loads(member(flagship_tgz, "package/binaries.lock.json"))
+            _expect(
+                report,
+                shipped == lock,
+                f"{flagship_tgz.name} ships the generated lock",
+                "its binaries.lock.json differs",
+            )
 
 
 def verify(
@@ -840,14 +878,15 @@ def verify(
 
     lock_path = flagship_dir / "binaries.lock.json"
     if lock_path.is_file():
-        check_lock(
-            report,
-            json.loads(lock_path.read_text(encoding="utf-8")),
-            by_name,
-            final,
-            agent_ver,
-            flagship_dir / f"amd-gaia-gaia-{agent_ver}.tgz",
-        )
+        with _Reading(report, lock_path.name):
+            check_lock(
+                report,
+                json.loads(lock_path.read_text(encoding="utf-8")),
+                by_name,
+                final,
+                agent_ver,
+                flagship_dir / f"amd-gaia-gaia-{agent_ver}.tgz",
+            )
     else:
         report.errors.append(f"no generated lock at {lock_path}")
 
@@ -862,14 +901,15 @@ def verify(
         )
         if a is None or b is None:
             continue
-        problems = twin_diff(a.path, b.path, rc, final)
-        _expect(
-            report,
-            not problems,
-            f"twin-diff {a.name} == {b.name}",
-            "; ".join(problems[:10])
-            + (f" (+{len(problems) - 10} more)" if len(problems) > 10 else ""),
-        )
+        with _Reading(report, f"twin-diff {a.name} == {b.name}"):
+            problems = twin_diff(a.path, b.path, rc, final)
+            _expect(
+                report,
+                not problems,
+                f"twin-diff {a.name} == {b.name}",
+                "; ".join(problems[:10])
+                + (f" (+{len(problems) - 10} more)" if len(problems) > 10 else ""),
+            )
 
     write_outputs(report, out, rc, final, sha, agent_ver)
     return report

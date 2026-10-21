@@ -390,6 +390,26 @@ def test_a_final_terminal_binary_with_the_rc_version_fails(tmp_path, flavors):
     assert any("lock tui/win32-arm64" in e for e in report.errors)
 
 
+def test_a_malformed_archive_is_reported_not_raised(tmp_path, flavors):
+    """A wheel with no METADATA and a truncated tarball each fail one check."""
+    art, flagship = build_art(tmp_path, flavors)
+    rc, final = flavors
+    whl = art / "rc-core-dist" / f"amd_gaia-{rc.pep440}-py3-none-any.whl"
+    with zipfile.ZipFile(whl, "w") as zf:
+        zf.writestr("gaia/version.py", "")
+    tgz = art / "final-core-dist" / f"amd-gaia-agent-ui-{final.npm}.tgz"
+    tgz.write_bytes(tgz.read_bytes()[:40])
+    report = run_verify(tmp_path, art, flagship)
+    assert any(
+        e.startswith(whl.name) and "has no" in e and "METADATA" in e
+        for e in report.errors
+    )
+    assert any(e.startswith(tgz.name) for e in report.errors)
+    # Everything else was still checked, and the manifest was still written.
+    assert any("latest.yml offers" in c for c in report.checks)
+    assert (tmp_path / "out" / "release-manifest.json").is_file()
+
+
 def test_a_missing_required_artifact_fails(tmp_path, flavors):
     art, flagship = build_art(tmp_path, flavors)
     (art / "rc-windows-setup" / artifacts_for("win-x64", flavors[0].npm)[0][0]).unlink()
