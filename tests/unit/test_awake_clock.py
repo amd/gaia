@@ -215,6 +215,19 @@ def test_a_standby_that_ends_at_shutdown_is_still_left_out():
     assert ledger.read() == pytest.approx(1010.0)
 
 
+def test_abandoning_a_ledger_counts_the_gap_unjudged_and_silently(caplog):
+    """A stuck monitor's gap is not a standby, and logging may be what's stuck."""
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.frozen(3600.0)
+    with caplog.at_level(logging.DEBUG, logger=LEDGER_LOG):
+        ledger.abandon()
+    assert ledger.read() == pytest.approx(4600.0)
+    assert ledger.excluded == 0.0
+    assert caplog.records == []
+
+
 def test_a_monitor_beating_after_shutdown_leaves_nothing_out():
     """A stop that timed out must not move the clock back later."""
     pc = _Machine()
@@ -694,3 +707,93 @@ def test_a_monitor_that_gets_no_display_notices_says_so(
         time.sleep(1.5)
     assert caplog.text.count("No Windows display power notification") == 1
     assert "Modern Standby will count toward time limits" in caplog.text
+
+
+def _silent_subscription(monkeypatch):
+    """A subscription Windows accepts but never notifies on."""
+    user32 = awake_clock._user32
+    monkeypatch.setattr(awake_clock, "FIRST_NOTICE_WAIT", 0.3)
+    monkeypatch.setattr(user32, "RegisterPowerSettingNotification", lambda *_a: 1)
+    monkeypatch.setattr(user32, "UnregisterPowerSettingNotification", lambda _h: 1)
+
+
+@windows_only
+def test_a_failed_session_lookup_never_takes_the_monitor_down(
+    fresh_clock, monkeypatch, caplog
+):
+    _silent_subscription(monkeypatch)
+
+    def no_session():
+        raise OSError(5, "Access is denied")
+
+    monkeypatch.setattr(awake_clock, "_session_ids", no_session)
+    with caplog.at_level(logging.WARNING, logger=LEDGER_LOG):
+        awake_clock.monotonic()
+        deadline = time.perf_counter() + 5
+        while "No Windows display power notification" not in caplog.text:
+            assert time.perf_counter() < deadline, caplog.text
+            time.sleep(0.05)
+    assert "Could not read this process's session id" in caplog.text
+    assert "Could not tell which session" in caplog.text
+    assert awake_clock._monitor.problem() is None
+
+
+@windows_only
+def test_a_dead_tick_thread_gets_the_monitor_replaced(fresh_clock, caplog):
+    """Without the tick thread a stuck monitor would freeze limits silently."""
+    awake_clock.monotonic()
+    old = awake_clock._monitor
+    old._tick_stop.set()
+    old._ticker.join(5)
+    with caplog.at_level(logging.ERROR, logger=LEDGER_LOG):
+        awake_clock.monotonic()
+    assert awake_clock._monitor is not old
+    assert "tick thread exited" in caplog.text
+
+
+@windows_only
+def test_shutdown_never_leaves_the_clock_held(fresh_clock):
+    """No more beats after shutdown, so a display-off hold would never end."""
+    awake_clock.monotonic()
+    awake_clock._ledger.gap = 0.3
+    _display_message(awake_clock._monitor.hwnd, 0)
+    awake_clock.shutdown()
+    before = awake_clock.monotonic()
+    time.sleep(1.0)
+    assert awake_clock.monotonic() - before >= 0.9
+
+
+@windows_only
+def test_stop_waits_for_a_tick_in_progress(fresh_clock, monkeypatch):
+    awake_clock.monotonic()
+    monitor = awake_clock._monitor
+    ticking = threading.Event()
+
+    def slow_tick():
+        ticking.set()
+        time.sleep(0.8)
+
+    monkeypatch.setattr(monitor.ledger, "tick", slow_tick)
+    assert ticking.wait(5)
+    monitor.stop()
+    assert not monitor._ticker.is_alive()
+
+
+@windows_only
+def test_monitors_that_never_stop_are_capped(fresh_clock, monkeypatch, caplog):
+    """Each wedged monitor keeps a thread; the healthy reset can't free them."""
+    awake_clock.monotonic()
+    monitor_type = type(awake_clock._monitor)
+    monkeypatch.setattr(monitor_type, "stop", lambda self, timeout=5.0: None)
+    monkeypatch.setattr(monitor_type, "problem", lambda self: "is stuck (test)")
+    with caplog.at_level(logging.ERROR, logger=LEDGER_LOG):
+        for _ in range(awake_clock.MAX_WEDGED):
+            awake_clock.monotonic()
+            awake_clock._restarts = 0  # as a healthy replacement would reset it
+        with pytest.raises(
+            awake_clock.AwakeClockError, match="3 earlier monitors are still stuck"
+        ):
+            awake_clock.monotonic()
+        with pytest.raises(awake_clock.AwakeClockError, match="Restart GAIA"):
+            awake_clock.monotonic()
+    assert "3 replaced monitors never stopped" in caplog.text

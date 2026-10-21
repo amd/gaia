@@ -19,8 +19,9 @@ about to carry on. :func:`monotonic` stops while the PC sleeps:
   size, at WARNING. A freeze with the display on is a pause, and a busy process
   starved of its turn is not frozen; both count, and are logged. A process
   stalled for over ``STANDBY_GAP`` seconds while using little CPU with the
-  display off (heavy paging, a debugger) can't be told from standby this way,
-  and is excluded too, which is why each exclusion is a warning. A process
+  display off (heavy paging, a debugger, a native call that blocks while
+  holding the GIL) can't be told from standby this way, and is excluded too,
+  which is why each exclusion is a warning. A process
   that gets no display notifications (no console session: a service, a
   remote logon) can't see standby at all; the monitor says so once at startup.
 * A monitor that dies, fails or stops beating is replaced on the next read,
@@ -56,6 +57,8 @@ TICK_BREAK = 3 * HEARTBEAT
 MAX_RESTARTS = 3
 # A replacement this long without trouble wipes the slate for the next one.
 HEALTHY_RESET = 600.0
+# Replaced monitors whose threads never stopped; past this many, give up.
+MAX_WEDGED = 2
 # Windows sends the current display state on subscribing; this long is too long.
 FIRST_NOTICE_WAIT = 2.0
 
@@ -433,6 +436,10 @@ if sys.platform == "win32":
                 )
             return None
 
+        def alive(self) -> bool:
+            """Whether either of its threads is still running."""
+            return self._thread.is_alive() or self._ticker.is_alive()
+
         def stop(self, timeout: float = 5.0) -> None:
             if self._stop_event is None:
                 return
@@ -568,8 +575,15 @@ if sys.platform == "win32":
             if _unbiased() - self._subscribed_at < FIRST_NOTICE_WAIT:
                 return
             self._quiet_reported = True
-            session, console = _session_ids()
-            if session != console:
+            try:
+                session, console = _session_ids()
+            except OSError as exc:
+                # A warning must never take the monitor down with it.
+                log.error("Could not read this process's session id: %s", exc)
+                session = console = None
+            if session is None:
+                where = "Could not tell which session this process runs in."
+            elif session != console:
                 where = (
                     f"This process runs in session {session}, not the "
                     f"interactive console session ({console}): a service or a "
@@ -599,15 +613,23 @@ if sys.platform == "win32":
     _monitor: Optional[_StandbyMonitor] = None
     _restarts = 0
     _last_problem: Optional[str] = None
+    _why_gave_up: Optional[str] = None
+    _wedged: list = []
     _shut_down = False
 
     def _gave_up() -> AwakeClockError:
+        why = _why_gave_up or f"{MAX_RESTARTS} restarts did not fix it"
         return AwakeClockError(
             "GAIA's time-limit clock stopped working: the Windows standby "
-            f"monitor {_last_problem}, and {MAX_RESTARTS} restarts did not fix "
-            "it. Restart GAIA. If it happens again, run `gaia diagnostics` and "
-            "attach the bundle to an issue at https://github.com/amd/gaia/issues"
+            f"monitor {_last_problem}, and {why}. Restart GAIA. If it happens "
+            "again, run `gaia diagnostics` and attach the bundle to an issue at "
+            "https://github.com/amd/gaia/issues"
         )
+
+    def _still_wedged() -> int:
+        """Replaced monitors with a thread still running, pruned of the rest."""
+        _wedged[:] = [m for m in _wedged if m.alive()]
+        return len(_wedged)
 
     def _failure(what: str, detail: object) -> None:
         """Count one failure of the monitor, and say so loudly."""
@@ -642,7 +664,7 @@ if sys.platform == "win32":
         return ledger
 
     def _ensure_monitor() -> SleepLedger:
-        global _monitor, _restarts, _last_problem
+        global _monitor, _restarts, _last_problem, _why_gave_up
         with _state_lock:
             if _monitor is None or _ledger is None:
                 return _start_monitor()
@@ -672,7 +694,19 @@ if sys.platform == "win32":
             # so a failed replacement is retried on the next read.
             _ledger.abandon()
             _monitor.stop(timeout=0.5)
+            if _monitor.alive():
+                _wedged.append(_monitor)
             _monitor = None
+            wedged = _still_wedged()
+            if wedged > MAX_WEDGED:
+                # Each keeps a thread and a window; no healthy reset frees them.
+                _why_gave_up = f"{wedged} earlier monitors are still stuck"
+                _restarts = MAX_RESTARTS + 1
+                log.error(
+                    "Giving up on the awake-clock standby monitor: %d replaced "
+                    "monitors never stopped.",
+                    wedged,
+                )
             if _restarts > MAX_RESTARTS:
                 raise _gave_up()
             ledger = _start_monitor()
@@ -706,14 +740,18 @@ if sys.platform == "win32":
 
     def _reset_for_tests() -> None:
         """Stop the monitor and forget it, so the next read starts a new one."""
-        global _ledger, _monitor, _restarts, _last_problem, _shut_down
+        global _ledger, _monitor, _restarts, _last_problem, _why_gave_up
+        global _shut_down
         with _state_lock:
             if _ledger is not None:
                 _ledger.detach()
             if _monitor is not None:
                 _monitor.stop()
+            for monitor in _wedged:
+                monitor.stop()
+            _wedged.clear()
             _ledger, _monitor, _shut_down = None, None, False
-            _restarts, _last_problem = 0, None
+            _restarts, _last_problem, _why_gave_up = 0, None, None
 
     atexit.register(shutdown)
 
