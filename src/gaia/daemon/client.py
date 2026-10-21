@@ -384,7 +384,7 @@ def _spawn_and_wait(
     drop_env: tuple = (),
 ) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
-    paths.ensure_host_dir()
+    host = paths.ensure_host_dir()
     # The daemon's stdout can't be rotated while it runs, so cap it per start.
     try:
         rotate_if_oversized(paths.log_path())
@@ -409,6 +409,9 @@ def _spawn_and_wait(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             env=_daemon_env(drop_env),
+            # Not the launcher's cwd: the daemon outlives it, and on Windows a
+            # process's cwd cannot be deleted or renamed while it runs.
+            cwd=str(host),
             **spawn_kwargs,
         )
     except OSError as e:
