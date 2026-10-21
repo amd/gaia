@@ -22,10 +22,11 @@
 // download" and "no Intel build" together there), and a machine it cannot
 // place at all keeps the full list rather than guessing.
 //
-// Windows is the one exception to "pick a card": from WINDOWS_SETUP_SINCE the
-// Windows setup asks for the desktop app, the terminal, or both while it runs,
-// so a Windows visitor gets that one setup instead of two cards to choose
-// between. Until a release publishes it, Windows renders as before.
+// Windows x64 is the one exception to "pick a card": its setup asks for the
+// desktop app, the terminal, or both while it runs, so that setup is the only
+// Windows x64 download the page offers (SETUP_ONLY_PLATFORMS). A release that
+// does not carry it gets no Windows x64 button, never the desktop app's own
+// setup or the raw binary in its place.
 //
 // Every link is an asset of the newest stable GitHub release, so GitHub's
 // per-asset download_count counts the site's downloads. No link is invented: a
@@ -44,6 +45,7 @@ import {
   INSTALLER_CTA_LABELS,
   PLATFORM_LABELS,
   PLATFORM_ORDER,
+  SETUP_ONLY_PLATFORMS,
   artifactFileName,
   desktopArtifactFileName,
   windowsSetupOffersChoice,
@@ -68,7 +70,11 @@ const { version } = release;
 const byName = new Map(release.assets.map((a) => [a.name, a]));
 const published = (name: string | null) => (name ? byName.get(name) : undefined);
 
-const desktopRows = DESKTOP_PLATFORMS.flatMap((platform) => {
+const perSurface = (p: PlatformKey) => !SETUP_ONLY_PLATFORMS.includes(p);
+const desktopPlatforms = DESKTOP_PLATFORMS.filter(perSurface);
+const tuiPlatforms = PLATFORM_ORDER.filter(perSurface);
+
+const desktopRows = desktopPlatforms.flatMap((platform) => {
   const artifact = published(desktopArtifactFileName(platform, version));
   return artifact ? [{ platform, artifact }] : [];
 });
@@ -88,7 +94,7 @@ const tuiRow = (platform: PlatformKey): TuiRow => ({
   }),
 });
 
-const tuiRows = PLATFORM_ORDER.map(tuiRow).filter((r) => r.binary || r.installers.length);
+const tuiRows = tuiPlatforms.map(tuiRow).filter((r) => r.binary || r.installers.length);
 
 // A single platform missing is a coverage decision the page renders around. A
 // whole card with nothing to offer is not: the asset names drifted (or this is
@@ -97,7 +103,7 @@ const tuiRows = PLATFORM_ORDER.map(tuiRow).filter((r) => r.binary || r.installer
 if (!desktopRows.length) {
   throw new Error(
     `[downloads] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
-      `desktop app build (${DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, version)).join(', ')}). ` +
+      `desktop app build (${desktopPlatforms.map((p) => desktopArtifactFileName(p, version)).join(', ')}). ` +
       `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
       `update DESKTOP_FILENAMES in src/scripts/download-target.ts.`,
   );
@@ -105,30 +111,19 @@ if (!desktopRows.length) {
 if (!tuiRows.length) {
   throw new Error(
     `[downloads] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
-      `terminal build (${PLATFORM_ORDER.map((p) => artifactFileName(p, version)).join(', ')}). ` +
+      `terminal build (${tuiPlatforms.map((p) => artifactFileName(p, version)).join(', ')}). ` +
       `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
       `update BINARY_FILENAMES in src/scripts/download-target.ts.`,
   );
 }
 
-// The setup that asks desktop app / terminal / both. Present only when the
-// published win-x64-setup is new enough to be that setup rather than the
-// terminal-only one earlier releases used the same filename for.
+// The setup that asks desktop app / terminal / both: the only Windows x64
+// download. Present only when the published win-x64-setup is new enough to be
+// that setup rather than the terminal-only one earlier releases used the same
+// filename for.
 const windowsSetup = windowsSetupOffersChoice(version)
-  ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
+  ? published(artifactFileName('win-x64-setup', version))
   : undefined;
-
-// With it, the per-surface Windows buttons are not rendered -- the setup is where
-// that choice is made -- and the terminal's Windows row in the full list keeps
-// only its raw binary, since the setup has a line of its own there.
-const isWindowsX64 = (p: PlatformKey) => p === 'win-x64';
-const desktopCtaRows = windowsSetup ? desktopRows.filter((r) => !isWindowsX64(r.platform)) : desktopRows;
-const tuiCtaRows = windowsSetup ? tuiRows.filter((r) => !isWindowsX64(r.platform)) : tuiRows;
-const tuiListRows = windowsSetup
-  ? tuiRows.map((r) => (isWindowsX64(r.platform) ? { ...r, installers: [] } : r))
-  : tuiRows;
-const desktopListLabel = (p: PlatformKey) =>
-  windowsSetup && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
 
 // Until a release publishes installers none of these exist — a valid state, and
 // the terminal card is the binary offer it was before. Naming the architectures
@@ -188,6 +183,20 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     </div>
   )}
 
+  {/* No setup on this release: say so, rather than offer the desktop app's own
+      setup or the raw binary in its place. The cards hide as above — neither
+      holds a Windows x64 download. */}
+  {!windowsSetup && (
+    <div class="mx-auto w-full max-w-[720px] space-y-3 text-left">
+      <div data-dl-cta data-surface="setup" data-kind="setup-missing" data-platform="win-x64" hidden>
+        <p class="g-body text-[13.5px]">
+          The Windows installer is not published for v{version}. Every other platform is
+          listed below.
+        </p>
+      </div>
+    </div>
+  )}
+
   {/* A plain wrapper carries `hidden`: the grid's own display class would
       override the attribute. */}
   <div data-dl-cards>
@@ -210,7 +219,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
           revealed at once (the Apple Silicon download and the "no Intel
           build" line) with nothing between them otherwise. */}
       <div class="mt-5 space-y-3">
-        {desktopCtaRows.map((row) => (
+        {desktopRows.map((row) => (
           <div data-dl-cta data-surface="desktop" data-kind="build" data-platform={row.platform} hidden>
             <a href={row.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
               <Fragment set:html={DOWNLOAD_ICON} />
@@ -254,7 +263,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             Silicon and Intel blocks together. The captions stay outside so
             they keep their tighter gap to the block they describe. */}
         <div class="space-y-3">
-          {tuiCtaRows.map((row) => (
+          {tuiRows.map((row) => (
             <div
               data-dl-cta
               data-surface="tui"
@@ -347,7 +356,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
               >
                 <span class="text-g-accent-text" aria-hidden="true">↓</span>
                 <span>
-                  {PLATFORM_LABELS[row.platform]} — {desktopListLabel(row.platform)} ·{' '}
+                  {PLATFORM_LABELS[row.platform]} — {DESKTOP_DOWNLOAD_LABELS[row.platform]} ·{' '}
                   {formatBytes(row.artifact.sizeBytes)}
                 </span>
               </a>
@@ -362,7 +371,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       <div>
         <div class="text-[13.5px] font-semibold text-g-text">Terminal · v{version}</div>
         <ul class="mt-1.5 space-y-1">
-          {tuiListRows.map((row) => (
+          {tuiRows.map((row) => (
             <li>
               <div class="text-[13.5px] text-g-muted">
                 {PLATFORM_LABELS[row.platform]}
@@ -429,7 +438,8 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     });
 
     // Every platform stays one disclosure away, including this machine's other
-    // options — so someone who came for the standalone binary still finds it.
+    // options — so someone who came for a standalone binary still finds it
+    // (Windows x64 excepted: its only download is the setup).
     const list = root.querySelector<HTMLElement>('[data-dl-list]');
     const listLabel = root.querySelector('[data-dl-list-label]');
     if (!list || !listLabel) return;

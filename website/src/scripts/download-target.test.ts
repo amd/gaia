@@ -12,6 +12,7 @@ import {
   INSTALLER_CTA_LABELS,
   PLATFORM_LABELS,
   PLATFORM_ORDER,
+  SETUP_ONLY_PLATFORMS,
   artifactFileName,
   desktopArtifactFileName,
   detectOs,
@@ -217,6 +218,20 @@ describe('artifactFileName', () => {
     expect(byFilename.size).toBe(keys.length);
     expect(byFilename.get('gaia-0.23.0-win-x64-setup.exe')).toBe('win-x64-setup');
     expect(byFilename.get('gaia-windows-amd64.exe')).toBe('win-x64');
+  });
+});
+
+// Windows x64 is offered its one setup and nothing else; macOS and Linux have no
+// combined installer, so they keep a download per surface.
+describe('SETUP_ONLY_PLATFORMS', () => {
+  it('is Windows x64 alone', () => {
+    expect(SETUP_ONLY_PLATFORMS).toEqual(['win-x64']);
+  });
+
+  it('names only platforms that have a setup to offer', () => {
+    for (const p of SETUP_ONLY_PLATFORMS) {
+      expect(INSTALLERS_FOR[p]).toContain(`${p}-setup`);
+    }
   });
 });
 

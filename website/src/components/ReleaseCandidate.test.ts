@@ -15,8 +15,8 @@ const CANDIDATE: Candidate = {
   htmlUrl: 'https://github.com/amd/gaia/releases/tag/v0.25.0-rc1',
   downloads: [
     {
-      label: 'Windows — desktop app (.exe)',
-      url: 'https://github.com/amd/gaia/releases/download/v0.25.0-rc1/gaia-agent-ui-0.25.0-rc.1-x64-setup.exe',
+      label: 'Windows — desktop app, terminal, or both (.exe)',
+      url: 'https://github.com/amd/gaia/releases/download/v0.25.0-rc1/gaia-0.25.0-rc.1-win-x64-setup.exe',
       sizeBytes: 120 * 1024 * 1024,
     },
   ],

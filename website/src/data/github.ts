@@ -116,12 +116,12 @@ export interface ReleaseCandidate {
 }
 
 // The installers publish.yml attaches to a release candidate, in the order the
-// list shows them: the one Windows setup first, as on the stable downloads.
-// Everything else (terminal binaries, the wheel) is one click away on the
-// release page.
+// list shows them. Windows gets the one setup only, as on the stable downloads
+// (SETUP_ONLY_PLATFORMS): the desktop app's own setup stays on the release for
+// its auto-updater. Everything else (terminal binaries, the wheel) is one click
+// away on the release page.
 const RC_DOWNLOADS: { label: string; match: RegExp }[] = [
   { label: 'Windows — desktop app, terminal, or both (.exe)', match: /^gaia-\d[^/]*-win-x64-setup\.exe$/ },
-  { label: 'Windows — desktop app only (.exe)', match: /^gaia-agent-ui-.+-x64-setup\.exe$/ },
   { label: 'macOS, Apple Silicon — desktop app (.dmg)', match: /^gaia-agent-ui-.+-arm64\.dmg$/ },
   { label: 'Linux — desktop app (.AppImage)', match: /^gaia-agent-ui-.+-x86_64\.AppImage$/ },
   { label: 'Debian / Ubuntu — desktop app (.deb)', match: /^gaia-agent-ui-.+-amd64\.deb$/ },

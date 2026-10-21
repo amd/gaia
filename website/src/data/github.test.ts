@@ -198,11 +198,10 @@ describe('pickReleaseCandidate', () => {
     expect(rc!.htmlUrl).toBe('https://github.com/amd/gaia/releases/tag/v0.25.0-rc1');
     // Installers in a fixed order; the blockmap, wheel and raw binary are left
     // to the release page.
-    // The one Windows setup leads even though it is listed after the desktop
-    // app's own setup on the release.
+    // Windows gets the one setup only: the desktop app's own setup is on the
+    // release, for its auto-updater, but is not offered.
     expect(rc!.downloads.map((d) => d.url.split('/').at(-1))).toEqual([
       'gaia-0.25.0-rc.1-win-x64-setup.exe',
-      'gaia-agent-ui-0.25.0-rc.1-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-arm64.dmg',
       'gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage',
       'gaia-agent-ui-0.25.0-rc.1-amd64.deb',
