@@ -58,6 +58,31 @@ def test_explicit_empty_scopes_takes_the_union_path(client, monkeypatch):
     assert captured["config"]["scopes"] != []
 
 
+def test_a_busy_connection_is_flagged_so_can_send_false_is_not_final(
+    client, monkeypatch
+):
+    """Mid-save in another GAIA process: scopes are unknown, so the entry says
+    busy and the TUI does not read ``can_send: false`` as "reconnect"."""
+    import gaia.connectors.api as capi
+
+    monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: ["google"])
+    monkeypatch.setattr(
+        capi,
+        "get_connection",
+        lambda p: (
+            {"scopes": [], "account_email": "me@g.com", "error": "busy"}
+            if p == "google"
+            else None
+        ),
+    )
+    monkeypatch.setattr(capi, "list_agent_grants", lambda p: {})
+
+    body = client.get("/v1/email/connectors").json()
+    by = {p["provider"]: p for p in body["providers"]}
+    assert by["google"]["busy"] is True
+    assert by["microsoft"]["busy"] is False
+
+
 def test_omitted_scopes_takes_the_same_union_path(client, monkeypatch):
     captured = {}
 

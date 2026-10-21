@@ -28,7 +28,7 @@ from gaia_agent_email.mailbox_state import (
 
 from gaia.agents.base.agent import default_max_steps
 from gaia.connectors.api import connected_mailbox_providers, get_connection
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectionBusyError, ConnectorsError
 from gaia.connectors.providers.microsoft import ACCOUNT_TYPES
 from gaia.llm.lemonade_client import configured_lemonade_url
 from gaia.logger import get_logger
@@ -745,20 +745,22 @@ class EmailAgentConfig:
 
             # A provider is calendar-scoped iff its stored connection includes one
             # of its calendar scopes. NOTE: get_connection() returns None once a
-            # provider's re-auth tripwire has cleared it, and a busy row with no
-            # scopes while another GAIA process is saving it, so a scoped provider
-            # can be transiently treated as unscoped here; the error below still
-            # names the scope to grant, and a retry sees the real scopes.
+            # provider's re-auth tripwire has cleared it, so a scoped provider can
+            # be transiently treated as unscoped; the error below still names the
+            # scope to grant. A busy row (another GAIA process mid-save) has no
+            # scopes yet, so it says busy instead of asking for a grant.
+            rows = {p: get_connection(p) or {} for p in connected}
             scoped = [
                 p
                 for p in connected
                 if p in _PROVIDER_CALENDAR_SCOPES
-                and _PROVIDER_CALENDAR_SCOPES[p].intersection(
-                    (get_connection(p) or {}).get("scopes", [])
-                )
+                and _PROVIDER_CALENDAR_SCOPES[p].intersection(rows[p].get("scopes", []))
             ]
 
             if not scoped:
+                busy = [p for p in connected if rows[p].get("error") == "busy"]
+                if busy:
+                    raise ConnectionBusyError(busy[0])
                 raise ConfigurationError(
                     "Connected providers have no calendar scope. "
                     "Grant calendar.events or calendar.readonly for Google, "

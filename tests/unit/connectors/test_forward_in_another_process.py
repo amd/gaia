@@ -303,6 +303,8 @@ def test_a_busy_connection_is_not_reported_as_disconnected(busy_mismatch):
 
     err = _busy_error()
 
+    # The TUI keys on this phrase (preflight/check.go connectionBeingSaved).
+    assert "being saved by another GAIA process" in str(err)
     tool_text = format_connector_error(err)
     assert tool_text.startswith("CONNECTION_BUSY:")
     assert "Retry" in tool_text and "click Connect" not in tool_text
@@ -651,8 +653,10 @@ def test_an_interrupted_forward_whose_undo_fails_still_raises_the_interrupt(
 
     monkeypatch.setattr(store, "restore_connection_slots", also_fails)
 
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(KeyboardInterrupt) as exc:
         _forward_with_failing_connection_write(monkeypatch, KeyboardInterrupt())
+
+    assert "keyring gone" in str(exc.value.__cause__), "the failed undo was not kept"
 
 
 def test_an_interrupted_forward_still_puts_back_the_old_connection(
