@@ -3,12 +3,6 @@
 """Validate ``eval/ci_lanes.json`` and print the eval_flagship.yml lane matrix.
 
     python util/eval_lane_matrix.py >> "$GITHUB_OUTPUT"
-    python util/eval_lane_matrix.py --categories "tool_selection memory" >> "$GITHUB_OUTPUT"
-
-``--categories`` runs a subset (eval_flagship_gemma_stx.yml): the whole map is
-still validated, every requested category must belong to a lane, and the
-subset is regrouped by the environment it needs into at most three lanes,
-``core``, ``memory`` and ``gaia``.
 
 Standard library only: the lanes job runs before any venv exists. Each lane's
 environment is derived from its categories rather than stored as a second
@@ -25,13 +19,23 @@ wrong one:
 
 Values are emitted as literal env strings, not booleans: a GitHub expression of
 the form ``flag and '0' or '1'`` reads '0' as falsy and falls through to '1'.
+
+``EVAL_ONE_CATEGORY_PER_LANE=1`` gives each selected category its own lane
+(eval_flagship_gemma_stx.yml, whose small pool runs lanes on separate machines).
+
+A dispatch can narrow the run with ``EVAL_SELECT_CATEGORIES`` and
+``EVAL_SELECT_SCENARIOS`` (comma-separated; blank = all). The matrix then holds
+only the lanes that run something, each lane only its selected categories, and
+``scenarios`` names the ids per category. An unknown or unrunnable id fails here,
+on a hosted runner, before any lane takes a lab machine. A tag run sets neither,
+so its matrix is exactly the full one.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -41,6 +45,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCREEN_READING = frozenset({"vision", "web_system"})
 
 GAIA_PREFIX = "gaia_"
+
+#: Tags a gaia_* lane passes to ``--exclude-tag`` in eval_flagship.yml's run
+#: step. A test keeps the two in step.
+GAIA_LANE_EXCLUDE_TAGS = ("live", "local_blocked_win_shim")
+
+#: The outcomes job (`gaia eval tasks`) is not a scenario category, but a
+#: targeted dispatch can still ask for it by this name.
+OUTCOMES = "outcomes"
 
 
 class LaneMapError(ValueError):
@@ -125,62 +137,193 @@ def build_matrix(doc: dict, on_disk: set[str], lanes_file: str) -> list[dict]:
     ]
 
 
-def subset_matrix(
-    doc: dict, on_disk: set[str], lanes_file: str, categories: list[str]
-) -> list[dict]:
-    """A matrix for *categories* only, grouped by the environment each needs.
-
-    ``memory`` gets its own lane rather than turning memory on for the plain
-    categories beside it, and the gaia_* categories share one lane because they
-    share fixtures. Order follows the request so the first lane is the one asked
-    for first.
-    """
-    build_matrix(doc, on_disk, lanes_file)
-    wanted = list(dict.fromkeys(c for c in categories if c))
-    if not wanted:
-        raise LaneMapError(
-            "No categories were requested, so nothing would run and the eval "
-            "would go green having measured nothing. Name at least one."
-        )
-    claimed = {c for lane in doc["lanes"] for c in lane["categories"]}
-    excluded = doc.get("excluded") or {}
-    unknown = [c for c in wanted if c not in claimed]
-    if unknown:
-        reasons = "; ".join(
-            f"{c}: {excluded[c]}" if c in excluded else f"{c}: not in any lane"
-            for c in unknown
-        )
-        raise LaneMapError(
-            f"Cannot run {unknown} ({reasons}). Pick categories from the lanes in "
-            f"{lanes_file}."
-        )
-    groups: dict[str, list[str]] = {}
-    for category in wanted:
-        if category == "memory":
-            name = "memory"
-        elif category.startswith(GAIA_PREFIX):
-            name = "gaia"
-        else:
-            name = "core"
-        groups.setdefault(name, []).append(category)
-    return [
-        {"lane": name, "categories": " ".join(cats), **lane_env(cats)}
-        for name, cats in groups.items()
-    ]
-
-
 def categories_on_disk(scenarios: Path) -> set[str]:
     return {p.name for p in scenarios.iterdir() if p.is_dir() and any(p.glob("*.yaml"))}
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--categories",
-        default=None,
-        help="Space-separated subset to run instead of every lane",
-    )
-    args = parser.parse_args(argv or [])
+def _top_level(text: str, key: str) -> str | None:
+    match = re.search(rf"^{key}:[ \t]*(.*?)[ \t]*$", text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def scenario_index(scenarios: Path) -> dict[str, dict]:
+    """``{id: {"category", "tags"}}`` for every scenario YAML, without PyYAML.
+
+    The lanes job runs before any venv exists. Scenario files keep ``id``,
+    ``category`` and a flow-style ``tags`` list at top level; a test checks this
+    reading against ``yaml.safe_load`` for every file.
+    """
+    index = {}
+    for path in sorted(scenarios.rglob("*.yaml")):
+        text = path.read_text(encoding="utf-8")
+        sid = _unquote(_top_level(text, "id") or "")
+        if not sid:
+            continue
+        raw_tags = _top_level(text, "tags") or ""
+        tags = []
+        if raw_tags.startswith("[") and raw_tags.endswith("]"):
+            tags = [_unquote(t) for t in raw_tags[1:-1].split(",") if t.strip()]
+        index[sid] = {
+            "category": _unquote(_top_level(text, "category") or path.parent.name),
+            "tags": tags,
+        }
+    return index
+
+
+def parse_list(text: str | None) -> list[str]:
+    """Split a dispatch input on commas or whitespace, keeping order, no repeats."""
+    out = []
+    for part in re.split(r"[,\s]+", text or ""):
+        if part and part not in out:
+            out.append(part)
+    return out
+
+
+def select(
+    include: list[dict],
+    index: dict[str, dict],
+    categories: list[str],
+    scenarios: list[str],
+    excluded: dict,
+) -> dict:
+    """Narrow a full matrix to a dispatch's selection, or refuse it.
+
+    Returns ``include`` (lanes that run something), ``targeted``, ``outcomes``
+    (whether the outcomes job runs) and ``description`` (one line for humans).
+    Every refusal names the valid ids, so a typo costs one re-dispatch.
+    """
+    if not categories and not scenarios:
+        return {
+            "include": include,
+            "targeted": False,
+            "outcomes": True,
+            "description": "full run: every lane, category and scenario",
+        }
+
+    lane_of = {c: lane["lane"] for lane in include for c in lane["categories"].split()}
+    problems = []
+
+    bad_category = False
+    for category in categories:
+        if category == OUTCOMES or category in lane_of:
+            continue
+        if category in excluded:
+            problems.append(
+                f"category '{category}' never runs in CI: {excluded[category]}"
+            )
+        else:
+            problems.append(f"'{category}' is not a category")
+            bad_category = True
+    if bad_category:
+        problems.append("Valid categories: " + ", ".join(sorted(lane_of) + [OUTCOMES]))
+
+    picked: dict[str, list[str]] = {}
+    unknown = []
+    for sid in scenarios:
+        meta = index.get(sid)
+        if meta is None:
+            unknown.append(sid)
+            continue
+        category = meta["category"]
+        if category not in lane_of:
+            why = excluded.get(category, "no lane runs it")
+            problems.append(
+                f"scenario '{sid}' is in '{category}', which never runs in CI: {why}"
+            )
+            continue
+        if categories and category not in categories:
+            problems.append(
+                f"scenario '{sid}' is in '{category}', which the categories input "
+                "leaves out. Add that category, or clear the categories input"
+            )
+            continue
+        if category.startswith(GAIA_PREFIX):
+            hit = sorted(set(meta["tags"]) & set(GAIA_LANE_EXCLUDE_TAGS))
+            if hit:
+                problems.append(
+                    f"scenario '{sid}' carries {hit}, which the gaia_* lanes "
+                    "exclude, so it would never run"
+                )
+                continue
+        picked.setdefault(category, []).append(sid)
+    if unknown:
+        problems.append(f"not scenario ids: {', '.join(unknown)}")
+        runnable = sorted(
+            sid
+            for sid, meta in index.items()
+            if meta["category"] in lane_of
+            and (not categories or meta["category"] in categories)
+        )
+        problems.append("Valid scenario ids: " + ", ".join(runnable))
+    if problems:
+        raise LaneMapError(
+            "The dispatch selection cannot run as asked. " + " | ".join(problems)
+        )
+
+    wanted = list(picked) if scenarios else [c for c in categories if c != OUTCOMES]
+    lanes = []
+    for lane in include:
+        mine = [c for c in lane["categories"].split() if c in wanted]
+        if not mine:
+            continue
+        entry = {**lane, "categories": " ".join(mine), **lane_env(mine)}
+        if scenarios:
+            entry["scenarios"] = " ".join(f"{c}={','.join(picked[c])}" for c in mine)
+        lanes.append(entry)
+
+    outcomes = OUTCOMES in categories
+    if scenarios:
+        count = sum(len(ids) for ids in picked.values())
+        what = f"{count} scenario(s) in {len(picked)} category(ies)"
+    else:
+        what = f"every scenario in {', '.join(wanted) or 'no scenario category'}"
+    lane_names = ", ".join(lane["lane"] for lane in lanes) or "none"
+    return {
+        "include": lanes,
+        "targeted": True,
+        "outcomes": outcomes,
+        "description": (
+            f"TARGETED run: {what}; lanes {lane_names}; outcomes job "
+            + ("runs" if outcomes else "skipped")
+        ),
+    }
+
+
+def one_category_per_lane(include: list[dict]) -> list[dict]:
+    """Split every lane into one lane per category, named after the category.
+
+    For a small pool where lanes run in parallel across machines: two slow
+    categories that share a lane in ``ci_lanes.json`` would otherwise run one
+    after the other on one machine. The environment is re-derived per category,
+    and a targeted lane's ``scenarios`` follow their category.
+    """
+    split = []
+    for lane in include:
+        picked = {}
+        for pair in (lane.get("scenarios") or "").split():
+            category, ids = pair.split("=", 1)
+            picked[category] = ids
+        for category in lane["categories"].split():
+            entry = {
+                **lane,
+                "lane": category,
+                "categories": category,
+                **lane_env([category]),
+            }
+            if "scenarios" in lane:
+                entry["scenarios"] = f"{category}={picked[category]}"
+            split.append(entry)
+    return split
+
+
+def main() -> int:
     lanes_file = os.environ.get("EVAL_LANES_FILE", "eval/ci_lanes.json")
     path = REPO_ROOT / lanes_file
     try:
@@ -193,24 +336,40 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    on_disk = categories_on_disk(REPO_ROOT / "eval" / "scenarios")
+    scenarios_dir = REPO_ROOT / "eval" / "scenarios"
+    excluded = doc.get("excluded") or {}
     try:
-        if args.categories is None:
-            include = build_matrix(doc, on_disk, lanes_file)
-        else:
-            include = subset_matrix(doc, on_disk, lanes_file, args.categories.split())
+        include = build_matrix(doc, categories_on_disk(scenarios_dir), lanes_file)
+        chosen = select(
+            include,
+            scenario_index(scenarios_dir),
+            parse_list(os.environ.get("EVAL_SELECT_CATEGORIES")),
+            parse_list(os.environ.get("EVAL_SELECT_SCENARIOS")),
+            excluded,
+        )
     except LaneMapError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
-    print(f"matrix={json.dumps({'include': include})}")
-    excluded = doc.get("excluded") or {}
+    if os.environ.get("EVAL_ONE_CATEGORY_PER_LANE") == "1":
+        before = ", ".join(lane["lane"] for lane in chosen["include"]) or "none"
+        chosen["include"] = one_category_per_lane(chosen["include"])
+        after = ", ".join(lane["lane"] for lane in chosen["include"]) or "none"
+        chosen["description"] = chosen["description"].replace(
+            f"lanes {before};", f"lanes {after} (one per category);"
+        )
+    print(f"matrix={json.dumps({'include': chosen['include']})}")
+    print(f"has_lanes={'true' if chosen['include'] else 'false'}")
+    print(f"targeted={'true' if chosen['targeted'] else 'false'}")
+    print(f"outcomes={'true' if chosen['outcomes'] else 'false'}")
+    print(f"selection={chosen['description']}")
+    lane_names = ", ".join(lane["lane"] for lane in chosen["include"]) or "none"
     print(
-        f"Lanes: {', '.join(l['lane'] for l in include)}; "
-        f"excluded: {', '.join(sorted(excluded)) or 'none'}",
+        f"Lanes: {lane_names}; excluded: {', '.join(sorted(excluded)) or 'none'}. "
+        f"{chosen['description']}",
         file=sys.stderr,
     )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

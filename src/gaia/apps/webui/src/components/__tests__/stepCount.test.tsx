@@ -3,8 +3,8 @@
 
 /**
  * "N steps" is the agent's own step count, the figure the TUI and evals report.
- * Thinking, plan, and tool rows are not steps: verify-01 showed "23 steps" for a
- * 10-step turn, and kw-08's final answering step had no row at all.
+ * Thinking, plan, and tool rows are not steps: a 10-step turn showed "23 steps",
+ * and another turn's final answering step had no row at all.
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -25,8 +25,8 @@ const row = (type: AgentStep['type'], tool?: string): AgentStep => ({
     ...(type === 'plan' ? { planSteps: ['a', 'b'] } : {}),
 });
 
-/** verify-01's shape: a thinking row and a plan per step, six tool calls, 24 rows. */
-function verify01Rows(): AgentStep[] {
+/** A 10-step turn's shape: a thinking row and a plan per step, six tool calls, 24 rows. */
+function tenStepTurnRows(): AgentStep[] {
     const rows: AgentStep[] = [];
     for (let i = 0; i < 10; i++) {
         rows.push(row('thinking'));
@@ -40,7 +40,7 @@ const summary = () => document.querySelector('.agent-summary-text')?.textContent
 
 describe('AgentActivity step count', () => {
     it('shows the agent step count, not the number of rows', () => {
-        render(<AgentActivity steps={verify01Rows()} isActive={false} variant="summary" agentStepCount={10} />);
+        render(<AgentActivity steps={tenStepTurnRows()} isActive={false} variant="summary" agentStepCount={10} />);
         expect(summary()).toBe('10 steps · 6 tools');
     });
 
@@ -63,7 +63,7 @@ describe('MessageBubble step count', () => {
             id: 7, session_id: 's', role: 'assistant', content: 'Done.', created_at: '', rag_sources: null,
             stats: { tokens_per_second: 0, time_to_first_token: 0, input_tokens: 0, output_tokens: 0, steps: 9 },
         };
-        render(<MessageBubble message={message} agentSteps={verify01Rows()} />);
+        render(<MessageBubble message={message} agentSteps={tenStepTurnRows()} />);
         expect(summary()).toBe('9 steps · 6 tools');
     });
 });

@@ -409,7 +409,7 @@ OTHER_PAGE = "https://other-shop.example.com/cm5/"
 
 
 def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
-    """rc12 kw-02: the plan budget forced an answer, the completion check sent it
+    """The plan budget forced an answer, the completion check sent it
     back for the missing BOM, and the guard then refused the work the BOM needed."""
     from gaia.security import PathValidator
 
@@ -424,7 +424,7 @@ def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
         agent._tool_requires_confirmation = lambda *a, **kw: False
         agent.console = MagicMock()
         agent.console.cancelled = None
-        scratch = tmp_path / "gaia-scratch-kw02"
+        scratch = tmp_path / "gaia-scratch-bom"
         scratch.mkdir()
         agent.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
         agent.path_validator.set_scratch_dir(str(scratch))

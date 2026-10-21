@@ -18,6 +18,15 @@ Two failure classes, both reported:
   any category named via ``--not-measured`` because the environment could not run
   it at all.
 
+A targeted run (``gaia eval agent --scenario``) records its selection in the
+scorecard's ``config.scenario_filter``. Then only the selected scenarios are
+expected, and every one of them must have run.
+
+``--fail-on-zero-token-errors`` adds a third check that blocks whatever
+``--enforce`` says: scenarios that ERRORED without Claude spending a single
+token. That is the signature of an exhausted Claude quota (v0.25.1-rc2: 68
+scenarios, ~3 s each), and a run that hit it measured nothing from that point on.
+
 ``skipped`` (``SKIPPED_NO_DOCUMENT`` / ``SKIPPED_NO_MODEL``) is the subtle one and the reason this list
 is not just the obvious errors: those scenarios keep their ids, so the missing
 check stays clean, and ``compare_scorecards`` files them under ``corpus_changed``
@@ -36,7 +45,8 @@ Usage::
 
 Exit codes:
     0 — complete, OR incomplete in report mode (``--enforce`` absent).
-    1 — incomplete and ``--enforce`` was passed.
+    1 — incomplete and ``--enforce`` was passed, or zero-token errors were found
+        with ``--fail-on-zero-token-errors``.
 
 ``--enforce`` is what makes the gate BLOCKING. Without it the same findings are
 emitted as ``::warning::`` annotations and written to the job summary, and the
@@ -50,6 +60,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -79,6 +90,49 @@ def _scenario_ids(scorecard: dict) -> list:
     ]
 
 
+def scenario_filter(scorecard: dict) -> list | None:
+    """The ids a targeted run was limited to, or ``None`` for a full run."""
+    selected = (scorecard.get("config") or {}).get("scenario_filter")
+    return list(selected) if selected else None
+
+
+_TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+# Scorecards without `driver_usage` keep only the first 500 characters of the
+# driver's JSON, which still carry these fields when Claude was never reached.
+_ZERO_API_TEXT = re.compile(r'"duration_api_ms"\s*:\s*0\s*[,}]')
+_ZERO_TOKENS_TEXT = (
+    re.compile(r'"input_tokens"\s*:\s*0\s*[,}]'),
+    re.compile(r'"output_tokens"\s*:\s*0\s*[,}]'),
+)
+
+
+def _spent_no_tokens(result: dict) -> bool:
+    if result.get("status") != "ERRORED":
+        return False
+    usage = result.get("driver_usage")
+    if isinstance(usage, dict):
+        keys = _TOKEN_KEYS + ("duration_api_ms",)
+        return all(not usage.get(key) for key in keys)
+    text = str(result.get("error") or "")
+    return bool(_ZERO_API_TEXT.search(text)) and all(
+        pattern.search(text) for pattern in _ZERO_TOKENS_TEXT
+    )
+
+
+def zero_token_errors(scorecard: dict) -> list:
+    """Scenario ids that ERRORED before Claude spent a token (quota exhausted)."""
+    return [
+        s.get("scenario_id")
+        for s in scorecard.get("scenarios") or []
+        if _spent_no_tokens(s)
+    ]
+
+
 def check_category(baseline_path: Path, current_path: Path, category: str):
     """Return ``(problems, status_line)`` for one category.
 
@@ -93,12 +147,26 @@ def check_category(baseline_path: Path, current_path: Path, category: str):
 
     current = _load(current_path)
     got = _scenario_ids(current)
+    selected = scenario_filter(current)
 
+    if selected:
+        # A targeted run is complete when every SELECTED scenario ran. The
+        # baseline's others were never asked for, so they are not "missing".
+        absent = sorted(set(selected) - set(got))
+        if absent:
+            problems.append(
+                f"{category}: {len(absent)} selected scenario(s) missing from the run: "
+                f"{', '.join(absent)}"
+            )
+        expected = f"targeted run of {len(selected)} selected"
+        if baseline_path.exists():
+            others = set(_scenario_ids(_load(baseline_path))) - set(selected)
+            expected += f", {len(others)} other baseline scenario(s) not run"
     # Without a baseline only the missing-scenario check goes dark; everything
     # below still answers "did this produce a measurement". Reporting the absent
     # baseline and moving on beats returning early, which would drop the one
     # check that still works and read as a clean category.
-    if baseline_path.exists():
+    elif baseline_path.exists():
         want = _scenario_ids(_load(baseline_path))
         absent = sorted(set(want) - set(got))
         if absent:
@@ -184,6 +252,14 @@ def main(argv=None) -> int:
             "are emitted as ::warning:: annotations and the job stays green."
         ),
     )
+    parser.add_argument(
+        "--fail-on-zero-token-errors",
+        action="store_true",
+        help=(
+            "Exit 1, whatever --enforce says, when any scenario ERRORED without "
+            "Claude spending a token: the driver's quota ran out."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.categories and not args.not_measured:
@@ -198,14 +274,30 @@ def main(argv=None) -> int:
     results_dir = Path(args.results_dir)
 
     problems = []
+    no_tokens = []
     for category in args.categories:
+        current_path = results_dir / category / "scorecard.json"
         cat_problems, status_line = check_category(
             baseline_dir / f"scorecard_{category}.json",
-            results_dir / category / "scorecard.json",
+            current_path,
             category,
         )
         print(status_line)
         problems.extend(cat_problems)
+        if args.fail_on_zero_token_errors and current_path.exists():
+            no_tokens += zero_token_errors(_load(current_path))
+
+    if no_tokens:
+        message = (
+            f"{len(no_tokens)} scenario(s) ERRORED before Claude spent a single "
+            f"token: {', '.join(no_tokens)}. Claude was never reached, so these are "
+            "not results. Usually the quota ran out: wait for the window to reset "
+            "(or switch CLAUDE_ACCOUNT), then re-dispatch just these with the "
+            "`scenarios` input. If the quota is fine, the driver failed before its "
+            "first call (credential or CLI flags): read the error in each trace."
+        )
+        print(f"::error::Integrity: {message}")
+        _write_summary(["", "### Eval integrity: CLAUDE NEVER REACHED", "", message])
 
     # A category the environment made impossible is still an unmeasured category.
     # Named with its cause rather than silently dropped.
@@ -214,13 +306,13 @@ def main(argv=None) -> int:
 
     if not problems:
         print("")
-        print("Integrity OK - every baseline scenario ran and produced a measurement.")
+        print("Integrity OK - every expected scenario ran and produced a measurement.")
         _write_summary(
             [
                 "",
                 "### Eval integrity: OK",
                 "",
-                f"Every baseline scenario ran and produced a measurement "
+                f"Every expected scenario ran and produced a measurement "
                 f"({', '.join(args.categories)}).",
             ]
         )
@@ -246,9 +338,10 @@ def main(argv=None) -> int:
     summary += [f"- {problem}" for problem in problems]
     summary += [""]
 
-    if args.enforce:
-        print("enforce=true - failing the build.")
-        summary.append("**enforce=true — this failed the build.**")
+    if args.enforce or no_tokens:
+        reason = "enforce=true" if args.enforce else "Claude was never reached"
+        print(f"{reason} - failing the build.")
+        summary.append(f"**{reason} — this failed the build.**")
         _write_summary(summary)
         return 1
 

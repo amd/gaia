@@ -50,8 +50,8 @@ def test_it_runs_on_windows_strix_point_and_never_on_halo():
     assert "strix-halo" not in labels
 
 
-def test_it_never_holds_more_than_one_strix_point_machine():
-    assert CALL["strategy"]["max-parallel"] == 1
+def test_it_never_holds_more_than_three_strix_point_machines():
+    assert CALL["strategy"]["max-parallel"] <= 3
     assert "${{" not in CALLER["concurrency"]["group"], "one run at a time, any ref"
 
 
@@ -94,3 +94,20 @@ def test_committed_scorecards_come_from_this_model_and_driver():
         # exactly like a verdict.
         for key in ("source_run", "scenarios", "passed", "pass_rate"):
             assert META[key] is None, key
+
+
+def test_it_uses_the_flagship_selection_one_category_per_lane():
+    env = CALLER["jobs"]["lanes"]["steps"][-1]["env"]
+    assert env["EVAL_ONE_CATEGORY_PER_LANE"] == "1"
+    assert "inputs.categories" in env["EVAL_SELECT_CATEGORIES"]
+    assert "inputs.scenarios" in env["EVAL_SELECT_SCENARIOS"]
+    assert CALL["with"]["scenarios"] == "${{ matrix.scenarios }}"
+
+
+def test_a_dispatch_fails_on_an_exhausted_claude_quota():
+    assert CALL["with"]["fail-on-zero-tokens"] == (
+        "${{ github.event_name == 'workflow_dispatch' }}"
+    )
+    steps = {s.get("name"): s for s in LANE["jobs"]["lane"]["steps"]}
+    gate = steps["Integrity gate - did we actually measure?"]["run"]
+    assert "--fail-on-zero-token-errors" in gate

@@ -11,33 +11,36 @@
 # records it; `--compare` refuses a baseline captured on another model. The
 # lane itself is eval_scenario_lane.yml, which says how.
 #
-# WHY A SUBSET, AND WHY ONE LANE AT A TIME
+# WHY A SUBSET, ONE CATEGORY PER MACHINE, AT MOST THREE MACHINES
 # ------------------------------------------------------------------------------
-# The Strix Point pool is a handful of machines, shared with the RAG retrieval
-# benchmark (eval_retrieval.yml, up to 8 h), the RAG integration tests
-# (test_rag.yml) and the C++ integration tests (build_cpp.yml), and the last
-# two run on PRs. So this workflow holds at most ONE machine: `max-parallel: 1`
-# on the lane matrix and one run at a time workflow-wide. The whole 29-category
-# suite (~26 machine-hours on Halo) does not fit that; the default is a smoke
-# set that does, about 85 minutes on one machine.
+# The Strix Point pool is shared with the RAG retrieval benchmark
+# (eval_retrieval.yml, up to 8 h), the RAG integration tests (test_rag.yml) and
+# the C++ integration tests (build_cpp.yml); the last two run on PRs, and the
+# email eval (test_email_agent_eval.yml) is disabled. Its jobs from 2026-10-05
+# to 10-21 ran on six hosts, five of them on 10-21. Over that window no pool job
+# was running about 97% of the time, and the most at once was three.
+#
+# So this workflow takes at most THREE machines (`max-parallel: 3`), each lane
+# one category (EVAL_ONE_CATEGORY_PER_LANE) in its own concurrency group, and one
+# run at a time workflow-wide. That leaves the pool two or more machines.
 #
 # Strix Point runs a scenario ~3x slower than Halo: error_recovery took 34 min
 # here (3 scenarios, 8-14 min each) against 10.6 min on Halo in v0.25.1-rc2,
-# and setup on a fresh machine took ~5 min. Default categories:
+# and setup on a fresh machine took ~5 min. Default categories, longest first
+# so it starts first, with expected Strix Point time (3.2x Halo):
 #
-#   context_retention  4 scenarios, 13.3 min on Halo, ~43 expected here.
-#                      Multi-turn document Q&A with the embedder co-resident
-#                      beside the chat model, the #1030 class of regression,
-#                      under Strix Point's tighter memory.
-#   error_recovery     3 scenarios, 34 min measured here. Tool failures
-#                      handled honestly instead of invented.
+#   tool_selection     7 scenarios  ~92 min  the core agentic skill a ~4B
+#                                            model is most likely to lose
+#   error_recovery     3 scenarios   34 min  tool failures handled honestly
+#                                            (measured)
+#   context_retention  4 scenarios  ~43 min  multi-turn document Q&A with the
+#                                            embedder beside the chat model
+#                                            (the #1030 class)
+#   adversarial        3 scenarios  ~28 min  prompt injection; starts on the
+#                                            machine error_recovery frees
 #
-# tool_selection (7 scenarios, 28.7 min on Halo, ~90 expected here) is the
-# first to add, and the most important one left out: it alone fills the 90
-# minutes. Dispatch it on its own, or add it once two machines can be spared.
-# Then adversarial (3 scenarios, prompt injection). A dispatch naming memory or
-# gaia_* categories gets extra lanes, each with its own setup, run one after
-# another.
+# About 100 min wall clock and ~4 machine-hours. Next to add: mcp_reliability
+# (~56 min) as a fourth machine's worth, or personality (~26).
 #
 # BASELINE. tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/ has its
 # meta.json and no scorecards until a real run on this pool produces them
@@ -59,10 +62,15 @@ on:
   # run the full category list instead, if the pool grows.
   workflow_dispatch:
     inputs:
+      # Same inputs and validation as eval_flagship.yml (util/eval_lane_matrix.py).
       categories:
-        description: 'Space-separated categories (each must be in eval/ci_lanes.json). Default is the ~85 min smoke set.'
+        description: 'Comma-separated categories. Blank = the default four (~100 min on three machines). "outcomes" is refused: this workflow has no outcomes job.'
         required: false
-        default: 'context_retention error_recovery'
+        default: ''
+      scenarios:
+        description: 'Comma-separated scenario ids (blank = every scenario in the selected categories)'
+        required: false
+        default: ''
       enforce:
         description: 'Fail the build on a regression or an incomplete run (false = report as ::warning::)'
         required: false
@@ -73,7 +81,7 @@ on:
         required: false
         default: ''
 
-# One run at a time, so two dispatches never hold two Strix Point machines.
+# One run at a time, so two dispatches never hold six Strix Point machines.
 # The lanes' own groups are named after this workflow plus the lane, so this
 # group is never one a lane waits on.
 concurrency:
@@ -98,9 +106,8 @@ jobs:
         id: gate
         run: python util/eval_tag_gate.py
 
-  # Validates the request before anything reaches the pool: an unknown or
-  # screen-reading category fails here, and the subset is split into lanes by
-  # the environment each category needs.
+  # Validates the request before anything reaches the pool, with the same
+  # inputs and rules as eval_flagship.yml, then gives each category its own lane.
   lanes:
     name: Resolve the lane matrix
     needs: eval-gate
@@ -110,14 +117,33 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
+      targeted: ${{ steps.build.outputs.targeted }}
+      selection: ${{ steps.build.outputs.selection }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Validate the categories and emit the matrix
+      - name: Validate the selection and emit the matrix
         id: build
         env:
-          CATEGORIES: ${{ github.event.inputs.categories || 'context_retention error_recovery' }}
-        run: python util/eval_lane_matrix.py --categories "$CATEGORIES" >> "$GITHUB_OUTPUT"
+          # Both blank would mean "every lane", 29 categories this pool cannot
+          # hold, so the default four stand in. Scenarios alone pick their own
+          # categories (the ' ' parses as none).
+          EVAL_SELECT_CATEGORIES: ${{ inputs.categories != '' && inputs.categories || (inputs.scenarios != '' && ' ' || 'tool_selection,error_recovery,context_retention,adversarial') }}
+          EVAL_SELECT_SCENARIOS: ${{ inputs.scenarios || '' }}
+          EVAL_ONE_CATEGORY_PER_LANE: '1'
+        run: |
+          set -euo pipefail
+          out="$(python util/eval_lane_matrix.py)"
+          echo "$out" >> "$GITHUB_OUTPUT"
+          if grep -qx 'outcomes=true' <<<"$out"; then
+            echo "::error::'outcomes' is a task suite that runs on Strix Halo in eval_flagship.yml; this workflow has no outcomes job. Remove it from the categories input."
+            exit 1
+          fi
+          if ! grep -qx 'has_lanes=true' <<<"$out"; then
+            echo "::error::The selection runs no scenario category, so nothing would be measured. Name at least one category."
+            exit 1
+          fi
+          echo "## $(grep '^selection=' <<<"$out" | cut -d= -f2-)" >> "$GITHUB_STEP_SUMMARY"
 
   agent-eval:
     name: Gemma on Strix Point - ${{ matrix.lane }}
@@ -127,13 +153,19 @@ jobs:
       needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success'
     strategy:
       fail-fast: false
-      # The pool's other consumers include per-PR jobs; hold one machine at most.
-      max-parallel: 1
+      # Three machines at most: the pool's other consumers include per-PR jobs.
+      max-parallel: 3
       matrix: ${{ fromJSON(needs.lanes.outputs.matrix) }}
     uses: ./.github/workflows/eval_scenario_lane.yml
     with:
       lane: ${{ matrix.lane }}
       categories: ${{ matrix.categories }}
+      scenarios: ${{ matrix.scenarios }}
+      targeted: ${{ needs.lanes.outputs.targeted }}
+      selection: ${{ needs.lanes.outputs.selection }}
+      # An exhausted Claude quota errors every scenario before a token is spent;
+      # a dispatch fails on that, as eval_flagship.yml's do.
+      fail-on-zero-tokens: ${{ github.event_name == 'workflow_dispatch' }}
       memory-disabled: ${{ matrix.memory_disabled }}
       memory-admin: ${{ matrix.memory_admin }}
       memory-mcp: ${{ matrix.memory_mcp }}
@@ -145,9 +177,9 @@ jobs:
       artifact-name: eval-gemma-stx-${{ matrix.lane }}
       enforce: ${{ github.event.inputs.enforce == 'true' }}
       eval-model: ${{ github.event.inputs.eval_model || '' }}
-      # Room for the default set plus tool_selection, and short enough that a
-      # hung lane frees the machine within hours. Raise it here before
-      # dispatching more: at ~3x Halo, memory alone (131 min there) won't fit.
+      # ~2x the longest default lane (tool_selection), and short enough that a
+      # hung lane frees its machine within hours. Raise it before dispatching
+      # a bigger category: at ~3x Halo, memory (131 min there) won't fit.
       eval-timeout-minutes: 180
       job-timeout-minutes: 240
     secrets: inherit

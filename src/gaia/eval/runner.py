@@ -197,6 +197,33 @@ _NO_MEASUREMENT_STATUSES = frozenset(
 )
 
 
+def _driver_usage(stdout):
+    """Token and API-time counts from a failed ``claude -p --output-format json``.
+
+    ``None`` when stdout is not that JSON. A run whose driver could not reach
+    Claude at all (quota exhausted) reports zeros here, which is how the
+    integrity gate tells "Claude was unavailable" from an ordinary error.
+    """
+    try:
+        raw = json.loads(stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("usage"), dict):
+        return None
+    usage = raw["usage"]
+    counts = {
+        key: usage.get(key)
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    }
+    counts["duration_api_ms"] = raw.get("duration_api_ms")
+    return counts
+
+
 def _stamp_agent_provenance(
     result: dict,
     scenario_data: dict,
@@ -598,13 +625,33 @@ def _downloaded_lemonade_models() -> set:
     return {m["id"] for m in catalog.get("data", []) if m.get("id")}
 
 
+def parse_scenario_ids(values):
+    """Flatten ``--scenario`` values (repeatable, each comma-separated) to ids.
+
+    Returns ``None`` when nothing was asked for, so callers keep "no filter"
+    distinct from "an empty selection". Order is kept and duplicates dropped.
+    """
+    if not values:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    ids = []
+    for value in values:
+        for part in str(value).split(","):
+            sid = part.strip()
+            if sid and sid not in ids:
+                ids.append(sid)
+    return ids or None
+
+
 def find_scenarios(
     scenario_id=None, category=None, extra_dirs=None, tags=None, exclude_tags=None
 ):
     """Find scenario YAML files matching filters.
 
     Args:
-        scenario_id: Only return the scenario with this ID.
+        scenario_id: Only return the scenario with this ID, or with any of
+            these IDs when given a list.
         category: Only return scenarios in this category.
         extra_dirs: List of additional directories to scan for scenario YAML files.
             Scenarios from extra_dirs override built-in scenarios with the same ID.
@@ -658,10 +705,12 @@ def find_scenarios(
                 )
             scenarios_by_id[sid] = (path, data)
 
+    wanted_ids = set(parse_scenario_ids(scenario_id) or ())
+
     # Apply filters
     scenarios = []
     for sid, (path, data) in sorted(scenarios_by_id.items(), key=lambda x: x[0]):
-        if scenario_id and data.get("id") != scenario_id:
+        if wanted_ids and data.get("id") not in wanted_ids:
             continue
         if category and data.get("category") != category:
             continue
@@ -674,6 +723,49 @@ def find_scenarios(
             continue
         scenarios.append((path, data))
     return scenarios
+
+
+def unmatched_scenario_errors(
+    requested, matched, category=None, extra_dirs=None, tags=None, exclude_tags=None
+):
+    """Say why each requested scenario id is missing from ``matched``.
+
+    A run that quietly drops one of the ids it was given looks complete, so the
+    caller turns every line returned here into a hard error. Empty means every
+    requested id was selected.
+    """
+    got = {data.get("id") for _path, data in matched}
+    missing = [sid for sid in requested if sid not in got]
+    if not missing:
+        return []
+    known = {
+        data.get("id"): data for _path, data in find_scenarios(extra_dirs=extra_dirs)
+    }
+    errors = []
+    for sid in missing:
+        data = known.get(sid)
+        if data is None:
+            errors.append(f"'{sid}' is not a scenario id")
+            continue
+        own_category = data.get("category")
+        scenario_tags = set(data.get("tags") or [])
+        if category and own_category != category:
+            errors.append(f"'{sid}' is in category '{own_category}', not '{category}'")
+        elif tags and not scenario_tags.intersection(tags):
+            errors.append(f"'{sid}' carries none of the --tag values {sorted(tags)}")
+        elif exclude_tags and scenario_tags.intersection(exclude_tags):
+            hit = sorted(scenario_tags.intersection(exclude_tags))
+            errors.append(f"'{sid}' carries the excluded tag(s) {hit}")
+        else:
+            errors.append(f"'{sid}' was not selected")
+    pool = sorted(
+        sid
+        for sid, data in known.items()
+        if not category or data.get("category") == category
+    )
+    where = f"in category '{category}'" if category else "in total"
+    errors.append(f"Valid scenario ids {where}: {', '.join(pool)}")
+    return errors
 
 
 def build_scenario_prompt(
@@ -1933,6 +2025,9 @@ def run_scenario_subprocess(
                 "elapsed_s": elapsed,
                 "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
             }
+            usage = _driver_usage(proc.stdout)
+            if usage is not None:
+                result["driver_usage"] = usage
         else:
             # Parse JSON from stdout
             try:
@@ -2461,6 +2556,13 @@ def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
         )
 
 
+def _summary_over(results):
+    """The scorecard summary for a subset of results, by the scorecard's own rules."""
+    from gaia.eval.scorecard import build_scorecard
+
+    return build_scorecard("subset", results, {})["summary"]
+
+
 def compare_scorecards(baseline_path, current_path):
     """Compare two scorecard.json files and print a regression/improvement report.
 
@@ -2504,6 +2606,17 @@ def compare_scorecards(baseline_path, current_path):
 
     base_map = scenario_map(baseline)
     curr_map = scenario_map(current)
+
+    # A targeted run (`--scenario`) is judged on the scenarios it was asked to
+    # run. The baseline's others were never selected, so they are "not run",
+    # not "removed", and the summary rows must not mix the two sets.
+    selection = (current.get("config") or {}).get("scenario_filter")
+    not_run = []
+    if selection:
+        selected = set(selection)
+        not_run = sorted(sid for sid in base_map if sid not in selected)
+        base_map = {sid: s for sid, s in base_map.items() if sid in selected}
+        baseline = dict(baseline, summary=_summary_over(list(base_map.values())))
 
     all_ids = sorted(set(base_map) | set(curr_map))
 
@@ -2608,6 +2721,12 @@ def compare_scorecards(baseline_path, current_path):
     print("SCORECARD COMPARISON")
     print(f"  Baseline : {baseline_path}")
     print(f"  Current  : {current_path}")
+    if selection:
+        print(
+            f"  TARGETED : {len(selection)} selected scenario(s); baseline rows "
+            f"below cover only those. {len(not_run)} baseline scenario(s) were "
+            "not run and are not judged."
+        )
     print(f"{'='*70}")
 
     # Summary row
@@ -2695,6 +2814,14 @@ def compare_scorecards(baseline_path, current_path):
         for sid in only_in_current:
             print(f"    {sid}")
 
+    if not_run:
+        print(
+            f"\n[ ] NOT RUN ({len(not_run)} scenario(s)) — not selected in this "
+            "targeted run; no verdict either way:"
+        )
+        for sid in not_run:
+            print(f"    {sid}")
+
     if corpus_changed:
         print(
             f"\n[~] AVAILABILITY CHANGED ({len(corpus_changed)} scenario(s)) — "
@@ -2756,6 +2883,7 @@ def compare_scorecards(baseline_path, current_path):
         "only_in_current": only_in_current,
         "corpus_changed": corpus_changed,
         "unmeasured": unmeasured,
+        "not_run": not_run,
     }
 
 
@@ -2888,23 +3016,38 @@ class AgentEvalRunner:
         """Internal entry — holds the eval lock; only called by ``run()``."""
 
         # Find scenarios
+        requested_ids = parse_scenario_ids(scenario_id)
         scenarios = find_scenarios(
-            scenario_id=scenario_id,
+            scenario_id=requested_ids,
             category=category,
             extra_dirs=self.extra_scenario_dirs,
             tags=self.tags if self.tags else None,
             exclude_tags=self.exclude_tags if self.exclude_tags else None,
         )
-        if not scenarios:
-            filter_desc = f"id={scenario_id}, category={category}"
+        # Every requested id must run: a scorecard that silently lost one looks
+        # complete, and the compare step would never notice it was asked for.
+        problems = unmatched_scenario_errors(
+            requested_ids or [],
+            scenarios,
+            category=category,
+            extra_dirs=self.extra_scenario_dirs,
+            tags=self.tags or None,
+            exclude_tags=self.exclude_tags or None,
+        )
+        if not scenarios or problems:
+            filter_desc = f"id={requested_ids}, category={category}"
             if self.tags:
                 filter_desc += f", tags={self.tags}"
             if self.exclude_tags:
                 filter_desc += f", exclude_tags={self.exclude_tags}"
-            print(
-                f"[ERROR] No scenarios found ({filter_desc})",
-                file=sys.stderr,
+            headline = (
+                "No scenarios found"
+                if not scenarios
+                else "Not every requested --scenario would run"
             )
+            print(f"[ERROR] {headline} ({filter_desc})", file=sys.stderr)
+            for line in problems:
+                print(f"  - {line}", file=sys.stderr)
             sys.exit(1)
 
         print(f"[INFO] Found {len(scenarios)} scenario(s)")
@@ -3079,6 +3222,10 @@ class AgentEvalRunner:
             # and judge; --compare refuses a baseline that differs in either.
             "agent_model": run_agent_model(results, self.agent_model),
         }
+        if requested_ids:
+            # Marks a targeted run, so compare and the integrity gate judge it
+            # against only these baseline scenarios and name the rest as not run.
+            config["scenario_filter"] = list(requested_ids)
         scorecard = aggregate_scorecard(results, run_id, run_dir, config)
 
         # Write JUnit XML if requested

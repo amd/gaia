@@ -102,83 +102,252 @@ def test_bad_lane_maps_are_refused(doc, on_disk, match):
         lane_matrix.build_matrix(doc, on_disk, "lanes.json")
 
 
-def test_main_prints_a_github_output_line(capsys):
+def _outputs(capsys) -> dict:
+    lines = capsys.readouterr().out.strip().splitlines()
+    return dict(line.split("=", 1) for line in lines)
+
+
+def test_main_prints_github_output_lines(capsys, monkeypatch):
+    monkeypatch.delenv("EVAL_SELECT_CATEGORIES", raising=False)
+    monkeypatch.delenv("EVAL_SELECT_SCENARIOS", raising=False)
     assert lane_matrix.main() == 0
-    out = capsys.readouterr().out.strip()
-    assert out.startswith("matrix=")
-    assert json.loads(out[len("matrix=") :])["include"]
+    out = _outputs(capsys)
+    assert json.loads(out["matrix"])["include"]
+    assert out["has_lanes"] == "true"
+    assert out["targeted"] == "false"
+    assert out["outcomes"] == "true"
 
 
-# ---------------------------------------------------------------------------
-# --categories: a subset, regrouped by environment (eval_flagship_gemma_stx.yml)
-# ---------------------------------------------------------------------------
+# --- dispatch selection ------------------------------------------------------
 
 
-def _subset(categories):
-    doc = json.loads((REPO_ROOT / "eval" / "ci_lanes.json").read_text("utf-8"))
-    on_disk = lane_matrix.categories_on_disk(REPO_ROOT / "eval" / "scenarios")
-    return lane_matrix.subset_matrix(doc, on_disk, "eval/ci_lanes.json", categories)
+@pytest.fixture(scope="module")
+def index() -> dict:
+    return lane_matrix.scenario_index(REPO_ROOT / "eval" / "scenarios")
 
 
-def test_the_gemma_default_set_is_one_memory_off_lane():
+@pytest.fixture(scope="module")
+def excluded() -> dict:
+    return json.loads((REPO_ROOT / "eval" / "ci_lanes.json").read_text("utf-8"))[
+        "excluded"
+    ]
+
+
+def _select(real_matrix, index, excluded, categories="", scenarios=""):
+    return lane_matrix.select(
+        real_matrix,
+        index,
+        lane_matrix.parse_list(categories),
+        lane_matrix.parse_list(scenarios),
+        excluded,
+    )
+
+
+def test_index_reads_every_scenario_as_yaml_does(index):
+    yaml = pytest.importorskip("yaml")
+    files = sorted((REPO_ROOT / "eval" / "scenarios").rglob("*.yaml"))
+    assert len(index) == len(files)
+    for path in files:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert index[data["id"]] == {
+            "category": data["category"],
+            "tags": list(data.get("tags") or []),
+        }, path
+
+
+def test_no_selection_leaves_the_tag_run_matrix_untouched(real_matrix, index, excluded):
+    chosen = _select(real_matrix, index, excluded)
+    assert chosen["include"] is real_matrix
+    assert chosen["targeted"] is False
+    assert chosen["outcomes"] is True
+    assert all("scenarios" not in lane for lane in real_matrix)
+
+
+def test_scenarios_alone_pick_their_lanes_and_categories(real_matrix, index, excluded):
+    chosen = _select(
+        real_matrix,
+        index,
+        excluded,
+        scenarios="empty_file, no_sycophancy,large_document",
+    )
+    assert chosen["targeted"] is True
+    assert chosen["outcomes"] is False
+    assert chosen["include"] == [
+        {
+            "lane": "conversation",
+            "categories": "personality adversarial",
+            "memory_disabled": "1",
+            "memory_admin": "0",
+            "memory_mcp": "0",
+            "gaia_fixtures": "0",
+            "scenarios": "personality=no_sycophancy adversarial=empty_file,large_document",
+        }
+    ]
+    assert chosen["description"] == (
+        "TARGETED run: 3 scenario(s) in 2 category(ies); lanes conversation; "
+        "outcomes job skipped"
+    )
+
+
+def test_categories_alone_run_every_scenario_in_them(real_matrix, index, excluded):
+    chosen = _select(real_matrix, index, excluded, categories="memory,gaia_honesty")
+    assert [(lane["lane"], lane["categories"]) for lane in chosen["include"]] == [
+        ("memory", "memory"),
+        ("gaia-signal", "gaia_honesty"),
+    ]
+    assert all("scenarios" not in lane for lane in chosen["include"])
+    # A narrowed lane keeps the environment its categories need.
+    assert chosen["include"][1]["gaia_fixtures"] == "1"
+    assert chosen["include"][0]["memory_mcp"] == "1"
+
+
+def test_outcomes_only_runs_no_scenario_lane(real_matrix, index, excluded):
+    chosen = _select(real_matrix, index, excluded, categories="outcomes")
+    assert chosen["include"] == []
+    assert chosen["outcomes"] is True
+
+
+@pytest.mark.parametrize(
+    "categories, scenarios, match",
+    [
+        ("memroy", "", r"'memroy' is not a category \| Valid categories: "),
+        ("vision", "", "never runs in CI: Reads the runner's screen"),
+        (
+            "",
+            "no_such_scenario",
+            r"not scenario ids: no_such_scenario \| Valid scenario ids: ",
+        ),
+        ("memory", "empty_file", "which the categories input leaves out"),
+        (
+            "",
+            "web_live_search_canary",
+            r"carries \['live'\], which the gaia_\* lanes exclude",
+        ),
+    ],
+)
+def test_a_bad_selection_is_refused_with_the_valid_ids(
+    real_matrix, index, excluded, categories, scenarios, match
+):
+    with pytest.raises(lane_matrix.LaneMapError, match=match):
+        _select(real_matrix, index, excluded, categories, scenarios)
+
+
+def test_the_valid_id_list_covers_only_runnable_scenarios(real_matrix, index, excluded):
+    with pytest.raises(lane_matrix.LaneMapError) as exc:
+        _select(real_matrix, index, excluded, scenarios="nope")
+    listed = str(exc.value).split("Valid scenario ids: ")[1].split(", ")
+    assert "empty_file" in listed
+    assert not [sid for sid in listed if index[sid]["category"] in excluded]
+
+
+def test_main_refuses_a_bad_dispatch(capsys, monkeypatch):
+    monkeypatch.setenv("EVAL_SELECT_SCENARIOS", "empty_file,typo_id")
+    assert lane_matrix.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "::error::The dispatch selection cannot run as asked" in captured.err
+
+
+def test_main_emits_a_targeted_matrix(capsys, monkeypatch):
+    monkeypatch.setenv("EVAL_SELECT_CATEGORIES", "adversarial")
+    monkeypatch.setenv("EVAL_SELECT_SCENARIOS", "empty_file")
+    assert lane_matrix.main() == 0
+    out = _outputs(capsys)
+    include = json.loads(out["matrix"])["include"]
+    assert [lane["scenarios"] for lane in include] == ["adversarial=empty_file"]
+    assert out["targeted"] == "true"
+    assert out["outcomes"] == "false"
+    assert out["selection"].startswith("TARGETED run: 1 scenario(s)")
+
+
+def test_exclude_tags_match_the_workflow_run_step():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "eval_flagship.yml").read_text(
+        "utf-8"
+    )
+    expected = ", ".join(
+        f"'--exclude-tag', '{tag}'" for tag in lane_matrix.GAIA_LANE_EXCLUDE_TAGS
+    )
+    assert f"$extraArgs = @({expected})" in workflow
+
+
+def test_the_gemma_lane_workflow_excludes_the_same_tags():
     workflow = (
-        REPO_ROOT / ".github" / "workflows" / "eval_flagship_gemma_stx.yml"
-    ).read_text(encoding="utf-8")
-    import yaml
-
-    default = yaml.safe_load(workflow)[True]["workflow_dispatch"]["inputs"][
-        "categories"
-    ]["default"]
-    (lane,) = _subset(default.split())
-    assert lane["lane"] == "core"
-    assert lane["categories"] == default
-    assert lane["memory_disabled"] == "1" and lane["gaia_fixtures"] == "0"
+        REPO_ROOT / ".github" / "workflows" / "eval_scenario_lane.yml"
+    ).read_text("utf-8")
+    expected = ", ".join(
+        f"'--exclude-tag', '{tag}'" for tag in lane_matrix.GAIA_LANE_EXCLUDE_TAGS
+    )
+    assert f"$extraArgs = @({expected})" in workflow
 
 
-def test_memory_gets_its_own_lane_and_does_not_switch_memory_on_beside_it():
-    lanes = {lane["lane"]: lane for lane in _subset(["tool_selection", "memory"])}
+# --- one category per lane (eval_flagship_gemma_stx.yml) ----------------------
 
-    assert lanes["memory"]["categories"] == "memory"
-    assert lanes["memory"]["memory_mcp"] == "1"
-    assert lanes["core"]["memory_disabled"] == "1"
+GEMMA_DEFAULT = "tool_selection,error_recovery,context_retention,adversarial"
 
 
-def test_gaia_categories_share_one_fixture_lane():
-    lanes = {lane["lane"]: lane for lane in _subset(["gaia_core", "gaia_shell"])}
+def test_each_selected_category_gets_its_own_lane(real_matrix, index, excluded):
+    chosen = _select(real_matrix, index, excluded, categories=GEMMA_DEFAULT)
+    split = lane_matrix.one_category_per_lane(chosen["include"])
 
-    assert list(lanes) == ["gaia"]
-    assert lanes["gaia"]["gaia_fixtures"] == "1"
-
-
-@pytest.mark.parametrize("category", sorted(lane_matrix.SCREEN_READING))
-def test_a_screen_reading_category_is_refused_with_its_reason(category):
-    with pytest.raises(lane_matrix.LaneMapError, match="public artifact"):
-        _subset(["tool_selection", category])
-
-
-def test_an_unknown_category_is_refused():
-    with pytest.raises(lane_matrix.LaneMapError, match="not in any lane"):
-        _subset(["tool_selecton"])
+    assert [lane["lane"] for lane in split] == [
+        "tool_selection",
+        "error_recovery",
+        "context_retention",
+        "adversarial",
+    ]
+    for lane in split:
+        assert lane["categories"] == lane["lane"]
+        assert lane["memory_disabled"] == "1" and lane["gaia_fixtures"] == "0"
 
 
-@pytest.mark.parametrize("categories", [[], [""]])
-def test_an_empty_request_is_refused(categories):
-    with pytest.raises(lane_matrix.LaneMapError, match="No categories"):
-        _subset(categories)
+def test_a_split_lane_re_derives_its_environment():
+    lanes = [
+        {
+            "lane": "mixed",
+            "categories": "memory tool_selection",
+            **lane_matrix.lane_env(["memory", "tool_selection"]),
+        }
+    ]
+    split = {lane["lane"]: lane for lane in lane_matrix.one_category_per_lane(lanes)}
+
+    assert split["memory"]["memory_mcp"] == "1"
+    # Memory on for one category must not switch it on for its neighbour.
+    assert split["tool_selection"]["memory_disabled"] == "1"
 
 
-def test_a_repeated_category_runs_once():
-    (lane,) = _subset(["error_recovery", "error_recovery"])
-    assert lane["categories"] == "error_recovery"
+def test_a_split_lane_keeps_only_its_own_scenarios(real_matrix, index, excluded):
+    chosen = _select(
+        real_matrix,
+        index,
+        excluded,
+        categories="tool_selection,error_recovery",
+        scenarios="file_not_found,smart_discovery",
+    )
+    split = lane_matrix.one_category_per_lane(chosen["include"])
+
+    assert {lane["lane"]: lane["scenarios"] for lane in split} == {
+        "tool_selection": "tool_selection=smart_discovery",
+        "error_recovery": "error_recovery=file_not_found",
+    }
 
 
-def test_the_cli_prints_a_matrix_for_a_subset(capsys):
-    assert lane_matrix.main(["--categories", "error_recovery"]) == 0
-    out = capsys.readouterr().out
-    matrix = json.loads(out.split("matrix=", 1)[1])
-    assert [lane["lane"] for lane in matrix["include"]] == ["core"]
+def test_a_full_run_is_not_split_unless_asked(capsys, monkeypatch):
+    monkeypatch.setenv("EVAL_SELECT_CATEGORIES", "tool_selection,error_recovery")
+    monkeypatch.delenv("EVAL_SELECT_SCENARIOS", raising=False)
+    monkeypatch.delenv("EVAL_ONE_CATEGORY_PER_LANE", raising=False)
+    assert lane_matrix.main() == 0
+    lanes = json.loads(_outputs(capsys)["matrix"])["include"]
+    assert [lane["lane"] for lane in lanes] == ["tools"]
 
 
-def test_the_cli_fails_on_a_bad_subset(capsys):
-    assert lane_matrix.main(["--categories", "vision"]) == 1
-    assert "::error::" in capsys.readouterr().err
+def test_main_splits_and_says_so(capsys, monkeypatch):
+    monkeypatch.setenv("EVAL_SELECT_CATEGORIES", "tool_selection,error_recovery")
+    monkeypatch.delenv("EVAL_SELECT_SCENARIOS", raising=False)
+    monkeypatch.setenv("EVAL_ONE_CATEGORY_PER_LANE", "1")
+    assert lane_matrix.main() == 0
+    out = _outputs(capsys)
+    assert [lane["lane"] for lane in json.loads(out["matrix"])["include"]] == [
+        "tool_selection",
+        "error_recovery",
+    ]
+    assert "lanes tool_selection, error_recovery (one per category)" in out["selection"]

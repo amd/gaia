@@ -45,6 +45,26 @@ on:
         description: 'Space-separated categories this lane runs, serially'
         required: true
         type: string
+      scenarios:
+        description: 'Targeted dispatch only: "category=id,id ..." from util/eval_lane_matrix.py. Blank runs every scenario'
+        required: false
+        type: string
+        default: ''
+      targeted:
+        description: "'true' when the run is a selection rather than a full sweep (util/eval_lane_matrix.py)"
+        required: false
+        type: string
+        default: 'false'
+      selection:
+        description: 'One-line description of the selection, for the summary'
+        required: false
+        type: string
+        default: ''
+      fail-on-zero-tokens:
+        description: 'Fail when scenarios errored before Claude spent a token (an exhausted quota), whatever enforce says'
+        required: false
+        type: boolean
+        default: false
       memory-disabled:
         description: "GAIA_MEMORY_DISABLED for this lane ('0' or '1'), from util/eval_lane_matrix.py"
         required: true
@@ -151,6 +171,10 @@ jobs:
       VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
       EVAL_CATEGORIES: ${{ inputs.categories }}
       EVAL_LANE: ${{ inputs.lane }}
+      EVAL_SCENARIOS: ${{ inputs.scenarios }}
+      EVAL_TARGETED: ${{ inputs.targeted }}
+      EVAL_SELECTION: ${{ inputs.selection }}
+      FAIL_ON_ZERO_TOKENS: ${{ inputs.fail-on-zero-tokens }}
       GAIA_MEMORY_DISABLED: ${{ inputs.memory-disabled }}
       GAIA_MEMORY_ADMIN: ${{ inputs.memory-admin }}
       GAIA_MEMORY_MCP_ALWAYS: ${{ inputs.memory-mcp }}
@@ -512,6 +536,18 @@ jobs:
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
             Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE``, ``$env:AGENT_MODEL`` on $env:COMPUTERNAME"
             Add-Summary ""
+            # category -> "id,id", from a targeted dispatch.
+            $selected = @{}
+            foreach ($pair in (($env:EVAL_SCENARIOS -split '\s+') | Where-Object { $_ })) {
+              $kv = $pair -split '=', 2
+              $selected[$kv[0]] = $kv[1]
+            }
+            if ($env:EVAL_TARGETED -eq 'true') {
+              Add-Summary "**$env:EVAL_SELECTION**"
+              Add-Summary ""
+              foreach ($c in $selected.Keys) { Add-Summary "- ``$c``: $($selected[$c] -replace ',', ', ')" }
+              Add-Summary ""
+            }
             Add-Summary "| category | minutes |"
             Add-Summary "| --- | ---: |"
 
@@ -639,7 +675,10 @@ jobs:
               }
 
               $global:LASTEXITCODE = 0
-              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --agent-model "$env:AGENT_MODEL" @extraArgs 2>&1 |
+              # The CLI refuses a named scenario that would not run.
+              $pick = @()
+              if ($selected.ContainsKey($category)) { $pick = @('--scenario', $selected[$category]) }
+              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --agent-model "$env:AGENT_MODEL" @extraArgs @pick 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               $code = $LASTEXITCODE
@@ -760,6 +799,9 @@ jobs:
           $gateArgs = @("--baseline-dir", $env:BASELINE_DIR, "--results-dir", "eval-out")
           foreach ($c in (($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ })) { $gateArgs += @("--category", $c) }
           if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          # An exhausted Claude quota errors every scenario in seconds with no
+          # tokens spent; that measured nothing and always fails when asked.
+          if ($env:FAIL_ON_ZERO_TOKENS -eq 'true') { $gateArgs += "--fail-on-zero-token-errors" }
           $global:LASTEXITCODE = 0
           & $env:VENV_PY -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
@@ -893,7 +935,13 @@ jobs:
             baseline_dir = $env:BASELINE_DIR
             enforce = ($env:ENFORCE -eq 'true')
             memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
-          } | ConvertTo-Json -Compress
+          }
+          if ($env:EVAL_TARGETED -eq 'true') {
+            $status.targeted = $true
+            $status.selection = $env:EVAL_SELECTION
+            $status.scenarios = $env:EVAL_SCENARIOS
+          }
+          $status = $status | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
 
       # The machine is ephemeral; this artifact is the only copy.
