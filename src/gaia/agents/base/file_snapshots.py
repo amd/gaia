@@ -741,7 +741,7 @@ class _Span:
         return "created" if after else "unchanged"
 
 
-def _spans(turns: List[_Turn]) -> List[_Span]:
+def _spans(turns: List[_Turn], include_unchanged: bool = False) -> List[_Span]:
     spans: Dict[str, _Span] = {}
     for turn in turns:
         message_id = turn.manifest.get("message_id")
@@ -753,6 +753,8 @@ def _spans(turns: List[_Turn]) -> List[_Span]:
             span.last_turn, span.last = turn, entry
             if message_id is not None and message_id not in span.message_ids:
                 span.message_ids.append(message_id)
+    if include_unchanged:
+        return list(spans.values())
     return [s for s in spans.values() if s.change != "unchanged"]
 
 
@@ -867,6 +869,18 @@ def restore_session(
         )
     session_dir = turns[0].dir.parent
     kept_dirs = _apply(steps, session_dir / "rollback")
+    # A file made and then deleted within the chat leaves only its folders.
+    for span in _spans(turns, include_unchanged=True):
+        if span.change != "unchanged" or span.first["existed"]:
+            continue
+        for folder in reversed(span.first.get("created_dirs") or []):
+            path = Path(folder)
+            if not path.is_dir():
+                continue
+            try:
+                path.rmdir()
+            except OSError:
+                kept_dirs.append(folder)
 
     restored_at = _now_iso()
     for turn in turns:
