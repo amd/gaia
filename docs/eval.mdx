@@ -410,12 +410,13 @@ The manifest also defines adversarial documents (`empty.txt`, `unicode_test.txt`
 | `--generate-corpus` | `false` | Regenerate corpus documents and validate `manifest.json` |
 | `--backend URL` | `http://localhost:4200` | Agent UI backend URL |
 | `--model MODEL` | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
+| `--agent-model MODEL` | -- | Local model the agent must run (e.g. `Gemma-4-E4B-it-GGUF`). Each scenario's session is checked, and one that ran another model is discarded as `INFRA_ERROR`. It verifies, it does not switch: set `default_model` in the backend's GAIA home first |
 | `--budget USD` | `2.00` | Max spend per scenario |
 | `--timeout SECS` | `900` | Per-scenario timeout (auto-scaled for large-doc and multi-turn scenarios) |
 | `--fix` | `false` | Auto-invoke Claude Code to repair failures, then re-eval |
 | `--max-fix-iterations N` | `3` | Max repair cycles in `--fix` mode |
 | `--target-pass-rate N` | `0.90` | Stop fixing early when pass rate reaches this threshold |
-| `--compare PATH...` | -- | Compare two `scorecard.json` files or compare against saved baseline |
+| `--compare PATH...` | -- | Compare two `scorecard.json` files or compare against saved baseline. Exits 0 (no regression), 2 (regression) or 3 (measured with a different agent model or eval model) |
 | `--save-baseline` | `false` | Save this run's scorecard as `eval/results/baseline.json` |
 | `--capture-session UUID` | -- | Convert a live Agent UI session into a YAML scenario |
 
@@ -463,6 +464,13 @@ gaia eval agent --compare eval/results/latest/scorecard.json
 # Explicit two-file comparison
 gaia eval agent --compare eval/results/run_20250320/scorecard.json eval/results/run_20250322/scorecard.json
 ```
+
+`--compare` refuses (exit 3) two scorecards measured with a different local model
+or a different eval model, because the scenario IDs match either way and the diff
+would measure the model swap. It reads the baseline's models from `meta.json` in
+the baseline's directory when there is one, otherwise from the baseline scorecard.
+A current scorecard records its model as `config.agent_model`: the `--agent-model`
+pin, or the one model every measured scenario ran.
 
 **Comparison output includes:**
 - Per-scenario delta: PASS to FAIL regressions (highlighted), FAIL to PASS improvements

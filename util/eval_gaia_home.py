@@ -4,6 +4,7 @@
 
     python util/eval_gaia_home.py env   --home <dir>   # KEY=VALUE lines to export
     python util/eval_gaia_home.py check --home <dir>   # exit 1 unless isolated + empty
+    python util/eval_gaia_home.py pin-model --home <dir> --model <id>
 
 Agent state under the runner's real ``~/.gaia`` outlives the job on the
 self-hosted pool, so memory one run wrote was recalled as fact by a later run
@@ -15,11 +16,17 @@ reaches the shared server through ``LEMONADE_BASE_URL``.
 ``check`` runs in the environment the backend is about to start with. It fails
 when any state root resolves outside the home, or when the memory database
 already holds a row.
+
+``pin-model`` makes a model the home's ``default_model``, which every agent and
+every new Agent UI session resolves to, and then checks, in that same
+environment, that GAIA reads it back. It is how an eval scores one model on a
+machine whose hardware would pick another.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -113,15 +120,54 @@ def check(home: Path) -> list[str]:
     return problems
 
 
+def write_default_model(home: Path, model: str) -> Path:
+    """Write *model* as ``default_model`` in *home*'s config, as `gaia config set` would."""
+    path = Path(home) / "config.json"
+    path.write_text(json.dumps({"default_model": model}), encoding="utf-8")
+    return path
+
+
+def pin_model(home: Path, model: str) -> list[str]:
+    """Pin *model* in *home* and confirm GAIA resolves it; problems, empty when fit."""
+    write_default_model(home, model)
+    src = str(REPO_ROOT / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from gaia import config
+
+    problems = []
+    if not _within(config.GAIA_CONFIG_FILE, home):
+        problems.append(
+            f"GAIA reads its config from {config.GAIA_CONFIG_FILE}, outside {home}, "
+            "so the pin would not reach the backend. Export the variables "
+            "`util/eval_gaia_home.py env` prints first."
+        )
+    resolved = config.GaiaConfig.load().resolve_model(None, None)
+    if resolved != model:
+        problems.append(f"default_model reads back as {resolved!r}, not {model!r}")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("action", choices=["env", "check"])
+    parser.add_argument("action", choices=["env", "check", "pin-model"])
     parser.add_argument("--home", required=True, type=Path)
+    parser.add_argument("--model", help="Model id to pin (pin-model only)")
     args = parser.parse_args(argv)
     home = Path(os.path.abspath(args.home))
     if args.action == "env":
         for name, value in env_for(home).items():
             print(f"{name}={value}")
+        return 0
+    if args.action == "pin-model":
+        if not args.model:
+            parser.error("pin-model needs --model")
+        problems = pin_model(home, args.model)
+        for problem in problems:
+            print(f"NOT PINNED: {problem}", file=sys.stderr)
+        if problems:
+            return 1
+        print(f"GAIA home {home} runs {args.model}.")
         return 0
     problems = check(home)
     if problems:

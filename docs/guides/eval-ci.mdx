@@ -132,6 +132,13 @@ gaia eval agent --compare eval/results/latest/scorecard.json
 
 When only one path is provided, it's compared against `eval/results/baseline.json` automatically.
 
+A baseline only judges the model it was captured on. `--compare` exits 3 when the
+two scorecards ran a different local model or a different eval model, so pin the
+model in CI (`default_model` in the backend's GAIA home, plus `--agent-model`) and
+keep one baseline per model. GAIA's own CI keeps
+`tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/` for Gemma on Strix Point,
+measured by `eval_flagship_gemma_stx.yml`.
+
 ### 3. Explicit Two-File Comparison
 
 Compare any two scorecards directly:

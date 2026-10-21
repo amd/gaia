@@ -66,6 +66,7 @@ on:
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
       - 'hub/agents/*/npm/SKILL.md'
+      - 'hub/agents/gaia/npm/binaries.lock.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -123,6 +124,7 @@ on:
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
       - 'hub/agents/*/npm/SKILL.md'
+      - 'hub/agents/gaia/npm/binaries.lock.json'
   merge_group:
   workflow_dispatch:
 

@@ -121,6 +121,11 @@ scorecards are comparable. Pass `--agent-type` to measure a different agent, but
 never compare that result to a scorecard captured under another one —
 `--compare` matches on scenario ID alone and cannot tell two agents apart.
 
+The local model is different: a scorecard records it, and `--compare` refuses
+(exit 3) a baseline captured on another model or under another eval model. To
+score a specific model, set it as `default_model` in the backend's GAIA home and
+pass `--agent-model` so every scenario is checked against it.
+
 ### 4. Architecture Audit (Free)
 
 Check for structural limitations without making any LLM calls:
