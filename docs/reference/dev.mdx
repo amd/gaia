@@ -257,6 +257,7 @@ python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
 python util/lint.py --workflow-ancestor-skip # reject job if: conditions an upstream skip silently skips
 python util/lint.py --test-lanes  # reject test files that no CI lane runs
+python util/lint.py --ci-paths    # reject CI lanes whose paths: filter misses a file they depend on
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
 ```
@@ -293,6 +294,20 @@ lanes that install hub wheels run `util/check_module_skips.py` right after their
 install step. It fails on such a skip unless the file is listed
 under `module_skips:` in the same allowlist, with `runs_in` naming the lane that
 installs the package. That lane must name the file and run the check too.
+</Note>
+
+<Note>
+`--ci-paths` fails when a workflow's `paths:` filter would not fire on a file the
+workflow runs, imports directly, installs, or reads by literal path. A PR changing
+only that file would merge with the lane never running. It also fails when a file
+under `src/`, `hub/`, `tui/`, `installer/`, `util/` or `tests/` triggers no
+path-scoped workflow. Add the path to the lane's filter, or list it in
+`util/ci_path_allowlist.yml` with the reason the lane can't be affected. To see
+which workflows a change would run:
+
+```bash
+git diff --name-only origin/main... | python util/check_ci_path_coverage.py --changed -
+```
 </Note>
 
 ### Running Tests

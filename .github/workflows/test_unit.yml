@@ -15,24 +15,34 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
-      # Tested here, but outside src/: the PE-resource gate and the installer
-      # filename table.
-      - 'util/check_pe_resources.py'
-      - 'util/check_component_core_api.py'
-      # The wholesale-skip guard and the allowlist it reads.
-      - 'util/check_module_skips.py'
-      - 'util/check_test_lane_coverage.py'
-      - 'util/test_lane_allowlist.yml'
-      # Every test session runs the root conftest; this checks it left no daemon.
+      # tests/unit tests most util/ scripts by importing them, and the root conftest
+      # runs in every session.
+      - 'util/**'
       - 'conftest.py'
-      - 'util/check_no_daemons.py'
-      - 'installer/tui/**'
+      # Workflow-contract tests read workflow files, and the lane-coverage tests
+      # run their checks over every workflow and action.
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      # Hub agent code, skills and component manifests that tests/unit imports or reads.
+      - 'hub/agents/*/python/**'
+      - 'hub/skills/**'
+      - 'hub/components/*/gaia-agent.yaml'
+      # tests/unit/installer covers the installer tree, and
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
+      - 'installer/**'
       - 'tui/**'
       - 'setup.py'
       - 'pyproject.toml'
-      - '.github/workflows/test_unit.yml'
+      # Repository files that individual unit tests read.
+      - 'scripts/dev/**'
+      - 'scripts/audit/**'
+      - 'examples/skill_references_example.py'
+      - 'eval/ci_lanes.json'
+      - 'eval/retrieval/**'
+      - 'data/pdf/**'
+      - 'cpp/src/unicode_upper_ranges.inc'
+      - 'website/src/scripts/download-target.ts'
       # tests/unit/test_doc_examples_runnable.py execs this guide's own code
       # blocks, so a docs-only change can still break the guard.
       - 'docs/guides/custom-agent.mdx'
@@ -41,30 +51,55 @@ on:
       # it too — and that is the exact drift that made v0.23.1 untaggable.
       - 'docs/docs.json'
       - 'docs/releases/**'
+      # Doc pages unit tests check against the code (drift and runnable-command tests).
+      - 'docs/connectors/google.mdx'
+      - 'docs/guides/chat.mdx'
+      - 'docs/guides/gaia.mdx'
+      - 'docs/guides/install.mdx'
+      - 'docs/guides/npu.mdx'
+      - 'docs/guides/starter-skills.mdx'
+      - 'docs/guides/talk.mdx'
+      - 'docs/plans/desktop-installer.mdx'
+      - 'docs/reference/cli.mdx'
+      - 'docs/runbooks/google-oauth-client.md'
+      - 'docs/sdk/sdks/agent-ui.mdx'
+      - 'docs/sdk/sdks/rag.mdx'
+      - 'docs/sdk/sdks/skills.mdx'
+      - 'hub/agents/*/npm/SKILL.md'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/**'
       - 'tests/**'
-      # Tested here, but outside src/: the PE-resource gate and the installer
-      # filename table.
-      - 'util/check_pe_resources.py'
-      - 'util/check_component_core_api.py'
-      # The wholesale-skip guard and the allowlist it reads.
-      - 'util/check_module_skips.py'
-      - 'util/check_test_lane_coverage.py'
-      - 'util/test_lane_allowlist.yml'
-      # Every test session runs the root conftest; this checks it left no daemon.
+      # tests/unit tests most util/ scripts by importing them, and the root conftest
+      # runs in every session.
+      - 'util/**'
       - 'conftest.py'
-      - 'util/check_no_daemons.py'
-      - 'installer/tui/**'
+      # Workflow-contract tests read workflow files, and the lane-coverage tests
+      # run their checks over every workflow and action.
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      # Hub agent code, skills and component manifests that tests/unit imports or reads.
+      - 'hub/agents/*/python/**'
+      - 'hub/skills/**'
+      - 'hub/components/*/gaia-agent.yaml'
+      # tests/unit/installer covers the installer tree, and
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
+      - 'installer/**'
       - 'tui/**'
       - 'setup.py'
       - 'pyproject.toml'
-      - '.github/workflows/test_unit.yml'
+      # Repository files that individual unit tests read.
+      - 'scripts/dev/**'
+      - 'scripts/audit/**'
+      - 'examples/skill_references_example.py'
+      - 'eval/ci_lanes.json'
+      - 'eval/retrieval/**'
+      - 'data/pdf/**'
+      - 'cpp/src/unicode_upper_ranges.inc'
+      - 'website/src/scripts/download-target.ts'
       # tests/unit/test_doc_examples_runnable.py execs this guide's own code
       # blocks, so a docs-only change can still break the guard.
       - 'docs/guides/custom-agent.mdx'
@@ -73,6 +108,21 @@ on:
       # it too — and that is the exact drift that made v0.23.1 untaggable.
       - 'docs/docs.json'
       - 'docs/releases/**'
+      # Doc pages unit tests check against the code (drift and runnable-command tests).
+      - 'docs/connectors/google.mdx'
+      - 'docs/guides/chat.mdx'
+      - 'docs/guides/gaia.mdx'
+      - 'docs/guides/install.mdx'
+      - 'docs/guides/npu.mdx'
+      - 'docs/guides/starter-skills.mdx'
+      - 'docs/guides/talk.mdx'
+      - 'docs/plans/desktop-installer.mdx'
+      - 'docs/reference/cli.mdx'
+      - 'docs/runbooks/google-oauth-client.md'
+      - 'docs/sdk/sdks/agent-ui.mdx'
+      - 'docs/sdk/sdks/rag.mdx'
+      - 'docs/sdk/sdks/skills.mdx'
+      - 'hub/agents/*/npm/SKILL.md'
   merge_group:
   workflow_dispatch:
 

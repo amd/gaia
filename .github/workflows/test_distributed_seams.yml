@@ -28,6 +28,17 @@ on:
       - 'tests/integration/test_distributed_seams.py'
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'hub/agents/email/python/pyproject.toml'
+      - 'hub/agents/email/python/gaia_agent_email/__init__.py'
+      - 'src/gaia/agents/base/memory_store.py'
+      - 'src/gaia/ui/database.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/unit/conftest.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -40,6 +51,17 @@ on:
       - 'tests/integration/test_distributed_seams.py'
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'hub/agents/email/python/pyproject.toml'
+      - 'hub/agents/email/python/gaia_agent_email/__init__.py'
+      - 'src/gaia/agents/base/memory_store.py'
+      - 'src/gaia/ui/database.py'
+      - 'tests/integration/conftest.py'
+      - 'tests/unit/conftest.py'
   merge_group:
   workflow_dispatch:
 
