@@ -104,6 +104,7 @@ from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
 from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
+from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -115,22 +116,6 @@ _UNSET = object()
 
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
-
-# Windows ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION.
-_LOCKED_WINERRORS = frozenset({32, 33})
-
-
-def _held_by_another_program(error: OSError) -> bool:
-    """True when the OS refused *error*'s file because another program holds it."""
-    if getattr(error, "winerror", None) in _LOCKED_WINERRORS:
-        return True
-    # Windows reports a read of a locked file as EACCES; POSIX reads never block.
-    return (
-        os.name == "nt"
-        and isinstance(error, PermissionError)
-        and error.errno == errno.EACCES
-    )
-
 
 # Tools that create files; an agent with none of them gets no scratch directory.
 _FILE_CREATING_TOOLS = frozenset(
@@ -2903,7 +2888,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         """Reindex a file that was modified or created.
 
         Raises:
-            PermissionError: Another program holds the file open. The file
+            PermissionError: Windows refused the read, because another program
+                holds the file exclusively or has locked part of it. The file
                 watcher retries on this, so it must not be caught here.
         """
         if not self.rag:
@@ -2922,7 +2908,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         logger.info(f"Reindexing: {real_file_path}")
         try:
-            # RAG turns a read error into a failed result, so check for a lock first.
+            # Catches a whole-file lock on formats whose parser hides the OS error.
             if os.path.isfile(real_file_path):
                 with open(real_file_path, "rb") as f:
                     f.read(1)
@@ -2931,14 +2917,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.info(f"Not reindexing {real_file_path}: deleted before it was read")
             return
         except OSError as e:
-            if not _held_by_another_program(e):
-                logger.exception(f"Failed to reindex {real_file_path}")
-                return
-            if isinstance(e, PermissionError):
+            if held_by_another_program(e):
                 raise
-            raise PermissionError(
-                errno.EACCES, e.strerror or str(e), real_file_path
-            ) from e
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
         try:
             result = self.rag.reindex_document(real_file_path)
         except Exception:
@@ -2948,9 +2930,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         if result.get("success"):
             self.indexed_files.add(file_path)
             logger.info(f"Successfully reindexed {real_file_path}")
-        else:
-            error = result.get("error", "Unknown error")
-            logger.error(f"Failed to reindex {real_file_path}: {error}")
+            return
+        error = result.get("error", "Unknown error")
+        if result.get("error_type") == "file_locked":
+            # A partial lock, or one taken after the probe: let the watcher retry.
+            raise PermissionError(errno.EACCES, error, real_file_path)
+        logger.error(f"Failed to reindex {real_file_path}: {error}")
 
     def stop_watching(self) -> None:
         """Stop all file system observers."""

@@ -480,7 +480,8 @@ class FileChangeHandler(FileSystemEventHandler):
             # Nothing above this thread can handle it; log the traceback.
             logger.exception(f"Error in on_{kind} callback for {paths[0]}")
             return
-        self._locked_retries.pop(paths[-1], None)
+        with self._cond:
+            self._locked_retries.pop(paths[-1], None)
         self._update_telemetry(f"files_{kind}")
 
     def _locked_retry_kind(self, kind: str, file_path: str) -> Optional[str]:
@@ -501,28 +502,28 @@ class FileChangeHandler(FileSystemEventHandler):
     def _retry_locked(self, kind: str, file_path: str) -> bool:
         """Report ``file_path`` again after another window, a bounded number of
         times; its writer may still hold it open exclusively."""
-        tries = self._locked_retries.get(file_path, 0)
-        if tries >= _MAX_LOCKED_RETRIES:
-            self._locked_retries.pop(file_path, None)
-            return False
-        self._locked_retries[file_path] = tries + 1
-        logger.warning(
-            f"{file_path} is locked by another program; retrying "
-            f"({tries + 1}/{_MAX_LOCKED_RETRIES})"
-        )
         signature = self._signature(file_path)
         with self._cond:
             if self._closed:
                 return True
-            self._pending.setdefault(
-                file_path,
-                [
-                    kind,
-                    time.monotonic() + max(self._debounce_seconds, 1.0) * (2**tries),
-                    signature,
-                ],
-            )
+            if file_path in self._pending:
+                # A newer change is already queued and starts its own retries.
+                return True
+            tries = self._locked_retries.get(file_path, 0)
+            if tries >= _MAX_LOCKED_RETRIES:
+                self._locked_retries.pop(file_path, None)
+                return False
+            self._locked_retries[file_path] = tries + 1
+            self._pending[file_path] = [
+                kind,
+                time.monotonic() + max(self._debounce_seconds, 1.0) * (2**tries),
+                signature,
+            ]
             self._cond.notify()
+        logger.warning(
+            f"{file_path} is locked by another program; retrying "
+            f"({tries + 1}/{_MAX_LOCKED_RETRIES})"
+        )
         return True
 
     def wait_idle(self, timeout: Optional[float] = None) -> bool:
@@ -614,6 +615,7 @@ class FileChangeHandler(FileSystemEventHandler):
             if self._should_process(src_path) or self._should_process(dest_path):
                 with self._cond:
                     self._pending.pop(src_path, None)
+                    self._locked_retries.pop(src_path, None)
                 self._schedule_now("moved", src_path, dest_path)
 
     @property

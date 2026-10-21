@@ -231,18 +231,18 @@ Callbacks run on the watcher's own dispatch thread, one at a time, so a slow cal
 does not hold up event delivery. An exception a callback raises is logged with its
 traceback, and the next event is still delivered.
 
-**Let `PermissionError` propagate.** On Windows, a file another program still has open
-(a document open in Office, a copy still in progress) fails to read with
-`PermissionError`. When an `on_created` or `on_modified` callback raises it, the watcher
-reports the file again after 1, 2 and 4 windows. When an `on_moved` callback raises it,
-the destination is reported again the same way, as a modification, because editors
-save by renaming a temp file onto the document. If the file is still locked after the
-last retry, the watcher logs one error, with the traceback, telling the user to close
-the program and save the file again. A callback that catches `PermissionError`, for
-example with a bare `except Exception`, turns that retry off, and a file that was
-briefly locked is never processed. On Linux and macOS a read is never blocked by
-another program, so a `PermissionError` there means the file's permissions forbid it;
-the watcher retries it the same way and then gives up.
+**Let `PermissionError` propagate.** On Windows, a file another program holds for
+exclusive access, or has a byte-range lock on, fails to read with `PermissionError`.
+When an `on_created` or `on_modified` callback raises it, the watcher reports the file
+again after 1, 2 and 4 windows. When an `on_moved` callback raises it, the destination
+is reported again the same way, as a modification, because editors save by renaming a
+temp file onto the document. If the file is still locked after the last retry, the
+watcher logs one error, with the traceback, telling the user to close the program and
+save the file again. A callback that catches `PermissionError`, for example with a bare
+`except Exception`, turns that retry off, and a file that was briefly locked is never
+processed. On Linux and macOS a read is never blocked by another program, so a
+`PermissionError` there means the file's permissions forbid it; the watcher retries it
+the same way and then gives up.
 
 ```python
 def process(path: str):

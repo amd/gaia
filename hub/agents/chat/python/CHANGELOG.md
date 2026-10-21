@@ -9,15 +9,15 @@
   fails part-way all still count as a write. A snippet is recorded by its docstring or first
   comment line instead of its first line of code. Uses `may_write` on
   `note_untracked`, new in core 0.25.1.
-- On Windows, a watched document that another program has open, such as a
-  file open in Office, is now retried until it can be read, including one
-  saved by renaming a temp file onto it. Before, the agent tried it once and
-  never reindexed it. `reindex_file` now raises `PermissionError` for a locked
-  file so the file watcher retries it 1, 2 and 4 windows later. If the file is
-  still locked after that, the watcher logs one error telling the user to close
-  the program and save the file again. Any other reindex failure is still
-  logged, now with its traceback. The retry is the file watcher's, new in core
-  0.25.1; on 0.25.0 a locked file is logged once and not retried.
+- On Windows, a watched document that another program holds for exclusive
+  access, or has partly locked, is now retried until it can be read, including
+  one saved by renaming a temp file onto it. Before, the agent tried it once
+  and never reindexed it. `reindex_file` now raises `PermissionError` for a
+  locked file so the file watcher retries it 1, 2 and 4 windows later. If the
+  file is still locked after that, the watcher logs one error telling the user
+  to close the program and save the file again. Any other reindex failure is
+  still logged, now with its traceback. Needs core 0.25.1, whose file watcher
+  retries and whose RAG reports a locked read as `error_type: "file_locked"`.
 - gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
   agent chooses how hard the model reasons for the rest of a request; each new
   message starts again at the default. It registers per agent and only on a

@@ -263,39 +263,72 @@ def test_a_file_locked_for_good_is_given_up_on_loudly(tmp_path, caplog):
         handler.close()
 
 
-def test_a_new_change_to_a_locked_file_restarts_its_retries(tmp_path):
-    target = tmp_path / "locked.txt"
-    target.write_text("final")
-    attempts = []
-
+def _always_locked(attempts):
     def read(path):
         attempts.append(path)
         raise PermissionError(13, "being used by another process", path)
 
-    def wait_for_a_retry():
-        deadline = time.monotonic() + 10
-        while not handler._locked_retries and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert handler._locked_retries
+    return read
 
+
+def _wait_for_a_retry(handler):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with handler._cond:
+            if handler._locked_retries:
+                return
+        time.sleep(0.01)
+    pytest.fail("no locked-file retry was scheduled")
+
+
+def test_a_new_change_to_a_locked_file_restarts_its_retries(tmp_path):
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    attempts = []
+    read = _always_locked(attempts)
     handler = FileChangeHandler(
-        on_created=read,
-        on_modified=read,
-        on_deleted=lambda path: None,
-        extensions=[".txt"],
-        debounce_seconds=0.05,
+        on_created=read, on_modified=read, extensions=[".txt"], debounce_seconds=0.05
     )
     try:
         handler.on_created(_event(target))
-        wait_for_a_retry()
+        _wait_for_a_retry(handler)
         handler.on_modified(_event(target))
         assert handler.wait_idle(30)
         assert len(attempts) == 5  # the first try, then a fresh try and 3 retries
+    finally:
+        handler.close()
+
+
+def test_deleting_a_locked_file_forgets_its_retries(tmp_path):
+    """No delete callback is set, so nothing else would clear the count."""
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    attempts = []
+    handler = FileChangeHandler(
+        on_created=_always_locked(attempts), extensions=[".txt"], debounce_seconds=0.05
+    )
+    try:
         handler.on_created(_event(target))
-        wait_for_a_retry()
+        _wait_for_a_retry(handler)
         handler.on_deleted(_event(target))
         assert handler.wait_idle(30)
+        assert attempts == [str(target)]
         assert handler._locked_retries == {}
+    finally:
+        handler.close()
+
+
+def test_a_successful_move_clears_both_paths_retry_counts(tmp_path):
+    src, dest = str(tmp_path / "old.txt"), str(tmp_path / "doc.txt")
+    handler = FileChangeHandler(
+        on_moved=lambda s, d: None, extensions=[".txt"], debounce_seconds=0.05
+    )
+    try:
+        handler._locked_retries.update({src: 1, dest: 2})
+        handler.on_moved(MagicMock(is_directory=False, src_path=src, dest_path=dest))
+        assert handler.wait_idle(10)
+        assert handler._locked_retries == {}
+        assert handler.telemetry["files_moved"] == 1
     finally:
         handler.close()
 

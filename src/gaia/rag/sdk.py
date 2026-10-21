@@ -54,6 +54,7 @@ from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
     file_lock,
+    held_by_another_program,
     write_bytes_atomic,
     write_text_atomic,
 )
@@ -502,7 +503,10 @@ class RAGSDK:
         except OSError as e:
             if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
-            raise IOError(f"Cannot open file {file_path}: {e}")
+            # Keep the errno: it is how a caller tells a locked file apart.
+            raise OSError(
+                e.errno, f"Cannot open file: {e.strerror}", str(file_path)
+            ) from e
 
         # Verify it's a regular file (not directory or special file)
         try:
@@ -2919,7 +2923,9 @@ These positions indicate where to split the text."""
                 "num_chunks": int,
                 "total_indexed_files": int,
                 "total_chunks": int,
-                "error": str (if failed)
+                "error": str (if failed),
+                "error_type": str (some failures: "file_locked",
+                    "cache_busy" or "embedding_unavailable")
             }
 
         Raises:
@@ -3197,7 +3203,13 @@ These positions indicate where to split the text."""
 
         try:
             # Extract text based on file type
-            text, file_metadata = self._extract_text_from_file(file_path)
+            try:
+                text, file_metadata = self._extract_text_from_file(file_path)
+            except PermissionError as e:
+                # Only the document's own read: a cache write can fail with EACCES too.
+                if held_by_another_program(e):
+                    return self._document_locked(stats, file_path, e)
+                raise
 
             # Store metadata in stats if available (for PDFs)
             if file_metadata.get("num_pages"):
@@ -3383,14 +3395,36 @@ These positions indicate where to split the text."""
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
         except Exception as e:
-            if self.config.show_stats:
-                print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(
-                f"Failed to index {file_path}: {type(e).__name__}: {e}",
-                exc_info=True,
-            )
-            stats["error"] = str(e)
-            return stats
+            return self._index_failed(stats, file_path, e)
+
+    def _document_locked(
+        self, stats: Dict[str, Any], file_path: str, error: PermissionError
+    ) -> Dict[str, Any]:
+        """Index stats for a document Windows would not let us read."""
+        message = (
+            f"Could not read {Path(file_path).name}: another program may have it "
+            "open, or you may not have permission to read it. Close any program "
+            "using it and index the document again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.error(f"{message} ({error})")
+        stats["error"] = message
+        stats["error_type"] = "file_locked"
+        return stats
+
+    def _index_failed(
+        self, stats: Dict[str, Any], file_path: str, e: Exception
+    ) -> Dict[str, Any]:
+        """Index stats for a document that failed for any other reason."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {e}")
+        self.log.error(
+            f"Failed to index {file_path}: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        stats["error"] = str(e)
+        return stats
 
     def _cache_busy(
         self, stats: Dict[str, Any], file_path: str, error: FileLockError
