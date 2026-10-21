@@ -45,7 +45,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `file_edit`: 3
   - `file_search`: 3
   - `image_gen`: 3
-  - `loop_control`: 4
+  - `loop_control`: 5
   - `media_transcription`: 4
   - `memory`: 5
   - `rag_index`: 5

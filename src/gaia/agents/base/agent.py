@@ -3452,6 +3452,23 @@ Do NOT wrap conversational replies in JSON.
         behind a once-per-session guard inside the override, not here.
         """
 
+    def _remind_task_list(self, messages: List[Dict], conversation: List[Dict]) -> None:
+        """Remind the model to start or advance its task list, at most once a turn.
+
+        Per-turn guidance, like the step-budget notices: in this turn's
+        request, never in saved history.
+        """
+        task_list = getattr(self, "task_list", None)
+        if task_list is None:
+            return
+        note = task_list.nudge()
+        if note is None:
+            return
+        transient = getattr(messages, "append_transient", messages.append)
+        transient({"role": "user", "content": note})
+        conversation.append({"role": "user", "content": note})
+        logger.debug("Task list reminder: %s", note)
+
     def _mirror_plan_to_task_list(self) -> None:
         """Derive the task list from the reply's ``plan`` field.
 
@@ -9202,6 +9219,7 @@ Do NOT wrap conversational replies in JSON.
             # as the drain above: appended at the step boundary so the next
             # model call sees it.
             self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
+            self._remind_task_list(messages, conversation)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array

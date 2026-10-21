@@ -53,6 +53,20 @@ PROMPT_RULES = (
 #: the model is told about (MAX_ITEMS is).
 _MAX_RAW_ITEMS = 1000
 
+#: Tool calls into a request, with no list, before the model is reminded.
+NUDGE_AFTER_CALLS = 2
+#: Tool calls since the last list change before the model is reminded.
+NUDGE_STALE_STEPS = 3
+NUDGE_START = (
+    "If this request needs more steps, call update_tasks(items=[...]) with all "
+    "of its steps and done=[...] for the ones already finished, then keep it "
+    "updated. If it is nearly done, ignore this."
+)
+NUDGE_ADVANCE = (
+    "Your task list has not changed for a few steps. If a step finished, call "
+    "update_tasks(advance=true)."
+)
+
 # A list marker the model typed into the step text ("- ", "2. ", "3) ").
 _LIST_MARKER = re.compile(r"^(?:[-*•]|\d{1,2}[.)])\s+")
 # Terminal escape sequences (CSI, OSC) and control or bidi characters: step
@@ -184,6 +198,30 @@ class TaskList:
         # Tool calls since the model last touched the list; a list that has
         # stopped being kept must look it.
         self._steps_since_update = 0
+        self._calls_this_turn = 0
+        self._nudged = False
+
+    # -- reminders ------------------------------------------------------------
+
+    def nudge(self) -> Optional[str]:
+        """A one-line reminder for the model's next step, or ``None``.
+
+        The prompt rule alone is often skipped, so the agent reminds the model
+        once a request has proved itself multi-step, and once when a kept list
+        has fallen behind. At most one reminder per turn.
+        """
+        with self._lock:
+            if self._nudged:
+                return None
+            if not self._kept_this_turn and not self.is_active():
+                if self._calls_this_turn < NUDGE_AFTER_CALLS:
+                    return None
+                self._nudged = True
+                return NUDGE_START
+            if self.is_active() and self._steps_since_update >= NUDGE_STALE_STEPS:
+                self._nudged = True
+                return NUDGE_ADVANCE
+            return None
 
     # -- reading ----------------------------------------------------------
 
@@ -324,6 +362,8 @@ class TaskList:
         """A new request started; the model has not touched the list yet."""
         with self._lock:
             self._kept_this_turn = False
+            self._calls_this_turn = 0
+            self._nudged = False
 
     def end_turn(self) -> None:
         """The turn ended; nothing is running any more."""
@@ -341,6 +381,7 @@ class TaskList:
             return
         label = self._narrate(tool, args or {}) if self._narrate else tool
         with self._lock:
+            self._calls_this_turn += 1
             if not self._items:
                 return
             self._current_action = label

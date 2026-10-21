@@ -420,3 +420,83 @@ def test_a_corrupt_session_row_is_cleared_with_a_warning(clean_registry):
     assert "unreadable task_list" in agent.console.print_warning.call_args.args[0]
     assert agent.task_list.items == []
     assert db.get_session(sid)["task_list"] is None
+
+
+# -- reminders ------------------------------------------------------------------
+
+
+def test_the_reminder_fires_once_after_two_calls_without_a_list():
+    from gaia.agents.tools.task_list_tools import NUDGE_START, TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    assert tl.nudge() is None
+    tl.action_started("read_file", {})
+    assert tl.nudge() is None
+    tl.action_started("read_file", {})
+    assert tl.nudge() == NUDGE_START
+    tl.action_started("read_file", {})
+    assert tl.nudge() is None
+    tl.begin_turn()
+    assert tl.nudge() is None
+
+
+def test_a_kept_list_gets_an_advance_reminder_only_when_it_falls_behind():
+    from gaia.agents.tools.task_list_tools import NUDGE_ADVANCE, TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.update(items=STEPS)
+    for _ in range(2):
+        tl.action_started("read_file", {})
+        assert tl.nudge() is None
+    tl.action_started("read_file", {})
+    assert tl.nudge() == NUDGE_ADVANCE
+    tl.action_started("read_file", {})
+    assert tl.nudge() is None
+
+
+def test_a_finished_list_from_an_earlier_turn_does_not_count_as_kept():
+    from gaia.agents.tools.task_list_tools import NUDGE_START, TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.update(items=["a"])
+    tl.update(advance=True)
+    tl.begin_turn()
+    tl.action_started("x", {})
+    tl.action_started("x", {})
+    assert tl.nudge() == NUDGE_START
+
+
+def test_the_agent_sends_the_reminder_to_the_model_but_not_into_history(clean_registry):
+    # pylint: disable=unused-argument
+    from gaia.agents.tools.task_list_tools import NUDGE_START
+
+    agent = _agent()
+    _wire(agent)
+    seen = []
+    replies = [
+        _calls(("read_tli", {"path": "a"})),
+        _calls(("read_tli", {"path": "b"})),
+        _calls(("update_tasks", {"items": STEPS, "done": [1]})),
+        "done",
+    ]
+
+    def send(messages, *_, **__):
+        seen.append([m.get("content") for m in messages if m.get("role") == "user"])
+        return SimpleNamespace(text=replies.pop(0), stats={})
+
+    agent.chat = MagicMock(
+        get_stats=MagicMock(return_value={}), send_messages=MagicMock(side_effect=send)
+    )
+    result = agent.process_query("go")
+    reminded = [i for i, users in enumerate(seen) if NUDGE_START in users]
+    assert reminded and reminded[0] == 2, seen
+    assert [i["status"] for i in agent.task_list.items] == [
+        COMPLETED,
+        IN_PROGRESS,
+        PENDING,
+    ]
+    saved = json.dumps(result.get("model_messages") or [])
+    assert NUDGE_START not in saved

@@ -304,6 +304,12 @@ unfinished list from an earlier turn. The event's `source` is then `plan` and bo
 apps title the card "Plan" instead of "Tasks", so you can tell which one you
 are looking at.
 
+**Reminders.** Models often skip the prompt rule, so the agent reminds them,
+at most once per turn: after two tool calls with no list (start one, marking
+what is already done), or after three tool calls since the last change to an
+unfinished list (advance it). A reminder goes to the model for that turn only
+and is never saved in the conversation.
+
 ---
 
 ## Related Topics
