@@ -196,12 +196,34 @@ jobs:
             installer/tui/linux/build-packages.sh --version "${CORE}" --payload stage/linux-x64 --out dist
           fi
           ls -l dist
-      # The previous stable release's terminal .deb, for the upgrade row. If
-      # that release published none, it is rebuilt from its own gaia-tui with a
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rebuilt-packages-${{ matrix.label }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The previous stable release's terminal .deb, for the upgrade row -- for
+  # every release, not only candidates, so a final tests its upgrade too.
+  previous-deb:
+    name: Previous release's terminal .deb
+    needs: resolve
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-json
+      # The previous release's own .deb when it published one. If it
+      # published none, it is rebuilt from its own gaia-tui with a
       # stand-in sidecar: the upgrade row checks the package upgrade and the
       # user's data, and runs only the NEW version's agent.
       - name: Previous release's .deb
-        if: matrix.label == 'linux'
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -214,6 +236,7 @@ jobs:
           if name:
               subprocess.check_call(["curl", "-fL", "--retry", "3", "-sS", "-o", f"prev/{name}", d["prev_urls"][name]])
           else:
+              subprocess.check_call("sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm ruby ruby-dev build-essential && sudo gem install --no-document fpm", shell=True)
               bin_name = d["prev_assets"].get("tui-bin-linux-x64")
               if not bin_name:
                   sys.exit(f"::error::{d['prev_tag']} publishes neither a terminal .deb nor gaia-linux-amd64")
@@ -230,14 +253,7 @@ jobs:
           ls -l prev
       - uses: actions/upload-artifact@v7
         with:
-          name: rebuilt-packages-${{ matrix.label }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@v7
-        if: matrix.label == 'linux'
-        with:
-          name: rebuilt-prev-deb
+          name: previous-deb
           path: prev/
           if-no-files-found: error
           retention-days: 7
@@ -332,9 +348,10 @@ jobs:
 
   posix:
     name: ${{ matrix.row }}
-    needs: [resolve, rebuild-packages]
-    # rebuild-packages is skipped when the release carries its packages.
-    if: always() && needs.resolve.result == 'success' && needs.rebuild-packages.result != 'failure'
+    needs: [resolve, rebuild-packages, previous-deb]
+    # Not gated on rebuild-packages or previous-deb: a row that needs their
+    # artifact fails at the download, naming it, and every other row still runs.
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -377,7 +394,7 @@ jobs:
       - uses: actions/download-artifact@v8
         if: matrix.kind == 'tui-deb-upgrade'
         with:
-          name: rebuilt-prev-deb
+          name: previous-deb
           path: ${{ runner.temp }}/prev
       # Host prerequisites a user would already have, installed before the
       # timed phases: a display for the desktop app, and FUSE for an AppImage.

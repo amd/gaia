@@ -357,7 +357,8 @@ install)
       ;;
     tui-rpm)
       rpm="$(package_file tui-rpm)"
-      cp "${rpm}" "${WORK}/dl/" 2>/dev/null || true
+      # The container sees only WORK (as /work); a rebuilt package lives outside it.
+      case "${rpm}" in "${WORK}/dl/"*) ;; *) cp "${rpm}" "${WORK}/dl/" ;; esac
       docker exec gaia-fedora test ! -e /usr/bin/gaia-tui || die "gaia-tui is already in the container"
       docker exec gaia-fedora dnf install -y "/work/dl/$(basename "${rpm}")"
       for b in gaia-tui gaia-agent; do docker exec gaia-fedora test -x "/usr/bin/${b}" || die "${b} did not land in /usr/bin"; done
