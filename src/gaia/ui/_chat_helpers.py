@@ -4574,7 +4574,13 @@ async def _index_document(filepath: Path) -> int:
         if stop.is_set():
             raise IndexingStopped(filepath.name)
 
+    def _queue_update(_event: dict) -> None:
+        # Waiting in line for the embedder or vision model is not a stall.
+        # Runs on the waiting thread, so it only notes the time.
+        progress["at"] = _time.monotonic()
+
     def _do_index():
+        from gaia.daemon.broker_client import lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
@@ -4583,11 +4589,12 @@ async def _index_document(filepath: Path) -> int:
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(
-            str(filepath),
-            progress_callback=lambda _done, _total: _step(),
-            heartbeat=_step,
-        )
+        with lease_wait_listener(_queue_update):
+            result = rag.index_document(
+                str(filepath),
+                progress_callback=lambda _done, _total: _step(),
+                heartbeat=_step,
+            )
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
