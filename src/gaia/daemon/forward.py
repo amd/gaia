@@ -294,9 +294,15 @@ class ConnectionForwarder:
             # GAIA operation is mid-save on (ConnectionBusyError) — must not
             # turn into a mailbox outage by withdrawing a still-valid forward.
             # The refresh loop will retry on its next tick.
+            kind = (
+                "busy connection"
+                if isinstance(e, ConnectionBusyError)
+                else "unclassified mint failure"
+            )
             logger.warning(
-                "forward-out: unclassified mint failure for '%s' on agent '%s' "
-                "(%s); retaining any existing forward for the next refresh",
+                "forward-out: %s for '%s' on agent '%s' (%s); retaining any "
+                "existing forward for the next refresh",
+                kind,
                 provider,
                 agent_id,
                 e,

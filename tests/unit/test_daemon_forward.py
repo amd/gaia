@@ -296,6 +296,22 @@ def test_forward_provider_transport_mint_failure_retains_stale_forward(caplog):
     assert "retaining any existing forward" in caplog.text
 
 
+def test_a_busy_mint_is_logged_as_busy_and_keeps_the_forward(caplog):
+    def _mint(*, provider, scopes, agent_id):
+        raise ConnectionBusyError(provider)
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
+    with caplog.at_level("WARNING"):
+        with pytest.raises(ConnectionBusyError):
+            fwd.forward_provider(
+                "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+            )
+
+    assert http.deletes == []
+    assert "busy connection for 'google'" in caplog.text
+    assert "unclassified" not in caplog.text
+
+
 def test_forward_provider_busy_after_the_mint_keeps_the_existing_forward():
     """A connection that turned busy (mid-save elsewhere) has no trustworthy
     scopes, so nothing is posted and the existing forward is not withdrawn."""

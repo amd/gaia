@@ -757,8 +757,15 @@ class EmailAgentConfig:
                 and _PROVIDER_CALENDAR_SCOPES[p].intersection(rows[p].get("scopes", []))
             ]
 
+            busy = sorted(
+                (
+                    p
+                    for p in connected
+                    if p in _PROVIDER_CALENDAR_SCOPES and rows[p].get("error") == "busy"
+                ),
+                key=PROVIDERS.index,
+            )
             if not scoped:
-                busy = [p for p in connected if rows[p].get("error") == "busy"]
                 if busy:
                     raise ConnectionBusyError(busy[0])
                 raise ConfigurationError(
@@ -768,9 +775,13 @@ class EmailAgentConfig:
                     "in Settings → Connectors, then retry."
                 )
 
-            # First in registry order wins when more than one is scoped.
+            # First in registry order wins when more than one is scoped. A busy
+            # provider ranked ahead may be the one that wins once its save ends,
+            # so picking the next one now would use the wrong calendar.
             scoped.sort(key=PROVIDERS.index)
             provider = scoped[0]
+            if busy and PROVIDERS.index(busy[0]) < PROVIDERS.index(provider):
+                raise ConnectionBusyError(busy[0])
 
         try:
             family = backend_family(provider)

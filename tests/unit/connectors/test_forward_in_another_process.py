@@ -297,6 +297,13 @@ def _busy_error():
     return exc.value
 
 
+def test_the_busy_error_is_part_of_the_public_connectors_api():
+    import gaia.connectors as connectors
+
+    assert "ConnectionBusyError" in connectors.__all__
+    assert connectors.ConnectionBusyError is ConnectionBusyError
+
+
 def test_a_busy_connection_is_not_reported_as_disconnected(busy_mismatch):
     from gaia.connectors.formatting import format_connector_error
     from gaia.ui.routers.connectors import _raise_http_for

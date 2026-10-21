@@ -33,6 +33,7 @@ Phase I prompt-injection defense:
 from __future__ import annotations
 
 import re
+import threading
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
@@ -167,6 +168,8 @@ class _UnavailableCalendarBackend:
         self._message = message
         self._resolve = resolve
         self._backend: Any = None
+        # Concurrent first uses must build one backend, not one each.
+        self._resolve_lock = threading.Lock()
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -174,12 +177,14 @@ class _UnavailableCalendarBackend:
         if self._backend is None:
             if self._resolve is None:
                 raise ConfigurationError(self._message)
-            try:
-                self._backend = self._resolve()
-            except ConnectionBusyError:
-                raise
-            except (ConfigurationError, ConnectorsError) as exc:
-                raise ConfigurationError(str(exc)) from exc
+            with self._resolve_lock:
+                if self._backend is None:
+                    try:
+                        self._backend = self._resolve()
+                    except ConnectionBusyError:
+                        raise
+                    except (ConfigurationError, ConnectorsError) as exc:
+                        raise ConfigurationError(str(exc)) from exc
         return getattr(self._backend, name)
 
 
