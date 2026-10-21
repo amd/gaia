@@ -2109,6 +2109,9 @@ Examples:
   # Fix a specific category
   gaia eval agent --category rag_quality --fix
 
+  # Finish a run that stopped when Claude's quota ran out (runs only what is missing)
+  gaia eval agent --resume eval/results/eval-20261021-141300
+
   # Compare two runs for regressions
   gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/scorecard.json
 
@@ -2215,6 +2218,13 @@ Examples:
         nargs="+",
         metavar="PATH",
         help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
+    )
+    agent_eval_parser.add_argument(
+        "--resume",
+        metavar="RUN_DIR",
+        help="Finish a run that stopped because Claude ran out of quota (or its "
+        "credential failed): run only its scenarios that have no result, under "
+        "the run's own model, agent and settings, and update its scorecard in place",
     )
     agent_eval_parser.add_argument(
         "--require-complete",
@@ -5420,6 +5430,43 @@ Let me know your answer!
                 )
                 return
 
+            resume_dir = getattr(args, "resume", None)
+            if resume_dir:
+                # A resumed run keeps its own selection and settings.
+                clashing = [
+                    flag
+                    for flag, given in (
+                        ("--scenario", getattr(args, "scenario", None)),
+                        ("--category", getattr(args, "category", None)),
+                        ("--tag", getattr(args, "tag", None)),
+                        ("--exclude-tag", getattr(args, "exclude_tag", None)),
+                        ("--scenario-dir", getattr(args, "scenario_dir", None)),
+                        ("--corpus-dir", getattr(args, "corpus_dir", None)),
+                        ("--fix", fix_mode),
+                        ("--iterations", iterations != 1),
+                        ("--budget", args.budget != "2.00"),
+                        ("--timeout", args.timeout != 900),
+                        ("--audit-only", getattr(args, "audit_only", False)),
+                        ("--save-baseline", getattr(args, "save_baseline", False)),
+                    )
+                    if given
+                ]
+                if clashing:
+                    print(
+                        f"Error: --resume takes the run's own selection and settings, "
+                        f"so it cannot be combined with {', '.join(clashing)}. Drop "
+                        "them, or start a new run.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+                if not Path(resume_dir).is_dir():
+                    print(
+                        f"Error: --resume {resume_dir} is not a directory. Pass the "
+                        "run directory the stopped run printed as `Output:`.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+
             from gaia.eval.runner import AgentEvalRunner
 
             # Resolve --device to model when --model not explicit
@@ -5468,6 +5515,14 @@ Let me know your answer!
                 max_fix_iterations=getattr(args, "max_fix_iterations", 3),
                 target_pass_rate=getattr(args, "target_pass_rate", 0.90),
                 keep_sessions=getattr(args, "keep_sessions", False),
+                resume_dir=resume_dir,
+                # Only a value the user chose is checked against the run's own.
+                resume_model=(
+                    eval_model if eval_model != DEFAULT_CLAUDE_MODEL else None
+                ),
+                resume_agent_type=(
+                    args.agent_type if args.agent_type != DEFAULT_AGENT_TYPE else None
+                ),
             )
 
             # --save-baseline: copy scorecard to eval/results/baseline.json

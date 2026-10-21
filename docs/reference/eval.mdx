@@ -154,8 +154,9 @@ gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch> \
 A targeted run is labelled as one in its summary, its lane artifacts and every
 scorecard (`config.scenario_filter`). Its comparison judges only the selected
 scenarios and lists the rest as not run. A dispatch also fails, whatever
-`enforce` says, when scenarios errored before Claude spent a token: the quota ran
-out, so re-dispatch those scenarios once it resets.
+`enforce` says, when Claude was unavailable: scenarios that errored before Claude
+spent a token, or that the runner stopped or never started because of a Claude
+outage. Re-dispatch those scenarios once the quota resets.
 
 A release candidate can skip the evals. Put `[skip eval]` in an annotated tag's message:
 
@@ -176,6 +177,25 @@ table, and the all-lanes CI summary adds the lanes together. The usage is filed
 under the `driver` role: one Claude session plays the user and judges every turn,
 so its tokens cover both jobs. A scenario killed on timeout records none, and the
 totals then say how many scenarios they are missing.
+
+### When Claude runs out mid-run
+
+If the driver's `claude -p` call fails because the account is out of quota, its
+credential is rejected, or Claude never answered at all, the run stops at once
+and starts nothing else. That scenario is recorded as `INFRA_ERROR` and every
+later one as `NOT_RUN`. Neither counts as a pass, an ordinary error or a
+regression. The run exits with code 3 and prints the account, when the limit
+resets, and the command to finish it:
+
+```bash
+gaia eval agent --resume eval/results/eval-20261021-141300
+```
+
+`--resume` runs only the scenarios without a result, under the run's own model,
+agent and settings, and rewrites that run's scorecard with everything merged.
+Each scenario that ran records the commit and time it ran at (`commit`, `ran_at`), so a
+scorecard that mixes commits says so. In CI, where the run directory doesn't
+outlive the lane, re-dispatch the printed `-f scenarios=...` list instead.
 
 ### Require a complete comparison
 

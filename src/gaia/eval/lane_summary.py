@@ -88,6 +88,7 @@ NO_MEASUREMENT_COUNTERS = (
     "blocked",
     "budget_exceeded",
     "skipped",
+    "not_run",
 )
 
 

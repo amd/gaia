@@ -19,6 +19,10 @@ _JUDGED_STATUSES = {"PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE"}
 # available on this machine (SKIPPED_NO_MODEL).
 SKIPPED_STATUSES = frozenset({"SKIPPED_NO_DOCUMENT", "SKIPPED_NO_MODEL"})
 
+# Never started because Claude became unavailable mid-run (quota, credential).
+# Not a result and not an error: `gaia eval agent --resume` runs these later.
+NOT_RUN = "NOT_RUN"
+
 
 def build_scorecard(run_id, results, config):
     """Build scorecard dict from list of scenario result dicts."""
@@ -32,6 +36,7 @@ def build_scorecard(run_id, results, config):
         1 for r in results if r.get("status") in ("INFRA_ERROR", "SETUP_ERROR")
     )
     skipped = sum(1 for r in results if r.get("status") in SKIPPED_STATUSES)
+    not_run = sum(1 for r in results if r.get("status") == NOT_RUN)
     errored = sum(
         1
         for r in results
@@ -45,6 +50,7 @@ def build_scorecard(run_id, results, config):
             "INFRA_ERROR",
             "SETUP_ERROR",
             *SKIPPED_STATUSES,
+            NOT_RUN,
         )
     )
 
@@ -77,6 +83,7 @@ def build_scorecard(run_id, results, config):
                 "budget_exceeded": 0,
                 "infra_error": 0,
                 "skipped": 0,
+                "not_run": 0,
                 "errored": 0,
                 "scores": [],
             }
@@ -95,6 +102,8 @@ def build_scorecard(run_id, results, config):
             by_category[cat]["infra_error"] += 1
         elif status in SKIPPED_STATUSES:
             by_category[cat]["skipped"] += 1
+        elif status == NOT_RUN:
+            by_category[cat]["not_run"] += 1
         else:
             by_category[cat]["errored"] += 1
         # Only accumulate scores for judged scenarios; cap FAIL scores at 5.99
@@ -148,6 +157,7 @@ def build_scorecard(run_id, results, config):
         "INFRA_ERROR",
         "SETUP_ERROR",
         *SKIPPED_STATUSES,
+        NOT_RUN,
         "ERRORED",
     }
     unrecognized = sorted(
@@ -168,6 +178,7 @@ def build_scorecard(run_id, results, config):
             "budget_exceeded": budget_exceeded,
             "infra_error": infra_error,
             "skipped": skipped,
+            "not_run": not_run,
             "errored": errored,
             "pass_rate": passed / total if total > 0 else 0.0,
             # judged_pass_rate uses only scenarios the eval agent actually judged
@@ -223,6 +234,7 @@ def write_summary_md(scorecard):
         f"**Date:** {ts}",
         f"**Model:** {scorecard.get('config', {}).get('model', 'unknown')}",
         "",
+        *_stopped_md(scorecard.get("stopped")),
         "## Summary",
         f"- **Total:** {s.get('total_scenarios', 0)} scenarios",
         f"- **Passed:** {s.get('passed', 0)} \u2705",
@@ -232,6 +244,7 @@ def write_summary_md(scorecard):
         f"- **Budget exceeded:** {s.get('budget_exceeded', 0)} \U0001f4b8",
         f"- **Infra error:** {s.get('infra_error', 0)} \U0001f527",
         f"- **Skipped:** {s.get('skipped', 0)} \u23ed",
+        f"- **Not run (Claude unavailable):** {s.get('not_run', 0)}",
         f"- **Errored:** {s.get('errored', 0)} \u26a0\ufe0f",
         f"- **Pass rate (all):** {s.get('pass_rate', 0)*100:.0f}%",
         f"- **Pass rate (judged):** {s.get('judged_pass_rate', 0)*100:.0f}%",
@@ -309,6 +322,21 @@ def write_summary_md(scorecard):
     ]
 
     return "\n".join(lines) + "\n"
+
+
+def _stopped_md(stopped):
+    """A banner for a run a Claude outage cut short: what to do, first."""
+    if not stopped:
+        return []
+    not_run = stopped.get("not_run") or []
+    return [
+        f"> **Stopped: {stopped.get('headline')}** during "
+        f"`{stopped.get('after_scenario')}`. {len(not_run)} scenario(s) have no "
+        "result, which is NOT a failure of the agent. Resets: "
+        f"{stopped.get('resets') or 'not stated'}. Resume with "
+        f"`{stopped.get('resume')}`.",
+        "",
+    ]
 
 
 def _claude_usage_md(usage):
@@ -404,7 +432,9 @@ def write_junit_xml(scorecard):
             in ("TIMEOUT", "BUDGET_EXCEEDED", "INFRA_ERROR", "SETUP_ERROR", "ERRORED")
         )
         cat_skipped = sum(
-            1 for r in cat_scenarios if r.get("status") in SKIPPED_STATUSES
+            1
+            for r in cat_scenarios
+            if r.get("status") in SKIPPED_STATUSES or r.get("status") == NOT_RUN
         )
         testsuite.set("failures", str(cat_failures))
         testsuite.set("errors", str(cat_errors))
@@ -427,6 +457,9 @@ def write_junit_xml(scorecard):
             if status == "PASS":
                 # Passing tests have no sub-elements
                 pass
+            elif status == NOT_RUN:
+                skipped_el = ET.SubElement(testcase, "skipped")
+                skipped_el.set("message", result.get("error") or "Not run")
             elif status in SKIPPED_STATUSES:
                 skipped_el = ET.SubElement(testcase, "skipped")
                 skipped_el.set(
