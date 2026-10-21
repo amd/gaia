@@ -295,7 +295,7 @@ func TestConfirmationTimeoutDeniesAndClearsModal(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
 
-	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	updated, cmd := m.Update(m.confirmation.ExpiryMsg())
 	m = updated.(ChatModel)
 	if cmd == nil {
 		t.Fatal("the timeout tick produced no decision")
@@ -323,7 +323,7 @@ func TestTheRecordedTimeoutNamesTheClockThatActuallyRan(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, gatedShellCall())
 
-	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	updated, cmd := m.Update(m.confirmation.ExpiryMsg())
 	m = updated.(ChatModel)
 	if cmd == nil {
 		t.Fatal("a live prompt must still be bounded")
@@ -353,12 +353,13 @@ func TestStaleConfirmationTimeoutIsDropped(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
+	expiry := m.confirmation.ExpiryMsg()
 	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "declined"})
 	if m.confirmation != nil {
 		t.Fatal("setup: the confirmation should already be cleared")
 	}
 
-	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	updated, cmd := m.Update(expiry)
 	m = updated.(ChatModel)
 	if cmd != nil {
 		t.Error("a stale timeout must not produce a decision")

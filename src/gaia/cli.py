@@ -214,6 +214,24 @@ def initialize_lemonade_for_agent(
     return True, resolved_url
 
 
+def _lemonade_answers(base_url: str | None = None) -> bool:
+    """Whether the Lemonade Server a command uses answers its health check now."""
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.lemonade_supervisor import _probe
+
+    if gaia_runs_lemonade(base_url):
+        # A stopped GAIA server's stand-in address may be another Lemonade.
+        base_url = running_embedded_lemonade_url()
+        if not base_url:
+            return False
+    if base_url:
+        client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
+    else:
+        client = LemonadeClient(keep_alive=True, verbose=False)
+    return _probe(client)
+
+
 def ensure_agent_models(
     agent: str,
     host: str = DEFAULT_HOST,
@@ -1972,6 +1990,11 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
         "--lemonade",
         action="store_true",
         help="Kill Lemonade server (port 13305)",
+    )
+    kill_parser.add_argument(
+        "--daemons",
+        action="store_true",
+        help="List running GAIA daemons and stop those whose home folder is gone",
     )
 
     # Add LLM app command
@@ -4795,6 +4818,8 @@ Let me know your answer!
 
     # Handle kill command
     if args.action == "kill":
+        if args.daemons:
+            sys.exit(kill_stray_daemons())
         if args.lemonade:
             # Use lemonade-server stop for graceful shutdown
             try:
@@ -4840,9 +4865,10 @@ Let me know your answer!
             print("     --lemonade        stop Lemonade Server (port 13305)")
             print("     --port <number>   kill the GAIA/Lemonade process")
             print("                       listening on <number>")
+            print("     --daemons         list GAIA daemons, stop orphaned ones")
             print(
-                "   Both target a port. A stray GAIA process that is not "
-                "holding a port must be killed by PID."
+                "   A stray GAIA process that is none of these must be killed "
+                "by PID."
             )
             sys.exit(1)
         return
@@ -5092,7 +5118,7 @@ Let me know your answer!
             model=getattr(args, "model", None),
         )
         if not success:
-            return
+            sys.exit(1)
 
         try:
             from gaia.apps.llm.app import main as llm
@@ -5113,18 +5139,13 @@ Let me know your answer!
                 print(response)
                 print("=" * 50)
             return
-        except Exception as e:
-            # Check if it's a connection error and provide helpful message
-            error_msg = str(e).lower()
-            if (
-                "connection" in error_msg
-                or "refused" in error_msg
-                or "timeout" in error_msg
-            ):
+        except Exception as e:  # noqa: BLE001 -- CLI boundary: report and fail
+            print(f"❌ Error: {e}", file=sys.stderr)
+            # The install/start advice only when the server really is gone: a
+            # stalled stream also says "timeout", with Lemonade up.
+            if not _lemonade_answers(getattr(args, "base_url", None)):
                 LemonadeManager.print_server_error()
-            else:
-                print(f"❌ Error: {str(e)}")
-            return
+            sys.exit(1)
 
     # Handle evaluation
     if args.action == "eval":
@@ -5812,6 +5833,63 @@ Let me know your answer!
     return
 
 
+def kill_stray_daemons() -> int:
+    """``gaia kill --daemons``: list every GAIA daemon, stop the orphaned ones.
+
+    Orphaned means its home folder or instance.json is gone, so no client can
+    reach it. The daemon of this shell's own home is never stopped here; use
+    ``gaia daemon stop`` for that.
+
+    Returns:
+        The exit code: 1 if an orphaned daemon would not stop.
+    """
+    from gaia.daemon import paths, strays
+    from gaia.daemon.instance import read_instance
+
+    daemons = strays.find_daemons()
+    if not daemons:
+        print("No GAIA daemons are running.")
+        return 0
+    own_home = paths.host_dir()
+    # By pid too: an older daemon may not have honoured the GAIA_HOME it inherited.
+    own = read_instance()
+    orphaned = []
+    print(f"GAIA daemons running: {len(daemons)}")
+    for daemon in daemons:
+        if own is not None and own.pid in daemon.pids:
+            home, state = str(own_home), "this home, left running"
+        elif daemon.home is None:
+            home, state = "(home unknown: cannot read its environment)", "left running"
+        elif strays.same_home(daemon.home, own_home):
+            home, state = str(daemon.home), "this home, left running"
+        elif daemon.is_orphaned():
+            home, state = str(daemon.home), "orphaned"
+            orphaned.append(daemon)
+        else:
+            home, state = str(daemon.home), "left running"
+        print(
+            f"  pid {daemon.pid:<7} up {strays.format_age(daemon.age_seconds):<8} "
+            f"{state:<24} {home}"
+        )
+    if not orphaned:
+        print("No orphaned daemons to stop.")
+        return 0
+    failed = []
+    for daemon in orphaned:
+        if strays.stop_daemon(daemon):
+            print(f"✅ Stopped orphaned daemon pid {daemon.pid} ({daemon.home})")
+        else:
+            failed.append(daemon)
+            print(f"❌ Daemon pid {daemon.pid} ({daemon.home}) did not exit")
+    if failed:
+        print(
+            "   Kill the remaining pid(s) with your OS task manager, then re-run "
+            "`gaia kill --daemons`."
+        )
+        return 1
+    return 0
+
+
 def kill_process_by_port(port):
     """Kill the GAIA/Lemonade process listening on ``port``.
 
@@ -6419,7 +6497,7 @@ def handle_config_command(args):
         print(value if value is not None else "")
         return
 
-    if action == "set" and args.key.startswith("lemonade_"):
+    if action == "set" and args.key in _LEMONADE_CHOICE_KEYS:
         _set_lemonade_config(args.key, args.value, config_file, path)
         return
 
@@ -6436,6 +6514,12 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+#: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
+_LEMONADE_CHOICE_KEYS = frozenset(
+    ("lemonade_mode", "lemonade_base_url", "lemonade_api_key_stored")
+)
 
 
 def _set_lemonade_config(key, value, config_file, path) -> None:

@@ -90,12 +90,14 @@ def _normalize_error(
     return {"status": "error", "detail": msg}
 
 
-def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
+def _api(
+    base_url: str, method: str, path: str, timeout: float = 120, **kwargs
+) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
     headers = {**UI_HEADER, **kwargs.pop("headers", {})}
     try:
-        r = getattr(requests, method)(url, timeout=120, headers=headers, **kwargs)
+        r = getattr(requests, method)(url, timeout=timeout, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError as e:
@@ -104,6 +106,11 @@ def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
         return _normalize_error(e, base_url)
     except Exception as e:
         return _normalize_error(e, base_url)
+
+
+#: Indexing a large PDF takes minutes; a shorter wait made the driver retry,
+#: and every retry re-embedded the document from scratch.
+INDEX_DOCUMENT_TIMEOUT_S = 900
 
 
 # Keep in sync with gaia.ui._chat_helpers (not imported here: gaia.ui pulls the
@@ -243,6 +250,12 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         elif etype == "tool_confirm_denied":
             event_log.append(
                 f"[denied] {event.get('tool', '?')}: {event.get('message', '')[:200]}"
+            )
+
+        elif etype == "permission_request":
+            event_log.append(
+                f"[permission prompt] {event.get('tool', '?')}: "
+                f"{json.dumps(event.get('args') or {}, default=str)[:200]}"
             )
 
         elif etype == "user_input_request":
@@ -610,7 +623,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         agent won't treat it as session-specific.
         """
         result = _api(
-            backend_url, "post", "/documents/upload-path", json={"filepath": filepath}
+            backend_url,
+            "post",
+            "/documents/upload-path",
+            timeout=INDEX_DOCUMENT_TIMEOUT_S,
+            json={"filepath": filepath},
         )
         # If a session was specified, link the newly-indexed document to it so
         # the agent sees it as a session document (not just a library document).

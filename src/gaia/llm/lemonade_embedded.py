@@ -232,6 +232,71 @@ def pid_exists(pid: int) -> bool:
     return True
 
 
+#: lemond processes this process spawned, by pid. Holding the handle is what
+#: lets an unexpected exit be reported with its exit code (#5261).
+_SPAWNED: Dict[int, subprocess.Popen] = {}
+
+#: How much of lemond.log to scan for its last lines; the file grows unbounded.
+_LOG_TAIL_BYTES = 64 * 1024
+
+# Seconds between the Windows FILETIME epoch (1601) and the Unix one.
+_FILETIME_EPOCH_OFFSET = 11644473600
+
+
+def _windows_exit_info(pid: int) -> Optional[Tuple[int, float]]:
+    """Exit code and exit time of a finished Windows process, by pid.
+
+    Readable only while some process still holds a handle to it -- the daemon
+    that spawned it does. None when it cannot be opened or is still running.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    # A private WinDLL, so the restype set here leaves ctypes.windll alone.
+    kernel32 = ctypes.WinDLL("kernel32")  # type: ignore[attr-defined]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        code = wintypes.DWORD(0)
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return None
+        if code.value == 259:  # STILL_ACTIVE
+            return None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+        exited = times[1]
+        ticks = (exited.dwHighDateTime << 32) | exited.dwLowDateTime
+        return code.value, ticks / 1e7 - _FILETIME_EPOCH_OFFSET
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
+    """``(exit code, exit time)`` of a lemond that is gone; either may be None."""
+    info = _windows_exit_info(pid)
+    if info is not None:
+        return info
+    process = _SPAWNED.get(pid)
+    if process is not None and process.poll() is not None:
+        return process.returncode, None
+    return None, None
+
+
+def _describe_exit_code(code: Optional[int]) -> str:
+    if code is None:
+        return "exit code unavailable"
+    if code < 0:
+        return f"killed by signal {-code}"
+    if code > 0x7FFFFFFF:
+        return f"exit code {code} (0x{code:08X})"
+    return f"exit code {code}"
+
+
 #: Display adapters whose Vulkan cooperative-matrix path fails under the
 #: llama.cpp Lemonade bundles (b10825) on an old driver: Qwen3.6 crashed on its
 #: first token and Gemma 4 generated at 14 tok/s, not 34. Strix Halo only — the
@@ -1059,7 +1124,11 @@ class EmbeddedLemonade:
                 owner_started=owner_started,
             )
 
-        identity = self._identify(int(pid), int(port), api_key)
+        spawned = _SPAWNED.get(int(pid))
+        if spawned is not None and spawned.poll() is not None:
+            identity = OTHER
+        else:
+            identity = self._identify(int(pid), int(port), api_key)
         if identity != OTHER:
             log.warning(
                 "Embedded Lemonade (pid %s) is not answering on port %s%s",
@@ -1082,9 +1151,71 @@ class EmbeddedLemonade:
                 owner_started=owner_started,
             )
 
-        log.debug("Recorded instance (pid %s) is gone; clearing state", pid)
+        self._report_gone(state)
         self._clear_state()
         return stopped
+
+    def _log_tail(self, lines: int = 3) -> str:
+        """The last *lines* non-health lines of lemond's log, `` | ``-joined."""
+        try:
+            with open(self.log_path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - _LOG_TAIL_BYTES))
+                text = handle.read().decode("utf-8", errors="replace")
+        except OSError as e:
+            return f"<{self.log_path} unreadable: {e}>"
+        kept = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and "health" not in line.lower()
+        ]
+        return " | ".join(kept[-lines:]) or f"<{self.log_path} is empty>"
+
+    def _report_gone(self, state: dict) -> None:
+        """Log how a recorded lemond ended, unless GAIA stopped it on purpose."""
+        pid = int(state["pid"])
+        spawned = _SPAWNED.get(pid)
+        if state.get("stop_requested_by"):
+            log.debug("Recorded instance (pid %s) is gone; GAIA stopped it", pid)
+            _SPAWNED.pop(pid, None)
+            return
+        code, exited_at = _exit_details(pid)
+        started_at = state.get("started_at")
+        if started_at:
+            end = exited_at if exited_at is not None else time.time()
+            when = (
+                f"started {time.strftime('%H:%M:%S', time.localtime(started_at))}, "
+                f"{'exited' if exited_at is not None else 'found gone'} "
+                f"{end - float(started_at):.0f}s later"
+            )
+        else:
+            when = "start time not recorded"
+        log.warning(
+            "Embedded Lemonade exited without GAIA stopping it: pid %s, port %s, "
+            "%s, %s%s. Last lines of %s: %s",
+            pid,
+            state.get("port"),
+            when,
+            _describe_exit_code(code),
+            "" if spawned is not None else " (not started by this process)",
+            self.log_path,
+            self._log_tail(),
+        )
+        _SPAWNED.pop(pid, None)
+
+    def recorded_health(self) -> Tuple[bool, Optional[dict]]:
+        """Ask the recorded instance for its ``/health`` payload.
+
+        Returns:
+            ``(recorded, health)``: whether an instance is recorded at all, and
+            its health payload, or None when it did not answer.
+        """
+        state = self._read_state()
+        port = state.get("port") if state else None
+        api_key = state.get("api_key") if state else None
+        if not (port and api_key):
+            return False, None
+        return True, self._health(int(port), api_key)
 
     def current_api_key(self) -> Optional[str]:
         """Return the API key of the recorded instance, if there is one.
@@ -1357,6 +1488,8 @@ class EmbeddedLemonade:
                 cwd=str(self.dist_dir),
                 **kwargs,
             )
+        _SPAWNED[process.pid] = process
+        started_at = time.time()
 
         # Record the instance before waiting: an interrupt during the wait must
         # still leave `stop` able to find and kill what we just spawned.
@@ -1368,6 +1501,7 @@ class EmbeddedLemonade:
                 "version": self.version,
                 "owner_pid": owner_pid,
                 "owner_started": owner_started,
+                "started_at": started_at,
             }
         )
 
@@ -1394,6 +1528,7 @@ class EmbeddedLemonade:
                     f"it was doing, then retry."
                 )
         except BaseException:
+            _SPAWNED.pop(process.pid, None)
             self._terminate(process)
             recorded = self._read_state()
             if recorded is None or recorded.get("pid") == process.pid:
@@ -1408,6 +1543,7 @@ class EmbeddedLemonade:
                 "version": self.version,
                 "owner_pid": owner_pid,
                 "owner_started": owner_started,
+                "started_at": started_at,
             }
         )
         self._write_env_file(port, api_key)
@@ -1475,7 +1611,14 @@ class EmbeddedLemonade:
             )
         log.info("Stopping embedded Lemonade (pid %s, port %s)", pid, port)
 
-        self._kill_tree(pid)
+        # Any process that finds it gone now knows the exit was deliberate.
+        self._write_state({**state, "stop_requested_by": os.getpid()})
+        try:
+            self._kill_tree(pid)
+        except EmbeddedLemonadeError:
+            self._write_state(state)
+            raise
+        _SPAWNED.pop(pid, None)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             gone = self._health(port, api_key, timeout=1.0) is None

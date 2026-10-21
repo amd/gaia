@@ -2,6 +2,8 @@
 
 ## 0.2.0
 
+- When `generate_image` fails, the prompt asks for its error in a sentence or two
+  instead of pointing at an `--sd` flag that does not exist.
 - Requires `amd-gaia>=0.25.0`, the first core release that ships
   `gaia.agents.tools.path_access`, which the agent imports at start. With an
   older core the agent fails at import.

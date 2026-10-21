@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Register (or remove) the ``gaia_mcp`` stub servers for the flagship agent.
 
-``install`` merges two entries into ``~/.gaia/mcp_servers.json`` and activates
+``install`` merges two entries into the MCP server list the agent reads
+(``$GAIA_HOME/mcp_servers.json``, else ``~/.gaia/mcp_servers.json``) and activates
 them for the flagship in ``~/.gaia/connectors/activations.json`` — the two
 things ChatAgent reads before it surfaces an MCP server's tools:
 
@@ -30,6 +31,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from gaia.config import mcp_servers_path
 from gaia.connectors.activations import activate_agent, deactivate_agent
 
 STUB = Path(__file__).resolve().parent / "acme_mcp.py"
@@ -41,7 +43,8 @@ SERVERS = {"acme_orders": "orders", "acme_shipping": "shipping"}
 
 
 def _config_path() -> Path:
-    return Path.home() / ".gaia" / "mcp_servers.json"
+    # The agent's own resolver, so an eval under GAIA_HOME stages where it reads.
+    return mcp_servers_path()
 
 
 def _read_config(path: Path) -> dict:

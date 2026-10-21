@@ -7,7 +7,7 @@ task and then re-ran the same check used to have its answer replaced by "I
 can't confirm the task is finished". When the guard's correction doesn't land
 and the turn ends, it now asks the model once more, with the same tools but
 ``tool_choice="none"``, and that reply is the answer. Repeats that errored or
-were refused keep their own message: there the failure IS the evidence.
+were refused get the same call, and their failure message follows the reply.
 """
 
 import json
@@ -316,8 +316,14 @@ def test_a_failed_repeat_summary_is_printed_as_well(agent):
 
 
 # ---------------------------------------------------------------------------
-# Repeats that failed: today's message, and no closing call
+# Repeats that failed: the work done survives, the failure follows it
 # ---------------------------------------------------------------------------
+
+_RESEARCH = "The loader reads config.yaml before the env vars; that is the bug."
+
+
+def _closing_prompt(agent, chat) -> str:
+    return _model_calls(agent, chat)[-1].kwargs["messages"][-1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -339,36 +345,42 @@ def test_a_failed_repeat_summary_is_printed_as_well(agent):
     ],
     ids=["rate-limit-error", "connection-failure", "not-permitted", "generic-error"],
 )
-def test_failed_repeats_keep_their_message(agent, tool_result, expected):
+def test_failed_repeats_keep_the_research_and_add_the_failure(
+    agent, tool_result, expected
+):
     agent.tool_result = tool_result
-    chat = _stub_chat(agent, *_repeat_then())
+    chat = _stub_chat(agent, *_repeat_then(_RESEARCH))
 
     result = agent.process_query("fix the loader and run the tests")
 
-    assert expected in result["result"]
-    assert _CANNED not in result["result"]
-    # No closing call: the failure the user needs to hear already happened.
-    assert len(_model_calls(agent, chat)) == _CALLS
-    assert result["steps_taken"] == _CALLS
+    text = result["result"]
+    assert text.startswith(_RESEARCH)
+    assert text.index(_RESEARCH) < text.index(expected)
+    assert _CANNED not in text
+    assert len(_model_calls(agent, chat)) == _CALLS + 1
+    assert "failed" in _closing_prompt(agent, chat)
+    assert result["steps_taken"] == _CALLS + 1
 
 
 @pytest.mark.usefixtures("clean_registry")
-def test_failed_repeats_on_the_legacy_path_keep_their_message():
+def test_failed_repeats_on_the_legacy_path_keep_the_research():
     """The results must come from ``previous_outputs``, not ``step_results``.
 
     Error recovery clears ``step_results`` before every retry, so reading it
-    here makes a loop of failures look like a clean run — and spends a closing
-    call telling the user what went well.
+    here makes a loop of failures look like a clean run — and asks the closing
+    call what went well instead of what the failure kept it from doing.
     """
     agent = _make_agent(streaming=False, model_id=None)
     agent.tool_result = {"status": "error", "error": "boom"}
-    chat = _stub_chat(agent, *([_json_call()] * _CALLS))
+    chat = _stub_chat(agent, *([_json_call()] * _CALLS), _answer(_RESEARCH))
 
     result = agent.process_query("fix the loader and run the tests")
 
+    assert result["result"].startswith(_RESEARCH)
     assert "kept failing: boom" in result["result"]
     assert _CANNED not in result["result"]
-    assert chat.send_messages.call_count == _CALLS
+    assert chat.send_messages.call_count == _CALLS + 1
+    assert "failed" in _closing_prompt(agent, chat)
 
 
 # ---------------------------------------------------------------------------

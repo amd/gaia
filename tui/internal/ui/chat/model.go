@@ -1170,7 +1170,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case components.ConfirmationDecidedMsg:
-		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID {
+		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID || m.confirmation.Seq() != msg.Seq {
 			// Stale — a decision for a confirmation that is no longer up (already
 			// resolved by the run ending first, or superseded). Drop it, same as a
 			// stale question answer.

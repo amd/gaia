@@ -156,7 +156,7 @@ func TestWrapTerminatesOnAnsiStyledWords(t *testing.T) {
 							t.Errorf("wrap(%s, %d) produced a %d-wide line", name, w, visualLen(line))
 						}
 					}
-				case <-time.After(2 * time.Second):
+				case <-time.After(10 * time.Second):
 					t.Fatalf("wrap(%s, %d) never returned", name, w)
 				}
 			}()

@@ -40,9 +40,10 @@ from typing import (
     Union,
 )
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
+    caveated_answer,
     incomplete_answer,
     mentioned_paths,
 )
@@ -105,6 +106,8 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     SCRATCH_ARG,
+    command_reaches_folder,
+    is_inside_folder,
 )
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
@@ -521,6 +524,23 @@ class ToolCallTruncated(ValueError):
         )
 
 
+class TurnCancel(threading.Event):
+    """A turn's cancel signal that can say why the turn was stopped.
+
+    ``message`` is the answer the turn ends with when it stops at a step
+    boundary. ``None`` means a plain stop (the user's Stop, a disconnect).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.message: Optional[str] = None
+
+    def cancel(self, message: str) -> None:
+        """Stop the turn and end it with *message*."""
+        self.message = message
+        self.set()
+
+
 class _UserWaitClock:
     """Time a tool body spends blocked on the user, which its timeout excludes."""
 
@@ -777,10 +797,17 @@ _REPEATED_CALL_ANSWER_PROMPT = (
     "results above show: what you completed, what you could not confirm, and "
     "what the user should do next."
 )
+_FAILED_CALL_ANSWER_PROMPT = (
+    "`{tool}` failed {count} times in a row, so stop calling tools and answer "
+    "now from what the results above show: what you completed, what that "
+    "failure kept you from doing, and what the user should do next. The "
+    "failure itself is reported after your answer; don't repeat it."
+)
 
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+_REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
 _MAX_LOOP_PERIOD = 3
@@ -1509,6 +1536,13 @@ _PLACEHOLDER_MARKERS = frozenset(
 _PLACEHOLDER_LITERALS = frozenset(
     {"todo", "tbd", "...", "…", "placeholder", "fill in", "fill_in"}
 )
+# A note to fill the content in later, standing where the content belongs.
+_PLACEHOLDER_PHRASE = re.compile(
+    r"\[?(?:(?:todo|tbd|fixme)\s*[:\-]?\s*)?(?:(?:please\s+)?fill(?:\s+(?:this|me|it))?"
+    r"\s+in(?:\s+later)?|add\s+(?:the\s+)?content(?:\s+here)?|(?:your\s+|insert\s+)?"
+    r"content\s+(?:goes\s+)?here)\]?[.!]?",
+    re.I,
+)
 _CONTENT_ARG_NAMES = frozenset(
     {
         "content",
@@ -1551,11 +1585,127 @@ def _placeholder_value(name: str, value: str) -> bool:
         return True
     if _ANGLE_PLACEHOLDER.fullmatch(text) or _UNRESOLVED_PLAN_REF.match(text):
         return True
+    if name.lower() in _CONTENT_ARG_NAMES and _PLACEHOLDER_PHRASE.fullmatch(text):
+        return True
     if _PLACEHOLDER_TOKEN.fullmatch(text):
         return name.lower() in _CONTENT_ARG_NAMES or any(
             part in _PLACEHOLDER_MARKERS for part in text.split("_")
         )
     return False
+
+
+_EMPTY_WORD = re.compile(r"\b(?:empty|blank|touch)\b", re.I)
+_NAME_TOKEN = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>(),;]+)")
+# Words that may sit between "empty" and the file it describes.
+_EMPTY_LEAD_WORDS = frozenset(
+    {"a", "an", "the", "new", "file", "files", "called", "named", "text", "and", "or"}
+)
+# "notes.txt (empty)", "notes.txt, empty", "leave notes.txt blank".
+_EMPTY_AFTER = re.compile(r"^\s*[(,:—-]?\s*$")
+# "Is notes.txt empty?", "don't leave it blank": the file is not to be empty.
+_EMPTY_NOT_ASKED = re.compile(
+    r"\b(?:not|don't|do not|never|no longer|if|whether|is|are|was)\b", re.I
+)
+# "Fill the empty notes.txt with the summary": the file is to get content.
+_FILLS_IT = re.compile(
+    r"\b(?:fill|populate|put|append|insert|update|replace|overwrite|paste)\b|"
+    r"\badd\b.*\bto\b",
+    re.I,
+)
+_WITH_CONTENT = re.compile(r"^\s*(?:file\s+)?with\s+(?!nothing\b|no\b)", re.I)
+_CLAUSE_BREAK = re.compile(r",|\b(?:and|then)\b", re.I)
+# "Create notes.txt. It should be empty."
+_IT_STAYS_EMPTY = re.compile(
+    r"^\s*(?:it|the file|that file)\s+(?:should|must|can|will|needs to)\s+"
+    r"(?:be|stay|remain)\s+(?:empty|blank)\b",
+    re.I,
+)
+# "Create a blank notes.txt, then write the summary to it": content comes later.
+_FILLED_LATER = re.compile(
+    r"\b(?:write|save|put|add|copy|append|paste|insert)\b[^.;\n]*?\b(?:to|into|in)\s+"
+    r"(?:it|that file|the file|this file)\b|"
+    r"\b(?:fill|populate|update)\s+(?:it|that file|the file|this file)\b",
+    re.I,
+)
+
+
+def _base_name(path: str) -> str:
+    return os.path.basename(path.replace("\\", "/").rstrip("/")).casefold()
+
+
+def _names_in(text: str) -> List[str]:
+    return [
+        _base_name(next(g for g in m.groups() if g is not None).strip(".:!?"))
+        for m in _NAME_TOKEN.finditer(text)
+    ]
+
+
+def _filled_later(request: str, name: str) -> bool:
+    """Whether *request* also asks for content to go into the file."""
+    named_target = re.compile(
+        r"\b(?:write|save|put|add|append|copy|paste)\b[^.;\n]*?\b(?:to|into|in)\s+"
+        r"(?:the\s+)?[`\"']?(?:[^\s`\"']*[/\\])?" + re.escape(name) + r"(?![\w.])",
+        re.I,
+    )
+    return bool(_FILLED_LATER.search(request) or named_target.search(request))
+
+
+def _requested_empty(file_path: Any, request: Optional[str]) -> bool:
+    """Whether *request* asks for *file_path* itself to be empty or blank."""
+    if not isinstance(file_path, str) or not request:
+        return False
+    name = _base_name(file_path)
+    if _filled_later(request, name):
+        return False
+    sentences = re.split(r"(?<=[.!?])\s+|\n|;", request)
+    for index, sentence in enumerate(sentences):
+        if _asks_empty(sentence, name):
+            return True
+        if index and _IT_STAYS_EMPTY.match(sentence):
+            named = [n for n in _names_in(sentences[index - 1]) if "." in n]
+            if named == [name]:
+                return True
+    return False
+
+
+def _asks_empty(sentence: str, name: str) -> bool:
+    """Whether *sentence* itself asks for the file *name* to be empty."""
+    empties = list(_EMPTY_WORD.finditer(sentence))
+    if not empties or sentence.rstrip().endswith("?"):
+        return False
+    for mention in _NAME_TOKEN.finditer(sentence):
+        token = next(g for g in mention.groups() if g is not None)
+        if _base_name(token.strip(".:!?")) != name:
+            continue
+        if _WITH_CONTENT.match(sentence[mention.end() :]):
+            continue
+        for word in empties:
+            first, last = sorted((word, mention), key=lambda m: m.start())
+            breaks = list(_CLAUSE_BREAK.finditer(sentence, 0, first.start()))
+            clause = sentence[breaks[-1].end() if breaks else 0 : last.end()]
+            if _EMPTY_NOT_ASKED.search(clause) or _FILLS_IT.search(clause):
+                continue
+            if word.end() <= mention.start():
+                if _only_names_between(sentence[word.end() : mention.start()]):
+                    return True
+            elif _EMPTY_AFTER.match(sentence[mention.end() : word.start()]):
+                return True
+    return False
+
+
+def _only_names_between(text: str) -> bool:
+    """True when *text* lists file names, not a second thing to write."""
+    seen_name = False
+    for match in _NAME_TOKEN.finditer(text):
+        word = match.group().casefold()
+        if "." in word.strip(".") or "/" in word or "\\" in word:
+            seen_name = True
+        elif word in {"and", "or", "called", "named"}:
+            continue
+        elif seen_name or word not in _EMPTY_LEAD_WORDS:
+            # "an empty a.txt and a b.md with ...": b.md is a new object.
+            return False
+    return True
 
 
 def _empty_by_design(file_path: Any) -> bool:
@@ -1564,19 +1714,23 @@ def _empty_by_design(file_path: Any) -> bool:
     return os.path.basename(file_path.replace("\\", "/")) in EMPTY_BY_DESIGN_FILES
 
 
-def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]:
+def _write_stand_in(
+    tool_name: str, tool_args: Any, request: Optional[str] = None
+) -> Optional[Tuple[str, Any]]:
     """``(arg, value)`` when a file write would put a stand-in on disk, else None.
 
     The whole content must be the stand-in: a document that merely contains
     "TODO" or "<placeholder>" is real content. Empty content is a stand-in
-    except for :data:`EMPTY_BY_DESIGN_FILES`.
+    unless the file is in :data:`EMPTY_BY_DESIGN_FILES` or *request* (the
+    user's message) asked for that file to be empty.
     """
     if not isinstance(tool_args, dict):
         return None
     if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" in tool_args:
         content = tool_args["content"]
         if content is None or (isinstance(content, str) and not content.strip()):
-            if _empty_by_design(tool_args.get("file_path")):
+            file_path = tool_args.get("file_path")
+            if _empty_by_design(file_path) or _requested_empty(file_path, request):
                 return None
             return "content", content
         if isinstance(content, str) and _placeholder_value("content", content):
@@ -1589,7 +1743,7 @@ def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]
 
 
 def _plan_step_placeholder(
-    tool_name: str, tool_args: Any, _path: str = ""
+    tool_name: str, tool_args: Any, _path: str = "", request: Optional[str] = None
 ) -> Optional[Tuple[str, Any]]:
     """Return ``(arg, value)`` for the first stand-in value in a plan step's args.
 
@@ -1600,7 +1754,7 @@ def _plan_step_placeholder(
     if not _path and isinstance(tool_args, dict):
         if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" not in tool_args:
             return "content", None
-        found = _write_stand_in(tool_name, tool_args)
+        found = _write_stand_in(tool_name, tool_args, request)
         if found is not None:
             return found
     if isinstance(tool_args, dict):
@@ -1685,6 +1839,52 @@ def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     if data is None:
         return SkillSets()
     return parse_skill_sets(data, where=f" in {path}")
+
+
+def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
+    """The scratch folder when this call runs code that may sit in it, else "".
+
+    A Python file there, or one handed a scratch path as an argument; a
+    shell line run there or naming a path there.
+    """
+    if not isinstance(prompt_args, dict):
+        return ""
+    reader = getattr(agent, "_read_validator", None)
+    scratch = getattr(reader() if callable(reader) else None, "scratch_dir", None)
+    if not scratch:
+        return ""
+    scratch = str(scratch)
+    if tool_name == "execute_python_file":
+        target = edit_target(prompt_args)
+        if is_inside_folder(target, scratch):
+            return scratch
+        args = prompt_args.get("args")
+        if isinstance(args, str) and args.strip():
+            bases = [os.getcwd()]
+            if target:
+                bases.append(os.path.dirname(os.path.abspath(target)))
+            project = getattr(agent, "_script_project_root", None)
+            root = project() if callable(project) else None
+            if root:
+                bases.append(str(root))
+            if command_reaches_folder(args, bases, scratch):
+                return scratch
+        return ""
+    if tool_name in SHELL_TOOLS:
+        command = prompt_args.get("command")
+        if not isinstance(command, str):
+            return ""
+        bases = [os.getcwd()]
+        session = getattr(agent, "_shell_session", None)
+        if session is not None and not getattr(session, "closed", True):
+            bases.append(str(session.cwd))
+        folder = prompt_args.get("working_directory")
+        if isinstance(folder, str) and folder:
+            # Resolved as the shell tool resolves it: against the process cwd.
+            bases = [os.path.join(os.getcwd(), folder)]
+        if command_reaches_folder(command, bases, scratch):
+            return scratch
+    return ""
 
 
 class Agent(abc.ABC):
@@ -2724,6 +2924,26 @@ Do NOT wrap conversational replies in JSON.
             in getattr(getattr(skills[name], "gaia", None), "tools_required", ())
         )
 
+    def _activate_extraction_skills(self, just_loaded=False):
+        """Apply a loaded extraction skill now, so load_skill reports its tools."""
+        ledger = getattr(self, "_extraction_ledger", None)
+        if ledger is None:
+            return
+        ledger.activate_skill(
+            self._extraction_skill_instructions(ledger.query, just_loaded)
+        )
+        self._offer_extraction_tools()
+
+    def _offer_extraction_tools(self):
+        ledger = getattr(self, "_extraction_ledger", None)
+        if (
+            ledger is not None
+            and ledger.offered
+            and "extract_document_items" not in self._tools_registry
+        ):
+            self._register_extraction_tool()
+            self._apply_tool_filter(self._active_tool_filter)
+
     def _read_validator(self):
         """The agent's file read boundary, or None when it has none."""
         validator = getattr(self, "path_validator", None)
@@ -2886,7 +3106,7 @@ Do NOT wrap conversational replies in JSON.
                 validator = self._read_validator()
                 return ledger.run(
                     file_path,
-                    lambda path: read_snapshot(path, validator),
+                    lambda path: read_snapshot(path, validator, prompt_user=True),
                     ask,
                     check,
                     fields,
@@ -3142,7 +3362,7 @@ Do NOT wrap conversational replies in JSON.
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
         extraction = getattr(self, "_extraction_ledger", None)
-        if extraction is not None and extraction.enabled and new_filter is not None:
+        if extraction is not None and extraction.offered and new_filter is not None:
             new_filter = list(
                 dict.fromkeys(
                     [*new_filter, "extract_document_items", "save_extracted_items"]
@@ -5322,7 +5542,9 @@ Do NOT wrap conversational replies in JSON.
         tool_args = self._resolve_plan_parameters(
             step.get("tool_args") or {}, step_results
         )
-        found = _plan_step_placeholder(tool_name, tool_args)
+        found = _plan_step_placeholder(
+            tool_name, tool_args, request=getattr(self, "_current_query", None)
+        )
         if found is None:
             return False
         arg, value = found
@@ -6100,7 +6322,9 @@ Do NOT wrap conversational replies in JSON.
                 return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # A stand-in written to disk replaces the real file with that word.
-        stand_in = _write_stand_in(tool_name, tool_args)
+        stand_in = _write_stand_in(
+            tool_name, tool_args, getattr(self, "_current_query", None)
+        )
         if stand_in is not None:
             arg, value = stand_in
             logger.warning(
@@ -6108,9 +6332,10 @@ Do NOT wrap conversational replies in JSON.
             )
             empty = value is None or not str(value).strip()
             why = (
-                "is empty. Only files that are empty by design ("
+                "is empty. A file is written empty only when the user asked "
+                "for an empty or blank file, or it is empty by design ("
                 + ", ".join(sorted(EMPTY_BY_DESIGN_FILES))
-                + ") are written empty"
+                + ")"
                 if empty
                 else f"is a placeholder ({value!r}), not the real content"
             )
@@ -6177,16 +6402,11 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        # A script in the agent's own scratch folder can be granted as such —
-        # narrower than "running Python files", and it covers the next one.
-        if tool_name == "execute_python_file" and isinstance(prompt_args, dict):
-            reader = getattr(self, "_read_validator", None)
-            scratch = getattr(
-                reader() if callable(reader) else None, "scratch_dir", None
-            )
-            target = edit_target(prompt_args)
-            if scratch and target and edit_is_inside(target, (str(scratch),)):
-                prompt_args = {**prompt_args, SCRATCH_ARG: str(scratch)}
+        # Scratch writes never ask, so code run from there is asked about on
+        # every run — the marker keeps "always" (and any broader grant) off it.
+        scratch = _scratch_reached_by(self, tool_name, prompt_args)
+        if scratch:
+            prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above.
         one_time = isinstance(prompt_args, dict) and bool(
@@ -6798,23 +7018,11 @@ Do NOT wrap conversational replies in JSON.
         """
         extraction = getattr(self, "_extraction_ledger", None)
         if extraction is not None:
-            extraction.activate_skill(
-                self._extraction_skill_instructions(
-                    extraction.query,
-                    (
-                        (tool_args or {}).get("name")
-                        if tool_name == "load_skill"
-                        else False
-                    ),
-                )
+            self._activate_extraction_skills(
+                (tool_args or {}).get("name") if tool_name == "load_skill" else False
             )
             extraction.observe(tool_name, tool_args or {}, tool_result)
-            if (
-                extraction.enabled
-                and "extract_document_items" not in self._tools_registry
-            ):
-                self._register_extraction_tool()
-                self._apply_tool_filter(self._active_tool_filter)
+            self._offer_extraction_tools()
         truncated_result = tool_result
         # Its pages are bounded by the store; condensing one would archive it again.
         if (
@@ -7889,6 +8097,17 @@ Do NOT wrap conversational replies in JSON.
             return list(manager.list_servers())
         return list(manager.servers_for_agent(ns_id))
 
+    def _close_unrun_tool_card(self) -> None:
+        """End a displayed tool call the repeat guard refused to run.
+
+        Without a result the call shows as still running, and a front-end that
+        waits out a running tool would never see the turn go idle.
+        """
+        self.console.pretty_print_json(
+            {"status": "error", "error": _REPEAT_NOT_RUN_NOTE}, "Tool Result"
+        )
+        self.console.print_tool_complete()
+
     def _console_cancelled(self) -> bool:
         """Cooperative mid-generation cancel check for the Agent-UI path.
 
@@ -8006,18 +8225,21 @@ Do NOT wrap conversational replies in JSON.
     def _grounding_findings(
         self, answer: Optional[str], query: str, history: str
     ) -> list:
-        """Where *answer* outruns this turn's tool record (see ``grounding.py``)."""
+        """Where *answer* outruns this turn's tool record (see ``grounding.py``).
+
+        The answer only: files the turn wrote are never sent back for a
+        rewrite, since a false positive would damage a correct deliverable.
+        """
         if not answer or not answer.strip():
             return []
         roots = [os.getcwd(), self._verification_project_root()]
-        answer = strip_verification_scope(answer)
         return ungrounded(
-            answer,
+            strip_verification_scope(answer),
             query or "",
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
-        ) + self._deliverable_findings(answer, query or "", history, roots)
+        )
 
     def _deliverable_findings(
         self, answer: str, query: str, history: str, roots: list
@@ -8071,12 +8293,17 @@ Do NOT wrap conversational replies in JSON.
         return cache[stamp]
 
     def _note_ungrounded(self, answer: Optional[str], query: str) -> None:
-        """Record what *answer* still outruns, for this turn's scope note."""
-        self._turn_ungrounded = unverified_reasons(
-            self._grounding_findings(
-                answer, query, getattr(self, "_grounding_history", "")
+        """Record what *answer* and the files it wrote still outrun, for the scope note."""
+        history = getattr(self, "_grounding_history", "")
+        findings = self._grounding_findings(answer, query, history)
+        if answer and answer.strip():
+            findings += self._deliverable_findings(
+                strip_verification_scope(answer),
+                query or "",
+                history,
+                [os.getcwd(), self._verification_project_root()],
             )
-        )
+        self._turn_ungrounded = unverified_reasons(findings)
 
     def _project_has_tests(self, root: Optional[str]) -> bool:
         """``project_has_tests``, walked once per root per turn."""
@@ -8149,8 +8376,14 @@ Do NOT wrap conversational replies in JSON.
             return body
         return f"{body.rstrip()}\n\n{statement}"
 
+    def _turn_outputs(self) -> set:
+        """Files this turn wrote by any tool, scripts included: never sources."""
+        return {
+            key for key, item in self._completion_evidence.files.items() if item.written
+        }
+
     def _gate_unsealed_answer(
-        self, answer: Optional[str], keep_answer: bool = False
+        self, answer: Optional[str]
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -8158,23 +8391,19 @@ Do NOT wrap conversational replies in JSON.
         cap — lands here, so an unverified save or an unfinished extraction is
         reported as incomplete on those paths too. ``None`` stays ``None`` when
         nothing is unverified: the caller's max-steps fallback owns that text.
-
-        ``keep_answer`` keeps *answer* ahead of the report instead of replacing
-        it: the step-cap reply was asked for what was found and what is
-        missing, and is often the only place the turn's findings exist.
+        A non-empty *answer* always stays ahead of the report: it is often the
+        only place the turn's findings exist.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
-        gaps.extend(self._extraction_ledger.gaps())
+        gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
             gaps.append(unsupported[1] + ".")
         if gaps:
             report = incomplete_answer(gaps)
-            # Keep the error that ended the turn; add what stays unverified.
-            keep = bool(answer and answer.strip()) and (
-                keep_answer or bool(self._unrecovered_errors())
-            )
+            # The turn ended early, so it is unfinished; whatever it said stays.
+            keep = bool(answer and answer.strip())
             answer = f"{answer}\n\n{report}" if keep else report
         elif answer and answer.strip() and not self._unrecovered_errors():
             self._note_ungrounded(answer, getattr(self, "_current_query", ""))
@@ -8459,7 +8688,7 @@ Do NOT wrap conversational replies in JSON.
             self._extraction_skill_instructions(user_input)
         )
         had_extraction_tools = "extract_document_items" in self._tools_registry
-        if self._extraction_ledger.enabled:
+        if self._extraction_ledger.offered:
             self._register_extraction_tool()
         else:
             getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
@@ -8467,7 +8696,7 @@ Do NOT wrap conversational replies in JSON.
             if self._instance_tools is not None:
                 self._instance_tools.pop("extract_document_items", None)
                 self._instance_tools.pop("save_extracted_items", None)
-        if self._extraction_ledger.enabled or had_extraction_tools:
+        if self._extraction_ledger.offered or had_extraction_tools:
             self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
@@ -8638,10 +8867,9 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken,
                     steps_limit,
                 )
-                # Neutral wording: cancel now has several triggers (a user
-                # pressing Stop, an API client disconnecting, a stream timeout),
-                # and this text is persisted with the turn.
-                final_answer = (
+                # A limit that stopped the turn says so; a plain stop (Stop,
+                # a disconnect) gets the neutral wording.
+                final_answer = getattr(cancel_event, "message", None) or (
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
@@ -10007,6 +10235,7 @@ Do NOT wrap conversational replies in JSON.
                     consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
+                        self._close_unrun_tool_card()
                         # NATIVE path appends results to ``previous_outputs``
                         # (line 3387), not ``step_results``. Unwrap the
                         # ``result`` field so the helper sees actual tool
@@ -10260,6 +10489,7 @@ Do NOT wrap conversational replies in JSON.
                 if consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
+                    self._close_unrun_tool_card()
 
                     # Not ``step_results``: error recovery clears it before each retry.
                     recent_results = [o.get("result") for o in previous_outputs]
@@ -10654,9 +10884,11 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 # An answer about named workspace files that never opened one.
+                # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
                     and not tool_call_log
+                    and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
                     and any(name in self._tools_registry for name in _LOOK_TOOLS)
                 ):
@@ -10708,7 +10940,7 @@ Do NOT wrap conversational replies in JSON.
                             "Call query_specific_file or query_documents NOW to retrieve the "
                             "actual content. Output a tool call JSON — not planning text."
                         )
-                    elif not tool_call_history:
+                    elif not tool_call_history and not self._turn_tool_executions:
                         correction = (
                             "You said you would look that up but called no tools. "
                             "Call the appropriate tool RIGHT NOW. "
@@ -10803,15 +11035,12 @@ Do NOT wrap conversational replies in JSON.
                 # The record cannot say what the answer claims, so the answer
                 # is read — but only against an outcome that exists.
                 _IMAGE_AVAILABILITY_CLAIM = [
-                    r"--sd\b",
-                    r"\bsd flag\b",
                     r"stable diffusion.*active",
                     r"stable diffusion.*when",
                     r"image generation.*flag",
                     r"generate images when",
                     r"can generate images",
                     r"i can.*create.*image",
-                    r"when.*--sd",
                 ]
                 _IMAGE_OUTCOME_REPORTED = [
                     r"not available",
@@ -10865,29 +11094,6 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
-
-                # A failed generate_image is reported, not padded with what the
-                # model would have done; #1023: only when the latest call failed.
-                if image_outcome_recorded and capability_tool_last_succeeded is False:
-                    _SD_POST_FAILURE_VERBOSE = [
-                        r"would have done",
-                        r"what i would",
-                        r"prompt enhancement",
-                        r"i apologize for the confusion",
-                        r"let me explain what",
-                        r"enhance.*prompt",
-                        r"prompt.*technique",
-                        r"following.*research",
-                    ]
-                    _is_verbose_sd_failure = any(
-                        re.search(_p, answer_candidate, re.IGNORECASE)
-                        for _p in _SD_POST_FAILURE_VERBOSE
-                    )
-                    if _is_verbose_sd_failure:
-                        answer_candidate = (
-                            "Image generation is not available in this session — "
-                            "start GAIA with the `--sd` flag to enable it."
-                        )
 
                 # A request it never looked at, values no tool produced, or
                 # work it never did: one correction per gate, and only before
@@ -10966,8 +11172,8 @@ Do NOT wrap conversational replies in JSON.
                             steps_taken,
                             steps_limit,
                         )
+                        # Kept, with the gap named after it below.
                         completion_gaps = [why + "."]
-                        answer_candidate = incomplete_answer(completion_gaps)
                     else:
                         test_claim_corrections += 1
                         logger.debug(
@@ -11014,7 +11220,7 @@ Do NOT wrap conversational replies in JSON.
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate, _claims_file_write, soft=soft_gaps
                 )
-                extraction_gaps = self._extraction_ledger.gaps()
+                extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)
                 if artifact_gaps or soft_gaps:
                     if (
@@ -11101,7 +11307,10 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     completion_gaps.append(final_test_claim[1] + ".")
                 if completion_gaps:
-                    answer_candidate = incomplete_answer(completion_gaps)
+                    # Never discard the work: keep it and name what is unconfirmed.
+                    answer_candidate = caveated_answer(
+                        answer_candidate, completion_gaps
+                    )
                 else:
                     self._note_ungrounded(answer_candidate, user_input)
                 inventory = self._extraction_ledger.render()
@@ -11109,7 +11318,7 @@ Do NOT wrap conversational replies in JSON.
                     # Never ask another synthesis call to reproduce the set; it condenses.
                     answer_candidate += "\n\n" + inventory
                     if not completion_gaps:
-                        saved = sorted(self._extraction_ledger.destinations)
+                        saved = sorted(self._extraction_ledger.verified)
                         if saved:
                             answer_candidate += (
                                 "\n\nI saved the full list to "
@@ -11220,8 +11429,7 @@ Do NOT wrap conversational replies in JSON.
                     gated, completion_gaps = self._gate_unsealed_answer(
                         self.finalize_answer(
                             _without_tool_markup(cap_answer), conversation
-                        ),
-                        keep_answer=True,
+                        )
                     )
                     final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
@@ -11311,9 +11519,7 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            final_answer, completion_gaps = self._gate_unsealed_answer(
-                final_answer, keep_answer=max_steps_reached
-            )
+            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -11574,29 +11780,27 @@ Do NOT wrap conversational replies in JSON.
     ) -> Tuple[Optional[str], int]:
         """Final answer when the loop guard stops the turn, and the step count.
 
-        Repeats that worked prove neither outcome, so the model gets one
-        closing call (tools withheld) to say what it did from the results it
-        already has; failed or refused repeats keep the summary, which names
-        the failure. ``executed_count`` counts the calls that ran, as the
-        summary does. Returns ``(None, steps)`` when the user pressed Stop.
+        The model always gets one closing call (tools withheld) to say what it
+        did from the results it already has, so earlier work survives the
+        stop. Failed or refused repeats add the failure summary after it.
+        ``executed_count`` counts the calls that ran, as the summary does.
+        Returns ``(None, steps)`` when the user pressed Stop.
         """
         summary = self._build_loop_break_summary(
             tool_name, executed_count, recent_results
         )
-        if self._repeats_carry_a_failure(recent_results):
-            return summary, steps_taken
+        failed = self._repeats_carry_a_failure(recent_results)
 
         steps_taken += 1
         if self._turn_recorder is not None and self.chat is not None:
             self.chat.turn_step = steps_taken
         self.execution_state = self.STATE_COMPLETION
+        prompt = _FAILED_CALL_ANSWER_PROMPT if failed else _REPEATED_CALL_ANSWER_PROMPT
         try:
             answer = self._closing_answer(
                 messages,
                 conversation,
-                _REPEATED_CALL_ANSWER_PROMPT.format(
-                    tool=tool_name, count=executed_count
-                ),
+                prompt.format(tool=tool_name, count=executed_count),
                 steps_taken,
             )
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
@@ -11608,6 +11812,8 @@ Do NOT wrap conversational replies in JSON.
             )
         # Raw, like the summary branches above — the caller finalizes once.
         # Subclass hooks append corrections, so a second pass duplicates them.
+        if failed and answer is not None:
+            answer = f"{answer.rstrip()}\n\n{summary}"
         return answer, steps_taken
 
     def _end_turn_on_scope(
