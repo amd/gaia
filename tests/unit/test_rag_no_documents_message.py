@@ -11,7 +11,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
+pytest.importorskip("gaia_agent_chat")
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY
