@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
@@ -30,6 +30,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from gaia.logger import get_logger
+from gaia.tool_cancellation import ToolCancelled
 
 log = get_logger(__name__)
 
@@ -604,13 +605,30 @@ class _SearchGate:
         with self._lock:
             return max(0.0, self._blocked_until - time.monotonic())
 
-    def wait_turn(self) -> None:
+    #: Longest single sleep while a stop check is wired, so Stop ends a wait promptly.
+    STOP_POLL_SECONDS = 0.25
+
+    def wait_turn(self, should_stop: Optional[Callable[[], bool]] = None) -> None:
+        """Wait for this caller's slot; raise ``ToolCancelled`` if *should_stop* fires."""
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot, self._blocked_until)
             self._next_slot = slot + self.min_interval
-        if slot > now:
-            self._sleep(slot - now)
+        remaining = slot - now
+        if should_stop is None:
+            if remaining > 0:
+                self._sleep(remaining)
+            return
+        while True:
+            if should_stop():
+                raise ToolCancelled(
+                    "web search was stopped while waiting out a DuckDuckGo rate limit"
+                )
+            if remaining <= 0:
+                return
+            step = min(remaining, self.STOP_POLL_SECONDS)
+            self._sleep(step)
+            remaining -= step
 
     def back_off(self, seconds: float) -> None:
         with self._lock:
@@ -1383,7 +1401,11 @@ class WebClient:
     SEARCH_BACKOFF_CAP = 20.0
 
     def search_duckduckgo(
-        self, query: str, num_results: int = 5, max_attempts: int = 3
+        self,
+        query: str,
+        num_results: int = 5,
+        max_attempts: int = 3,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> list:
         """Search DuckDuckGo and parse results from HTML.
 
@@ -1396,8 +1418,12 @@ class WebClient:
 
         Returns: [{"title": str, "url": str, "snippet": str}]
 
+        ``should_stop`` is polled during pacing and backoff waits, so a user's
+        Stop ends the wait instead of sitting it out.
+
         Raises:
             SearchUnavailableError: every attempt was turned away.
+            ToolCancelled: ``should_stop`` returned True during a wait.
             RuntimeError: DDG answered another non-200 status.
         """
         if not BS4_AVAILABLE:
@@ -1413,7 +1439,7 @@ class WebClient:
         for attempt in range(max_attempts):
             hinted = None
             for name, url in _DDG_ENDPOINTS:
-                _SEARCH_GATE.wait_turn()
+                _SEARCH_GATE.wait_turn(should_stop)
                 response = self.post(url, data={"q": query, "b": ""})
                 blocked = _ddg_block_reason(response)
                 if blocked is None:
@@ -1421,6 +1447,13 @@ class WebClient:
                         raise RuntimeError(
                             f"DuckDuckGo answered HTTP {response.status_code}, so "
                             "no results were read."
+                        )
+                    if reason:
+                        log.warning(
+                            "DuckDuckGo %s endpoint answered after an earlier "
+                            "refusal (%s)",
+                            name,
+                            reason,
                         )
                     return self._parse_ddg(name, response.text, num_results)
                 reason, status = blocked, response.status_code

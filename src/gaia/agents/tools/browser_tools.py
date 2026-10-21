@@ -13,10 +13,12 @@ search the web, and download files for local analysis.
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
 if TYPE_CHECKING:
     from gaia.web.client import SearchUnavailableError
@@ -56,6 +58,26 @@ SEARCH_UNAVAILABLE_STREAK_LIMIT = 3
 
 _TAVILY_CONNECTOR_ID = "mcp-tavily"
 
+#: Parallel ``search_web`` calls share one refusal streak per agent.
+_STREAK_LOCK = threading.Lock()
+
+_NO_BACKUP_SEARCH_NOTE = (
+    "No backup search provider is set up. Tell the user that adding a Tavily "
+    "API key (gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...) "
+    "lets search keep working when DuckDuckGo throttles it."
+)
+
+
+def _search_stop_requested(mixin) -> bool:
+    """True once the user stopped the turn or the agent gave up on the tool."""
+    cancel_event = getattr(mixin, "_cancel_event", None)
+    console_cancelled = getattr(getattr(mixin, "console", None), "cancelled", None)
+    return (
+        (cancel_event is not None and cancel_event.is_set())
+        or (console_cancelled is not None and console_cancelled.is_set())
+        or tool_cancelled()
+    )
+
 
 def _tavily_fallback(
     query: str, num_results: int
@@ -65,10 +87,8 @@ def _tavily_fallback(
     Returns ``(results, None)``, ``(None, None)`` when Tavily is not
     configured, or ``(None, error)`` when it is configured but failed.
     """
-    try:
-        from gaia.connectors.mcp_server import is_mcp_server_configured
-    except ImportError:
-        return None, None
+    from gaia.connectors.mcp_server import is_mcp_server_configured
+
     try:
         if not is_mcp_server_configured(_TAVILY_CONNECTOR_ID):
             return None, None
@@ -106,9 +126,11 @@ def _search_unavailable_result(
     a repeat or a tool failure; after a streak of refusals the mark is dropped
     so the failure breaker can stop a search loop that cannot recover.
     """
-    streak = getattr(mixin, "_search_unavailable_streak", 0) + 1
-    mixin._search_unavailable_streak = streak
+    with _STREAK_LOCK:
+        streak = getattr(mixin, "_search_unavailable_streak", 0) + 1
+        mixin._search_unavailable_streak = streak
     detail = f" {fallback_error}" if fallback_error else ""
+    backup = "" if fallback_error else f" {_NO_BACKUP_SEARCH_NOTE}"
     if streak >= SEARCH_UNAVAILABLE_STREAK_LIMIT:
         return {
             "status": "error",
@@ -122,7 +144,7 @@ def _search_unavailable_result(
                 "Call fetch_page on a URL you already know (an official site, "
                 "documentation page or Wikipedia article), or answer with what "
                 "you have and say web search was unavailable. Do not invent "
-                "search results."
+                f"search results.{backup}"
             ),
         }
     return {
@@ -407,8 +429,12 @@ class BrowserToolsMixin:
             source_note = None
             try:
                 results = mixin._web_client.search_duckduckgo(
-                    query, num_results=num_results
+                    query,
+                    num_results=num_results,
+                    should_stop=lambda: _search_stop_requested(mixin),
                 )
+            except ToolCancelled as e:
+                return f"Web search stopped: {e}."
             except ImportError as e:
                 return f"Error: {e}"
             except ValueError as e:
@@ -418,6 +444,11 @@ class BrowserToolsMixin:
                 results, fallback_error = _tavily_fallback(query, num_results)
                 if results is None:
                     return _search_unavailable_result(mixin, e, fallback_error)
+                logger.warning(
+                    "DuckDuckGo refused the search; answered by the Tavily "
+                    "connector instead (%d results)",
+                    len(results),
+                )
                 source_note = (
                     "(DuckDuckGo is rate-limiting searches; these results are "
                     "from the configured Tavily connector.)"
@@ -428,7 +459,8 @@ class BrowserToolsMixin:
                     f"Error performing web search: {e}\n"
                     "Try using fetch_page with a direct URL instead."
                 )
-            mixin._search_unavailable_streak = 0
+            with _STREAK_LOCK:
+                mixin._search_unavailable_streak = 0
 
             if not results:
                 return (

@@ -841,9 +841,10 @@ class TestBrowserToolsMixin:
 
         result = self.registered_tools["search_web"]("test", num_results=100)
         # Should have been clamped to 10
-        self.agent._web_client.search_duckduckgo.assert_called_once_with(
-            "test", num_results=10
-        )
+        self.agent._web_client.search_duckduckgo.assert_called_once()
+        call = self.agent._web_client.search_duckduckgo.call_args
+        assert call.args == ("test",) and call.kwargs["num_results"] == 10
+        assert callable(call.kwargs["should_stop"])
 
     def test_download_file_formats_size(self):
         """download_file formats file sizes correctly."""

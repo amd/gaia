@@ -20,6 +20,8 @@ No test touches the network: every HTTP response is a stub.
 
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from unittest.mock import MagicMock, patch
@@ -33,6 +35,7 @@ from gaia.agents.tools.browser_tools import (
     SEARCH_UNAVAILABLE_STREAK_LIMIT,
     BrowserToolsMixin,
 )
+from gaia.tool_cancellation import ToolCancelled
 from gaia.web import client as web_client
 from gaia.web.client import SearchUnavailableError, WebClient, _SearchGate
 
@@ -136,6 +139,24 @@ class TestRetryAndEndpoints:
             },
         ]
         assert sleeps == []
+
+    def test_an_endpoint_answering_after_a_refusal_is_logged(
+        self, client, sleeps, caplog
+    ):
+        patcher, _ = _serve(client, _response(202), _response(200, LITE_PAGE))
+        with patcher, caplog.at_level(logging.WARNING):
+            client.search_duckduckgo("q")
+        assert "lite endpoint answered after an earlier refusal (HTTP 202)" in (
+            caplog.text
+        )
+
+    def test_stop_ends_the_backoff_without_another_request(self, client, sleeps):
+        patcher, calls = _serve(client, _response(202), _response(202))
+        with patcher, pytest.raises(ToolCancelled, match="stopped"):
+            # Stop arrives once the first backoff wait has begun.
+            client.search_duckduckgo("q", should_stop=lambda: bool(sleeps))
+        assert len(calls) == 2
+        assert sleeps == [web_client._SearchGate.STOP_POLL_SECONDS]
 
     def test_backs_off_exponentially_then_succeeds(self, client, sleeps):
         patcher, calls = _serve(
@@ -258,6 +279,24 @@ class TestSearchGate:
         gate.wait_turn()
         assert slept == [5.0]
 
+    def test_a_stop_check_slices_the_wait_and_ends_it(self, monkeypatch):
+        slept = []
+        monkeypatch.setattr(web_client.time, "monotonic", lambda: 10.0)
+        gate = _SearchGate(min_interval=0.0, sleep=slept.append)
+        gate.back_off(30.0)
+
+        with pytest.raises(ToolCancelled):
+            gate.wait_turn(should_stop=lambda: len(slept) >= 2)
+        assert slept == [0.25, 0.25]
+
+    def test_a_stop_check_that_never_fires_waits_the_full_time(self, monkeypatch):
+        slept = []
+        monkeypatch.setattr(web_client.time, "monotonic", lambda: 10.0)
+        gate = _SearchGate(min_interval=0.0, sleep=slept.append)
+        gate.back_off(1.0)
+        gate.wait_turn(should_stop=lambda: False)
+        assert sum(slept) == pytest.approx(1.0) and max(slept) <= 0.25
+
 
 def _search_tool(web):
     tools = {}
@@ -327,6 +366,38 @@ class TestSearchToolResult:
         assert "rate_limited" not in last and last["retryable"] is False
         assert "stop calling search_web" in last["error"]
         assert _is_tool_failure(last)
+        # With no backup provider, the user is told how to add one.
+        assert "gaia connectors configure mcp-tavily" in last["hint"]
+
+    def test_stop_during_a_search_wait_ends_the_search(self, no_tavily):
+        web = MagicMock()
+
+        def refuse_until_stopped(query, num_results, should_stop):
+            assert should_stop()
+            raise ToolCancelled("web search was stopped while waiting")
+
+        web.search_duckduckgo.side_effect = refuse_until_stopped
+        host, search_web = _search_tool(web)
+        host._cancel_event = threading.Event()
+        host._cancel_event.set()
+
+        result = search_web("q")
+
+        assert result.startswith("Web search stopped")
+        assert getattr(host, "_search_unavailable_streak", 0) == 0
+
+    def test_ui_stop_is_seen_by_the_search(self, no_tavily):
+        web = MagicMock()
+        seen = []
+        web.search_duckduckgo.side_effect = lambda q, num_results, should_stop: (
+            seen.append(should_stop()) or []
+        )
+        host, search_web = _search_tool(web)
+        host.console = MagicMock(cancelled=threading.Event())
+        search_web("q")
+        host.console.cancelled.set()
+        search_web("q")
+        assert seen == [False, True]
 
     def test_a_successful_search_resets_the_streak(self, no_tavily):
         web = MagicMock()
@@ -366,6 +437,24 @@ class TestSearchToolResult:
         assert "Tavily" in result and "1. Tav" in result
         assert "https://tavily.example/x" in result.splitlines()[4]
 
+    def test_switching_to_tavily_is_logged(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            "gaia.connectors.mcp_server.is_mcp_server_configured", lambda _id: True
+        )
+        tavily = MagicMock(configured=True)
+        tavily.search.return_value = {
+            "results": [{"title": "Tav", "url": "https://t.example", "content": ""}]
+        }
+        monkeypatch.setattr("gaia.web.tavily.TavilyClient", lambda: tavily)
+        web = MagicMock()
+        web.search_duckduckgo.side_effect = _unavailable()
+        _, search_web = _search_tool(web)
+
+        with caplog.at_level(logging.WARNING):
+            search_web("q")
+
+        assert "answered by the Tavily connector instead (1 results)" in caplog.text
+
     def test_a_failing_tavily_is_reported_not_hidden(self, monkeypatch):
         monkeypatch.setattr(
             "gaia.connectors.mcp_server.is_mcp_server_configured", lambda _id: True
@@ -381,6 +470,10 @@ class TestSearchToolResult:
 
         assert result["rate_limited"] is True
         assert "Tavily connector also failed: credit cap reached" in result["error"]
+        for _ in range(SEARCH_UNAVAILABLE_STREAK_LIMIT - 1):
+            last = search_web("q")
+        # Tavily is set up, so the user is not told to set it up.
+        assert "configure mcp-tavily" not in last["hint"]
 
     def test_no_tavily_means_no_tavily_client(self, no_tavily, monkeypatch):
         built = MagicMock()
