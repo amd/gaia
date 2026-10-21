@@ -31,7 +31,6 @@ import os
 import re
 import stat
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -526,15 +525,19 @@ def write_bytes_atomic(
     """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Not tempfile.mkstemp: on Windows it retries a refused create up to
+    # 10,000 times, which turns an ACL-denied folder into a long hang.
+    tmp = target.parent / f".{target.name}.{uuid.uuid4().hex[:12]}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     try:
-        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+        fd = os.open(str(tmp), flags, 0o600)
     except PermissionError as e:
         raise PermissionError(
             e.errno,
             f"Cannot write {target}: this user cannot create files in "
             f"{target.parent}. Fix its permissions or point GAIA at a folder "
             "this user can write",
-            e.filename,
+            str(tmp),
         ) from e
     try:
         with os.fdopen(fd, "wb") as handle:

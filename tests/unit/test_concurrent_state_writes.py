@@ -702,6 +702,6 @@ def test_config_save_with_an_existing_lock_in_a_denied_directory_fails_loudly(
         start = time.monotonic()
         with pytest.raises(OSError) as exc:
             GaiaConfig.save_key("default_model", "other", path)
-        assert time.monotonic() - start < 10
+        assert time.monotonic() - start < 5
         assert str(config_dir) in str(exc.value)
     assert json.loads(path.read_text(encoding="utf-8")) == {"profile": "npu"}
