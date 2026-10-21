@@ -171,6 +171,7 @@ jobs:
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/messaging/test_bridge_contract.py \
+            tests/unit/messaging/test_bridge_hung_tool.py \
             tests/unit/test_execute_python_file_cwd.py \
             tests/unit/test_flagship_code_index_scope.py \
             tests/unit/test_stdio_permission_control.py \
