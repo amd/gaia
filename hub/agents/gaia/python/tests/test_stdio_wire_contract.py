@@ -314,6 +314,22 @@ def test_status_extension_fields_match_the_model_state_ping(monkeypatch):
     )
 
 
+def test_context_reduced_status_matches_the_fixture():
+    from gaia.ui.sse_handler import SSEOutputHandler
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    handler = SSEOutputHandler()
+    handler.print_context_eviction({"evicted_results": 2, "evicted_tokens_est": 900})
+    (event,) = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False).translate(
+        handler.event_queue.get_nowait()
+    )
+
+    assert event["type"] == "status"
+    assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | set(
+        EVENTS["status"]["context_reduced_extension"]
+    )
+
+
 def test_history_cut_status_matches_the_fixture():
     from gaia.agents.base.history import HistoryCut
 

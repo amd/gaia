@@ -217,6 +217,7 @@ export interface AgentStepResponse {
   latencyMs?: number | null;
   mcpServer?: string | null;
   narration?: string | null;
+  notice?: boolean | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;

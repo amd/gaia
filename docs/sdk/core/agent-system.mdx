@@ -490,52 +490,102 @@ the NPU budget. A cloud model reached through Lemonade gets the conservative
 30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
 per-result character budgets, not measured remaining tokens.
 
-## Evicting stale tool results
+## Moving read tool results out of the prompt
 
-On a large repository the context an agent re-sends each step grows to
-130–195K tokens, and most of it is old tool results the model has already
-acted on. Context eviction replaces such results, in the list sent to the
-model only, with a one-line stub that names where the full text is:
+**Opt-in for now** (`context_eviction="on"` or `GAIA_CONTEXT_EVICTION=on`). It
+turns on by default once it passes the planted-fact retrieval test in the
+context efficiency plan (#5263): in testing, a 4B model re-read a moved-out
+result correctly in 4 of 6 runs and once answered from memory instead.
+
+A local model's window is 32K–64K tokens, and a tool-heavy turn fills it fast:
+the model reads a document, then another, and every result rides along on every
+later call. Before each model call (the closing answer included) the agent
+measures the request. When the next call plus one more capped tool result would
+not fit, it moves the oldest tool results the model has already read out of the
+prompt, in one batch, until two would fit. This is the reducer proposed in
+the context efficiency plan (#5263), and it fires on headroom rather than a
+percentage: the usable window is the loaded window less the reply's
+reserve (`max_output_tokens`, 8,192 locally) and a 2,048-token margin, and the
+headroom is one capped result (5,000 tokens). A percentage gap shrinks on small
+windows until one result crosses both marks at once; this gap is one result
+everywhere.
+
+Each result moved out is replaced, in the list sent to the model only, by a
+one-line stub:
 
 ```
-[evicted: read_file path=src/gaia/cli.py; 41203 chars; read_tool_output(artifact=output_…, entry=1) fetches it]
+[Not shown, put away to save context: read_file path=docs/q3.md; summary: success, Revenue rose 12%; 41203 chars. Call read_tool_output(artifact=output_…, entry=1) to read it.]
 ```
 
-This is not the context compaction GAIA's roadmap rules out ("memory + RAG
-handles long conversations"): nothing is summarised and nothing is lost. Every
-evicted result is archived whole in the agent's artifact store and stays
-fetchable through `read_tool_output`; a result that already arrived as a chunk
-index keeps its handle and index. The turn's conversation log — what
-transcripts and the Agent UI show — is never touched. It is **off by default**.
+The stub keeps the tool, its key arguments and what the result said, and says
+plainly that the text isn't shown, which a 4B model otherwise misses. When the
+model needs a fact from it, it re-reads it with `read_tool_output`.
 
-Whether eviction saves money depends on the provider's cached-versus-uncached
-input price: every eviction changes the prompt prefix, so the next call
-re-reads everything after the eviction point uncached once. Simulated on real
-per-step counts, Kimi K2.7 (cached $0.19/M vs $0.95/M) saves 27%, GLM-5.3
-Flash 11%, and DeepSeek V4.1 Flash (0.006 vs 0.30) loses. So the policy fires
-rarely and in batches:
+The scope is narrow on purpose:
 
-- `context_eviction` — `off` (default), `on`, or `auto`. `auto` is on only for
-  a cloud model whose cached/uncached input price ratio, from the table in
-  `gaia.llm.cache_pricing`, is at least 0.1; a local model or one not in the
-  table is off, said once at info level, never guessed.
-- `context_eviction_threshold_tokens` (60,000) — nothing is evicted until the
-  last measured prompt (`prompt_tokens` from the previous step) is over this.
-- `context_eviction_keep_steps` (8) — results from the last this-many steps are
-  never evicted.
-- `context_eviction_min_batch_tokens` (30,000) — the evictable results must add
-  up to at least this (chars / 3.6) before they go, all in one batch.
+- **Only tool results move.** The system prompt and every user and assistant turn
+  are sent unchanged. Nothing is summarized or rewritten.
+- **Nothing is lost.** Each result is archived whole under the agent's run,
+  `~/.gaia/runs/<run_id>/results/`. Its handle is a hash of its text, so the same
+  result always gets the same handle and a byte-identical stub, on every turn and
+  in every process; that keeps the prompt cache. A result that already arrived as
+  a chunk index keeps its own handle, and a `read_tool_output` page points back at
+  its own archive. A put-away result read with no `entry` or `offset` comes back
+  from its start, a full page at a time. A missing original is an error that
+  names the handle, and so is an archived file whose contents no longer match its
+  hash (edited or corrupted on disk). Handles are exactly `output_` plus 32 hex
+  characters, so a handle can never name a path. If the archive can't be written
+  (disk full, read-only), the result stays in the prompt and a warning is logged.
+  Run folders untouched for 7 days are removed when an agent with eviction on
+  starts.
+  The turn's conversation log keeps every result.
+- **A nudge to re-read.** If the model answers while results are moved out and it
+  hasn't re-read any of them, it is asked once to re-read whatever the answer
+  depends on, or give the same answer again. That costs one extra model call on
+  such turns.
+- **Never silent.** Every batch is announced: a line in the Agent UI's activity
+  and the TUI transcript ("Moved 3 older tool results out of the prompt (~12.4K
+  tokens); still readable"), an info log line, and `evicted_results` /
+  `evicted_tokens_est` on that step's `stats` entry. Between turns,
+  `agent.context_state()` returns `{"put_away": {"results", "tokens"},
+  "summarized": None}` for the stubs the last request carried, which the context
+  panel reads.
+- **Some results always stay whole:** the latest tool step, anything read by
+  fewer than two model calls, a refusal (a denied permission, a governance
+  block, a call that did not run), an error result, `delegate_task` answers,
+  non-text content, and anything too small to be worth a stub.
 
-`GAIA_CONTEXT_EVICTION`, `GAIA_EVICT_THRESHOLD`, `GAIA_EVICT_KEEP` and
-`GAIA_EVICT_MIN_BATCH` override the four settings; a malformed value is an
-error at construction. Eligibility is judged from each result's own text (a
-stub already, or not), never a remembered id — a result the turn log replays
-at full size on a later turn (the log always keeps the pre-eviction copy) is
-judged fresh, so a long session keeps getting evicted rather than drifting
-back to full size after its first turn. `read_tool_output` pages and
-`delegate_task` results are never evicted, and user and assistant messages
-are never changed. Each batch adds `evicted_results` and `evicted_tokens_est`
-to that step's `stats` entry in the conversation log and logs one info line.
+How the request is measured: the backend's own `prompt_tokens` for the previous
+call, plus a count of what changed since that leans high (the larger of the
+cl100k count and UTF-8 bytes ÷ 3, since cl100k undercounts JSON and CJK). A
+reported count under a quarter of that estimate is not a whole prompt (some
+backends report only uncached tokens) and is ignored. Results replayed from an
+earlier turn count as already read.
+
+Every batch changes the prompt prefix, so the backend re-reads everything after
+the first stub once, uncached; oldest-first keeps that break as late in the
+prompt as it can be. In the deterministic stress test (46 tool steps, one 3 MB
+result, and the flagship's ~17,900-token fixed prompt), a 64K window moved
+results out 8 times in 51 calls and kept 88% of each request as a reusable
+prefix (95% with eviction off, which overflowed once and lost 4 of 6 facts). On
+a 32K window that prompt leaves no room for even one capped result after the
+reply's reserve, so nearly every call moves out whatever is eligible (50 of 53
+calls, 87% reuse); the plan's smaller fixed prompt is what fixes that case.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `context_eviction` | `"off"` | `"on"` (or `"auto"`) runs it; `"off"` leaves only the overflow retry |
+| `context_eviction_headroom_tokens` | `5000` | Room kept for one more capped tool result |
+| `context_eviction_keep_steps` | `2` | Model calls a result must have been in before it can move |
+| `context_eviction_threshold_tokens` | `None` | An absolute trigger in tokens, instead of the headroom rule |
+| `context_eviction_min_batch_tokens` | 5% of the window | Smallest batch worth a cache break, between the trigger and halfway into the headroom; past that any batch goes |
+
+`GAIA_CONTEXT_EVICTION`, `GAIA_EVICT_HEADROOM`, `GAIA_EVICT_KEEP`,
+`GAIA_EVICT_THRESHOLD` and `GAIA_EVICT_MIN_BATCH` override them. A malformed
+value is an error when the agent is built. On a small window the reply's reserve
+is capped at a quarter of the window, the margin at a sixteenth, and the
+headroom at a quarter of what's left, so a 4K or 8K window still has a positive
+trigger and room between the marks.
 
 **When the backend refuses a request as too long**, the overflow retry runs once,
 eviction on or off. It moves every older tool result out of the request the same
@@ -549,6 +599,8 @@ request was over by (read from the backend's error), or, when the error gives no
 numbers, at least a tenth of the request. Otherwise nothing is archived and the
 turn ends with the message that the request needs more than fits, rather than
 repeating a refusal.
+With eviction off, what it moves out is kept in memory for the session, not on
+disk.
 
 ## Common Pitfalls and Solutions
 

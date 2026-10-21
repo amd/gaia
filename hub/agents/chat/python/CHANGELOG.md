@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `ChatAgentConfig.context_eviction` (still `"off"` by default) works on
+  headroom when turned on: tool results the model has already read move out of
+  the request when the next call
+  plus one more capped result (`context_eviction_headroom_tokens`, new, 5000)
+  would not fit the window less the reply's reserve; each stays re-readable via
+  `read_tool_output`. `context_eviction_threshold_tokens` and
+  `context_eviction_min_batch_tokens` now default to `None` and
+  `context_eviction_keep_steps` to 2 (was 8). `"auto"` no longer depends on a
+  cloud model's cached-input price. Requires the matching `amd-gaia` core.
 - gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the
   agent chooses how hard the model reasons for the rest of a request; each new
   message starts again at the default. It registers per agent and only on a

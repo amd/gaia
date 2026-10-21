@@ -374,6 +374,17 @@
         ],
         "title": "Narration"
       },
+      "notice": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Notice"
+      },
       "planNarrations": {
         "anyOf": [
           {

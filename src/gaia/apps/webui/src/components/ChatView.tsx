@@ -1074,6 +1074,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
+                    if (status === 'context_reduced') {
+                        const step = agentEventToStep(event, stepIdRef);
+                        if (step) addAgentStep({ ...step, active: false, notice: true });
+                        return;
+                    }
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
                     // The client's own wait notice is not a step of the turn.
                     if (event.phase === 'waiting') return;

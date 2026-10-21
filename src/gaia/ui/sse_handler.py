@@ -1005,6 +1005,27 @@ class SSEOutputHandler(OutputHandler):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
 
+    def print_context_eviction(self, event: Dict[str, Any]):
+        """A lasting notice, with the counts the context meter and panel show."""
+        from gaia.agents.base.context_eviction import context_eviction_message
+
+        self._emit(
+            {
+                "type": "status",
+                "status": "context_reduced",
+                "message": context_eviction_message(event),
+                "context_reduced": {
+                    "reason": event.get("reason"),
+                    "results": event.get("evicted_results", 0),
+                    "tokens_freed": event.get("evicted_tokens_est", 0),
+                    "prompt_tokens_before": event.get("prompt_tokens_before"),
+                    "prompt_tokens_after": event.get("prompt_tokens_after"),
+                    "context_window": event.get("context_window"),
+                    "items": list(event.get("items") or []),
+                },
+            }
+        )
+
     def print_final_answer(
         self,
         answer: str,

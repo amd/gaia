@@ -251,6 +251,11 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
+        // A context notice keeps its own row: it never merges with a neighbour.
+        if (step.notice || prev?.notice) {
+            result.push({ ...step });
+            return;
+        }
         // Merge consecutive thinking steps; concatenate so accumulated text survives.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
             const merged = (prev.detail || '') + (step.detail || '');
@@ -562,7 +567,7 @@ function FlowStatus({ step }: { step: AgentStep }) {
     const text = step.detail || step.label || '';
     if (!text) return null;
     return (
-        <div className={`flow-thought ${step.active ? 'active' : ''}`}>
+        <div className={`flow-thought ${step.active ? 'active' : ''} ${step.notice ? 'flow-notice' : ''}`}>
             <span className="flow-thought-text">{text}</span>
         </div>
     );

@@ -169,6 +169,14 @@
     word-break: break-word;
 }
 
+.flow-notice {
+    color: var(--text-secondary);
+}
+
+.flow-notice .flow-thought-text {
+    font-style: normal;
+}
+
 /* @keyframes fadeIn defined in global index.css */
 
 /* ── Flow: Reasoning, folded behind a one-line toggle ───────────── */

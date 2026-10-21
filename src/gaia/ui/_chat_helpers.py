@@ -1718,6 +1718,18 @@ _RELAY_CONTEXT_PAIRS = 5
 _history_cuts: dict = {}
 
 
+def _context_eviction_step(event: dict, step_id: int, timestamp: int) -> dict:
+    """The saved row for a context eviction, so the notice survives a reload."""
+    return {
+        "id": step_id,
+        "type": "status",
+        "label": event.get("message", ""),
+        "active": False,
+        "notice": True,
+        "timestamp": timestamp,
+    }
+
+
 def _query_context_from_history(history_pairs: list) -> list[dict]:
     """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
     dicts for the sidecar's ``/query`` request body (#2109).
@@ -3896,6 +3908,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "success": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
+                    )
+                elif (
+                    event_type == "status" and event.get("status") == "context_reduced"
+                ):
+                    step_id += 1
+                    captured_steps.append(
+                        _context_eviction_step(
+                            event,
+                            step_id,
+                            int(asyncio.get_running_loop().time() * 1000),
+                        )
                     )
                 elif event_type == "policy_alert":
                     step_id += 1

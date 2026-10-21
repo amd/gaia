@@ -42,6 +42,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dropped every older result and the answer was built on whatever was left
   (#2780). The retry now keeps each result whole behind a handle the model can
   re-read, and retries only when the request will then fit.
+- **Opt-in: move read tool results out before the window fills.** With
+  `GAIA_CONTEXT_EVICTION=on`, tool results the model has already read leave
+  the prompt, oldest first, when the next call plus one more result would not
+  fit. Each stays re-readable through its handle, the activity and TUI
+  transcript say so, and conversation turns are never touched.
 - **Token counts no longer undercount when the tokenizer data can't load.** On
   an offline or locked-down machine the counter fell back to characters ÷ 4.28,
   which undercounts JSON and CJK text, so history that should take half the

@@ -78,12 +78,25 @@ type CanonicalStatusEvent struct {
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// ContextReduced is set when older tool results moved out of the prompt
+	// (each still readable); Message then carries the line to keep in the transcript.
+	ContextReduced *ContextReduced `json:"context_reduced,omitempty"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.
 type HistoryCut struct {
 	Turns  int `json:"turns"`
 	Tokens int `json:"tokens"`
+}
+
+// ContextReduced sizes one batch of tool results moved out of the prompt.
+type ContextReduced struct {
+	Reason             string `json:"reason"`
+	Results            int    `json:"results"`
+	TokensFreed        int    `json:"tokens_freed"`
+	PromptTokensBefore int    `json:"prompt_tokens_before"`
+	PromptTokensAfter  int    `json:"prompt_tokens_after"`
+	ContextWindow      int    `json:"context_window"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.
