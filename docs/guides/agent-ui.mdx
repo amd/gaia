@@ -588,7 +588,11 @@ that later change. Undo the later turn first to keep it. To undo every turn at o
 
 GAIA can't copy what a shell command, a Python snippet or a connected (MCP)
 tool is about to change. When a turn ran one that could have changed files,
-the answer says **Undo may be incomplete** and lists it.
+the answer says so — "GAIA ran 2 Python snippets it can't track" — and lists
+them, identical ones once. A snippet or script is left out only when GAIA can
+tell from its code that it just reads files, and no files changed in the folders
+it ran in. When in doubt — a library GAIA doesn't know, a file opened in a mode
+it can't read off the code — it is listed.
 
 **Settings → Privacy → Undo history** sets how long copies are kept (7 days by
 default) and how much space they may use (500 MB, oldest first), and shows how

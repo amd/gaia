@@ -315,6 +315,60 @@ class TestListingAndReview:
         assert turn["incomplete"] is True
         assert turn["untracked"][0]["detail"] == "npm run build"
 
+    def test_read_only_work_alone_records_no_turn(self, root):
+        with _record(root):
+            fs.note_untracked("run_python", "count errors", may_write=False)
+        assert fs.list_turns(SID, root=root) == []
+        assert fs.session_changes(SID, root=root)["incomplete"] is False
+
+    def test_only_work_that_may_write_marks_the_turn(self, root, work):
+        target = work / "a.txt"
+        target.write_text("old")
+        with _record(root):
+            fs.before_change(target)
+            target.write_text("new")
+            fs.note_untracked("run_python", "count errors", may_write=False)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["incomplete"] is False
+        assert turn["untracked"] == []
+        # Kept in the record, just not reported as a gap in undo.
+        manifest = json.loads(
+            (root / SID / turn["turn_id"] / fs.MANIFEST).read_text(encoding="utf-8")
+        )
+        assert manifest["untracked"][0]["may_write"] is False
+
+        with _record(root) as rec:
+            fs.note_untracked("run_python", "count", may_write=False)
+            fs.note_untracked("run_python", "save totals", ["C:\t.csv"])
+        (turn,) = [
+            t for t in fs.list_turns(SID, root=root) if t["turn_id"] == rec.turn_id
+        ]
+        assert turn["incomplete"] is True
+        assert [u["detail"] for u in turn["untracked"]] == ["save totals"]
+        changes = fs.session_changes(SID, root=root)
+        assert changes["incomplete"] is True
+        assert [u["detail"] for u in changes["untracked"]] == ["save totals"]
+
+    def test_entries_saved_before_may_write_existed_count_as_writes(self, root):
+        with _record(root) as rec:
+            fs.note_untracked("shell", "npm run build")
+        path = root / SID / rec.turn_id / fs.MANIFEST
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        del manifest["untracked"][0]["may_write"]
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["incomplete"] is True
+
+    def test_read_only_work_after_the_turn_ended_is_not_noted(self, root, work):
+        target = work / "a.txt"
+        target.write_text("old")
+        with _record(root) as rec:
+            fs.before_change(target)
+            target.write_text("new")
+        rec.note_untracked("run_python", "late read", may_write=False)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["incomplete"] is False
+
     def test_outside_a_turn_nothing_is_recorded(self, root, work):
         fs.before_change(work / "x.txt")
         fs.note_untracked("shell", "rm x")
