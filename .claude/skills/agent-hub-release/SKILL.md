@@ -125,7 +125,7 @@ matching `CHANGELOG.md` entry too if the agent keeps one (recommended, not requi
    object** against the lock → `npm publish` via OIDC (provenance) → trigger
    `deploy_website.yml` so the home page's download links pick up the new build.
 7. **Flagship (`gaia`) only — merge the lock PR.** Its `pin-lock` job opens a PR
-   committing the verified lock to main (branch `release/flagship-lock-v<version>`),
+   committing the verified lock to main (branch `flagship-lock/v<version>`),
    because the installer build and the final core release read the committed copy.
    Merge it; don't pin hashes by hand. Re-running the job is safe: it never opens a
    second PR and does nothing when main already matches.
