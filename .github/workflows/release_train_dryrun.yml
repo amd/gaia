@@ -26,9 +26,6 @@
 name: Release train dry run
 
 on:
-  # TEMPORARY: lets the branch run before the file is on main. Reverted before merge.
-  push:
-    branches: [ci/release-train-dryrun, ci/release-train-dryrun-rc2]
   workflow_dispatch:
     inputs:
       rc_tag:
@@ -64,7 +61,7 @@ jobs:
       - name: Check the tag against the tree
         id: plan
         env:
-          RC_TAG: ${{ inputs.rc_tag || 'v0.25.1-rc3' }}
+          RC_TAG: ${{ inputs.rc_tag }}
         run: |
           set -euo pipefail
           echo "Building ${GITHUB_REF_NAME} = ${GITHUB_SHA}"
