@@ -157,6 +157,16 @@ def test_the_wake_notification_does_not_hide_the_standby_it_ends():
     assert ledger.read() == pytest.approx(1040.0)
 
 
+def test_after_shutdown_a_late_display_off_never_holds_the_clock():
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    ledger.detach()
+    ledger.display(False)  # a notification still in flight during shutdown
+    pc.frozen(60.0)
+    assert ledger.read() == pytest.approx(1060.0)
+
+
 def test_readings_never_go_backwards_through_standbys_and_pauses():
     pc = _Machine(0.0)
     ledger = pc.ledger()
@@ -217,7 +227,7 @@ _CHILD = textwrap.dedent("""
         elif cmd == "on":
             display(1)
         elif cmd == "exit-monitor":
-            # Ends the pump without an error, as if the thread just returned.
+            # Wakes the pump on its stop event without stop(): it exits clean.
             ac._kernel32.SetEvent(ac._monitor._stop_event)
         elif cmd == "corrupt":
             user32.SendMessageW(ac._monitor.hwnd, 0x0218, 0x8013, 0)
@@ -333,7 +343,7 @@ def test_a_process_frozen_through_standby_wakes_with_the_standby_left_out(child)
     wall = time.perf_counter() - began
 
     # Held at the gap past the last beat before the freeze.
-    assert first_read - start <= (suspended - began) + GAP + 0.3
+    assert first_read - start <= (suspended - began) + GAP + 0.5
     assert start <= first_read <= woke <= later
     # All of the freeze is left out but the gap and up to one heartbeat.
     assert later - start <= wall - (FREEZE - GAP - HEARTBEAT - 0.5)

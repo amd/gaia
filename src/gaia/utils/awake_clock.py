@@ -17,7 +17,9 @@ about to carry on. :func:`monotonic` stops while the PC sleeps:
   with the display off and using next to no CPU, as standby, and leaves it
   out past the first ``STANDBY_GAP`` seconds. Each one is logged with its
   size. A freeze with the display on is a pause, and a busy process starved
-  of its turn is not frozen; both count, and are logged.
+  of its turn is not frozen; both count, and are logged. A process stalled
+  for over ``STANDBY_GAP`` seconds while using little CPU with the display off
+  (heavy paging, say) can't be told from standby this way, and is left out.
 * Linux and macOS: ``time.monotonic()``, which already stops during suspend.
 
 Use it for any limit on how long something may take, so a sleep never reads
@@ -74,12 +76,14 @@ class SleepLedger:
         self._last_beat = clock()
         self._last_cpu = cpu()
         self._display_on = True
+        self._monitored = True
 
     def read(self) -> float:
         """The awake time now."""
         with self._lock:
             raw = self._clock()
-            if not self._display_on and raw - self._last_beat > self.gap:
+            held = self._monitored and not self._display_on
+            if held and raw - self._last_beat > self.gap:
                 raw = self._last_beat + self.gap
             return raw - self.excluded
 
@@ -92,9 +96,20 @@ class SleepLedger:
     def display(self, on: bool) -> None:
         """The console display turned on or off just now."""
         with self._lock:
+            if not self._monitored:
+                return
             # A gap that ends here began under the old display state.
             report = self._beat_locked()
             self._display_on = on
+        self._log(*report)
+
+    def detach(self) -> None:
+        """Monitoring has ended: judge the last gap, then never hold again."""
+        with self._lock:
+            if not self._monitored:
+                return
+            report = self._beat_locked()
+            self._monitored = False
         self._log(*report)
 
     def _beat_locked(self):
@@ -498,7 +513,7 @@ if sys.platform == "win32":
                 return
             _shut_down = True
             # Nothing beats any more, so nothing may be held for a beat.
-            _ledger.display(True)
+            _ledger.detach()
             _monitor.stop()
 
     def _reset_for_tests() -> None:
