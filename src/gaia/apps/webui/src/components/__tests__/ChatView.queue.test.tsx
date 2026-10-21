@@ -145,7 +145,7 @@ describe('messages typed during a reply', () => {
         expect(streams).toHaveLength(1);
     });
 
-    it('stay queued when the running reply cannot take them', async () => {
+    it('stay queued, saying so, when the running reply cannot take them', async () => {
         mockedApi.sendFollowUp.mockRejectedValue(new Error('409'));
         await startTurn();
         await type('second');
@@ -153,12 +153,31 @@ describe('messages typed during a reply', () => {
         await act(async () => {
             fireEvent.click(screen.getByText('Add to this reply'));
         });
-        expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
+        expect(screen.getByText("Can't add to this reply; it will send when the reply ends.")).toBeTruthy();
+        expect(screen.queryByText('Queued. Sends when this reply ends.')).toBeNull();
 
         await act(async () => {
             current().onDone({ type: 'done', content: 'answer one', message_id: 2 } as StreamEvent);
         });
         expect(mockedApi.sendMessageStream.mock.calls[1][1]).toBe('second');
+    });
+
+    it('are not offered to a reply that said it cannot take them', async () => {
+        await startTurn();
+        act(() => {
+            current().onAgentEvent({ type: 'followup_unavailable' } as StreamEvent);
+        });
+        await type('second');
+
+        expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
+        expect(screen.queryByText('Add to this reply')).toBeNull();
+
+        // The next reply starts fresh and may take them.
+        await act(async () => {
+            current().onDone({ type: 'done', content: 'answer one', message_id: 2 } as StreamEvent);
+        });
+        await type('third');
+        expect(screen.getByText('Add to this reply')).toBeTruthy();
     });
 
     it('are sent next when the reply ended before reading them', async () => {

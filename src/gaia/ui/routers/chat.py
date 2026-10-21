@@ -698,10 +698,14 @@ class FollowUpRequest(BaseModel):
 async def send_followup(request: FollowUpRequest):
     """Hand a message to the session's running turn, picked up at its next step.
 
-    404 means no turn is running, 409 that the running one cannot take it
-    (not yet at the model, or relayed to an agent outside this process). Either
-    way the message was not delivered, so the caller must queue it.
+    404 means no turn is running, 409 that the running one cannot take it (not
+    yet at the model, or relayed to an agent that refused it or cannot take
+    one). Either way the message was not delivered, so the caller must queue it.
     """
+    from starlette.concurrency import run_in_threadpool
+
+    from gaia.ui.email_sidecar.errors import SidecarError
+
     text = request.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="A follow-up needs some text.")
@@ -710,7 +714,16 @@ async def send_followup(request: FollowUpRequest):
             status_code=404,
             detail="No reply is running in this chat; send it as a new message.",
         )
-    if not followups.deliver(request.session_id, text):
+    try:
+        # Off the event loop: a relayed turn's delivery is an HTTP round trip.
+        delivered = await run_in_threadpool(followups.deliver, request.session_id, text)
+    except SidecarError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"The running reply did not take the message ({exc}); it is "
+            "sent as the next message once the reply ends.",
+        ) from exc
+    if not delivered:
         raise HTTPException(
             status_code=409,
             detail="The running reply cannot take a message right now; it is "

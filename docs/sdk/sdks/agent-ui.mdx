@@ -1106,11 +1106,16 @@ Deleting a chat deletes its copies.
     Hand `{session_id, text}` to the session's running turn. The agent reads it
     at its next step without restarting. The stream then carries
     `followup_taken` (`text`) and the message is saved as a user message. A turn
-    that ends first sends `followup_returned` (`texts`) before `done`. 404: no
-    turn is running. 409: the running turn can't take it yet (it hasn't reached
-    the model, or a relayed agent runs it). The Agent UI calls it only when the
-    user picks **Add to this reply** on a queued message; otherwise a message
-    typed mid-turn waits and is sent as its own turn.
+    that ends first sends `followup_returned` (`texts`) before `done`. A turn
+    relayed to the GAIA agent sidecar (contract 2.15+) gets the message over the
+    sidecar's `/query/{run_id}/followup`; the sidecar can't say when its agent
+    reads it, so one it accepts counts as taken at once and nothing is
+    returned. A relayed turn that can't take one at all (email, or an older
+    agent) says so with a `followup_unavailable` event as it starts. 404: no
+    turn is running. 409: the running turn can't take it (it hasn't reached the
+    model, or the agent refused it). The Agent UI calls it only when the user
+    picks **Add to this reply** on a queued message; otherwise a message typed
+    mid-turn waits and is sent as its own turn.
   </Accordion>
 
   <Accordion title="GET /api/chat/followup/{session_id}">

@@ -197,6 +197,23 @@ class SidecarProxy:
                 f"decision: {exc}"
             ) from exc
 
+    def followup(self, run_id: str, text: str) -> dict:
+        """Hand run *run_id* a message the user sent mid-turn (contract >= 2.15).
+
+        A 404/409 (run over, agent not taking input) raises: the caller must
+        keep the message rather than show it as delivered.
+        """
+        import requests
+
+        path = f"{self.prefix}/query/{run_id}/followup"
+        try:
+            return self._post(path, {"text": text})
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to add the "
+                f"message to its reply: {exc}"
+            ) from exc
+
     def skills(self) -> dict:
         """The skills the agent can load (flagship, contract >= 2.17)."""
         import requests

@@ -324,6 +324,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         [sessionId],
     );
     const userStoppedRef = useRef(false);
+    /** The running reply said up front that it can't take a message mid-turn. */
+    const [followupsUnavailable, setFollowupsUnavailable] = useState(false);
     /** This view saw its chat's last turn end, so the queue need not wait for a poll to say so. */
     const observedEndRef = useRef(false);
     /** A queued message's send that the server has not yet taken; leaving the chat must not abort it. */
@@ -691,6 +693,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setLiveHistoryNotice(null);
         let doneHandled = false;
         observedEndRef.current = false;
+        if (!reattach) setFollowupsUnavailable(false);
         let streamController: AbortController | null = null;
         let queuedSettled = !fromQueue;
         queuedSendPendingRef.current = fromQueue;
@@ -831,6 +834,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                     });
+                    return;
+                }
+                if (event.type === 'followup_unavailable') {
+                    if (!isStale()) setFollowupsUnavailable(true);
                     return;
                 }
                 if (event.type === 'followup_returned') {
@@ -1526,7 +1533,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
             .catch((err) => {
                 log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
-                setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
+                setQueue((q) => messageQueue.steerRefused(q, id));
             });
     }, [queue, isStreaming, sessionId, setQueue]);
 
@@ -1936,7 +1943,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
                         onRetry={(id) => setQueue((q) => messageQueue.promote(q, id, 'failed', 'queued'))}
-                        onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                        onSteer={isStreaming && !stopping && !followupsUnavailable ? handleSteer : undefined}
                     />
                     <Composer
                         value={input}

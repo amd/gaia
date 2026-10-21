@@ -309,8 +309,9 @@ class TestDispatchEmailQuery:
         assert call["query"] == "what's up"
         assert call["context"] == _query_context_from_history(history_pairs)
         assert call["model_id"] == "model-x"
-        # No terminal error was emitted before the relay handoff.
-        assert handler.events == []
+        # No terminal error was emitted before the relay handoff; email takes
+        # no mid-turn messages, so the chat is told not to offer adding one.
+        assert handler.events == [{"type": "followup_unavailable"}]
 
 
 if __name__ == "__main__":

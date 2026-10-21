@@ -36,7 +36,9 @@ export function QueuedMessages({ items, onRemove, onSteer, onRetry }: QueuedMess
                             : <CornerDownRight size={12} aria-hidden="true" />}
                     <span className="queued-message-text" title={item.text}>{item.text}</span>
                     <span className="queued-message-state" title={item.error}>
-                        {item.state === 'failed' ? `Not sent. ${item.error ?? ''}`.trim() : STATE_LABEL[item.state as keyof typeof STATE_LABEL]}
+                        {item.state === 'failed'
+                            ? `Not sent. ${item.error ?? ''}`.trim()
+                            : (item.state === 'queued' && item.note) || STATE_LABEL[item.state as keyof typeof STATE_LABEL]}
                     </span>
                     {item.state === 'failed' && (
                         <button
