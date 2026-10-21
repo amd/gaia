@@ -77,6 +77,7 @@ from gaia.llm.stream_watchdog import (
     stall_limits,
     watch_stream,
 )
+from gaia.llm.surface_hints import TUI_PROVIDER_AUTH_HINT, TUI_PROVIDER_SETTINGS
 from gaia.logger import get_logger
 from gaia.ports import (
     is_gaia_process,
@@ -2480,23 +2481,21 @@ def _cloud_request_error(
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
-            "Run /provider in the TUI to reconnect the provider, and check "
-            "your account's model access. If Lemonade itself requires "
-            "authentication, verify LEMONADE_API_KEY."
+            f"{TUI_PROVIDER_AUTH_HINT}"
         )
     if status == 404:
         return CloudModelUnavailableError(
             "The selected cloud model is unavailable (HTTP 404). It may need "
             "deployment or access for your account. Choose a deployed model "
-            "or router in the TUI provider settings.",
+            f"or router {TUI_PROVIDER_SETTINGS}.",
             model_id=model,
             provider=provider,
         )
     if status == 429:
         return LemonadeClientError(
             "Cloud rate limit reached (HTTP 429). Wait before retrying; "
-            "check your provider's usage limits and account in the TUI "
-            "provider settings."
+            "check your provider's usage limits and account "
+            f"{TUI_PROVIDER_SETTINGS}."
         )
     if status in {402, 412}:
         # Fireworks answers a suspended or over-limit account with 412.
@@ -2509,8 +2508,8 @@ def _cloud_request_error(
             f"{name} refused the request (HTTP {status}): the account may be "
             "suspended, out of credit, or over its spending limit. Retrying will "
             f"not help. Add funds or raise the limit {where}, then send your "
-            "message again, or switch to a local model in the TUI provider "
-            "settings to keep working now."
+            "message again, or switch to a local model "
+            f"{TUI_PROVIDER_SETTINGS} to keep working now."
         )
     if status is None:
         if reason == "upstream timeout":
@@ -2528,11 +2527,11 @@ def _cloud_request_error(
         return LemonadeClientError(
             "The cloud request failed without an error code from the provider. "
             "Send your message again; if it fails the same way, check the "
-            "provider connection in the TUI provider settings."
+            f"provider connection {TUI_PROVIDER_SETTINGS}."
         )
     return LemonadeClientError(
         f"Cloud request through Lemonade failed (HTTP {status}). Check the "
-        "provider connection and selected model in the TUI provider settings."
+        f"provider connection and selected model {TUI_PROVIDER_SETTINGS}."
     )
 
 

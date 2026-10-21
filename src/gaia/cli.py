@@ -353,6 +353,21 @@ def ensure_agent_models(
         return False
 
 
+def _cli_error_text(e: BaseException) -> str:
+    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms."""
+    from gaia.llm.providers.lemonade import classify_lemonade_exception
+    from gaia.llm.surface_hints import surface_wording
+
+    raw = surface_wording(str(e), "cli")
+    classified = classify_lemonade_exception(e)
+    if not classified:
+        return f"❌ Error: {raw}"
+    message = surface_wording(classified.user_message, "cli")
+    # An auth error's remedy is the raw text itself; don't print it twice.
+    detail = "" if raw.endswith(message) else f"\n   Details: {raw}"
+    return f"❌ Error: {message}{detail}"
+
+
 class GaiaCliClient:
     log = get_logger(__name__)
 
@@ -402,14 +417,7 @@ class GaiaCliClient:
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
-            from gaia.llm.providers.lemonade import classify_lemonade_exception
-
-            classified = classify_lemonade_exception(e)
-            error_message = (
-                f"❌ Error: {classified.user_message}\n   Details: {e}"
-                if classified
-                else f"❌ Error: {e}"
-            )
+            error_message = _cli_error_text(e)
             self.log.error(error_message)
             print(error_message)
             yield error_message
@@ -474,12 +482,8 @@ class GaiaCliClient:
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
-            from gaia.llm.providers.lemonade import classify_lemonade_exception
-
             self.log.error(f"Error in chat: {str(e)}")
-            classified = classify_lemonade_exception(e)
-            detail = f"\n   Details: {e}" if classified else ""
-            print(f"❌ Error: {classified.user_message if classified else e}{detail}")
+            print(_cli_error_text(e))
             sys.exit(1)
 
 
