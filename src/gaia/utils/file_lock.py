@@ -209,6 +209,22 @@ def _discard_entry(entry: Path) -> None:
         log.debug("Left queue entry %s for the next waiter: %s", entry, e)
 
 
+def _release_and_discard(fd: int, entry: Path) -> None:
+    """Release the lock *fd* holds on *entry* and delete *entry*.
+
+    POSIX deletes first, while still locked, so no waiter can create a new entry
+    under the same name in between. Windows cannot delete an open file, so it
+    releases first; an open handle there also protects a newer entry's name.
+    """
+    if os.name != "nt":
+        _discard_entry(entry)
+    try:
+        _release_fd(fd)
+    finally:
+        if os.name == "nt":
+            _discard_entry(entry)
+
+
 def _probe_lock(fd: int) -> Optional[bool]:
     """Take *fd*'s lock if free: True taken, False held elsewhere, None unknown."""
     if os.name == "nt":
@@ -247,8 +263,7 @@ def _entry_alive(entry: Path) -> Optional[bool]:
     if not taken:
         os.close(fd)
         return None if taken is None else True
-    _release_fd(fd)
-    _discard_entry(entry)
+    _release_and_discard(fd, entry)
     return False
 
 
@@ -268,10 +283,7 @@ class _QueueEntry:
         self.fd = fd
 
     def leave(self) -> None:
-        try:
-            _release_fd(self.fd)
-        finally:
-            _discard_entry(self.path)
+        _release_and_discard(self.fd, self.path)
 
 
 def _create_entry(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
@@ -321,8 +333,10 @@ def _join_queue(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
         deadline = time.monotonic() + _ENTRY_LOCK_SECONDS
         while not try_lock(entry.fd):
             if time.monotonic() >= deadline:
+                ours = _same_file(entry.fd, entry.path)
                 os.close(entry.fd)
-                _discard_entry(entry.path)
+                if ours:
+                    _discard_entry(entry.path)
                 raise FileLockTimeout(
                     f"Could not lock this waiter's queue entry {entry.path} for "
                     f"{target}: another process held it for over "
@@ -512,7 +526,16 @@ def write_bytes_atomic(
     """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    try:
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    except PermissionError as e:
+        raise PermissionError(
+            e.errno,
+            f"Cannot write {target}: this user cannot create files in "
+            f"{target.parent}. Fix its permissions or point GAIA at a folder "
+            "this user can write",
+            e.filename,
+        ) from e
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
