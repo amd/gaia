@@ -445,8 +445,9 @@ functions act for that agent and that skill:
 | Function | Needs | Does |
 |----------|-------|------|
 | `check_read(path)` / `check_write(path)` | — | The agent's allowed-folders check, the same `validate_read` / `validate_write` that `read_file` / `write_file` use, including the approval prompt. Returns the resolved `Path` or raises `SkillPermissionError`. |
-| `open_read(path)`, `list_readable(root, recursive=True)` | — | Open a file in binary mode after `check_read`; list the readable files under a checked folder (hidden entries, secrets and links out of scope left out, no prompt per file). Reading through these needs no `filesystem` permission. |
-| `open_write(path, *, binary=False, encoding="utf-8", newline=None)` | — | Create or replace a file after `check_write` (the overwrite confirmation included), creating missing parent folders. |
+| `open_read(path, mode="r", *, encoding=None, errors=None, newline=None)` | — | `open()` for reading (`"r"` or `"rb"`) at the path `check_read` resolved, so a symlink or junction that lands outside the scope is refused. Text defaults to UTF-8, never the locale's. A mode that writes raises `ValueError`. |
+| `open_write(path, mode="w", *, encoding=None, errors=None, newline=None)` | — | Create, replace (`"w"`), create-only (`"x"`) or append (`"a"`), each with `"b"` for bytes, after `check_write` and its overwrite confirmation. Missing parent folders are created. |
+| `list_readable(root, *, recursive=True, include_hidden=False)` | — | The files under a `check_read`-approved folder, sorted. Never prompts per file: secrets and links that resolve outside the scope are left out, and linked folders are not entered. |
 | `run_program(name, args, *, timeout, cwd=None)` | `program:run:<name>` | Starts the named program, found on PATH or in its usual install folder. Runs with no shell, stdin closed, and an environment without the agent's keys and tokens. Returns a `CompletedProcess`. It does **not** block network access. |
 | `temp_dir(sub=None)`, `write_temp_file(name, data)`, `copy_to_temp(path)` | `scratch:write` | A fresh folder under `<gaia_home>/skill-temp/<skill>/`, deleted when the call returns. `copy_to_temp` read-checks its source first. |
 | `preferences().get()` / `.update(dict)` / `.reset()` | — | The skill's own saved preferences, described below. |
@@ -454,13 +455,14 @@ functions act for that agent and that skill:
 Every path-named argument (`path`, `file_path`, `*_path`, `*_dir`, `*_file`,
 and similar) is read-checked **before** the tool body runs. A skill tool can't
 be pointed outside the agent's scope unless the user approves the path. A tool
-that writes calls `check_write` itself.
+that writes calls `check_write` or `open_write` itself.
 
 `gaia skill audit` matches these calls against the manifest. A declared
 `run_program("soffice")` passes. An undeclared one, or one naming a program the
-manifest doesn't list, is flagged. A raw `subprocess`, `tempfile` or `open()` is
-flagged as before. A bundled skill's declared capabilities are approved by the
-audit it passed before release. Any other skill that declares `program:run`
+manifest doesn't list, is flagged. The file functions need no `filesystem`
+permission, since the agent's allowed folders bound every call. A raw
+`subprocess`, `tempfile` or `open()` is flagged as before. A bundled skill's
+declared capabilities are approved by the audit it passed before release. Any other skill that declares `program:run`
 asks the user before each call to its tools, through the usual confirmation
 prompt. `experimental` skills may use `scratch:write` but not `program:run`.
 

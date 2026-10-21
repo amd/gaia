@@ -23,10 +23,11 @@ these functions act for that agent and that skill::
   argument whose name says it is a path (``path``, ``file_path``,
   ``output_dir`` …, see :func:`is_path_argument`) is read-checked before the
   tool body runs, so a skill tool cannot be pointed outside the scope by
-  default. A tool that writes calls :func:`check_write` itself.
-- **Files.** :func:`open_read`, :func:`list_readable` and :func:`open_write`
-  open, list and create files behind those same checks, so a skill that
-  reads the user's files (logs, exports) needs no ``open()`` of its own.
+  default. A tool that writes calls :func:`check_write` (or :func:`open_write`)
+  itself.
+- **Files.** :func:`open_read`, :func:`open_write` and :func:`list_readable`
+  open, create and list files behind those same checks, so a skill that
+  streams the user's files needs no ``open()`` or ``os.walk`` of its own.
 - **Programs.** :func:`run_program` starts one executable the manifest names
   (``program:run:<name>``): no shell, stdin closed, an environment holding
   only what a program needs to start (no API keys or tokens), and a timeout.
@@ -268,71 +269,163 @@ def check_write(path: str | os.PathLike, *, content_size: int = 0) -> Path:
     return resolved
 
 
-def open_read(path: str | os.PathLike) -> IO[bytes]:
-    """Open a file the agent may read, in binary mode.
+_READ_MODES = ("r", "rt", "rb")
+_WRITE_MODES = ("w", "wt", "wb", "x", "xt", "xb", "a", "at", "ab")
 
-    The same check as :func:`check_read`, then ``open(path, "rb")``. The
-    caller decodes (and may wrap it in ``gzip`` or ``io.TextIOWrapper``). A
-    skill that reads only through here needs no ``filesystem`` permission:
-    the agent's allowed folders already bound what it can open.
+
+def _open_checked(
+    target: Path,
+    mode: str,
+    encoding: Optional[str],
+    errors: Optional[str],
+    newline: Optional[str],
+) -> IO[Any]:
+    if "b" in mode:
+        if encoding is not None or errors is not None or newline is not None:
+            raise ValueError(
+                f"Mode {mode!r} is binary: drop encoding, errors and newline, or "
+                "open in text mode."
+            )
+        return open(target, mode)  # pylint: disable=consider-using-with
+    # Never the locale's encoding: a skill must read the same bytes the same way
+    # on every machine.
+    return open(  # pylint: disable=consider-using-with
+        target, mode, encoding=encoding or "utf-8", errors=errors, newline=newline
+    )
+
+
+def open_read(
+    path: str | os.PathLike,
+    mode: str = "r",
+    *,
+    encoding: Optional[str] = None,
+    errors: Optional[str] = None,
+    newline: Optional[str] = None,
+) -> IO[Any]:
+    """Open a file the agent may read, for reading only.
+
+    The file is opened at the path :func:`check_read` resolved, so a symlink
+    or junction is followed once, by the check, and refused when it lands
+    outside the allowed folders. The caller closes it, normally in a ``with``.
+
+    Args:
+        path: The file.
+        mode: ``"r"`` (text, the default) or ``"rb"`` (bytes).
+        encoding: Text mode only. Defaults to UTF-8, never the locale's.
+        errors: Text mode only, as for ``open`` (e.g. ``"replace"``).
+        newline: Text mode only, as for ``open`` (``""`` for ``csv``).
 
     Raises:
+        ValueError: *mode* would write, or a text option with a binary mode.
         SkillPermissionError: outside the agent's allowed folders, or a secret.
         OSError: the file cannot be opened.
     """
-    return open(check_read(path), "rb")
+    if mode not in _READ_MODES:
+        raise ValueError(
+            f"open_read opens files for reading; mode {mode!r} is not one of "
+            f"{', '.join(_READ_MODES)}. To write, use open_write."
+        )
+    return _open_checked(check_read(path), mode, encoding, errors, newline)
 
 
 def open_write(
     path: str | os.PathLike,
+    mode: str = "w",
     *,
-    binary: bool = False,
-    encoding: str = "utf-8",
+    encoding: Optional[str] = None,
+    errors: Optional[str] = None,
     newline: Optional[str] = None,
+    content_size: int = 0,
 ) -> IO[Any]:
-    """Create or replace a file the agent may write, after :func:`check_write`.
+    """Create, replace or append to a file the agent may write.
 
-    Missing parent folders are created inside the checked path's scope. An
-    existing file goes through the validator's overwrite confirmation.
+    :func:`check_write` runs first, with ``write_file``'s refusals (outside the
+    allowed folders, protected locations) and its overwrite confirmation.
+    Missing parent folders of the checked path are created.
+
+    Args:
+        path: The file.
+        mode: ``"w"`` (the default), ``"x"`` (fail if it exists) or ``"a"``,
+            each with ``"b"`` for bytes.
+        encoding: Text mode only. Defaults to UTF-8, never the locale's.
+        errors: Text mode only, as for ``open``.
+        newline: Text mode only, as for ``open`` (``""`` for ``csv``).
+        content_size: Bytes about to be written, when known, for the
+            validator's size check.
 
     Raises:
+        ValueError: *mode* is not a write mode, or a text option with a
+            binary mode.
         SkillPermissionError: outside the allowed folders, a protected
             location, or the user declined the overwrite.
         OSError: the file cannot be created.
     """
-    target = check_write(path)
+    if mode not in _WRITE_MODES:
+        raise ValueError(
+            f"open_write mode {mode!r} is not one of {', '.join(_WRITE_MODES)}. "
+            "To read, use open_read."
+        )
+    target = check_write(path, content_size=content_size)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if binary:
-        return open(target, "wb")
-    return open(target, "w", encoding=encoding, newline=newline)
+    return _open_checked(target, mode, encoding, errors, newline)
 
 
-def list_readable(root: str | os.PathLike, *, recursive: bool = True) -> List[Path]:
-    """Files under *root* the agent may read, sorted, hidden entries skipped.
+def _is_link(entry: os.DirEntry) -> bool:
+    # A real folder under a resolved root resolves to itself; a symlink or a
+    # Windows junction does not.
+    return os.path.normcase(os.path.realpath(entry.path)) != os.path.normcase(
+        os.path.abspath(entry.path)
+    )
 
-    *root* itself goes through :func:`check_read` (with its approval prompt);
-    entries found inside never prompt, and secrets or links that leave the
-    allowed folders are left out, as the agent's own folder walks do.
+
+def list_readable(
+    root: str | os.PathLike,
+    *,
+    recursive: bool = True,
+    include_hidden: bool = False,
+) -> List[Path]:
+    """Files under a folder the agent may read, sorted.
+
+    *root* goes through :func:`check_read`, approval prompt included. Files
+    found inside never prompt: one that is a secret, or a link that resolves
+    outside the allowed folders, is left out, as the agent's own folder walks
+    do. Linked folders (symlinks, junctions) are not entered.
+
+    Args:
+        root: The folder.
+        recursive: Walk subfolders too.
+        include_hidden: Keep names starting with ``.``.
 
     Raises:
         SkillPermissionError: *root* is outside the agent's allowed folders.
+        NotADirectoryError: *root* is not a folder.
     """
     from gaia.agents.tools.path_access import readable_entry
 
     call = current()
     base = check_read(root)
-    found: List[Path] = []
-    if recursive:
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-            for name in sorted(filenames):
-                if not name.startswith("."):
-                    found.append(Path(dirpath) / name)
-    else:
-        found = sorted(
-            p for p in base.iterdir() if p.is_file() and not p.name.startswith(".")
+    if not base.is_dir():
+        raise NotADirectoryError(
+            f"{base} is not a folder. Pass a folder, or open the file with open_read."
         )
-    return [p for p in found if readable_entry(call.agent, p)]
+
+    def shown(name: str) -> bool:
+        return include_hidden or not name.startswith(".")
+
+    found: List[Path] = []
+    pending = [base]
+    while pending:
+        folder = pending.pop()
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if not shown(entry.name):
+                    continue
+                if entry.is_dir():
+                    if recursive and not _is_link(entry):
+                        pending.append(Path(entry.path))
+                elif entry.is_file():
+                    found.append(Path(entry.path))
+    return sorted(p for p in found if readable_entry(call.agent, p))
 
 
 # ----------------------------------------------------------------------
@@ -554,6 +647,9 @@ __all__: List[str] = [
     "current",
     "find_program",
     "is_path_argument",
+    "list_readable",
+    "open_read",
+    "open_write",
     "preferences",
     "run_program",
     "temp_dir",

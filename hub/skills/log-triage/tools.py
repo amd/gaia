@@ -1216,7 +1216,7 @@ def _open_text(path: Path) -> io.TextIOBase:
     Every read goes through :func:`gaia.skills.context.open_read`, so the
     agent's allowed folders and secret-file refusals apply to each file.
     """
-    raw: Any = skill_context.open_read(path)
+    raw: Any = skill_context.open_read(path, "rb")
     if path.suffix.lower() == ".gz":
         raw = _OwningGzip(fileobj=raw, mode="rb")
     head = raw.peek(4)[:4] if hasattr(raw, "peek") else b""
@@ -1234,7 +1234,7 @@ def _is_binary(path: Path) -> bool:
         skill_context.check_read(path)
         return False
     try:
-        with skill_context.open_read(path) as f:
+        with skill_context.open_read(path, "rb") as f:
             chunk = f.read(8192)
     except OSError:
         return False
@@ -1256,7 +1256,7 @@ def _sample_lines(path: Path) -> List[str]:
         return [ln.rstrip("\r\n") for ln in lines]
     size = path.stat().st_size
     if size > 4 * SAMPLE_TAIL_BYTES:
-        with skill_context.open_read(path) as f:
+        with skill_context.open_read(path, "rb") as f:
             for offset in (size // 2, max(0, size - SAMPLE_TAIL_BYTES)):
                 f.seek(offset)
                 chunk = f.read(
@@ -2506,7 +2506,7 @@ def _is_own_output(path: Path) -> bool:
     if path.suffix.lower() not in (".json", ".csv"):
         return False
     try:
-        with skill_context.open_read(path) as f:
+        with skill_context.open_read(path, "rb") as f:
             head = f.read(200).decode("utf-8", errors="replace")
     except OSError:
         return False
