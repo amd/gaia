@@ -71,3 +71,28 @@ def test_every_declaration_excludes_the_breaking_major(
             f"{where} declares '{req}', which admits {package} {broken_major}. "
             f"That release removes APIs GAIA imports; add an upper bound below it."
         )
+
+
+def test_pymupdf_is_capped_below_2() -> None:
+    """pymupdf 2.0 ships no macOS x86_64 wheel and its sdist fails to build.
+
+    The cap is global because ``gaia init`` refuses a platform marker on an
+    extra's requirement, so every platform resolves to a 1.x wheel.
+    """
+    declared = _requirements("pymupdf")
+    assert {where for where, _ in declared} >= {"[rag]", "[ui]"}
+    for where, req in declared:
+        assert req.marker is None, f"{where} declares '{req}' with a marker"
+        assert req.specifier.contains(Version("1.28.2")), f"{where}: '{req}'"
+        assert not req.specifier.contains(Version("2.0")), f"{where}: '{req}'"
+
+
+def test_extras_carry_no_platform_markers() -> None:
+    """``gaia init`` adds extras by reading these requirements back from the
+    installed metadata and refuses any condition beyond ``extra == ...``."""
+    for extra, reqs in _setup_kwargs()["extras_require"].items():
+        for raw in reqs:
+            assert Requirement(raw).marker is None, (
+                f"[{extra}] declares '{raw}'; `gaia init --profile ...` fails on "
+                "it (gaia.agents.install_hints.gaia_extra_requirements)"
+            )
