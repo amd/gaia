@@ -9,6 +9,13 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A mailbox another GAIA process is saving is reported as busy, not as
+  missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
+  on a connection, the connection listing returns it marked `"error": "busy"`
+  with no scopes. Mailbox onboarding used to read that as "missing N
+  permissions" and send the user to reconnect; it now reports the `error` state
+  with "being saved by another GAIA process right now. Retry in a moment."
+
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`
   and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and

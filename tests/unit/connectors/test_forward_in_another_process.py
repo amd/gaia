@@ -320,7 +320,7 @@ def test_the_listing_keeps_a_busy_connection_then_clears_it_once_free(
 
     row = get_connection("google")
     assert row["error"] == "busy"
-    assert row["scopes"] == [GMAIL]
+    assert row["scopes"] == [], "scopes mid-save can't be trusted for a decision"
     assert row["account_email"] == "alice@example.com"
     assert "refresh_token" not in row
     assert _stored_refresh_token() == "forwarded-refresh"
@@ -560,12 +560,12 @@ async def test_reloading_a_stale_client_never_logs_a_secret(
         assert secret not in caplog.text
 
 
-def _forward_with_failing_connection_write(monkeypatch):
+def _forward_with_failing_connection_write(monkeypatch, error=None):
     from gaia.connectors import store
     from gaia.connectors.api import import_forwarded_connection
 
     def locked_keyring(**_kwargs):
-        raise ConnectorsError("keyring locked (simulated)")
+        raise error or ConnectorsError("keyring locked (simulated)")
 
     monkeypatch.setattr(store, "save_connection", locked_keyring)
     try:
@@ -630,18 +630,6 @@ def test_the_startup_sweep_clears_a_connection_whose_client_is_gone(
     assert _stored_refresh_token() is None
 
 
-def test_the_startup_sweep_keeps_a_connection_another_process_forwarded(
-    connected_under_old_client,
-):
-    from gaia.connectors.api import tripwire_check
-
-    _written_by_another_process()
-
-    tripwire_check()
-
-    assert _stored_refresh_token() == "forwarded-refresh"
-
-
 def test_the_startup_sweep_leaves_a_busy_connection_in_place(busy_mismatch, caplog):
     from gaia.connectors.api import tripwire_check
 
@@ -649,4 +637,29 @@ def test_the_startup_sweep_leaves_a_busy_connection_in_place(busy_mismatch, capl
         tripwire_check()
 
     assert _stored_refresh_token() == "forwarded-refresh"
-    assert "left in place" in caplog.text
+    assert "being saved by another GAIA process" in caplog.text
+    assert "cleared by tripwire" not in caplog.text
+
+
+def test_an_interrupted_forward_whose_undo_fails_still_raises_the_interrupt(
+    monkeypatch, connected_under_old_client
+):
+    from gaia.connectors import store
+
+    def also_fails(_snapshot):
+        raise ConnectorsError("keyring gone (simulated)")
+
+    monkeypatch.setattr(store, "restore_connection_slots", also_fails)
+
+    with pytest.raises(KeyboardInterrupt):
+        _forward_with_failing_connection_write(monkeypatch, KeyboardInterrupt())
+
+
+def test_an_interrupted_forward_still_puts_back_the_old_connection(
+    monkeypatch, connected_under_old_client
+):
+    with pytest.raises(KeyboardInterrupt):
+        _forward_with_failing_connection_write(monkeypatch, KeyboardInterrupt())
+
+    assert peek_provider_credentials("google")["client_id"] == OLD_CLIENT
+    assert _stored_refresh_token() == "old-refresh"

@@ -421,8 +421,10 @@ def list_connections() -> List[Dict[str, Any]]:
     which has no equivalent notion.
 
     A row with ``"error": "busy"`` is a connection another GAIA process is
-    writing right now: it is kept, with its metadata as last read, because
-    it is not known to be gone. Asking again shortly gives its real state.
+    writing right now: it is kept, because it is not known to be gone, with
+    its display metadata as last read and ``scopes`` empty, because scopes
+    that may be about to change can't be trusted for a decision. Asking
+    again shortly gives its real state.
     """
     out: List[Dict[str, Any]] = []
     for provider in _store_list():
@@ -681,6 +683,15 @@ def import_forwarded_connection(
             try:
                 restore_connection_slots(previous)
             except Exception as restore_err:
+                if not isinstance(e, Exception):
+                    # Ctrl+C or shutdown: say what was left behind, don't mask it.
+                    logger.error(
+                        "api: forward of %s interrupted and its undo failed (%s); "
+                        "the stored client and connection may not match",
+                        provider,
+                        restore_err,
+                    )
+                    raise e from restore_err
                 raise ConnectorsError(
                     f"Forwarding the {provider} connection failed ({e}), and "
                     "putting back the previous client config and connection also "

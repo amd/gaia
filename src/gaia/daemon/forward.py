@@ -320,6 +320,15 @@ class ConnectionForwarder:
             # actually declare a requirement, so specs that don't stay on
             # today's exact (ledger-only) behavior.
             connection = self._get_connection(provider)
+            if connection and connection.get("error") == "busy":
+                # Its scopes are unknown mid-save; keep the existing forward.
+                logger.warning(
+                    "forward-out: '%s' for agent '%s' became busy after the "
+                    "mint; retaining any existing forward for the next refresh",
+                    provider,
+                    agent_id,
+                )
+                raise ConnectionBusyError(provider)
             connection_scopes = connection.get("scopes", []) if connection else []
             forwarded_scopes = [s for s in connection_scopes if s in granted]
         else:

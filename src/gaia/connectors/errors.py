@@ -231,8 +231,9 @@ class ConnectionBusyError(ConnectorsError):
 
     Transient: the connection is NOT known to be gone, so callers must not
     treat it like ``AuthRequiredError`` (no reconnect prompt, no 401, no
-    withdrawn forward). ``connection`` is the stored connection's metadata
-    as last read (never its tokens), or ``None`` if it could not be read.
+    withdrawn forward). ``connection`` is the stored connection's display
+    metadata as last read (account email, connected-at, account type; never
+    its tokens or scopes), or ``None`` if it could not be read.
     """
 
     def __init__(self, provider: str, *, connection: dict | None = None):

@@ -158,14 +158,14 @@ def load_current_connection(
     raise ConnectionBusyError(provider_id, connection=_summary(current))
 
 
-_SUMMARY_FIELDS = ("account_email", "scopes", "connected_at", "account_type")
+_SUMMARY_FIELDS = ("account_email", "connected_at", "account_type")
 
 
 def _summary(stored: dict) -> dict:
-    """The display metadata of a stored connection — never its tokens."""
-    summary = {k: stored.get(k) for k in _SUMMARY_FIELDS}
-    summary["scopes"] = list(stored.get("scopes") or [])
-    return summary
+    """Display metadata of a stored connection: no tokens, and no scopes —
+    a connection mid-save may be about to change, so its scopes can't be
+    trusted for a decision."""
+    return {k: stored.get(k) for k in _SUMMARY_FIELDS}
 
 
 def _load(

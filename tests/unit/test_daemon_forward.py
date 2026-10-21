@@ -21,6 +21,7 @@ import pytest
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -293,6 +294,27 @@ def test_forward_provider_transport_mint_failure_retains_stale_forward(caplog):
     assert http.posts == []
     assert http.deletes == []
     assert "retaining any existing forward" in caplog.text
+
+
+def test_forward_provider_busy_after_the_mint_keeps_the_existing_forward():
+    """A connection that turned busy (mid-save elsewhere) has no trustworthy
+    scopes, so nothing is posted and the existing forward is not withdrawn."""
+    fwd, http = _forwarder(
+        grants={"google": {"installed:email": ALL_SCOPES}},
+        get_connection=lambda provider: {
+            "provider": provider,
+            "scopes": [],
+            "error": "busy",
+        },
+        spec=_SPEC_WITH_REQUIRED_CONNECTIONS,
+    )
+    with pytest.raises(ConnectionBusyError):
+        fwd.forward_provider(
+            "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+        )
+
+    assert http.posts == []
+    assert http.deletes == []
 
 
 def test_forward_provider_delivery_failure_raises_forward_delivery_error():

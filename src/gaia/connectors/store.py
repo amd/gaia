@@ -513,10 +513,11 @@ def peek_connection(
 
 
 def snapshot_connection_slots(provider: str) -> dict:
-    """The raw stored client config and connection for ``provider``.
+    """The stored client config and connection values for ``provider``.
 
     For :func:`restore_connection_slots`, to undo a multi-slot write that
-    failed partway. Holds secrets: never log it.
+    failed partway. A torn chunked value reads as absent. Holds secrets:
+    never log it.
     """
     verify_keyring_backend()
     return {
@@ -529,7 +530,8 @@ def snapshot_connection_slots(provider: str) -> dict:
 
 
 def restore_connection_slots(snapshot: dict) -> None:
-    """Put back the slots :func:`snapshot_connection_slots` read, exactly."""
+    """Put back the values :func:`snapshot_connection_slots` read; an absent
+    one (including a torn one) is deleted."""
     verify_keyring_backend()
     for username, raw in snapshot.items():
         if raw is None:
