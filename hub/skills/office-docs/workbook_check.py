@@ -11,9 +11,11 @@ the file says so until a person opens it.
 Two passes:
 
 * **Recalculation** — when LibreOffice is installed, a copy of the workbook is
-  converted headless in a temporary folder, which computes every formula; the
-  computed values and error values (``#REF!``, ``#DIV/0!`` ...) are read back
-  from that copy. The original file is never written.
+  converted headless in the tool call's temporary folder, which computes every
+  formula; the computed values and error values (``#REF!``, ``#DIV/0!`` ...)
+  are read back from that copy. The original file is never written. This goes
+  through :mod:`gaia.skills.context`, so it runs only inside the skill's tool
+  call, with the ``program:run:soffice`` and ``scratch:write`` it declares.
 * **Static checks** — always: unknown functions and names, references to
   sheets that do not exist, literal error values, circular references,
   numeric functions over text or empty cells, SUMIFS-style ranges of different
@@ -23,18 +25,21 @@ Two passes:
 from __future__ import annotations
 
 import fnmatch
-import os
-import platform
 import re
-import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from gaia.logger import get_logger
+from gaia.skills.context import (
+    copy_to_temp,
+    find_program,
+    run_program,
+    temp_dir,
+    write_temp_file,
+)
 
 logger = get_logger(__name__)
 
@@ -713,75 +718,47 @@ def _cycles(deps: Dict[Tuple[str, int, int], set]) -> List[List[Tuple[str, int, 
     return found
 
 
-def find_soffice() -> Optional[str]:
-    """The LibreOffice executable, or None when it is not installed."""
-    for name in ("soffice", "libreoffice"):
-        found = shutil.which(name)
-        if found:
-            return found
-    system = platform.system()
-    candidates: List[Path] = []
-    if system == "Windows":
-        for base in (
-            os.environ.get("ProgramFiles"),
-            os.environ.get("ProgramFiles(x86)"),
-        ):
-            if base:
-                candidates.append(
-                    Path(base) / "LibreOffice" / "program" / "soffice.exe"
-                )
-    elif system == "Darwin":
-        candidates.append(Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"))
-    else:
-        candidates += [
-            Path("/usr/bin/soffice"),
-            Path("/usr/lib/libreoffice/program/soffice"),
-        ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return None
+def soffice_installed() -> bool:
+    """True when LibreOffice is on PATH or in its usual install folder."""
+    return find_program("soffice") is not None
 
 
-def recalculate(path: Path, soffice: str, workdir: Path) -> Path:
+def recalculate(path: Path) -> Path:
     """Convert a copy of *path* with LibreOffice, which computes every formula.
 
-    Returns the recalculated copy inside *workdir*. A private LibreOffice
-    profile keeps a running LibreOffice window from swallowing the request,
-    and is set to recalculate on load: by default Calc keeps the values cached
-    in an Excel-saved file, which would hide a formula broken since.
+    Runs inside a skill tool call: the copy, the LibreOffice profile and the
+    converted file live in the call's temporary folder (``scratch:write``) and
+    LibreOffice starts through ``run_program`` (``program:run:soffice``). A
+    private profile keeps a running LibreOffice window from swallowing the
+    request, and is set to recalculate on load: by default Calc keeps the
+    values cached in an Excel-saved file, which would hide a formula broken
+    since.
+
+    Returns:
+        The recalculated copy, inside the call's temporary folder.
 
     Raises:
         RuntimeError: LibreOffice did not produce the copy.
     """
-    source = workdir / ("source" + path.suffix.lower())
-    shutil.copyfile(path, source)
-    out_dir = workdir / "out"
-    profile_dir = workdir / "profile"
-    (profile_dir / "user").mkdir(parents=True, exist_ok=True)
-    (profile_dir / "user" / "registrymodifications.xcu").write_text(
-        _ALWAYS_RECALC_PROFILE, encoding="utf-8"
-    )
-    profile = profile_dir.resolve().as_uri()
-    cmd = [
-        soffice,
-        f"-env:UserInstallation={profile}",
-        "--headless",
-        "--norestore",
-        "--nologo",
-        "--convert-to",
-        "xlsx",
-        "--outdir",
-        str(out_dir),
-        str(source),
-    ]
+    source = copy_to_temp(path, "source" + path.suffix.lower())
+    write_temp_file("profile/user/registrymodifications.xcu", _ALWAYS_RECALC_PROFILE)
+    profile = temp_dir("profile").as_uri()
+    out_dir = temp_dir("out")
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        proc = run_program(
+            "soffice",
+            [
+                f"-env:UserInstallation={profile}",
+                "--headless",
+                "--norestore",
+                "--nologo",
+                "--convert-to",
+                "xlsx",
+                "--outdir",
+                str(out_dir),
+                str(source),
+            ],
             timeout=RECALC_TIMEOUT_S,
-            check=False,
         )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(
@@ -867,12 +844,28 @@ def _reconcile(
     return values
 
 
-def check_workbook(path: Path, *, recalc: bool = True) -> Dict[str, Any]:
-    """Recalculate (when possible) and check every formula in *path*.
+#: Why the formulas were not computed, when the caller passes no recalculator.
+STATIC_ONLY_NOTE = "Recalculation was not requested; static checks only."
+NO_LIBREOFFICE_NOTE = (
+    "LibreOffice is not installed, so the formulas were not computed. "
+    "Static checks ran; an error that only shows in a computed value "
+    "can still be missed."
+)
+
+
+def check_workbook(
+    path: Path,
+    *,
+    recalculator: Optional[Callable[[Path], Path]] = None,
+    no_recalc_note: str = STATIC_ONLY_NOTE,
+) -> Dict[str, Any]:
+    """Recalculate (when given a recalculator) and check every formula in *path*.
 
     Args:
         path: An existing .xlsx or .xlsm file.
-        recalc: Try LibreOffice recalculation. Static checks always run.
+        recalculator: Returns a recalculated copy of *path*, normally
+            :func:`recalculate`. ``None`` runs the static checks only.
+        no_recalc_note: What the result says when there is no recalculator.
 
     Returns:
         The tool result: errors, warnings, circular references, computed
@@ -923,19 +916,11 @@ def check_workbook(path: Path, *, recalc: bool = True) -> Dict[str, Any]:
     }
 
     computed: Optional[Dict[str, Dict[Tuple[int, int], Any]]] = None
-    soffice = find_soffice() if recalc and formula_count else None
-    if formula_count and not recalc:
-        result["recalc_note"] = "Recalculation was not requested; static checks only."
-    elif formula_count and soffice is None:
-        result["recalc_note"] = (
-            "LibreOffice is not installed, so the formulas were not computed. "
-            "Static checks ran; an error that only shows in a computed value "
-            "can still be missed."
-        )
-    elif soffice is not None:
+    if formula_count and recalculator is None:
+        result["recalc_note"] = no_recalc_note
+    elif formula_count:
         try:
-            with tempfile.TemporaryDirectory(prefix="gaia-wb-") as tmp:
-                computed = _computed_values(recalculate(path, soffice, Path(tmp)))
+            computed = _computed_values(recalculator(path))
             result["recalculated"] = True
             result["recalculated_with"] = "LibreOffice"
         except (RuntimeError, OSError) as e:

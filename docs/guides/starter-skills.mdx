@@ -244,7 +244,10 @@ headings and tables.
 - **Note** — `office-docs/verify_workbook` recalculates a copy of the workbook with
   LibreOffice when it is installed and reports formula errors, circular
   references and formulas pointing at the wrong cells. Without LibreOffice it
-  runs the same checks statically and says that values were not computed.
+  runs the same checks statically and says that values were not computed. It
+  reads only files inside the agent's allowed folders, and runs LibreOffice on
+  a copy in a temporary folder that is deleted when the check ends. That is
+  what its `program:run:soffice` and `scratch:write` permissions declare.
 
 ## Fork one
 

@@ -8,6 +8,11 @@ metadata:
     security_tier: community
     requirements:
       python: ">=3.10"
+      dependencies:
+        - openpyxl>=3.1
+    permissions:
+      - program:run:soffice
+      - scratch:write
     tools_required:
       - run_python
     pairs_with:
