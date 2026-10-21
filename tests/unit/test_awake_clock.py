@@ -52,19 +52,41 @@ def test_elsewhere_it_is_the_monotonic_clock():
 # ── Modern Standby: the ledger the Windows monitor feeds ──────────────────
 
 
-def _beating(ledger, start, seconds):
-    """The monitor beating once a second for *seconds*, from *start*."""
-    for tick in range(1, int(seconds) + 1):
-        ledger.beat(start + tick)
-    return start + int(seconds)
+class _Machine:
+    """The raw clock and process CPU time a ledger reads, moved by the test."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+        self.cpu = 0.0
+
+    def frozen(self, seconds):
+        """Windows froze the process: time passes, no CPU is used."""
+        self.now += seconds
+
+    def starved(self, seconds):
+        """The monitor was starved while another thread kept a core busy."""
+        self.now += seconds
+        self.cpu += seconds
+
+    def ledger(self, gap=10.0):
+        return awake_clock.SleepLedger(lambda: self.now, lambda: self.cpu, gap)
+
+
+def _beating(machine, ledger, seconds):
+    """The monitor running and beating once a second for *seconds*."""
+    for _ in range(int(seconds)):
+        machine.now += 1.0
+        ledger.beat()
 
 
 def test_standby_is_left_out_past_the_first_gap_and_logged(caplog):
-    ledger = awake_clock.SleepLedger(1000.0, gap=10.0)
-    ledger.display(False, 1000.0)
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.frozen(7200.0)  # two hours in Modern Standby
     with caplog.at_level(logging.INFO, logger=LEDGER_LOG):
-        ledger.beat(1000.0 + 7200.0)  # two hours frozen in standby
-    assert ledger.read(1000.0 + 7200.0) == pytest.approx(1010.0)
+        ledger.beat()
+    assert ledger.read() == pytest.approx(1010.0)
     assert ledger.excluded == pytest.approx(7190.0)
     assert "Left 7190.0 s out" in caplog.text
     assert "frozen for 7200.0 s with the display off" in caplog.text
@@ -72,56 +94,84 @@ def test_standby_is_left_out_past_the_first_gap_and_logged(caplog):
 
 def test_a_freeze_with_the_display_on_counts_and_is_logged(caplog):
     """Awake but not running (a debugger, a VM pause) is not standby."""
-    ledger = awake_clock.SleepLedger(1000.0, gap=10.0)
+    pc = _Machine()
+    ledger = pc.ledger()
+    pc.frozen(300.0)
     with caplog.at_level(logging.WARNING, logger=LEDGER_LOG):
-        ledger.beat(1300.0)
-    assert ledger.read(1300.0) == 1300.0
+        ledger.beat()
+    assert ledger.read() == 1300.0
     assert ledger.excluded == 0.0
     assert "did not run for 300.0 s with the display on" in caplog.text
 
 
+def test_a_busy_process_starved_with_the_display_off_counts_and_is_logged(caplog):
+    """A thread holding the GIL is not Windows freezing the process."""
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.starved(60.0)
+    with caplog.at_level(logging.WARNING, logger=LEDGER_LOG):
+        ledger.beat()
+    assert ledger.read() == 1060.0
+    assert ledger.excluded == 0.0
+    assert "used 60.0 s of CPU meanwhile, so it was busy" in caplog.text
+
+
 def test_a_screen_off_pc_that_keeps_running_counts_all_of_it():
     """Display off but no standby: the process runs, so a hang still trips."""
-    ledger = awake_clock.SleepLedger(1000.0, gap=10.0)
-    ledger.display(False, 1000.0)
-    now = _beating(ledger, 1000.0, 600)
-    assert ledger.read(now) == now
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    _beating(pc, ledger, 600)
+    assert ledger.read() == 1600.0
     assert ledger.excluded == 0.0
 
 
 def test_a_reader_that_wakes_before_the_monitor_never_sees_the_standby():
-    ledger = awake_clock.SleepLedger(1000.0, gap=10.0)
-    ledger.display(False, 1000.0)
-    before = ledger.read(1000.5)
-    held = [ledger.read(1000.0 + t) for t in (11.0, 3600.0, 7200.0)]
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.now += 0.5
+    before = ledger.read()
+    held = []
+    for seconds in (10.5, 3589.0, 3600.0):
+        pc.frozen(seconds)
+        held.append(ledger.read())
     assert held == [1010.0, 1010.0, 1010.0]
-    ledger.beat(7200.5)
-    after = ledger.read(7200.6)
+    ledger.beat()
+    pc.now += 0.1
+    after = ledger.read()
     assert before <= held[0] <= after
     assert after == pytest.approx(1010.1)
 
 
 def test_the_wake_notification_does_not_hide_the_standby_it_ends():
     """Display-on arrives as the process thaws, before the monitor's beat."""
-    ledger = awake_clock.SleepLedger(1000.0, gap=10.0)
-    ledger.display(False, 1000.0)
-    ledger.display(True, 1000.0 + 3600.0)
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.frozen(3600.0)
+    ledger.display(True)
     assert ledger.excluded == pytest.approx(3590.0)
-    later = 1000.0 + 3600.0 + 30.0
-    assert ledger.read(later) == pytest.approx(1040.0)
+    pc.now += 30.0
+    assert ledger.read() == pytest.approx(1040.0)
 
 
 def test_readings_never_go_backwards_through_standbys_and_pauses():
-    ledger = awake_clock.SleepLedger(0.0, gap=10.0)
-    raw, readings = 0.0, []
+    pc = _Machine(0.0)
+    ledger = pc.ledger()
+    readings = []
     for step, display_on in enumerate([True, False, False, True, False] * 20):
-        ledger.display(display_on, raw)
+        ledger.display(display_on)
         for jump in (0.5, 1.0, 30.0 * (step % 3), 1.0):
-            raw += jump
-            readings.append(ledger.read(raw))
+            if step % 4 == 1:
+                pc.starved(jump)
+            else:
+                pc.frozen(jump)
+            readings.append(ledger.read())
             if jump <= 1.0:
-                ledger.beat(raw)
-            readings.append(ledger.read(raw))
+                ledger.beat()
+            readings.append(ledger.read())
     assert readings == sorted(readings)
 
 
@@ -166,6 +216,9 @@ _CHILD = textwrap.dedent("""
             display(0)
         elif cmd == "on":
             display(1)
+        elif cmd == "exit-monitor":
+            # Ends the pump without an error, as if the thread just returned.
+            ac._kernel32.SetEvent(ac._monitor._stop_event)
         elif cmd == "corrupt":
             user32.SendMessageW(ac._monitor.hwnd, 0x0218, 0x8013, 0)
         elif cmd == "pid":
@@ -216,7 +269,10 @@ class _Child:
                     return answer
 
     def freeze(self, seconds):
-        """Suspend every thread, as Windows does to a desktop app in standby."""
+        """Suspend every thread, as Windows does to a desktop app in standby.
+
+        Returns when the suspend took effect, on ``time.perf_counter``.
+        """
         import ctypes
         from ctypes import wintypes
 
@@ -229,10 +285,12 @@ class _Child:
         assert handle, ctypes.get_last_error()
         try:
             assert ntdll.NtSuspendProcess(handle) == 0
+            suspended = time.perf_counter()
             time.sleep(seconds)
             assert ntdll.NtResumeProcess(handle) == 0
         finally:
             kernel32.CloseHandle(handle)
+        return suspended
 
     def close(self):
         if self.proc.poll() is None:
@@ -257,31 +315,35 @@ def child(tmp_path):
 
 # Well clear of the monitor's 1 s heartbeat, so its jitter is never a freeze.
 GAP = 2.5
+HEARTBEAT = 1.0
+FREEZE = 8.0
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Win32 monitor")
 
 
 @windows_only
 def test_a_process_frozen_through_standby_wakes_with_the_standby_left_out(child):
     c = child()
+    began = time.perf_counter()
     start = c.ask("off")
-    c.freeze(6.0)
+    suspended = c.freeze(FREEZE)
     first_read = c.ask("read")  # may run before the monitor has woken
     woke = c.ask("on")
     time.sleep(1.2)
     later = c.ask("read")
+    wall = time.perf_counter() - began
 
-    # Held at most a heartbeat plus the gap past the display-off reading.
-    assert first_read - start <= 1.0 + GAP + 0.3
+    # Held at the gap past the last beat before the freeze.
+    assert first_read - start <= (suspended - began) + GAP + 0.3
     assert start <= first_read <= woke <= later
-    # 6 s frozen and 1.2 s awake after it; only the gap and the 1.2 s count.
-    assert later - start < 1.0 + GAP + 1.2 + 0.5
+    # All of the freeze is left out but the gap and up to one heartbeat.
+    assert later - start <= wall - (FREEZE - GAP - HEARTBEAT - 0.5)
     assert any(line.startswith("Left ") for line in c.logs), c.logs
 
 
 @windows_only
 def test_a_process_frozen_with_the_display_on_counts_every_second(child):
     c = child()
-    start = c.ask("read")
+    start = c.ask("on")  # whatever the runner's real display is doing
     c.freeze(4.0)
     time.sleep(1.2)
     later = c.ask("read")
@@ -297,6 +359,16 @@ def test_a_dead_monitor_stops_every_time_limit_loudly(child):
     time.sleep(1.5)
     answer = c.ask("read")
     assert isinstance(answer, str) and answer.startswith("AwakeClockError"), answer
+
+
+@windows_only
+def test_a_monitor_thread_that_exits_stops_every_time_limit_loudly(child):
+    c = child()
+    c.ask("read")
+    c.ask("exit-monitor")
+    time.sleep(1.5)
+    answer = c.ask("read")
+    assert isinstance(answer, str) and "thread exited" in answer, answer
 
 
 @windows_only

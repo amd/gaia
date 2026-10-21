@@ -14,9 +14,10 @@ about to carry on. :func:`monotonic` stops while the PC sleeps:
   Windows freezes desktop processes for the standby, so a monitor thread
   subscribed to the console display's power state takes a stretch in which
   the process did not run for more than :data:`STANDBY_GAP` seconds, starting
-  with the display off, as standby, and leaves it out past the first
-  ``STANDBY_GAP`` seconds. Each one is logged with its size. A freeze with the
-  display on is a pause, not a sleep, and is counted (and logged).
+  with the display off and using next to no CPU, as standby, and leaves it
+  out past the first ``STANDBY_GAP`` seconds. Each one is logged with its
+  size. A freeze with the display on is a pause, and a busy process starved
+  of its turn is not frozen; both count, and are logged.
 * Linux and macOS: ``time.monotonic()``, which already stops during suspend.
 
 Use it for any limit on how long something may take, so a sleep never reads
@@ -50,60 +51,91 @@ class SleepLedger:
 
     The monitor calls :meth:`beat` about every :data:`HEARTBEAT` seconds and
     :meth:`display` when the console display turns on or off. A gap between
-    beats longer than *gap* that began with the display off is standby: all
-    of it past the first *gap* seconds is left out. Until the monitor has
-    seen such a gap, :meth:`read` holds the clock at the point it would be
-    left out from, so a reader that wakes first never sees the standby.
+    beats longer than *gap* is standby when it began with the display off and
+    the process used less than half of it in CPU time (Windows froze it, it
+    was not merely starved). All of it past the first *gap* seconds is left
+    out. Until the monitor has judged such a gap, :meth:`read` holds the clock
+    at the point it would be left out from, so a reader that wakes first never
+    sees the standby. *clock* and *cpu* are read under the lock, so readings
+    and beats are ordered and the clock never goes backwards.
     """
 
-    def __init__(self, raw_now: float, gap: float = STANDBY_GAP):
+    def __init__(
+        self,
+        clock: Callable[[], float],
+        cpu: Callable[[], float],
+        gap: float = STANDBY_GAP,
+    ):
+        self._clock = clock
+        self._cpu = cpu
         self._lock = threading.Lock()
         self.gap = gap
         self.excluded = 0.0
-        self._last_beat = raw_now
+        self._last_beat = clock()
+        self._last_cpu = cpu()
         self._display_on = True
 
-    def read(self, raw: float) -> float:
-        """The awake time at *raw*."""
+    def read(self) -> float:
+        """The awake time now."""
         with self._lock:
+            raw = self._clock()
             if not self._display_on and raw - self._last_beat > self.gap:
                 raw = self._last_beat + self.gap
             return raw - self.excluded
 
-    def beat(self, raw: float) -> float:
-        """Record that the monitor ran at *raw*; returns the seconds left out."""
+    def beat(self) -> float:
+        """Record that the monitor ran now; returns the seconds left out."""
         with self._lock:
-            frozen = raw - self._last_beat
-            display_on = self._display_on
-            left_out = 0.0
-            if frozen > self.gap and not display_on:
-                left_out = frozen - self.gap
-                self.excluded += left_out
-            self._last_beat = max(self._last_beat, raw)
+            report = self._beat_locked()
+        return self._log(*report)
+
+    def display(self, on: bool) -> None:
+        """The console display turned on or off just now."""
+        with self._lock:
+            # A gap that ends here began under the old display state.
+            report = self._beat_locked()
+            self._display_on = on
+        self._log(*report)
+
+    def _beat_locked(self):
+        raw, cpu = self._clock(), self._cpu()
+        frozen = raw - self._last_beat
+        busy = cpu - self._last_cpu
+        left_out = 0.0
+        if frozen > self.gap and not self._display_on and busy < frozen / 2:
+            left_out = frozen - self.gap
+            self.excluded += left_out
+        self._last_beat, self._last_cpu = raw, cpu
+        return left_out, frozen, busy, self._display_on, self.excluded
+
+    def _log(self, left_out, frozen, busy, display_on, excluded) -> float:
         if left_out:
             log.info(
                 "Left %.1f s out of time limits: the process was frozen for "
-                "%.1f s with the display off (Windows Modern Standby); the first "
-                "%.0f s still count. %.1f s left out so far.",
+                "%.1f s with the display off, using %.1f s of CPU, which is "
+                "Windows Modern Standby; the first %.0f s still count. %.1f s "
+                "left out so far.",
                 left_out,
                 frozen,
+                busy,
                 self.gap,
-                self.excluded,
+                excluded,
+            )
+        elif frozen > self.gap and display_on:
+            log.warning(
+                "The process did not run for %.1f s with the display on. That "
+                "is not standby, so it counts toward time limits.",
+                frozen,
             )
         elif frozen > self.gap:
             log.warning(
-                "The process did not run for %.1f s with the display on. That is "
-                "not standby, so it counts toward time limits.",
+                "The process did not get to run for %.1f s with the display "
+                "off, but used %.1f s of CPU meanwhile, so it was busy, not in "
+                "standby. It counts toward time limits.",
                 frozen,
+                busy,
             )
         return left_out
-
-    def display(self, on: bool, raw: float) -> None:
-        """The console display turned on or off at *raw*."""
-        # A gap that ends here began under the old display state.
-        self.beat(raw)
-        with self._lock:
-            self._display_on = on
 
 
 if sys.platform == "win32":
@@ -130,6 +162,7 @@ if sys.platform == "win32":
     _PM_REMOVE = 0x0001
     _WAIT_OBJECT_0 = 0
     _WAIT_FAILED = 0xFFFFFFFF
+    _HWND_MESSAGE = wintypes.HWND(-3)
 
     class _GUID(ctypes.Structure):
         _fields_ = [
@@ -259,9 +292,8 @@ if sys.platform == "win32":
         and beats every :data:`HEARTBEAT` seconds while pumping its messages.
         """
 
-        def __init__(self, ledger: SleepLedger, raw: Callable[[], float]):
+        def __init__(self, ledger: SleepLedger):
             self.ledger = ledger
-            self._raw = raw
             self.hwnd: Optional[int] = None
             self.error: Optional[BaseException] = None
             self._ready = threading.Event()
@@ -282,7 +314,7 @@ if sys.platform == "win32":
                     f"The standby monitor did not start within {timeout:.0f} s."
                 )
             if self.error is not None:
-                self._thread.join(timeout)
+                self.stop(timeout)
                 raise self.error
 
         def check(self) -> None:
@@ -328,7 +360,7 @@ if sys.platform == "win32":
                     ):
                         # 0 off, 1 on, 2 dimmed; only "off" can precede standby.
                         state = int.from_bytes(bytes(setting.Data), "little")
-                        self.ledger.display(state != 0, self._raw())
+                        self.ledger.display(state != 0)
                         log.debug("Console display state is now %d", state)
                     return 1
             except BaseException as exc:  # noqa: BLE001 — surfaced by check()
@@ -351,9 +383,21 @@ if sys.platform == "win32":
                 if not _user32.RegisterClassW(ctypes.byref(wndclass)):
                     raise _win_error("RegisterClassW")
                 registered_class = True
-                # Top-level (not message-only) so power broadcasts reach it.
+                # Message-only: power-setting notifications are addressed to
+                # it, and system-wide broadcasts never wait on its pump.
                 self.hwnd = _user32.CreateWindowExW(
-                    0, class_name, class_name, 0, 0, 0, 0, 0, None, None, instance, None
+                    0,
+                    class_name,
+                    class_name,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    _HWND_MESSAGE,
+                    None,
+                    instance,
+                    None,
                 )
                 if not self.hwnd:
                     raise _win_error("CreateWindowExW")
@@ -395,7 +439,7 @@ if sys.platform == "win32":
                     raise _win_error("MsgWaitForMultipleObjects")
                 # Before any message: a gap that just ended began under the
                 # display state from before it.
-                self.ledger.beat(self._raw())
+                self.ledger.beat()
                 if woke == _WAIT_OBJECT_0 or self.error is not None:
                     return
                 while _user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, _PM_REMOVE):
@@ -423,8 +467,8 @@ if sys.platform == "win32":
             if _start_error is not None:
                 raise _start_error
             if _monitor is None:
-                ledger = SleepLedger(_unbiased())
-                monitor = _StandbyMonitor(ledger, _unbiased)
+                ledger = SleepLedger(_unbiased, time.process_time)
+                monitor = _StandbyMonitor(ledger)
                 try:
                     monitor.start()
                 except BaseException as exc:
@@ -444,7 +488,7 @@ if sys.platform == "win32":
             OSError: Windows refused ``QueryUnbiasedInterruptTime`` (it never
                 does on Windows 7+).
         """
-        return _ensure_monitor().read(_unbiased())
+        return _ensure_monitor().read()
 
     def shutdown() -> None:
         """Stop the standby monitor; the clock keeps reading, without standby."""
@@ -454,7 +498,7 @@ if sys.platform == "win32":
                 return
             _shut_down = True
             # Nothing beats any more, so nothing may be held for a beat.
-            _ledger.display(True, _unbiased())
+            _ledger.display(True)
             _monitor.stop()
 
     def _reset_for_tests() -> None:
