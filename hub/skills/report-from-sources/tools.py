@@ -41,7 +41,6 @@ from report_from_sources_lib.tables import DataFileError
 from report_from_sources_lib.xlsx_chart import ChartWriteError, write_workbook_chart
 
 from gaia.agents.base.tools import tool
-from gaia.agents.tools.path_access import readable_entry
 from gaia.logger import get_logger
 from gaia.skills import context as skill_context
 from gaia.skills.errors import SkillPermissionError
@@ -70,9 +69,9 @@ def _guard(text: str, *, write: bool = False) -> Path:
         raise _PathRefused(str(e)) from e
 
 
-def _readable(path: Path) -> bool:
-    """Whether a file found in the inventoried folder may be read (never asks)."""
-    return readable_entry(skill_context.current().agent, path)
+def _list_readable(folder: Path, recursive: bool) -> List[Path]:
+    """Files in the inventoried folder the agent may read (never asks per file)."""
+    return skill_context.list_readable(folder, recursive=recursive, include_hidden=True)
 
 
 def _error(message: str, **extra: Any) -> Dict[str, Any]:
@@ -107,7 +106,9 @@ def inventory_data_files(folder: str, recursive: bool = False) -> dict:
             return _error(
                 f"{path} is not a folder. Pass the folder that holds the files."
             )
-        return inventory_folder(path, recursive=bool(recursive), readable=_readable)
+        return inventory_folder(
+            path, recursive=bool(recursive), list_files=_list_readable
+        )
     except (_PathRefused, SkillPermissionError) as e:
         return _error(str(e))
     except (DataFileError, OSError) as e:

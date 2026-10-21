@@ -159,38 +159,131 @@ def test_check_write_outside_the_scope_is_refused(agent, tmp_path, allowed, outs
     assert "new.txt" in result["error"] or "outside" in result["error"]
 
 
-def test_open_read_reads_inside_the_scope_only(agent, tmp_path, allowed, outside):
+# --------------------------------------------------------------------------
+# Files: open_read / open_write / list_readable
+# --------------------------------------------------------------------------
+
+
+def _link_folder(link: Path, target: Path) -> None:
+    """A folder link: a junction on Windows (no privilege needed), else a symlink."""
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_open_read_reads_text_and_bytes_inside_the_scope(agent, tmp_path, allowed):
+    (allowed / "utf8.txt").write_bytes("caf\u00e9".encode("utf-8"))
     body = (
-        "target = file_path if file_path.endswith('in.txt') else "
-        f"{str(outside)!r}\n"
-        "with ctx.open_read(target, encoding='utf-8') as f:\n"
-        "    return {'status': 'success', 'text': f.read()}\n"
+        "folder = __import__('pathlib').Path(file_path)\n"
+        "with ctx.open_read(folder / 'utf8.txt') as f:\n"
+        "    text = f.read()\n"
+        "with ctx.open_read(folder / 'in.txt', 'rb') as f:\n"
+        "    raw = f.read()\n"
+        "return {'status': 'success', 'text': text, 'raw': raw.decode()}\n"
     )
     _load(agent, tmp_path, "open-probe", [], body)
 
-    inside = agent._execute_tool(
-        "open-probe/probe", {"file_path": str(allowed / "in.txt")}
-    )
-    escaped = agent._execute_tool(
-        "open-probe/probe", {"file_path": str(allowed / "other.txt")}
-    )
+    result = agent._execute_tool("open-probe/probe", {"file_path": str(allowed)})
 
-    assert inside == {"status": "success", "text": "inside"}
-    assert escaped["status"] == "error"
-    assert "secret.txt" in escaped["error"]
+    assert result == {"status": "success", "text": "caf\u00e9", "raw": "inside"}
 
 
-def test_open_read_refuses_a_mode_that_writes(agent, tmp_path, allowed):
-    body = "ctx.open_read(file_path, 'a').close()\nreturn {'status': 'success'}\n"
-    _load(agent, tmp_path, "append-probe", [], body)
+def test_open_read_refuses_outside_the_scope(agent, tmp_path, allowed, outside):
+    body = f"ctx.open_read({str(outside)!r}).close()\nreturn {{'status': 'success'}}\n"
+    _load(agent, tmp_path, "open-out-probe", [], body)
 
     result = agent._execute_tool(
-        "append-probe/probe", {"file_path": str(allowed / "in.txt")}
+        "open-out-probe/probe", {"file_path": str(allowed / "in.txt")}
     )
 
     assert result["status"] == "error"
-    assert "would write" in str(result)
+    assert "secret.txt" in result["error"]
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        ("ctx.open_read(file_path, 'a')", "To write, use open_write"),
+        ("ctx.open_read(file_path, 'r+')", "To write, use open_write"),
+        ("ctx.open_read(file_path, 'rb', encoding='utf-8')", "is binary"),
+        ("ctx.open_write(file_path, 'r')", "To read, use open_read"),
+    ],
+)
+def test_open_modes_are_checked(agent, tmp_path, allowed, call, message):
+    _load(agent, tmp_path, "mode-probe", [], f"{call}.close()\nreturn {{}}\n")
+
+    result = agent._execute_tool(
+        "mode-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error" and message in str(result)
     assert (allowed / "in.txt").read_text(encoding="utf-8") == "inside"
+
+
+def test_open_write_creates_parents_inside_and_refuses_outside(
+    agent, tmp_path, allowed, outside
+):
+    body = (
+        "with ctx.open_write(file_path, newline='') as f:\n"
+        "    f.write('caf\\u00e9\\n')\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "write-file-probe", [], body)
+    target = allowed / "sub" / "out.txt"
+    escaped = outside.parent / "new.txt"
+
+    inside = agent._execute_tool("write-file-probe/probe", {"file_path": str(target)})
+    refused = agent._execute_tool("write-file-probe/probe", {"file_path": str(escaped)})
+
+    assert inside["status"] == "success", inside
+    assert target.read_bytes() == "caf\u00e9\n".encode("utf-8")
+    assert refused["status"] == "error" and not escaped.exists()
+
+
+def test_list_readable_skips_hidden_secrets_and_linked_folders(
+    agent, tmp_path, allowed, outside
+):
+    (allowed / ".hidden").write_text("x", encoding="utf-8")
+    (allowed / ".env").write_text("TOKEN=x", encoding="utf-8")
+    (allowed / "logs").mkdir()
+    (allowed / "logs" / "app.log").write_text("ok", encoding="utf-8")
+    try:
+        _link_folder(allowed / "escape", outside.parent)
+    except OSError as e:
+        pytest.skip(f"cannot create a folder link here: {e}")
+    body = (
+        "deep = [p.name for p in ctx.list_readable(file_path)]\n"
+        "flat = [p.name for p in ctx.list_readable(file_path, recursive=False)]\n"
+        "hidden = [p.name for p in ctx.list_readable(file_path, include_hidden=True)]\n"
+        "return {'status': 'success', 'deep': deep, 'flat': flat, 'hidden': hidden}\n"
+    )
+    _load(agent, tmp_path, "list-probe", [], body)
+
+    result = agent._execute_tool("list-probe/probe", {"file_path": str(allowed)})
+
+    assert result["status"] == "success", result
+    assert result["flat"] == ["in.txt"]
+    assert result["deep"] == ["in.txt", "app.log"]
+    assert ".hidden" in result["hidden"] and ".env" not in result["hidden"]
+    assert "secret.txt" not in result["deep"] + result["hidden"]
+
+
+def test_list_readable_refuses_a_folder_outside_the_scope(
+    agent, tmp_path, allowed, outside
+):
+    body = (
+        f"ctx.list_readable({str(outside.parent)!r})\n" "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "list-out-probe", [], body)
+
+    result = agent._execute_tool(
+        "list-out-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
 
 
 def test_context_functions_refuse_outside_a_skill_tool():
@@ -363,6 +456,8 @@ _RUN_SOFFICE = "proc = ctx.run_program('soffice', ['--version'], timeout=60)\n"
         (["scratch:write"], "ctx.write_temp_file('a.txt', 'x')\n", None),
         ([], "ctx.write_temp_file('a.txt', 'x')\n", "permission.undeclared.scratch"),
         ([], "ctx.open_read(file_path).close()\n", None),
+        ([], "ctx.open_write(file_path + '.out').close()\n", None),
+        ([], "ctx.list_readable(file_path)\n", None),
         ([], "open(file_path).close()\n", "permission.undeclared.filesystem"),
     ],
 )

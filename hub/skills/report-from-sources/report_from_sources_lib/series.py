@@ -1335,7 +1335,7 @@ def _rank_reason(newest: FileSummary, other: FileSummary) -> str:
 
 
 def inventory_folder(
-    folder: Path, *, recursive: bool = False, max_files: int = 300, readable=None
+    folder: Path, *, recursive: bool = False, max_files: int = 300, list_files=None
 ) -> Dict[str, Any]:
     """List the data files in *folder* with layout, coverage and vintage ranking.
 
@@ -1343,13 +1343,18 @@ def inventory_folder(
         folder: The directory to inventory.
         recursive: Include subfolders.
         max_files: Stop after this many files and report the rest as not read.
-        readable: Optional ``callable(path) -> bool``; files it rejects are
-            reported as out of scope instead of read.
+        list_files: Optional ``callable(folder, recursive) -> [Path]`` naming
+            the files that may be read, e.g. the skill context's
+            ``list_readable``. Any other file in the folder is reported as not
+            read. Defaults to every file.
     """
     if not folder.is_dir():
         raise DataFileError(f"{folder} is not a folder.")
     walker = folder.rglob("*") if recursive else folder.iterdir()
     paths = sorted((p for p in walker if p.is_file()), key=lambda p: str(p).lower())
+    readable = None
+    if list_files is not None:
+        readable = {os.path.normcase(str(p)) for p in list_files(folder, recursive)}
     files: List[FileSummary] = []
     narrative: List[Dict[str, Any]] = []
     skipped: List[Dict[str, str]] = []
@@ -1360,7 +1365,7 @@ def inventory_folder(
         if name.startswith("~$") or name.startswith(".~lock"):
             skipped.append({"file": name, "reason": "an Office lock file, not data"})
             continue
-        if readable is not None and not readable(path):
+        if readable is not None and os.path.normcase(str(path)) not in readable:
             skipped.append(
                 {"file": name, "reason": "outside the folders this agent may read"}
             )
