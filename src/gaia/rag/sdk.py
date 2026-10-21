@@ -2289,10 +2289,14 @@ These positions indicate where to split the text."""
         protected_text = text
         for i, match in enumerate(re.finditer(vlm_pattern, text, re.DOTALL)):
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
-            vlm_blocks.append(
-                {"placeholder": placeholder, "content": match.group(0).strip()}
+            block = match.group(0)
+            content = block.rstrip()
+            vlm_blocks.append({"placeholder": placeholder, "content": content.strip()})
+            # Keep the whitespace after the block, or restoring it fuses its last
+            # word to the next image or page marker.
+            protected_text = protected_text.replace(
+                block, placeholder + block[len(content) :], 1
             )
-            protected_text = protected_text.replace(match.group(0), placeholder, 1)
 
         # STEP 2: Identify natural document boundaries
         # Look for markdown headers, section breaks, or significant whitespace
