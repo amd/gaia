@@ -48,6 +48,8 @@ $logs = "$work\logs"
 
 $rel = Get-Content $env:RELEASE_JSON -Raw | ConvertFrom-Json
 $version = $rel.version
+# gaia-tui stamps the tag itself: `gaia-tui version` -> "gaia v0.25.1-rc2 (...)".
+$tuiVersion = $rel.tui_version
 $pep440 = $rel.pep440
 
 # The install-script row runs with a sandbox profile; every other row is the
@@ -115,6 +117,18 @@ function Wants([string]$Component) {
         'install-ps1' { return $Component -eq 'tui' }
     }
     return $false
+}
+
+# Resolved now, so a phase that puts GAIA's venv first on PATH still runs the
+# runner's Python for the helpers.
+$python = (Get-Command python -ErrorAction Stop).Source
+
+# The PATH a terminal opened after the install gets: the setup writes the user
+# PATH in the registry, which this already-running shell never re-reads.
+function Use-NewTerminalPath {
+    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:PATH = "$machine;$user;" + (Split-Path $python)
 }
 
 function Tui-Exe {
@@ -186,7 +200,11 @@ function Stop-AgentUi {
 # ── The TUI checks ────────────────────────────────────────────────────────────
 function Start-Fake {
     Remove-Item "$work\fake.port" -ErrorAction SilentlyContinue
-    $p = Start-Process -FilePath python -ArgumentList @("$here\fake_model_server.py", '--port-file', "$work\fake.port", '--log', "$logs\fake-requests.jsonl") `
+    # The flagship profile's models (INIT_PROFILES in src/gaia/installer/
+    # init_command.py) and the larger default a big machine picks, as downloaded.
+    $fakeArgs = @("$here\fake_model_server.py", '--port-file', "$work\fake.port", '--log', "$logs\fake-requests.jsonl",
+        '--model', 'Gemma-4-E4B-it-GGUF', '--model', 'user.embeddinggemma-300m-GGUF', '--model', 'Qwen3.6-35B-A3B-GGUF')
+    $p = Start-Process -FilePath $python -ArgumentList $fakeArgs `
         -PassThru -RedirectStandardOutput "$logs\fake-server.out" -RedirectStandardError "$logs\fake-server.err"
     Set-Content -Path "$work\fake.pid" -Value $p.Id
     for ($i = 0; $i -lt 50 -and -not (Test-Path "$work\fake.port"); $i++) { Start-Sleep -Milliseconds 200 }
@@ -195,10 +213,11 @@ function Start-Fake {
 }
 
 function One-Shot {
+    Use-NewTerminalPath
     $url = Start-Fake
     $env:LEMONADE_BASE_URL = $url
     try {
-        & python $journey bounded --seconds 600 --stdout "$logs\oneshot.out" --stderr "$logs\oneshot.err" -- `
+        & $python $journey bounded --seconds 600 --stdout "$logs\oneshot.out" --stderr "$logs\oneshot.err" -- `
             (Tui-Exe) chat --agent gaia --query 'Reply with a short greeting.' --timeout 8m
         $rc = $LASTEXITCODE
     } finally {
@@ -220,9 +239,10 @@ function One-Shot {
 # is a Lemonade that does not answer: LEMONADE_BASE_URL on a closed port. The
 # one-shot must refuse quickly and say how to fix it -- not hang, not exit 0.
 function Preflight-NoLemonade {
+    Use-NewTerminalPath
     $env:LEMONADE_BASE_URL = 'http://127.0.0.1:9/api/v1'
     try {
-        & python $journey bounded --seconds 120 --stdout "$logs\preflight.out" --stderr "$logs\preflight.err" --elapsed-file "$work\preflight.elapsed" -- `
+        & $python $journey bounded --seconds 120 --stdout "$logs\preflight.out" --stderr "$logs\preflight.err" --elapsed-file "$work\preflight.elapsed" -- `
             (Tui-Exe) chat --agent gaia --query 'hello' --timeout 2m
         $rc = $LASTEXITCODE
     } finally {
@@ -362,11 +382,11 @@ switch ($Step) {
     'launch' {
         if (Wants 'ui') { Start-AgentUi }
         if (Wants 'tui') {
-            Check-TuiVersion $(if ($env:KIND -eq 'install-ps1') { '' } else { $version })
+            Check-TuiVersion $(if ($env:KIND -eq 'install-ps1') { '' } else { $tuiVersion })
             if ($env:KIND -eq 'install-ps1') {
                 & "$gaiaHome\venv\Scripts\gaia.exe" --version
-                if ($env:GAIA_RELEASE_TAG) {
-                    Check-TuiVersion $version
+                if (Select-String -Path "$repo\installer\scripts\install.ps1" -Pattern 'GAIA_RELEASE_TAG' -Quiet) {
+                    Check-TuiVersion $tuiVersion
                     $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
                     if ($got -notmatch [regex]::Escape($pep440)) { Fail "install.ps1 was asked for $($rel.tag) but installed $got" }
                 }
@@ -383,10 +403,9 @@ switch ($Step) {
             }
         }
         if (Wants 'tui') {
-            if ($env:KIND -eq 'install-ps1') {
-                $env:PATH = "$gaiaHome\bin;$gaiaHome\venv\Scripts;$env:PATH"
-                $env:USERPROFILE = $userHome; $env:HOME = $userHome
-            }
+            # One-Shot takes the PATH a new terminal would, which is where
+            # install.ps1 put GAIA too.
+            if ($env:KIND -eq 'install-ps1') { $env:USERPROFILE = $userHome; $env:HOME = $userHome }
             One-Shot
         }
     }

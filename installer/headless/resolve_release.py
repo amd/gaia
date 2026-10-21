@@ -235,6 +235,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "tag": tag,
         "version": asset_version(tag),
         "pep440": pep440(tag),
+        # gaia-tui stamps the tag itself: `gaia-tui version` -> "gaia v0.25.1-rc2 (...)".
+        "tui_version": tag[1:],
         "core_version": core_version(tag),
         "prerelease": parse_tag(tag)[3] is not None,
         "assets": {i: n for i, n in names.items() if n in assets},
@@ -243,6 +245,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "prev_tag": prev_tag,
         "prev_version": asset_version(prev_tag) if prev_tag else "",
         "prev_pep440": pep440(prev_tag) if prev_tag else "",
+        "prev_tui_version": prev_tag[1:],
         "prev_assets": {i: n for i, n in prev_names.items() if n in prev_assets},
         "prev_urls": {
             n: prev_assets[n] for n in prev_names.values() if n in prev_assets

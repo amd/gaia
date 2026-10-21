@@ -240,6 +240,22 @@ def cmd_skip(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_finding(args: argparse.Namespace) -> int:
+    """Record a defect the row found without stopping its later phases.
+
+    For a contract the installer breaks that does not block the rest of the
+    journey (a documented command missing, a package name that collides), so
+    one bug does not hide whether everything after it works. Any finding fails
+    the row.
+    """
+    path = Path(args.results)
+    data = _load(path)
+    data.setdefault("findings", []).append(args.text)
+    _save(path, data)
+    print(f"::error::{data['row']}: {args.text}")
+    return 0
+
+
 def cmd_note(args: argparse.Namespace) -> int:
     path = Path(args.results)
     data = _load(path)
@@ -271,11 +287,12 @@ def _finalize(result: Dict[str, Any], expected: List[str]) -> None:
 
 
 def table(results: List[Dict[str, Any]]) -> str:
-    head = ["Row", "OS", "Source"] + [p.capitalize() for p in PHASES]
+    head = ["Row", "OS", "Source"] + [p.capitalize() for p in PHASES] + ["Findings"]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for r in sorted(results, key=lambda r: r["row"]):
         cells = [f"`{r['row']}`", r.get("os", ""), r.get("source", "")]
         cells += [_cell(r, p) for p in PHASES]
+        cells.append(f"**{len(r['findings'])}**" if r.get("findings") else "none")
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -295,6 +312,8 @@ def cmd_finish(args: argparse.Namespace) -> int:
     md = [f"### `{result['row']}`: {result.get('title', '')}", "", table([result]), ""]
     if result.get("notes"):
         md += [f"- {n}" for n in result["notes"]] + [""]
+    if result.get("findings"):
+        md += ["**Findings:**", ""] + [f"- {f}" for f in result["findings"]] + [""]
     if errors:
         md += ["**Over threshold:**", ""] + [f"- {e}" for e in errors] + [""]
     if warnings:
@@ -306,7 +325,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
     print("\n".join(md))
     if failed:
         print(f"::error::{result['row']}: failed phase(s): {', '.join(failed)}")
-    return 1 if failed or errors else 0
+    return 1 if failed or errors or result.get("findings") else 0
 
 
 def cmd_summarize(args: argparse.Namespace) -> int:
@@ -340,6 +359,9 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         e, w = check_thresholds(r, thresholds)
         over += e
         missing += w
+    findings = [f"`{r['row']}`: {f}" for r in results for f in r.get("findings", [])]
+    if findings:
+        md += ["### Findings", ""] + [f"- {f}" for f in findings] + [""]
     if over:
         md += ["### Over threshold", ""] + [f"- {e}" for e in over] + [""]
     if missing:
@@ -355,6 +377,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         r["row"]
         for r in results
         if any(v.get("status") == FAIL for v in r["phases"].values())
+        or r.get("findings")
     ]
     if failed_rows or over:
         print(
@@ -399,6 +422,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--phase", required=True, choices=PHASES)
     p.add_argument("--reason", required=True)
     p.set_defaults(func=cmd_skip)
+
+    p = sub.add_parser("finding")
+    p.add_argument("--results", required=True)
+    p.add_argument("--text", required=True)
+    p.set_defaults(func=cmd_finding)
 
     p = sub.add_parser("note")
     p.add_argument("--results", required=True)

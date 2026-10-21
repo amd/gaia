@@ -29,9 +29,13 @@ STEP="${1:?usage: posix-journey.sh <phase>}"
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -- "${HERE}/../.." && pwd)"
 JOURNEY="${HERE}/journey.py"
-PYTHON="${PYTHON:-python3}"
 
 die() { echo "::error::${ROW:-journey} ${STEP}: $*" >&2; exit 1; }
+# Absolute, so a phase that puts GAIA's venv first on PATH still runs the
+# runner's Python for the helpers.
+PYTHON="$(command -v "${PYTHON:-python3}")" || die "no Python for the journey helpers"
+# A defect that fails the row without stopping its later phases.
+finding() { "${PYTHON}" "${JOURNEY}" finding --results "${RESULTS:?RESULTS is required}" --text "$*"; }
 
 # ── Safety: CI runners only, and only inside a sandbox under RUNNER_TEMP ────
 [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "${CI:-}" = "true" ] \
@@ -58,8 +62,8 @@ json_get() {  # json_get <file> <python expression on d>
 rel() { json_get "${RELEASE_JSON}" "$1"; }
 asset_name() { rel "d['assets'].get('$1') or ''"; }
 asset_url() { local n; n="$(asset_name "$1")"; [ -n "$n" ] || die "the release carries no $1"; rel "d['urls']['$n']"; }
-VERSION="$(rel "d['version']")"
 PEP440="$(rel "d['pep440']")"
+TUI_VERSION="$(rel "d['tui_version']")"
 
 fetch() {  # fetch <url> <dest>
   echo "GET $1"
@@ -96,8 +100,12 @@ pkg_suffix() {
 # ── The fake model server and the TUI checks ─────────────────────────────────
 start_fake() {
   rm -f "${WORK}/fake.port"
+  # The flagship profile's models (INIT_PROFILES in src/gaia/installer/
+  # init_command.py) and the larger default a big machine picks, as downloaded.
   "${PYTHON}" "${HERE}/fake_model_server.py" --port-file "${WORK}/fake.port" \
-    --log "${LOGS}/fake-requests.jsonl" >"${LOGS}/fake-server.log" 2>&1 &
+    --log "${LOGS}/fake-requests.jsonl" --model Gemma-4-E4B-it-GGUF \
+    --model user.embeddinggemma-300m-GGUF --model Qwen3.6-35B-A3B-GGUF \
+    >"${LOGS}/fake-server.log" 2>&1 &
   echo $! >"${WORK}/fake.pid"
   for _ in $(seq 1 50); do [ -s "${WORK}/fake.port" ] && break; sleep 0.2; done
   [ -s "${WORK}/fake.port" ] || { cat "${LOGS}/fake-server.log"; die "the fake model server did not start"; }
@@ -168,13 +176,10 @@ preflight_no_lemonade() {
 }
 
 # ── The Agent UI ──────────────────────────────────────────────────────────────
-agent_ui_cmd() {
-  case "${KIND}" in
-    agent-ui-dmg) echo "/Applications/GAIA.app/Contents/MacOS/GAIA" ;;
-    agent-ui-deb) echo "/usr/bin/gaia-desktop" ;;
-    appimage) echo "${HOME}/Applications/gaia-agent-ui.AppImage" ;;
-  esac
-}
+# The install phase records the executable it installed, so launch and quit use
+# what is really on disk rather than a path this script assumes.
+agent_ui_cmd() { cat "${WORK}/app.cmd"; }
+APP_PATTERN='gaia-desktop'
 
 launch_agent_ui() {
   local cmd
@@ -218,24 +223,51 @@ wait_agent_ui_health() {
   case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app installed is '${got}', expected ${PEP440}" ;; esac
 }
 
+# The app's own processes and the backend it started.
+app_pids() {
+  {
+    pgrep -f "${APP_PATTERN}" || true
+    if [ -f "${GAIA_HOME}/backend.pid" ] && kill -0 "$(cat "${GAIA_HOME}/backend.pid")" 2>/dev/null; then
+      cat "${GAIA_HOME}/backend.pid"
+    fi
+  } | sort -u
+}
+
+# Quit the way the OS does at logout: SIGTERM to the app's main process (the
+# one without a Chromium --type= flag), which runs the app's own quit path and
+# stops the backend. Whatever is still running 30 s later is recorded for the
+# leftovers phase, then killed so the uninstall can proceed.
 stop_agent_ui() {
-  local pid
-  pid="$(cat "${WORK}/app.pid" 2>/dev/null || true)"
-  [ -n "${pid}" ] && kill "${pid}" 2>/dev/null || true
-  [ -f "${GAIA_HOME}/backend.pid" ] && kill "$(cat "${GAIA_HOME}/backend.pid")" 2>/dev/null || true
-  pkill -f "$(agent_ui_cmd)" 2>/dev/null || true
-  pkill -f "${GAIA_HOME}/venv/bin/gaia" 2>/dev/null || true
-  sleep 3
-  pkill -9 -f "$(agent_ui_cmd)" 2>/dev/null || true
-  pkill -9 -f "${GAIA_HOME}/venv/bin/gaia" 2>/dev/null || true
+  local p mains=""
+  for p in $(pgrep -f "${APP_PATTERN}" || true); do
+    ps -o args= -p "${p}" 2>/dev/null | grep -q -- '--type=' || mains="${mains} ${p}"
+  done
+  echo "asking the app to quit: SIGTERM to${mains:- (no main process found)}"
+  # shellcheck disable=SC2086 # a list of pids
+  [ -z "${mains}" ] || kill -TERM ${mains} 2>/dev/null || true
+  local i
+  for i in $(seq 1 30); do
+    if [ -z "$(app_pids)" ]; then echo "the app and its backend exited ${i}s after SIGTERM"; return 0; fi
+    sleep 1
+  done
+  local left
+  left="$(for p in $(app_pids); do ps -o pid=,args= -p "${p}" 2>/dev/null; done)"
+  echo "${left}" >"${WORK}/quit-leftovers"
+  echo "::warning::still running 30 s after the app was asked to quit:"
+  echo "${left}"
+  # shellcheck disable=SC2046 # a list of pids
+  kill -9 $(app_pids) 2>/dev/null || true
 }
 
 assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; done; }
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|GAIA\.app/|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
+  if [ -s "${WORK}/quit-leftovers" ]; then
+    finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
+  fi
 }
 
 # ── install.sh ────────────────────────────────────────────────────────────────
@@ -267,22 +299,39 @@ install)
       mkdir -p "${WORK}/mnt"
       hdiutil attach -nobrowse -readonly -mountpoint "${WORK}/mnt" "${dmg}"
       ls "${WORK}/mnt"
-      [ -d "${WORK}/mnt/GAIA.app" ] || { hdiutil detach "${WORK}/mnt" || true; die "the disk image holds no GAIA.app"; }
-      test ! -e /Applications/GAIA.app || die "/Applications/GAIA.app already exists: the runner is not clean"
-      cp -R "${WORK}/mnt/GAIA.app" /Applications/
+      # The user drags whatever .app the image holds; its name is the image's.
+      app="$(cd "${WORK}/mnt" && ls -d -- *.app 2>/dev/null | head -n1 || true)"
+      [ -n "${app}" ] || { hdiutil detach "${WORK}/mnt" || true; die "the disk image holds no .app"; }
+      test ! -e "/Applications/${app}" || die "/Applications/${app} already exists: the runner is not clean"
+      cp -R "${WORK}/mnt/${app}" /Applications/
       hdiutil detach "${WORK}/mnt"
-      codesign --verify --deep --strict /Applications/GAIA.app && echo "codesign: valid" \
-        || echo "::warning::codesign --verify failed on /Applications/GAIA.app"
+      echo "/Applications/${app}" >"${WORK}/app.bundle"
+      exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "/Applications/${app}/Contents/Info.plist")"
+      echo "/Applications/${app}/Contents/MacOS/${exe}" >"${WORK}/app.cmd"
+      codesign --verify --deep --strict "/Applications/${app}" && echo "codesign: valid" \
+        || echo "::warning::codesign --verify failed on /Applications/${app}"
       ;;
     agent-ui-deb)
       deb="${WORK}/dl/$(asset_name agent-ui-deb)"
-      dpkg-deb -f "${deb}" Package >"${WORK}/deb.package"
+      pkg="$(dpkg-deb -f "${deb}" Package)"
+      echo "${pkg}" >"${WORK}/deb.package"
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deb}"
-      [ -x /usr/bin/gaia-desktop ] || die "/usr/bin/gaia-desktop is not there after install"
+      # Launch what the menu entry launches.
+      desktop_file="$(dpkg -L "${pkg}" | grep -E '^/usr/share/applications/.*\.desktop$' | head -n1 || true)"
+      [ -n "${desktop_file}" ] || die "the package installed no menu entry"
+      exec_line="$(grep -m1 '^Exec=' "${desktop_file}" | sed 's/^Exec=//')"
+      echo "menu entry ${desktop_file}: Exec=${exec_line}"
+      exe="$(echo "${exec_line}" | sed -E 's/^"([^"]+)".*/\1/; t; s/ .*//')"
+      [ -x "${exe}" ] || die "the menu entry runs ${exe}, which is not there"
+      echo "${exe}" >"${WORK}/app.cmd"
+      # What docs/guides/install.mdx and docs/deployment/ui.mdx promise.
+      [ "${pkg}" = "gaia-desktop" ] || finding "the desktop app's .deb is named '${pkg}', but the docs say \`sudo apt remove gaia-desktop\`; and the terminal's .deb is also named 'gaia', so installing one replaces the other"
+      command -v gaia-desktop >/dev/null || finding "\`gaia-desktop\` is not on PATH after installing the .deb, but the docs say to run it from a terminal"
       ;;
     appimage)
       mkdir -p "${HOME}/Applications"
       install -m 0755 "${WORK}/dl/$(asset_name agent-ui-appimage)" "${HOME}/Applications/gaia-agent-ui.AppImage"
+      echo "${HOME}/Applications/gaia-agent-ui.AppImage" >"${WORK}/app.cmd"
       ;;
     tui-deb|tui-deb-upgrade)
       if [ "${KIND}" = "tui-deb-upgrade" ]; then
@@ -294,7 +343,7 @@ install)
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deb}"
       for b in gaia-tui gaia-agent; do [ -x "/usr/bin/${b}" ] || die "${b} did not land in /usr/bin"; done
       if [ "${KIND}" = "tui-deb-upgrade" ]; then
-        check_tui_version "$(rel "d['prev_version']")"
+        check_tui_version "$(rel "d['prev_tui_version']")"
         mkdir -p "${GAIA_HOME}"
         date +%s%N >"${GAIA_HOME}/headless-upgrade-marker"
         cp "${GAIA_HOME}/headless-upgrade-marker" "${WORK}/marker.expected"
@@ -328,7 +377,7 @@ install)
 upgrade)
   [ "${KIND}" = "tui-deb-upgrade" ] || die "no upgrade for ${KIND}"
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$(package_file tui-deb)"
-  check_tui_version "${VERSION}"
+  check_tui_version "${TUI_VERSION}"
   cmp -s "${WORK}/marker.expected" "${GAIA_HOME}/headless-upgrade-marker" \
     || die "the upgrade lost or changed ${GAIA_HOME}/headless-upgrade-marker"
   echo "marker survived the upgrade"
@@ -341,12 +390,12 @@ launch)
       check_tui_version ""
       "${GAIA_HOME}/venv/bin/gaia" --version
       if script_pins_release; then
-        check_tui_version "${VERSION}"
+        check_tui_version "${TUI_VERSION}"
         "${GAIA_HOME}/venv/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
           || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/venv/bin/gaia" --version 2>&1)"
       fi
       ;;
-    *) check_tui_version "${VERSION}" ;;
+    *) check_tui_version "${TUI_VERSION}" ;;
   esac
   ;;
 
@@ -374,7 +423,7 @@ uninstall)
       sudo rm -rf /usr/local/share/doc/gaia-tui
       for id in $(pkgutil --pkgs | grep '^ai\.amd\.gaia\.' || true); do sudo pkgutil --forget "${id}"; done
       ;;
-    agent-ui-dmg) rm -rf /Applications/GAIA.app ;;
+    agent-ui-dmg) rm -rf "$(cat "${WORK}/app.bundle")" ;;
     agent-ui-deb) sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "$(cat "${WORK}/deb.package")" ;;
     appimage) rm -f "${HOME}/Applications/gaia-agent-ui.AppImage" ;;
     tui-deb|tui-deb-upgrade) sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y gaia ;;
@@ -391,12 +440,14 @@ leftovers)
       [ -z "$(pkgutil --pkgs | grep '^ai\.amd\.gaia\.' || true)" ] || die "package receipts remain: $(pkgutil --pkgs | grep '^ai\.amd\.gaia\.')"
       ;;
     agent-ui-dmg)
-      assert_gone /Applications/GAIA.app
+      assert_gone "$(cat "${WORK}/app.bundle")"
       agents="$(find "${HOME}/Library/LaunchAgents" -iname '*gaia*' 2>/dev/null || true)"
       [ -z "${agents}" ] || die "launch agents left behind: ${agents}"
       ;;
     agent-ui-deb)
-      assert_gone /usr/bin/gaia-desktop /opt/GAIA /usr/share/applications/gaia-desktop.desktop
+      assert_gone /usr/bin/gaia-desktop "$(cat "${WORK}/app.cmd")" "$(dirname "$(cat "${WORK}/app.cmd")")"
+      menu="$(find /usr/share/applications -iname '*gaia*desktop*' 2>/dev/null || true)"
+      [ -z "${menu}" ] || die "menu entries left behind: ${menu}"
       ! dpkg -s "$(cat "${WORK}/deb.package")" 2>/dev/null | grep -q '^Status: install' || die "dpkg still lists the package as installed"
       ;;
     appimage)

@@ -296,7 +296,7 @@ jobs:
         run: |
           set -uo pipefail
           export WORK="${RUNNER_TEMP}/journey" RELEASE_JSON="${RUNNER_TEMP}/release/release.json"
-          R="${RUNNER_TEMP}/results/${ROW}.json"
+          R="${RUNNER_TEMP}/results/${ROW}.json"; export RESULTS="$R"
           J=installer/headless/journey.py
           python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "Windows x64" \
             --installer "${KIND}" --release "$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")" --source release
@@ -409,7 +409,7 @@ jobs:
           set -uo pipefail
           export WORK="${RUNNER_TEMP}/journey" RELEASE_JSON="${RUNNER_TEMP}/release/release.json"
           export PKG_DIR="${RUNNER_TEMP}/rebuilt" PREV_PKG_DIR="${RUNNER_TEMP}/prev" PYTHON=python
-          R="${RUNNER_TEMP}/results/${ROW}.json"
+          R="${RUNNER_TEMP}/results/${ROW}.json"; export RESULTS="$R"
           J=installer/headless/journey.py
           source=release
           if [ "${HAS_PACKAGES}" = true ] && [ "${PUBLISHED}" != true ]; then
