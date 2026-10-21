@@ -96,7 +96,7 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import strip_verification_scope
 from gaia.agents.registry import get_embedding_model_for_device
-from gaia.connectors.errors import ConnectionBusyError, ConnectorsError
+from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.connectors.providers.microsoft import (
@@ -179,12 +179,10 @@ class _UnavailableCalendarBackend:
                 raise ConfigurationError(self._message)
             with self._resolve_lock:
                 if self._backend is None:
-                    try:
-                        self._backend = self._resolve()
-                    except ConnectionBusyError:
-                        raise
-                    except (ConfigurationError, ConnectorsError) as exc:
-                        raise ConfigurationError(str(exc)) from exc
+                    # The resolver's own error (busy, reconnect, missing
+                    # scope) is the actionable one; the calendar tools format
+                    # ConnectorsError, so it propagates unchanged.
+                    self._backend = self._resolve()
         return getattr(self._backend, name)
 
 

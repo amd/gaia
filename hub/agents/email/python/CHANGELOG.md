@@ -23,7 +23,10 @@ contract version is tracked separately as
   being saved by another GAIA operation, so treat that 502 as transient and
   retry. The agent routes answer `503` with `Retry-After`. A calendar that was
   busy when a session started now works once the save finishes, instead of
-  staying unavailable for the whole session.
+  staying unavailable for the whole session. While a higher-ranked calendar
+  account is busy, the agent now waits for it instead of using another
+  account's calendar. A calendar error that needs a reconnect now says so,
+  instead of a generic configuration error.
 
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`

@@ -198,3 +198,47 @@ def test_concurrent_first_uses_build_one_calendar():
     for t in threads:
         t.join(5)
     assert len(calls) == 1
+
+
+def test_a_reconnect_error_reaches_the_user_unchanged():
+    """A rewrapped error lost the "reconnect" remedy the user needs."""
+    from gaia.connectors.errors import AuthRequiredError
+
+    def needs_reauth():
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.REAUTH_REQUIRED, provider="google"
+        )
+
+    with pytest.raises(AuthRequiredError) as exc:
+        _placeholder(needs_reauth).list_events()
+
+    assert exc.value.reason is AuthRequiredError.Reason.REAUTH_REQUIRED
+    assert "Reconnect" in str(exc.value)
+
+
+def test_two_busy_providers_ahead_of_the_only_scoped_one_are_waited_for(
+    monkeypatch,
+):
+    """Google and Microsoft 365 rank ahead of Outlook; both busy, the pick must
+    wait for them rather than settle on Outlook."""
+    from gaia_agent_email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
+
+    rows = {
+        "google": {"provider": "google", "scopes": [], "error": "busy"},
+        "microsoft": {
+            "provider": "microsoft",
+            "scopes": [sorted(OUTLOOK_CALENDAR_SCOPES)[0]],
+        },
+        "microsoft_work": {"provider": "microsoft_work", "scopes": [], "error": "busy"},
+    }
+    monkeypatch.setattr(
+        config_mod,
+        "connected_mailbox_providers",
+        lambda: ["microsoft_work", "microsoft", "google"],
+    )
+    monkeypatch.setattr(config_mod, "get_connection", lambda p: rows.get(p))
+
+    with pytest.raises(ConnectionBusyError) as exc:
+        EmailAgentConfig().resolve_calendar_backend()
+
+    assert exc.value.provider == "google", "named the busy provider ranked first"
