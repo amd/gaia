@@ -18,18 +18,22 @@ on:
       - 'tests/**'
       - 'setup.py'
       - 'pyproject.toml'
-      - 'util/lint.py'
-      - 'util/check_*.py'
-      # util/release_versions.py --check reads docs.json's navbar and imports release_tag.py.
-      - 'util/release_versions.py'
-      - 'util/release_tag.py'
+      # lint.py and the checks it imports, and the allowlists they read.
+      - 'util/**'
+      # util/release_versions.py --check reads the docs.json navbar label.
       - 'docs/docs.json'
-      - 'util/test_lane_allowlist.yml'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as
       # `check_dependabot.py` validates `.github/dependabot.yml` above.
       - '.github/workflows/**'
+      # `util/check_ci_path_coverage.py` reads every action, and fails on a tracked
+      # file under tui/ or installer/ that no workflow triggers on.
+      - '.github/actions/**'
+      - 'tui/**'
+      - 'installer/**'
+      # `check_agent_conventions.py` checks agents against the docs nav.
+      - 'docs/docs.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -39,18 +43,22 @@ on:
       - 'tests/**'
       - 'setup.py'
       - 'pyproject.toml'
-      - 'util/lint.py'
-      - 'util/check_*.py'
-      # util/release_versions.py --check reads docs.json's navbar and imports release_tag.py.
-      - 'util/release_versions.py'
-      - 'util/release_tag.py'
+      # lint.py and the checks it imports, and the allowlists they read.
+      - 'util/**'
+      # util/release_versions.py --check reads the docs.json navbar label.
       - 'docs/docs.json'
-      - 'util/test_lane_allowlist.yml'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as
       # `check_dependabot.py` validates `.github/dependabot.yml` above.
       - '.github/workflows/**'
+      # `util/check_ci_path_coverage.py` reads every action, and fails on a tracked
+      # file under tui/ or installer/ that no workflow triggers on.
+      - '.github/actions/**'
+      - 'tui/**'
+      - 'installer/**'
+      # `check_agent_conventions.py` checks agents against the docs nav.
+      - 'docs/docs.json'
   merge_group:
   workflow_dispatch:
 

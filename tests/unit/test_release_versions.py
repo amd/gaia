@@ -9,12 +9,14 @@ release.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import shutil
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "util"))
@@ -221,7 +223,7 @@ def test_the_chat_manifest_follows_chat_not_core_or_flagship(tree):
 @pytest.mark.parametrize(
     "rel",
     [
-        "hub/components/agent-ui/gaia-agent.yaml",
+        "hub/components/terminal-hub/gaia-agent.yaml",
         "src/gaia/apps/webui/package-lock.json",
         "docs/docs.json",
     ],
@@ -314,7 +316,7 @@ def test_an_rc_tree_with_a_stale_npm_version_fails(tree):
 @pytest.mark.parametrize(
     "path, what",
     [
-        ("hub/components/agent-ui/gaia-agent.yaml", "version"),
+        ("hub/components/terminal-hub/gaia-agent.yaml", "version"),
         ("hub/agents/gaia/python/gaia-agent.yaml", "min_gaia_version"),
         ("docs/docs.json", "navbar GAIA version"),
     ],
@@ -417,15 +419,19 @@ def test_navbar_with_a_literal_separator_is_read_too(tree):
 
 
 def test_cli_check_fails_with_the_fix_command(tree, capsys):
-    _set(tree, _target("hub/components/agent-ui/gaia-agent.yaml", "version"), "0.1.0")
+    _set(
+        tree, _target("hub/components/terminal-hub/gaia-agent.yaml", "version"), "0.1.0"
+    )
     assert rv.main(["--check", "--root", str(tree)]) == 1
     out = capsys.readouterr().out
-    assert "DRIFT  hub/components/agent-ui/gaia-agent.yaml (version): 0.1.0" in out
+    assert "DRIFT  hub/components/terminal-hub/gaia-agent.yaml (version): 0.1.0" in out
     assert f"Fix: {rv.FIX_CMD}" in out
 
 
 def test_cli_stamp_then_check(tree):
-    _set(tree, _target("hub/components/agent-ui/gaia-agent.yaml", "version"), "0.1.0")
+    _set(
+        tree, _target("hub/components/terminal-hub/gaia-agent.yaml", "version"), "0.1.0"
+    )
     assert rv.main(["--stamp", "--root", str(tree)]) == 0
     assert rv.main(["--check", "--root", str(tree)]) == 0
 
@@ -439,7 +445,12 @@ def test_lint_runs_the_check_and_the_workflows_trigger_on_its_inputs():
     lint = (REPO_ROOT / "util/lint.py").read_text(encoding="utf-8")
     assert "from release_versions import run_check" in lint
     assert "if args.release_versions or run_all:" in lint
-    workflow = (REPO_ROOT / ".github/workflows/lint.yml").read_text(encoding="utf-8")
-    assert "python util/lint.py --all" in workflow
-    for path in ("util/release_versions.py", "util/release_tag.py", "docs/docs.json"):
-        assert workflow.count(f"- '{path}'") == 2, path
+    text = (REPO_ROOT / ".github/workflows/lint.yml").read_text(encoding="utf-8")
+    assert "python util/lint.py --all" in text
+    on = yaml.safe_load(text)[True]  # PyYAML reads the bare `on:` key as True.
+    inputs = ["util/release_versions.py", "util/release_tag.py"]
+    inputs += [t.path for t in rv.TARGETS] + list(rv.SOURCE_FILES.values())
+    for event in ("push", "pull_request"):
+        patterns = on[event]["paths"]
+        for path in inputs:
+            assert any(fnmatch.fnmatch(path, p) for p in patterns), (event, path)

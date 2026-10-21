@@ -220,7 +220,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    ```
    `--stamp` writes, from `version.py`:
    - the Agent UI's `package.json` and lockfile (formerly `bump-ui-version.mjs`);
-   - both hub component manifests' `version` (`hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml`). `release_components.yml` gates the tag against each, and R2 paths are immutable, so a mismatch **fails the release** by design;
+   - the Terminal UI's hub manifest `version` (`hub/components/terminal-hub/gaia-agent.yaml`). Its six raw binaries publish to the Agent Hub R2 catalog because the flagship's `binaries.lock.json` pins them there, and `release_components.yml` gates the tag against the manifest. R2 paths are immutable, so a mismatch **fails the release** by design. `hub/components/agent-ui/` is no longer published and needs no bump;
    - the `docs.json` navbar label, `v<version> · Lemonade <LEMONADE_VERSION>`. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs;
    - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
 
@@ -231,8 +231,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 6. **Bump the Terminal UI's `min_gaia_version` by hand** to `<version>`. It is not stamped. It needs
    daemon host API v1.1, which no release before this one ships — so the release it
    publishes alongside *is* its minimum, and `release_components.yml` refuses to
-   publish it under an older core. Leave `agent-ui`'s alone: it talks to
-   `gaia.ui.server`, not the daemon control plane.
+   publish it under an older core.
    ```bash
    sed -i '' "s/^min_gaia_version: .*/min_gaia_version: \"<version>\"/" \
      hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
@@ -368,7 +367,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
    1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python util/release_versions.py --stamp`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry. (`hub/agents/gaia/python/packaging/stamp_version.py` writes the same flagship fields and still works; `release_agent_gaia.yml` runs its `--check`.)
-   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its agent-ui and Windows-setup legs fail because there is no GitHub release or new flagship yet; they publish nothing. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg fails because there is no GitHub release or new flagship yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
    3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
    4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<flagship-version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 
@@ -404,7 +403,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | GitHub Release | normal, becomes latest | pre-release, never latest |
 | PyPI | `<version>` | `<version>rcN` — `pip install amd-gaia` ignores it without `--pre` |
 | npm `@amd-gaia/agent-ui` | dist-tag `latest` | `<version>-rc.N` under dist-tag `next` |
-| Agent Hub R2 (`release_components.yml`) | publishes | does not run — the catalog has no pre-release channel |
+| `release_components.yml` | attaches the terminal installers to the release; publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
 | Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
 | `release` branch, release-notes bot | run | skipped |
@@ -438,6 +437,11 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    gaia init && gaia hub list                           # gaia agent version ends in +v<version>-rc1
    ```
    Then install the desktop app from the pre-release and walk the golden paths the release notes advertise.
+
+   The one-line installers take a candidate too: `GAIA_RELEASE_TAG=v<version>-rc1` makes them install `amd-gaia==<version>rc1`, that pre-release's terminal binary, and the agent frozen on it — the same set an RC core uses (installer/README.md). The RC release notes print both commands. Run them only on a test machine or a throwaway account; they install for real.
+   ```bash
+   curl -fsSL https://amd-gaia.ai/install.sh | GAIA_RELEASE_TAG=v<version>-rc1 sh
+   ```
 
 5. **Problems → fix forward, then `-rc2`.** Land the fix on `main` through a normal PR, re-run Phase 3 on the new merged SHA, and tag `v<version>-rc2` from step 2. Never move or delete an RC tag — each one is a published version on PyPI and npm.
 

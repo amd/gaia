@@ -154,7 +154,7 @@ To publish a new release (e.g. `v0.17.0`), create a release PR that updates thes
 | 2 | `docs/releases/v0.17.0.mdx` | Create release notes (see [format guide](https://amd-gaia.ai/docs/releases)) |
 | 3 | `docs/docs.json` | Add `"releases/v0.17.0"` to the Releases tab pages array |
 
-Then run `python util/release_versions.py --stamp`. It writes every version field that follows `version.py`, including the `docs.json` navbar label, the Agent UI package, and the hub component manifests; lint fails if one drifts. Commit what it changed with the PR, then merge and tag:
+Then run `python util/release_versions.py --stamp`. It writes every version field that follows `version.py`, including the `docs.json` navbar label, the Agent UI package, and the Terminal UI's hub manifest; lint fails if one drifts. Commit what it changed with the PR, then merge and tag:
 
 ```bash
 git tag v0.17.0 && git push origin v0.17.0

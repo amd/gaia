@@ -105,7 +105,6 @@ TARGETS: tuple[Target, ...] = (
         count=2,
         rc="npm",
     ),
-    Target("hub/components/agent-ui/gaia-agent.yaml", "version", _YAML_VERSION, "core"),
     Target(
         "hub/components/terminal-hub/gaia-agent.yaml", "version", _YAML_VERSION, "core"
     ),

@@ -2085,6 +2085,9 @@ Examples:
   # Run a specific scenario by ID
   gaia eval agent --scenario simple_factual_rag
 
+  # Run several scenarios from one category (the compare then judges only these)
+  gaia eval agent --category rag_quality --scenario simple_factual_rag,cross_section_rag
+
   # Run all scenarios in a category
   gaia eval agent --category rag_quality
 
@@ -2136,8 +2139,11 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--scenario",
+        action="append",
         default=None,
-        help="Run specific scenario by ID",
+        metavar="ID[,ID...]",
+        help="Run only these scenario IDs (repeatable, or comma-separated). An "
+        "ID that would not run, such as one outside --category, is an error.",
     )
     agent_eval_parser.add_argument(
         "--category",

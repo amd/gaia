@@ -24,6 +24,8 @@ on:
       - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
+      - '.github/actions/setup-venv/**'
+      - 'installer/scripts/start-lemonade.ps1'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -36,6 +38,8 @@ on:
       - 'tests/fixtures/*_skills/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
+      - '.github/actions/setup-venv/**'
+      - 'installer/scripts/start-lemonade.ps1'
   merge_group:
   workflow_dispatch:
 

@@ -257,6 +257,7 @@ python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
 python util/lint.py --workflow-ancestor-skip # reject job if: conditions an upstream skip silently skips
 python util/lint.py --test-lanes  # reject test files that no CI lane runs
+python util/lint.py --ci-paths    # reject CI lanes whose paths: filter misses a file they depend on
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
 python util/lint.py --release-versions # every version field matches its source
@@ -294,6 +295,20 @@ lanes that install hub wheels run `util/check_module_skips.py` right after their
 install step. It fails on such a skip unless the file is listed
 under `module_skips:` in the same allowlist, with `runs_in` naming the lane that
 installs the package. That lane must name the file and run the check too.
+</Note>
+
+<Note>
+`--ci-paths` fails when a workflow's `paths:` filter would not fire on a file the
+workflow runs, imports directly, installs, or reads by literal path. A PR changing
+only that file would merge with the lane never running. It also fails when a file
+under `src/`, `hub/`, `tui/`, `installer/`, `util/` or `tests/` triggers no
+path-scoped workflow. Add the path to the lane's filter, or list it in
+`util/ci_path_allowlist.yml` with the reason the lane can't be affected. To see
+which workflows a change would run:
+
+```bash
+git diff --name-only origin/main... | python util/check_ci_path_coverage.py --changed -
+```
 </Note>
 
 ### Running Tests
@@ -357,8 +372,8 @@ legs still only get exercised in CI.
 
 The harness runs on **bogus** credentials against a local Worker, so it proves
 the publish logic and nothing about whether the real key works. Every artifact
-over the Worker's request-body cap — the Agent UI installers, the gaia sidecar's
-Linux build — is PUT straight to R2 instead, and R2 answers both a bad
+over the Worker's request-body cap — today the flagship agent's sidecar
+builds — is PUT straight to R2 instead, and R2 answers both a bad
 credential and a malformed request with the same `Unauthorized`:
 
 ```bash
@@ -389,12 +404,12 @@ python util/release_versions.py --check   # what lint runs; changes nothing
 
 | Source | Fields that follow it |
 |---|---|
-| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
 | `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
 | `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
 
 `--stamp` does the work of `installer/version/bump-ui-version.mjs`, the flagship's
-`stamp_version.py`, and the hand edits to the component manifests and the navbar.
+`stamp_version.py`, and the hand edits to the Terminal UI manifest and the navbar.
 Those scripts still work, and release workflows still call them.
 `--stamp vX.Y.Z-rcN` writes a release candidate's versions into the same files
 as `util/release_tag.py stamp`, with the same result.
@@ -406,8 +421,8 @@ lockfile's root version.
 
 ### The flagship agent in a core release
 
-`gaia init` and the Windows setup install the flagship
-agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
+`gaia init`, the one-line installers (`install.sh` / `install.ps1`) and the
+Windows setup install the flagship agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
 `hub/agents/gaia/npm/binaries.lock.json`. Only `release_agent_gaia.yml` (tag
 `agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
 A final core release therefore fails unless that flagship release was cut from
