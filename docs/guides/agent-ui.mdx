@@ -721,7 +721,7 @@ gaia chat --ui
 
 An invalid value (not a whole number, or out of range) stops the Agent UI server at startup with an error naming the variable, rather than quietly using the default.
 
-**If the PC sleeps mid-reply,** the time it spends asleep (including Modern Standby, the sleep most current Windows laptops use) doesn't count toward this limit, the model-stall check, a running tool's time limit or the retry budget, so the reply isn't cut off the moment the PC wakes. A local model and a running tool pick up where they left off. A hosted model's connection may have dropped during the sleep; that is handled like any other dropped connection. A model that stays silent after the PC wakes is still caught. In Modern Standby, the moments before Windows pauses GAIA, plus about the first 10 seconds of the pause, still count; each stretch left out is logged with its length.
+**If the PC sleeps mid-reply,** the time it spends asleep (including Modern Standby, the sleep most current Windows laptops use) doesn't count toward this limit, the model-stall check, a running tool's time limit or the retry budget, so the reply isn't cut off the moment the PC wakes. A local model and a running tool pick up where they left off. A hosted model's connection may have dropped during the sleep; that is handled like any other dropped connection. A model that stays silent after the PC wakes is still caught. In Modern Standby, the moments before Windows pauses GAIA, plus about the first 10 seconds of the pause, still count; each stretch left out is logged as a warning with its length. GAIA running as a service or over a remote logon gets no display notifications from Windows, so there standby still counts, and GAIA logs a warning saying so when it starts.
 
 ---
 

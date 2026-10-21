@@ -16,10 +16,16 @@ about to carry on. :func:`monotonic` stops while the PC sleeps:
   the process did not run for more than :data:`STANDBY_GAP` seconds, starting
   with the display off and using next to no CPU, as standby, and leaves it
   out past the first ``STANDBY_GAP`` seconds. Each one is logged with its
-  size. A freeze with the display on is a pause, and a busy process starved
-  of its turn is not frozen; both count, and are logged. A process stalled
-  for over ``STANDBY_GAP`` seconds while using little CPU with the display off
-  (heavy paging, say) can't be told from standby this way, and is left out.
+  size, at WARNING. A freeze with the display on is a pause, and a busy process
+  starved of its turn is not frozen; both count, and are logged. A process
+  stalled for over ``STANDBY_GAP`` seconds while using little CPU with the
+  display off (heavy paging, a debugger) can't be told from standby this way,
+  and is excluded too, which is why each exclusion is a warning. A process
+  that gets no display notifications (no console session: a service, a
+  remote logon) can't see standby at all; the monitor says so once at startup.
+* A monitor that dies, fails or stops beating is replaced on the next read,
+  at most :data:`MAX_RESTARTS` times, each logged as an error; after that every
+  read raises :class:`AwakeClockError` telling the user to restart GAIA.
 * Linux and macOS: ``time.monotonic()``, which already stops during suspend.
 
 Use it for any limit on how long something may take, so a sleep never reads
@@ -42,6 +48,14 @@ log = get_logger(__name__)
 # Longest the process may not run, with the display off, before that is standby.
 STANDBY_GAP = 10.0
 HEARTBEAT = 1.0
+# The process running this long while a beat is overdue: the monitor is stuck.
+STUCK_AFTER = 5 * HEARTBEAT
+# A gap this long between ticks means the whole process was frozen.
+TICK_BREAK = 3 * HEARTBEAT
+# A stuck, dead or failed monitor is replaced at most this many times.
+MAX_RESTARTS = 3
+# Windows sends the current display state on subscribing; this long is too long.
+FIRST_NOTICE_WAIT = 2.0
 
 
 class AwakeClockError(RuntimeError):
@@ -60,6 +74,11 @@ class SleepLedger:
     at the point it would be left out from, so a reader that wakes first never
     sees the standby. *clock* and *cpu* are read under the lock, so readings
     and beats are ordered and the clock never goes backwards.
+
+    A second thread calls :meth:`tick` about every :data:`HEARTBEAT` seconds and
+    does nothing else, so it shows when the process was running. Standby
+    freezes it with the monitor; a stuck monitor does not, which is how
+    :meth:`stalled_for` tells the two apart without any reader's help.
     """
 
     def __init__(
@@ -67,16 +86,19 @@ class SleepLedger:
         clock: Callable[[], float],
         cpu: Callable[[], float],
         gap: float = STANDBY_GAP,
+        excluded: float = 0.0,
     ):
         self._clock = clock
         self._cpu = cpu
         self._lock = threading.Lock()
         self.gap = gap
-        self.excluded = 0.0
+        self.excluded = excluded
         self._last_beat = clock()
         self._last_cpu = cpu()
         self._display_on = True
         self._monitored = True
+        self._last_tick = self._last_beat
+        self._run_since = self._last_beat
 
     def read(self) -> float:
         """The awake time now."""
@@ -86,6 +108,20 @@ class SleepLedger:
             if held and raw - self._last_beat > self.gap:
                 raw = self._last_beat + self.gap
             return raw - self.excluded
+
+    def tick(self) -> None:
+        """The process ran just now."""
+        with self._lock:
+            raw = self._clock()
+            if raw - self._last_tick > TICK_BREAK:
+                self._run_since = raw  # the whole process was frozen until now
+            self._last_tick = raw
+
+    def stalled_for(self) -> float:
+        """Seconds the process has been seen running while a beat was overdue."""
+        with self._lock:
+            overdue_since = max(self._run_since, self._last_beat + self.gap)
+            return max(0.0, self._last_tick - overdue_since)
 
     def beat(self) -> float:
         """Record that the monitor ran now; returns the seconds left out."""
@@ -112,6 +148,15 @@ class SleepLedger:
             self._monitored = False
         self._log(*report)
 
+    def abandon(self) -> None:
+        """Its monitor is stuck or dead: stop holding, count the missed time.
+
+        Unlike :meth:`detach` it judges nothing (a stuck monitor is not a
+        standby) and logs nothing (logging may be what it is stuck in).
+        """
+        with self._lock:
+            self._monitored = False
+
     def _beat_locked(self):
         raw, cpu = self._clock(), self._cpu()
         frozen = raw - self._last_beat
@@ -124,13 +169,21 @@ class SleepLedger:
         self._last_beat, self._last_cpu = raw, cpu
         return left_out, frozen, busy, self._display_on, self.excluded
 
-    def _log(self, left_out, frozen, busy, display_on, excluded) -> float:
+    def _log(
+        self,
+        left_out: float,
+        frozen: float,
+        busy: float,
+        display_on: bool,
+        excluded: float,
+    ) -> float:
         if left_out:
-            log.info(
-                "Left %.1f s out of time limits: the process was frozen for "
-                "%.1f s with the display off, using %.1f s of CPU, which is "
-                "Windows Modern Standby; the first %.0f s still count. %.1f s "
-                "left out so far.",
+            # WARNING, not INFO: a paging stall or a debugger pause looks the same.
+            log.warning(
+                "Excluded %.1f s from time limits as probable standby (display "
+                "off, low CPU): the process did not run for %.1f s and used "
+                "%.1f s of CPU; the first %.0f s still count. %.1f s excluded "
+                "so far.",
                 left_out,
                 frozen,
                 busy,
@@ -291,6 +344,20 @@ if sys.platform == "win32":
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     _kernel32.CloseHandle.restype = wintypes.BOOL
 
+    _kernel32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
+    _kernel32.ProcessIdToSessionId.argtypes = [
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    _kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
+
+    def _session_ids():
+        """(this process's session id, the console session id)."""
+        session = wintypes.DWORD()
+        if not _kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session)):
+            raise _win_error("ProcessIdToSessionId")
+        return session.value, _kernel32.WTSGetActiveConsoleSessionId()
+
     _class_ids = itertools.count()
     _REPORT = (
         "Run `gaia diagnostics` and attach the bundle to an issue at "
@@ -314,12 +381,20 @@ if sys.platform == "win32":
             self.error: Optional[BaseException] = None
             self._ready = threading.Event()
             self._stopping = False
+            self.notify: Optional[int] = None
+            self._display_seen = False
+            self._quiet_reported = False
+            self._subscribed_at = 0.0
             self._stop_event = _kernel32.CreateEventW(None, True, False, None)
             if not self._stop_event:
                 raise _win_error("CreateEventW")
             self._wndproc = _WNDPROC(self._on_message)
             self._thread = threading.Thread(
                 target=self._run, name="gaia-awake-clock", daemon=True
+            )
+            self._tick_stop = threading.Event()
+            self._ticker = threading.Thread(
+                target=self._tick, name="gaia-awake-clock-tick", daemon=True
             )
 
         def start(self, timeout: float = 10.0) -> None:
@@ -332,36 +407,43 @@ if sys.platform == "win32":
             if self.error is not None:
                 self.stop(timeout)
                 raise self.error
+            self._ticker.start()
 
-        def check(self) -> None:
-            """Raise if the monitor failed or died; time limits need it."""
+        def _tick(self) -> None:
+            while not self._tick_stop.wait(HEARTBEAT):
+                self.ledger.tick()
+
+        def problem(self) -> Optional[str]:
+            """Why this monitor can no longer be trusted, or ``None``."""
             if self.error is not None:
-                raise AwakeClockError(
-                    f"The standby monitor failed ({self.error}), so time limits "
-                    f"can't tell Modern Standby from awake time. {_REPORT}"
-                ) from self.error
+                return f"failed ({self.error})"
             if not self._stopping and not self._thread.is_alive():
-                raise AwakeClockError(
-                    "The standby monitor thread exited, so time limits can't "
-                    f"tell Modern Standby from awake time. {_REPORT}"
+                return "thread exited"
+            if not self._stopping and not self._ticker.is_alive():
+                return "tick thread exited"
+            stalled = self.ledger.stalled_for()
+            if stalled > STUCK_AFTER:
+                return (
+                    f"has not beaten for over {stalled + self.ledger.gap:.0f} s "
+                    "while the rest of GAIA kept running"
                 )
+            return None
 
         def stop(self, timeout: float = 5.0) -> None:
             if self._stop_event is None:
                 return
             self._stopping = True
+            self._tick_stop.set()
             _kernel32.SetEvent(self._stop_event)
-            if (
-                self._thread.is_alive()
-                and self._thread is not threading.current_thread()
-            ):
-                self._thread.join(timeout)
-                if self._thread.is_alive():
-                    log.error(
-                        "The awake-clock standby monitor did not stop within %.0f s.",
-                        timeout,
-                    )
-                    return
+            for thread in (self._ticker, self._thread):
+                if thread.is_alive() and thread is not threading.current_thread():
+                    thread.join(timeout)
+            if self._thread.is_alive() or self._ticker.is_alive():
+                log.error(
+                    "The awake-clock standby monitor did not stop within %.1f s.",
+                    timeout,
+                )
+                return
             _kernel32.CloseHandle(self._stop_event)
             self._stop_event = None
 
@@ -377,9 +459,10 @@ if sys.platform == "win32":
                         # 0 off, 1 on, 2 dimmed; only "off" can precede standby.
                         state = int.from_bytes(bytes(setting.Data), "little")
                         self.ledger.display(state != 0)
+                        self._report_first_notice(state)
                         log.debug("Console display state is now %d", state)
                     return 1
-            except BaseException as exc:  # noqa: BLE001 — surfaced by check()
+            except BaseException as exc:  # noqa: BLE001 — surfaced by problem()
                 self.error = exc
                 _kernel32.SetEvent(self._stop_event)
                 return 0
@@ -417,9 +500,11 @@ if sys.platform == "win32":
                 )
                 if not self.hwnd:
                     raise _win_error("CreateWindowExW")
+                self._subscribed_at = _unbiased()
                 notify = _user32.RegisterPowerSettingNotification(
                     self.hwnd, ctypes.byref(_GUID_CONSOLE_DISPLAY_STATE), 0
                 )
+                self.notify = notify
                 if not notify:
                     raise _win_error(
                         "RegisterPowerSettingNotification(GUID_CONSOLE_DISPLAY_STATE)"
@@ -437,7 +522,7 @@ if sys.platform == "win32":
             self._ready.set()
             try:
                 self._pump()
-            except BaseException as exc:  # noqa: BLE001 — surfaced by check()
+            except BaseException as exc:  # noqa: BLE001 — surfaced by problem()
                 self.error = exc
                 log.error("The awake-clock standby monitor stopped: %s", exc)
             finally:
@@ -458,9 +543,43 @@ if sys.platform == "win32":
                 self.ledger.beat()
                 if woke == _WAIT_OBJECT_0 or self.error is not None:
                     return
+                self._report_no_notice()
                 while _user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, _PM_REMOVE):
                     _user32.TranslateMessage(ctypes.byref(msg))
                     _user32.DispatchMessageW(ctypes.byref(msg))
+
+        def _report_first_notice(self, state: int) -> None:
+            if self._display_seen:
+                return
+            self._display_seen = True
+            log.info(
+                "Receiving Windows display power notifications (display %s), "
+                "so Modern Standby is left out of time limits.",
+                {0: "off", 1: "on", 2: "dimmed"}.get(state, str(state)),
+            )
+
+        def _report_no_notice(self) -> None:
+            if self._display_seen or self._quiet_reported:
+                return
+            if _unbiased() - self._subscribed_at < FIRST_NOTICE_WAIT:
+                return
+            self._quiet_reported = True
+            session, console = _session_ids()
+            if session != console:
+                where = (
+                    f"This process runs in session {session}, not the "
+                    f"interactive console session ({console}): a service or a "
+                    "remote logon gets no display notifications."
+                )
+            else:
+                where = "Windows sent none, though this is the console session."
+            log.warning(
+                "No Windows display power notification arrived within %.0f s of "
+                "subscribing. %s Time in Modern Standby will count toward time "
+                "limits until one does.",
+                FIRST_NOTICE_WAIT,
+                where,
+            )
 
         def _cleanup(self, notify, registered_class, class_name, instance) -> None:
             if notify and not _user32.UnregisterPowerSettingNotification(notify):
@@ -474,33 +593,77 @@ if sys.platform == "win32":
     _state_lock = threading.Lock()
     _ledger: Optional[SleepLedger] = None
     _monitor: Optional[_StandbyMonitor] = None
-    _start_error: Optional[BaseException] = None
+    _restarts = 0
+    _last_problem: Optional[str] = None
     _shut_down = False
 
+    def _gave_up() -> AwakeClockError:
+        return AwakeClockError(
+            "GAIA's time-limit clock stopped working: the Windows standby "
+            f"monitor {_last_problem}, and {MAX_RESTARTS} restarts did not fix "
+            "it. Restart GAIA. If it happens again, run `gaia diagnostics` and "
+            "attach the bundle to an issue at https://github.com/amd/gaia/issues"
+        )
+
+    def _start_monitor() -> SleepLedger:
+        """Start a monitor, carrying over the standby already left out."""
+        global _ledger, _monitor, _restarts, _last_problem
+        if _restarts > MAX_RESTARTS:
+            raise _gave_up()
+        excluded = _ledger.excluded if _ledger is not None else 0.0
+        ledger = SleepLedger(_unbiased, time.process_time, excluded=excluded)
+        try:
+            monitor = _StandbyMonitor(ledger)
+            monitor.start()
+        except (AwakeClockError, OSError) as exc:
+            _restarts += 1
+            _last_problem = f"could not start ({exc})"
+            log.error(
+                "The awake-clock standby monitor could not start (attempt %d of "
+                "%d): %s",
+                _restarts,
+                MAX_RESTARTS + 1,
+                exc,
+            )
+            if _restarts > MAX_RESTARTS:
+                raise _gave_up() from exc
+            raise
+        _ledger, _monitor = ledger, monitor
+        return ledger
+
     def _ensure_monitor() -> SleepLedger:
-        global _ledger, _monitor, _start_error
+        global _monitor, _restarts, _last_problem
         with _state_lock:
-            if _start_error is not None:
-                raise _start_error
-            if _monitor is None:
-                ledger = SleepLedger(_unbiased, time.process_time)
-                monitor = _StandbyMonitor(ledger)
-                try:
-                    monitor.start()
-                except BaseException as exc:
-                    _start_error = exc
-                    raise
-                _ledger, _monitor = ledger, monitor
-            if not _shut_down:
-                _monitor.check()
-            return _ledger
+            if _monitor is None or _ledger is None:
+                return _start_monitor()
+            if _shut_down:
+                return _ledger
+            problem = _monitor.problem()
+            if problem is None:
+                return _ledger
+            _restarts += 1
+            _last_problem = problem
+            if _restarts > MAX_RESTARTS:
+                raise _gave_up()
+            log.error(
+                "The awake-clock standby monitor %s. Starting a new one (restart "
+                "%d of %d); the time since its last beat counts toward limits.",
+                problem,
+                _restarts,
+                MAX_RESTARTS,
+            )
+            _ledger.abandon()
+            _monitor.stop(timeout=0.5)
+            # Cleared first: if the new one fails, the next read tries again.
+            _monitor = None
+            return _start_monitor()
 
     def monotonic() -> float:
         """Seconds since boot, not counting time the PC slept or was in standby.
 
         Raises:
-            AwakeClockError: the standby monitor could not subscribe to the
-                display power state, or it has died.
+            AwakeClockError: the standby monitor could not start this time, or
+                it has failed more than :data:`MAX_RESTARTS` times.
             OSError: Windows refused ``QueryUnbiasedInterruptTime`` (it never
                 does on Windows 7+).
         """
@@ -510,7 +673,7 @@ if sys.platform == "win32":
         """Stop the standby monitor; the clock keeps reading, without standby."""
         global _shut_down
         with _state_lock:
-            if _monitor is None or _shut_down:
+            if _monitor is None or _ledger is None or _shut_down:
                 return
             _shut_down = True
             # Nothing beats any more, so nothing may be held for a beat.
@@ -519,12 +682,14 @@ if sys.platform == "win32":
 
     def _reset_for_tests() -> None:
         """Stop the monitor and forget it, so the next read starts a new one."""
-        global _ledger, _monitor, _start_error, _shut_down
+        global _ledger, _monitor, _restarts, _last_problem, _shut_down
         with _state_lock:
-            if _monitor is not None:
+            if _ledger is not None:
                 _ledger.detach()
+            if _monitor is not None:
                 _monitor.stop()
-            _ledger, _monitor, _start_error, _shut_down = None, None, None, False
+            _ledger, _monitor, _shut_down = None, None, False
+            _restarts, _last_problem = 0, None
 
     atexit.register(shutdown)
 

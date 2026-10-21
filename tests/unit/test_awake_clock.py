@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -88,8 +89,46 @@ def test_standby_is_left_out_past_the_first_gap_and_logged(caplog):
         ledger.beat()
     assert ledger.read() == pytest.approx(1010.0)
     assert ledger.excluded == pytest.approx(7190.0)
-    assert "Left 7190.0 s out" in caplog.text
-    assert "frozen for 7200.0 s with the display off" in caplog.text
+    # A warning: a paging stall or a debugger pause would read the same.
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert "Excluded 7190.0 s from time limits as probable standby" in record.message
+    assert "(display off, low CPU)" in record.message
+    assert "did not run for 7200.0 s" in record.message
+
+
+def test_a_monitor_that_stops_beating_while_the_process_runs_is_stalled():
+    """The tick thread kept running, so the missing beats are not standby."""
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    for _ in range(25):  # ticks, no beats: the monitor is stuck
+        pc.now += 1.0
+        ledger.tick()
+    assert ledger.stalled_for() == pytest.approx(15.0)
+    ledger.beat()
+    assert ledger.stalled_for() == 0.0
+
+
+def test_a_frozen_process_is_never_taken_for_a_stuck_monitor():
+    """Standby freezes the tick thread too, so its first tick after is fresh."""
+    pc = _Machine()
+    ledger = pc.ledger()
+    ledger.display(False)
+    pc.frozen(3600.0)
+    ledger.tick()  # thawed: ticks before the monitor gets to beat
+    pc.now += 1.0
+    ledger.tick()
+    # Only the second since thawing counts, not the hour asleep.
+    assert ledger.stalled_for() == pytest.approx(1.0)
+    assert ledger.stalled_for() < awake_clock.STUCK_AFTER
+    assert ledger.read() == pytest.approx(1010.0)  # still held for the beat
+
+
+def test_a_replacement_ledger_carries_the_standby_already_left_out():
+    pc = _Machine()
+    ledger = awake_clock.SleepLedger(lambda: pc.now, lambda: pc.cpu, excluded=500.0)
+    assert ledger.read() == pytest.approx(500.0)
 
 
 def test_a_freeze_with_the_display_on_counts_and_is_logged(caplog):
@@ -368,7 +407,7 @@ def test_a_process_frozen_through_standby_wakes_with_the_standby_left_out(child)
     assert start <= first_read <= woke <= later
     # All of the freeze is left out but the gap and up to one heartbeat.
     assert later - start <= wall - (FREEZE - GAP - HEARTBEAT - 0.5)
-    assert any(line.startswith("Left ") for line in c.logs), c.logs
+    assert any(line.startswith("Excluded ") for line in c.logs), c.logs
 
 
 @windows_only
@@ -383,23 +422,27 @@ def test_a_process_frozen_with_the_display_on_counts_every_second(child):
 
 
 @windows_only
-def test_a_dead_monitor_stops_every_time_limit_loudly(child):
+def test_a_monitor_that_fails_is_replaced_and_says_why(child):
     c = child()
-    c.ask("read")
+    before = c.ask("read")
     c.ask("corrupt")  # the window procedure fails on a NULL setting
     time.sleep(1.5)
-    answer = c.ask("read")
-    assert isinstance(answer, str) and answer.startswith("AwakeClockError"), answer
+    after = c.ask("read")
+    assert isinstance(after, float) and after >= before, after
+    failed = [line for line in c.logs if "restart 1 of 3" in line]
+    assert failed and "failed (NULL pointer access)" in failed[0], c.logs
 
 
 @windows_only
-def test_a_monitor_thread_that_exits_stops_every_time_limit_loudly(child):
+def test_a_monitor_thread_that_exits_is_replaced_and_says_why(child):
     c = child()
     c.ask("read")
     c.ask("exit-monitor")
     time.sleep(1.5)
-    answer = c.ask("read")
-    assert isinstance(answer, str) and "thread exited" in answer, answer
+    assert isinstance(c.ask("read"), float)
+    assert any(
+        "thread exited" in line and "restart 1 of 3" in line for line in c.logs
+    ), c.logs
 
 
 @windows_only
@@ -410,18 +453,189 @@ def test_shutdown_stops_the_monitor_and_releases_its_window(child):
     assert c.proc.wait(10) == 0
 
 
+def _display_message(hwnd, state):
+    """Send *hwnd* the notification Windows sends when the display changes."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32")
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    setting = awake_clock._POWERBROADCAST_SETTING()
+    setting.PowerSetting = awake_clock._GUID_CONSOLE_DISPLAY_STATE
+    setting.DataLength = 4
+    setting.Data[0] = state
+    user32.SendMessageW(hwnd, 0x0218, 0x8013, ctypes.addressof(setting))
+
+
+@pytest.fixture
+def fresh_clock():
+    """A monitor started for this test only, and stopped after it."""
+    awake_clock._reset_for_tests()
+    yield
+    awake_clock._reset_for_tests()
+
+
 @windows_only
-def test_a_monitor_that_cannot_subscribe_fails_loudly(monkeypatch):
+def test_a_stuck_monitor_is_replaced_and_its_time_counts(
+    fresh_clock, monkeypatch, caplog
+):
+    """A monitor wedged in a log call must not hold every limit forever."""
+    monkeypatch.setattr(awake_clock, "STUCK_AFTER", 1.0)
+    first = awake_clock.monotonic()
+    stuck, ledger = awake_clock._monitor, awake_clock._ledger
+    ledger.gap = 1.0
+    _display_message(stuck.hwnd, 0)
+    release = threading.Event()
+    monkeypatch.setattr(ledger, "_log", lambda *_a: release.wait(30) and 0.0)
+    began = time.perf_counter()
+    try:
+        with caplog.at_level(logging.ERROR, logger=LEDGER_LOG):
+            while awake_clock._monitor is stuck:
+                assert time.perf_counter() - began < 15, "never replaced"
+                awake_clock.monotonic()
+                time.sleep(0.1)
+        counted = awake_clock.monotonic() - first
+        wall = time.perf_counter() - began
+    finally:
+        release.set()
+    assert "has not beaten for" in caplog.text and "restart 1 of 3" in caplog.text
+    # Replaced within a few beats, without waiting on the wedged monitor.
+    assert wall < 10.0
+    # The stuck stretch counts toward limits: nothing said it was standby.
+    assert counted >= wall - 0.3
+
+
+@windows_only
+def test_a_monitor_that_cannot_start_is_retried_then_names_the_fix(
+    fresh_clock, monkeypatch, caplog
+):
+    attempts = []
+
     def refuse(_hwnd, _guid, _flags):
+        attempts.append(1)
         return None
 
-    awake_clock._reset_for_tests()
     monkeypatch.setattr(awake_clock._user32, "RegisterPowerSettingNotification", refuse)
-    try:
-        for _ in range(2):  # every reader is told, not just the first
+    with caplog.at_level(logging.ERROR, logger=LEDGER_LOG):
+        for _ in range(awake_clock.MAX_RESTARTS):
             with pytest.raises(awake_clock.AwakeClockError, match="display power"):
                 awake_clock.monotonic()
-    finally:
-        monkeypatch.undo()
-        awake_clock._reset_for_tests()
+        for _ in range(2):  # out of restarts: every reader is told what to do
+            with pytest.raises(awake_clock.AwakeClockError, match="Restart GAIA"):
+                awake_clock.monotonic()
+    assert len(attempts) == awake_clock.MAX_RESTARTS + 1
+    assert "could not start (attempt 1 of 4)" in caplog.text
+    monkeypatch.undo()
+    awake_clock._reset_for_tests()
     assert awake_clock.monotonic() > 0
+
+
+@windows_only
+def test_a_replacement_that_cannot_start_is_retried_not_skipped(
+    fresh_clock, monkeypatch
+):
+    """A failed restart must not leave the clock running with no monitor."""
+    awake_clock.monotonic()
+    old = awake_clock._monitor
+    attempts = []
+
+    def refuse(_hwnd, _guid, _flags):
+        attempts.append(1)
+        return None
+
+    monkeypatch.setattr(awake_clock._user32, "RegisterPowerSettingNotification", refuse)
+    awake_clock._kernel32.SetEvent(old._stop_event)  # the monitor thread exits
+    old._thread.join(5)
+    for expected in (1, 2):
+        with pytest.raises(awake_clock.AwakeClockError, match="display power"):
+            awake_clock.monotonic()
+        assert len(attempts) == expected
+    monkeypatch.undo()
+    awake_clock.monotonic()
+    assert awake_clock._monitor is not old
+    assert awake_clock._monitor.problem() is None
+
+
+@windows_only
+def test_a_replacement_monitor_keeps_the_standby_already_left_out(fresh_clock):
+    """Restarting must not jump every running limit forward by past standbys."""
+    awake_clock.monotonic()
+    old = awake_clock._monitor
+    awake_clock._ledger.excluded = 3600.0  # an hour of standby left out earlier
+    before = awake_clock.monotonic()
+    awake_clock._kernel32.SetEvent(old._stop_event)  # the monitor thread exits
+    old._thread.join(5)
+    after = awake_clock.monotonic()
+    assert awake_clock._monitor is not old
+    assert awake_clock._ledger.excluded == 3600.0
+    assert 0 <= after - before < 5.0
+
+
+@windows_only
+def test_stopping_the_monitor_unsubscribes_and_destroys_its_window(
+    fresh_clock, monkeypatch
+):
+    import ctypes
+
+    user32 = awake_clock._user32
+    calls = []
+    real_unsubscribe = user32.UnregisterPowerSettingNotification
+    real_destroy = user32.DestroyWindow
+
+    def unsubscribe(handle):
+        calls.append(("unsubscribe", handle))
+        return real_unsubscribe(handle)
+
+    def destroy(hwnd):
+        calls.append(("destroy", hwnd))
+        return real_destroy(hwnd)
+
+    monkeypatch.setattr(user32, "UnregisterPowerSettingNotification", unsubscribe)
+    monkeypatch.setattr(user32, "DestroyWindow", destroy)
+    awake_clock.monotonic()
+    monitor = awake_clock._monitor
+    hwnd, notify = monitor.hwnd, monitor.notify
+    awake_clock._reset_for_tests()
+    assert ("unsubscribe", notify) in calls
+    assert ("destroy", hwnd) in calls
+    assert not ctypes.windll.user32.IsWindow(hwnd)
+    assert not monitor._thread.is_alive()
+    assert not monitor._ticker.is_alive()
+
+
+@windows_only
+def test_the_monitor_says_once_that_display_notices_arrive(fresh_clock, caplog):
+    with caplog.at_level(logging.INFO, logger=LEDGER_LOG):
+        awake_clock.monotonic()
+        deadline = time.perf_counter() + 5
+        while "Receiving Windows display" not in caplog.text:
+            assert time.perf_counter() < deadline, caplog.text
+            time.sleep(0.05)
+        _display_message(awake_clock._monitor.hwnd, 1)
+    assert caplog.text.count("Receiving Windows display") == 1
+
+
+@windows_only
+def test_a_monitor_that_gets_no_display_notices_says_so(
+    fresh_clock, monkeypatch, caplog
+):
+    """No console session (a service, a remote logon): standby will count."""
+    user32 = awake_clock._user32
+    monkeypatch.setattr(awake_clock, "FIRST_NOTICE_WAIT", 0.3)
+    monkeypatch.setattr(user32, "RegisterPowerSettingNotification", lambda *_a: 1)
+    monkeypatch.setattr(user32, "UnregisterPowerSettingNotification", lambda _h: 1)
+    with caplog.at_level(logging.WARNING, logger=LEDGER_LOG):
+        awake_clock.monotonic()
+        deadline = time.perf_counter() + 5
+        while "No Windows display power notification" not in caplog.text:
+            assert time.perf_counter() < deadline, caplog.text
+            time.sleep(0.05)
+        time.sleep(1.5)
+    assert caplog.text.count("No Windows display power notification") == 1
+    assert "Modern Standby will count toward time limits" in caplog.text

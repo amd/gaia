@@ -67,6 +67,7 @@ from gaia.ui.email_sidecar.profiles import (
 from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
+from gaia.utils.awake_clock import AwakeClockError
 
 from . import followups
 from . import permissions as session_permissions
@@ -4281,7 +4282,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
         await _cleanup_stream()
-        error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        if isinstance(e, AwakeClockError):
+            # It names its fix (restart GAIA); a resend would fail the same way.
+            error_msg = str(e)
+        else:
+            error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg, ends_turn=True)
         except Exception as exc:
