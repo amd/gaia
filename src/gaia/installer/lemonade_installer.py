@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -225,6 +226,14 @@ class UnpinnedInstallerError(RuntimeError):
     """No SHA-256 is pinned for this installer, so GAIA will not fetch it."""
 
 
+class _SaveFailed(Exception):
+    """Carries an OSError from writing a download past the network handlers."""
+
+    def __init__(self, error: OSError):
+        super().__init__(str(error))
+        self.error = error
+
+
 def discard_download(path: Path) -> None:
     """Delete an installer :meth:`LemonadeInstaller.download_installer` returned."""
     try:
@@ -242,12 +251,19 @@ _KEPT_INSTALLER_NAME = re.compile(
 )
 
 
+# Long enough for another install to finish its download and sit at a password prompt.
+KEPT_INSTALLER_MIN_AGE_S = 3600
+
+
 def discard_kept_installers(directory: Path, older_than: float) -> None:
     """Delete installers that failed installs left in *directory*.
 
-    Only files last written before *older_than* (a ``time.time()`` value) go,
-    so a download written to since this run's began is left alone.
+    A file goes only if it was last written before *older_than* (a
+    ``time.time()`` value) and more than :data:`KEPT_INSTALLER_MIN_AGE_S` ago,
+    so a download another install wrote within the last hour, whether still
+    being written or waiting for its installer to run, is left alone.
     """
+    cutoff = min(older_than, time.time() - KEPT_INSTALLER_MIN_AGE_S)
     try:
         entries = list(directory.iterdir())
     except OSError as e:
@@ -257,7 +273,7 @@ def discard_kept_installers(directory: Path, older_than: float) -> None:
         if not _KEPT_INSTALLER_NAME.fullmatch(path.name):
             continue
         try:
-            if path.stat().st_mtime >= older_than:
+            if path.stat().st_mtime >= cutoff:
                 continue
         except FileNotFoundError:
             continue
@@ -265,6 +281,20 @@ def discard_kept_installers(directory: Path, older_than: float) -> None:
             log.warning("Could not check the old installer %s: %s", path, e)
             continue
         discard_download(path)
+
+
+def _remove_by_hand(version: Optional[str]) -> str:
+    """How to remove a Windows Lemonade Server when GAIA cannot."""
+    page = (
+        f"{GITHUB_RELEASE_TAG_BASE}/v{version}"
+        if version
+        else GITHUB_RELEASE_TAG_BASE.rsplit("/", 1)[0]
+    )
+    named = f"Lemonade v{version}" if version else "Lemonade"
+    return (
+        "Remove Lemonade Server from Windows Settings > Apps, or remove it "
+        f"with the {named} installer from {page}."
+    )
 
 
 class LemonadeInstaller:
@@ -586,6 +616,7 @@ class LemonadeInstaller:
             InstallerIntegrityError: The download is truncated or fails its
                 checksum.
             RuntimeError: The download fails.
+            OSError: The file cannot be written, e.g. the disk is full.
         """
         url = self.get_download_url()
         release_key = url[len(GITHUB_RELEASE_BASE) + 1 :]
@@ -645,17 +676,32 @@ class LemonadeInstaller:
                 chunk_size = 8192
                 digest = hashlib.sha256()
 
-                with open(dest_path, "wb") as f:
+                try:
+                    f = open(dest_path, "wb")
+                except OSError as e:
+                    raise _SaveFailed(e) from e
+                try:
                     while True:
                         chunk = response.read(chunk_size)
                         if not chunk:
                             break
-                        f.write(chunk)
+                        try:
+                            f.write(chunk)
+                        except OSError as e:
+                            raise _SaveFailed(e) from e
                         digest.update(chunk)
                         downloaded += len(chunk)
 
                         if self.progress_callback:
                             self.progress_callback(downloaded, total_size)
+                finally:
+                    try:
+                        f.close()  # Flushes, so a full disk can surface here too.
+                    except OSError as e:
+                        raise _SaveFailed(e) from e
+        except _SaveFailed as e:
+            # A full disk is not a network failure; let the caller name the folder.
+            raise e.error from None
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise LemonadeAssetError(
@@ -727,8 +773,6 @@ class LemonadeInstaller:
         """
         if self.system != "windows":
             return True
-
-        import time
 
         waited = 0
         while waited < timeout:
@@ -1352,11 +1396,7 @@ class LemonadeInstaller:
 
             installed_version = info.version.lstrip("v")
             failed = f"Could not uninstall Lemonade Server v{installed_version}:"
-            by_hand = (
-                "Remove Lemonade Server from Windows Settings > Apps, or remove it "
-                f"with the Lemonade v{installed_version} installer from "
-                f"{GITHUB_RELEASE_TAG_BASE}/v{installed_version}."
-            )
+            by_hand = _remove_by_hand(installed_version)
             rejected = []
             not_published = []
             not_downloaded = []
@@ -1456,8 +1496,15 @@ class LemonadeInstaller:
                 success=False, error=f"{failed} {' '.join(reasons)} {by_hand}"
             )
 
-        except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Uninstall timed out")
+        except subprocess.TimeoutExpired as e:
+            # Not retried with the other MSI: this one may still be running.
+            return InstallResult(
+                success=False,
+                error=f"Uninstall timed out: msiexec did not finish within "
+                f"{e.timeout:.0f} seconds. Windows Installer may still be "
+                "finishing, so wait a minute before retrying (retrying sooner "
+                f"fails with error 1618). {_remove_by_hand(None)}",
+            )
         except FileNotFoundError:
             return InstallResult(success=False, error="msiexec not found")
         except Exception as e:

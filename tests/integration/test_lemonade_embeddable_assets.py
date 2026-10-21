@@ -12,8 +12,9 @@ mid-install rather than in CI.
 The unit tests assert the pins are *present* and well-formed with no network.
 This one asks GitHub what the digests really are.
 
-Skips when GitHub is unreachable (offline dev box) or ``GAIA_SKIP_NETWORK_TESTS``
-is set. CI runners always have network, so it runs there.
+Skips when GitHub is unreachable (offline dev box), rate-limits the API, or
+``GAIA_SKIP_NETWORK_TESTS`` is set. With ``GAIA_REQUIRE_RELEASE_API`` set (the
+CI run on a Lemonade bump PR), the first two fail instead of skipping.
 """
 
 import json
@@ -54,6 +55,32 @@ def _github_reachable() -> bool:
         return False
 
 
+def _cannot_check(reason: str) -> None:
+    """Skip, unless this run exists to check the pins against upstream."""
+    if os.environ.get("GAIA_REQUIRE_RELEASE_API"):
+        pytest.fail(
+            f"{reason}, and GAIA_REQUIRE_RELEASE_API is set: this run must check "
+            "the Lemonade pins against the live release API. Re-run the job."
+        )
+    pytest.skip(reason)
+
+
+def _get_json(url: str):
+    """GET a GitHub API URL, treating a rate limit (403 or 429) as unable to check."""
+    headers = {"User-Agent": "GAIA/1.0"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            _cannot_check(f"GitHub API rate limit reached (HTTP {e.code})")
+        raise
+
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
@@ -67,17 +94,8 @@ pytestmark = [
 def published_digests():
     """Map asset name -> sha256 hex digest, as published for LEMONADE_VERSION."""
     if not _github_reachable():
-        pytest.skip("GitHub is unreachable")
-
-    url = RELEASE_API.format(version=LEMONADE_VERSION)
-    request = urllib.request.Request(url, headers={"User-Agent": "GAIA/1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            release = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        if e.code == 403:
-            pytest.skip("GitHub API rate limit reached")
-        raise
+        _cannot_check("GitHub is unreachable")
+    release = _get_json(RELEASE_API.format(version=LEMONADE_VERSION))
 
     digests = {}
     for asset in release.get("assets", []):
@@ -129,22 +147,14 @@ def test_pinned_installer_digest_matches_the_published_asset(published_digests, 
 def every_release():
     """Every release lemonade-sdk/lemonade has published, as the API returns it."""
     if not _github_reachable():
-        pytest.skip("GitHub is unreachable")
+        _cannot_check("GitHub is unreachable")
     every = []
     page = 1
     while True:
-        url = (
+        releases = _get_json(
             "https://api.github.com/repos/lemonade-sdk/lemonade/releases"
             f"?per_page=100&page={page}"
         )
-        request = urllib.request.Request(url, headers={"User-Agent": "GAIA/1.0"})
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                releases = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            if e.code == 403:
-                pytest.skip("GitHub API rate limit reached")
-            raise
         if not releases:
             return every
         every.extend(releases)
@@ -196,3 +206,47 @@ def test_legacy_msi_pin_matches_the_published_asset(every_release_digest, key):
         f"LEGACY_MSI_SHA256 pins {key} to a digest the release does not publish "
         f"('{every_release_digest[key]}')."
     )
+
+
+@pytest.fixture
+def rate_limited_api(request):
+    """A local API stand-in that answers every request with ``request.param``."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    status = request.param
+
+    class _Limited(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Limited)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/releases"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("rate_limited_api", [403, 429], indirect=True)
+def test_a_rate_limit_skips_locally(rate_limited_api, monkeypatch):
+    monkeypatch.delenv("GAIA_REQUIRE_RELEASE_API", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    with pytest.raises(pytest.skip.Exception, match="rate limit"):
+        _get_json(rate_limited_api)
+
+
+@pytest.mark.parametrize("rate_limited_api", [403, 429], indirect=True)
+def test_a_rate_limit_fails_a_bump_pr(rate_limited_api, monkeypatch):
+    monkeypatch.setenv("GAIA_REQUIRE_RELEASE_API", "1")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    with pytest.raises(pytest.fail.Exception, match="GAIA_REQUIRE_RELEASE_API"):
+        _get_json(rate_limited_api)

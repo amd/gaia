@@ -493,7 +493,7 @@ class TestDownloadedInstallerLifecycle:
         assert f"kept at {downloaded}" in out
 
     @staticmethod
-    def _left_by_earlier_runs(tmp_path, names):
+    def _left_by_earlier_runs(tmp_path, names, age_s=2 * 3600):
         import os
         import time
 
@@ -501,8 +501,8 @@ class TestDownloadedInstallerLifecycle:
         for name in names:
             path = tmp_path / name
             path.write_bytes(b"old")
-            an_hour_ago = time.time() - 3600
-            os.utime(path, (an_hour_ago, an_hour_ago))
+            written = time.time() - age_s
+            os.utime(path, (written, written))
             paths.append(path)
         return paths
 
@@ -529,6 +529,10 @@ class TestDownloadedInstallerLifecycle:
                 "other-a1b2c3d4.msi",
             ],
         )
+        # Another install finished this download and is waiting at sudo.
+        finished_elsewhere = self._left_by_earlier_runs(
+            tmp_path, ["Lemonade-2026.42.1-Darwin-p0o9i8u7.pkg"], age_s=600
+        )
         another_download = tmp_path / "lemonade-q1w2e3r4.msi"
 
         def _another_run_is_downloading():
@@ -547,6 +551,7 @@ class TestDownloadedInstallerLifecycle:
         assert not downloaded.exists()
         assert [p.name for p in kept if p.exists()] == []
         assert all(p.exists() for p in unrelated)
+        assert all(p.exists() for p in finished_elsewhere)
         assert another_download.exists()
 
     def test_a_failed_install_keeps_installers_earlier_failures_kept(
@@ -825,4 +830,72 @@ class TestUninstallFallbackErrors:
         assert not result.success
         assert "timed out" in result.error
         assert "did not accept" not in result.error
+        assert "wait a minute before retrying" in result.error
+        assert "error 1618" in result.error
+        assert "Windows Settings > Apps" in result.error
         assert len(ran) == 1
+
+    def test_a_full_disk_during_download_names_the_folder(self, tmp_path, monkeypatch):
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        self._no_installer_runs(monkeypatch, mod)
+        _disk_fills_on_write(monkeypatch, mod)
+        with _serve(b"m" * 20_000), _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert f"could not save the minimal MSI in {tmp_path}" in result.error
+        assert "No space left on device" in result.error
+        assert "Free disk space" in result.error
+        assert "could not download" not in result.error
+        assert "Check your network" not in result.error
+        assert list(tmp_path.iterdir()) == []
+
+
+def _disk_fills_on_write(monkeypatch, mod, on="write"):
+    """The temp file opens, then the disk fills on a write or on the final flush."""
+    import builtins
+
+    class _FullDisk:
+        def __init__(self, path, mode):
+            self._file = builtins.open(path, mode)
+            self._unflushed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+            return False
+
+        def write(self, data):
+            if on == "write":
+                self._unflushed = True
+                raise OSError(28, "No space left on device")
+            return self._file.write(data)
+
+        def close(self):
+            # Like a buffered file: unwritten bytes fail again on the closing
+            # flush, and a failed flush still closes it.
+            if self._file.closed:
+                return
+            self._file.close()
+            if on == "close" or self._unflushed:
+                raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(mod, "open", _FullDisk, raising=False)
+
+
+class TestFullDiskIsNotANetworkError:
+    @pytest.mark.parametrize("on", ["write", "close"])
+    def test_download_installer_raises_the_write_error(self, tmp_path, monkeypatch, on):
+        from gaia.installer import lemonade_installer as mod
+
+        installer = _installer("Windows", "AMD64")
+        payload = b"m" * 20_000
+        _pin(monkeypatch, installer, payload)
+        _disk_fills_on_write(monkeypatch, mod, on=on)
+        with _serve(payload):
+            with pytest.raises(OSError, match="No space left on device") as exc:
+                installer.download_installer(dest_dir=str(tmp_path))
+        assert exc.value.errno == 28
+        assert list(tmp_path.iterdir()) == []
