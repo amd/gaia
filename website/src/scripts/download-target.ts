@@ -106,6 +106,13 @@ export const INSTALLERS_FOR: Record<PlatformKey, InstallerKey[]> = {
  */
 export const WINDOWS_SETUP_SINCE = '0.25.0';
 
+/**
+ * The Windows one-liner, shared by the install-command block and the Windows
+ * setup's "terminal app only" option so the two cannot drift. Keep it
+ * byte-identical to docs/quickstart.mdx.
+ */
+export const WINDOWS_INSTALL_COMMAND = 'irm https://amd-gaia.ai/install.ps1 | iex';
+
 /** True when `version` is at or past WINDOWS_SETUP_SINCE; false if unparseable. */
 export function windowsSetupOffersChoice(version: string): boolean {
   const core = (v: string) => v.split('-')[0].split('.').map(Number);

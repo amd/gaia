@@ -17,11 +17,13 @@ interface Props {
   align?: 'left' | 'center';
 }
 
+import { WINDOWS_INSTALL_COMMAND } from '../scripts/download-target';
+
 const { class: className = '', align = 'left' } = Astro.props;
 
 const COMMANDS = [
   { os: 'macOS · Linux', cmd: 'curl -fsSL https://amd-gaia.ai/install.sh | sh' },
-  { os: 'Windows', cmd: 'irm https://amd-gaia.ai/install.ps1 | iex' },
+  { os: 'Windows', cmd: WINDOWS_INSTALL_COMMAND },
 ];
 const centered = align === 'center';
 ---

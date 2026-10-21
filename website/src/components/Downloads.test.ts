@@ -398,9 +398,13 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect(setup).toHaveLength(1);
     expect(setup[0].attrs['data-platform']).toBe('win-x64');
     expect('hidden' in setup[0].attrs).toBe(true);
-    expect(hrefsIn(setup[0])).toEqual([setupUrl('win-x64-setup')]);
+    // The one button is the setup; everything else in the block is folded away.
+    const buttons = descendants(setup[0]).filter(
+      (e) => e.tag === 'a' && String(e.attrs.class ?? '').includes('g-btn'),
+    );
+    expect(buttons.map((a) => a.attrs.href)).toEqual([setupUrl('win-x64-setup')]);
     expect(String(setup[0].parent?.attrs.class ?? '')).toMatch(/\bspace-y-\d/);
-    expect(textOf(setup[0])).toContain('the desktop app, the terminal, or both');
+    expect(textOf(setup[0])).toContain('the desktop app, the terminal app, or both');
 
     // The choice is made in the setup, so neither card offers Windows x64 a button.
     const perSurfaceWindows = ctas().filter(
@@ -443,21 +447,61 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect(names.find((n) => n.includes('Desktop app only'))).toContain('Windows (x64)');
   });
 
-  it('keeps the two cards when the release carries no Windows setup', async () => {
+  it('folds exactly the two single-app options under the setup, collapsed', async () => {
+    RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
+    rendered = await render();
+    const [setup] = ctas().filter((b) => b.attrs['data-surface'] === 'setup');
+
+    const folds = descendants(setup).filter((e) => e.tag === 'details');
+    expect(folds).toHaveLength(1);
+    expect('open' in folds[0].attrs).toBe(false);
+
+    const options = Object.fromEntries(
+      descendants(folds[0])
+        .filter((e) => 'data-dl-win-option' in e.attrs)
+        .map((o) => [o.attrs['data-dl-win-option'], { hrefs: hrefsIn(o), text: textOf(o) }]),
+    );
+    expect(Object.keys(options)).toEqual(['desktop', 'terminal']);
+    expect(options.desktop.hrefs).toEqual([setupDesktopUrl('win-x64')]);
+    expect(options.desktop.text).toContain('Desktop app only');
+    expect(options.desktop.text).toContain('downloads the GAIA agent the first time it runs');
+    expect(options.terminal.hrefs).toEqual([setupUrl('win-x64')]);
+    expect(options.terminal.text).toContain('Terminal app only');
+    expect(options.terminal.text).toContain('irm https://amd-gaia.ai/install.ps1 | iex');
+    // Sizes come from the release's asset data, not the copy.
+    expect(options.desktop.text).toContain('94.2 MB');
+  });
+
+  it('hides only the single-app option the release does not carry', async () => {
+    RELEASES = [
+      stable(SETUP_VERSION, [
+        SETUP_DESKTOP_FILES['darwin-arm64'],
+        SETUP_DESKTOP_FILES['linux-x64'],
+        ...Object.values(SETUP_RELEASE_FILES),
+      ]),
+    ];
+    rendered = await render();
+    const [setup] = ctas().filter((b) => b.attrs['data-surface'] === 'setup');
+
+    const options = descendants(setup).filter((e) => 'data-dl-win-option' in e.attrs);
+    expect(options.map((o) => o.attrs['data-dl-win-option'])).toEqual(['terminal']);
+    // The setup is still the one button.
+    const buttons = descendants(setup).filter(
+      (e) => e.tag === 'a' && String(e.attrs.class ?? '').includes('g-btn'),
+    );
+    expect(buttons.map((a) => a.attrs.href)).toEqual([setupUrl('win-x64-setup')]);
+    expect(hrefsIn(rendered.root).filter((h) => h.includes('gaia-agent-ui-0.25.0-x64'))).toEqual([]);
+  });
+
+  it('offers Windows no button when the release carries no setup', async () => {
     const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
     RELEASES = releaseAt(Object.values(rest));
     rendered = await render();
 
     expect(ctas().filter((b) => b.attrs['data-surface'] === 'setup')).toEqual([]);
-    const windows = Object.fromEntries(
-      ctas()
-        .filter((b) => b.attrs['data-platform'] === 'win-x64')
-        .map((b) => [b.attrs['data-surface'], hrefsIn(b)]),
-    );
-    expect(windows).toEqual({
-      desktop: [setupDesktopUrl('win-x64')],
-      tui: [setupUrl('win-x64')],
-    });
+    // Not the desktop-only setup or the raw binary promoted in its place.
+    expect(ctas().filter((b) => b.attrs['data-platform'] === 'win-x64')).toEqual([]);
+    expect(descendants(rendered.root).filter((e) => 'data-dl-win-option' in e.attrs)).toEqual([]);
   });
 });
 
@@ -483,8 +527,8 @@ describe('Downloads.astro against an incomplete release', () => {
         .filter((b) => b.attrs['data-surface'] === 'tui')
         .map((b) => [b.attrs['data-platform'], [b.attrs['data-kind'], ...hrefsIn(b)]]),
     );
+    // No Windows x64 entry: its only button is the setup, which is missing here.
     expect(tui).toEqual({
-      'win-x64': ['binary', setupUrl('win-x64')],
       'darwin-arm64': ['binary', setupUrl('darwin-arm64')],
       'linux-x64': ['binary', setupUrl('linux-x64')],
       'win-arm64': ['binary', setupUrl('win-arm64')],

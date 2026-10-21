@@ -24,8 +24,9 @@
 //
 // Windows is the one exception to "pick a card": from WINDOWS_SETUP_SINCE the
 // Windows setup asks for the desktop app, the terminal, or both while it runs,
-// so a Windows visitor gets that one setup instead of two cards to choose
-// between. Until a release publishes it, Windows renders as before.
+// so a Windows x64 visitor gets that one setup as the only button, with the
+// single-app files folded under it. A release missing the setup gets no Windows
+// button at all -- never the desktop-only setup promoted in its place.
 //
 // Every link is an asset of the newest stable GitHub release, so GitHub's
 // per-asset download_count counts the site's downloads. No link is invented: a
@@ -36,6 +37,7 @@
 import SurfacePreview from './SurfacePreview.astro';
 import { formatBytes, getStableRelease, type ReleaseAsset } from '../data/github';
 import {
+  WINDOWS_INSTALL_COMMAND,
   DESKTOP_DOWNLOAD_LABELS,
   DESKTOP_MISSING_PLATFORMS,
   DESKTOP_PLATFORMS,
@@ -111,24 +113,31 @@ if (!tuiRows.length) {
   );
 }
 
-// The setup that asks desktop app / terminal / both. Present only when the
-// published win-x64-setup is new enough to be that setup rather than the
-// terminal-only one earlier releases used the same filename for.
-const windowsSetup = windowsSetupOffersChoice(version)
+// Whether this release's win-x64-setup is the setup that asks desktop app /
+// terminal / both, rather than the terminal-only one earlier releases used the
+// same filename for.
+const windowsCombined = windowsSetupOffersChoice(version);
+const windowsSetup = windowsCombined
   ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
   : undefined;
 
-// With it, the per-surface Windows buttons are not rendered -- the setup is where
-// that choice is made -- and the terminal's Windows row in the full list keeps
-// only its raw binary, since the setup has a line of its own there.
+// The single-app files, offered only under the setup's "more options". Each is
+// shown when the release carries it; a missing one is just absent.
+const windowsDesktopOnly = published(desktopArtifactFileName('win-x64', version));
+const windowsTerminalOnly = published(artifactFileName('win-x64', version));
+
+// Neither card offers Windows x64 a button: the setup is where that choice is
+// made, and a release without the setup offers no Windows button rather than a
+// single-app file in its place. The terminal's Windows row in the full list
+// keeps only its raw binary, since the setup has a line of its own there.
 const isWindowsX64 = (p: PlatformKey) => p === 'win-x64';
-const desktopCtaRows = windowsSetup ? desktopRows.filter((r) => !isWindowsX64(r.platform)) : desktopRows;
-const tuiCtaRows = windowsSetup ? tuiRows.filter((r) => !isWindowsX64(r.platform)) : tuiRows;
-const tuiListRows = windowsSetup
+const desktopCtaRows = windowsCombined ? desktopRows.filter((r) => !isWindowsX64(r.platform)) : desktopRows;
+const tuiCtaRows = windowsCombined ? tuiRows.filter((r) => !isWindowsX64(r.platform)) : tuiRows;
+const tuiListRows = windowsCombined
   ? tuiRows.map((r) => (isWindowsX64(r.platform) ? { ...r, installers: [] } : r))
   : tuiRows;
 const desktopListLabel = (p: PlatformKey) =>
-  windowsSetup && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
+  windowsCombined && isWindowsX64(p) ? 'Desktop app only (.exe)' : DESKTOP_DOWNLOAD_LABELS[p];
 
 // Until a release publishes installers none of these exist — a valid state, and
 // the terminal card is the binary offer it was before. Naming the architectures
@@ -171,9 +180,9 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
         </div>
         <h3 class="g-h-card">GAIA for Windows</h3>
         <p class="g-body mt-2.5">
-          One installer for both ways to use GAIA. While it runs, choose the desktop app,
-          the terminal, or both. Choosing both installs the two side by side, each with its
-          own shortcut, and they use the same local models.
+          One installer for both ways to use GAIA: it installs the desktop app, the terminal
+          app, or both, and asks which while it runs. Choosing both installs the two side by
+          side, each with its own shortcut, and they use the same local models.
         </p>
         <div class="mt-5">
           <a href={windowsSetup.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
@@ -184,6 +193,50 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             Installer (.exe) · v{version} · {formatBytes(windowsSetup.sizeBytes)}
           </p>
         </div>
+
+        {/* Folded away like the full list below: these are for a visitor who
+            already knows they want one app only. */}
+        {(windowsDesktopOnly || windowsTerminalOnly) && (
+          <details data-dl-win-options class="group mt-5">
+            <summary class="g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden">
+              <span aria-hidden="true" class="inline-block transition-transform group-open:rotate-90">›</span>
+              More options: just one app
+            </summary>
+            <ul class="mt-3 space-y-3">
+              {windowsDesktopOnly && (
+                <li data-dl-win-option="desktop">
+                  <a
+                    href={windowsDesktopOnly.url}
+                    class="inline-flex items-baseline gap-2 text-[13.5px] text-g-text transition-colors hover:text-g-accent-text"
+                  >
+                    <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                    <span>Desktop app only (.exe) · {formatBytes(windowsDesktopOnly.sizeBytes)}</span>
+                  </a>
+                  <p class="g-body mt-1 text-[13px]">
+                    Installs just the desktop app. It downloads the GAIA agent the first time it
+                    runs.
+                  </p>
+                </li>
+              )}
+              {windowsTerminalOnly && (
+                <li data-dl-win-option="terminal">
+                  <a
+                    href={windowsTerminalOnly.url}
+                    class="inline-flex items-baseline gap-2 text-[13.5px] text-g-text transition-colors hover:text-g-accent-text"
+                  >
+                    <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                    <span>Terminal app only (.exe) · {formatBytes(windowsTerminalOnly.sizeBytes)}</span>
+                  </a>
+                  <p class="g-body mt-1 text-[13px]">
+                    The terminal app as a single file, with no installer: put it on your PATH
+                    yourself. Or let PowerShell install it for you:
+                  </p>
+                  <code class="mt-1.5 block overflow-x-auto whitespace-nowrap text-[12.5px] text-g-text">{WINDOWS_INSTALL_COMMAND}</code>
+                </li>
+              )}
+            </ul>
+          </details>
+        )}
       </section>
     </div>
   )}
