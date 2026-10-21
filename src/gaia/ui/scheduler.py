@@ -773,6 +773,7 @@ class ScheduledTask:
         error_count: int = 0,
         session_id: str = None,
         schedule_config: str = None,
+        last_error: str = None,
     ):
         self.id = task_id
         self.name = name
@@ -787,6 +788,8 @@ class ScheduledTask:
         self.error_count = error_count
         self.session_id = session_id
         self.schedule_config = schedule_config
+        # The last run's error, or None when it succeeded.
+        self.last_error = last_error
         self._timer_task: Optional[asyncio.Task] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -805,6 +808,7 @@ class ScheduledTask:
             "error_count": self.error_count,
             "session_id": self.session_id,
             "schedule_config": self.schedule_config,
+            "last_error": self.last_error,
         }
 
 
@@ -1503,6 +1507,7 @@ class Scheduler:
             )
         task.next_run_at = next_run.isoformat()
         task.last_result = error if error else (result or "completed")
+        task.last_error = error
 
         # Persist state
         self._db_update_task(task)
@@ -1533,6 +1538,7 @@ class Scheduler:
                     error_count=row.get("error_count", 0),
                     session_id=row.get("session_id"),
                     schedule_config=row.get("schedule_config"),
+                    last_error=row.get("last_error"),
                 )
             except KeyError as e:
                 raise RuntimeError(
@@ -1608,6 +1614,7 @@ class Scheduler:
             error_count=task.error_count,
             session_id=task.session_id,
             schedule_config=task.schedule_config,
+            last_error=task.last_error,
         )
 
     def _db_delete_task(self, task_id: str):

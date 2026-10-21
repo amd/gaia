@@ -177,6 +177,17 @@
     color: var(--text-secondary);
 }
 
+.schedule-card-error {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-left: 2px solid var(--accent);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .schedule-card-prompt {
     font-size: 12px;
     color: var(--text-secondary);

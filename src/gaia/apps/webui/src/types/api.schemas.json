@@ -3198,6 +3198,17 @@
         "title": "Interval Seconds",
         "type": "integer"
       },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
+      },
       "last_result": {
         "anyOf": [
           {

@@ -213,6 +213,10 @@ def _dispatch_one(
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
             handler._emit(request)
+            if getattr(handler, "background_mode", False) is True:
+                # Unattended run (a schedule): nobody can answer, so deny now
+                # rather than park the sidecar until it times out.
+                handler.resolve_relay_confirmation(False, confirm_id)
             return False
 
     if etype == "status":

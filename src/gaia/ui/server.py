@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from gaia.agents.install_hints import agent_import_error_message
+from gaia.agents.install_hints import agent_wheel_failed_message
 from gaia.config import UnsafeGaiaHomeError
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
@@ -250,6 +250,20 @@ def lemonade_is_remote() -> bool:
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
+_SCHEDULED_AGENT = "gaia"
+_SCHEDULED_MAX_STEPS = 5
+
+
+def _flagship_missing_message(registry) -> str:
+    """Why a scheduled run found no GAIA agent, and the one fix that works."""
+    reason = registry.get_load_error(_SCHEDULED_AGENT) if registry else None
+    return (
+        "The GAIA agent is not installed, so the scheduled task could not run"
+        + (f" (it failed to load: {reason})" if reason else "")
+        + ". Run `gaia init` to install it, then re-run the scheduled task."
+    )
+
+
 def _run_scheduled_prompt(
     db: ChatDatabase,
     prompt: str,
@@ -258,21 +272,39 @@ def _run_scheduled_prompt(
 ) -> str:
     """Run one scheduled prompt through a fresh GAIA agent; returns the answer.
 
+    Uses the same agent a chat would: the daemon sidecar when the flagship is
+    installed as one (a desktop install), else the in-process package.
+
     Setting *cancel_event* stops the agent at its next step; *console*
     (an ``SSEOutputHandler`` in background mode) reports whether a tool is
-    running, and cancelling it ends a streaming model reply.
+    running, and cancelling it ends a streaming model reply or relayed run.
     """
+    from gaia.ui._chat_helpers import (
+        _agent_type_unknown,
+        _should_relay_to_sidecar,
+        get_agent_registry,
+    )
+
+    registry = get_agent_registry()
+    if registry is None:
+        raise RuntimeError(
+            "Scheduled run started before the Agent UI finished discovering "
+            "agents; it will run again at its next time. If this repeats, "
+            "check the server log for agent registry errors."
+        )
+    if _agent_type_unknown(_SCHEDULED_AGENT, registry):
+        raise RuntimeError(_flagship_missing_message(registry))
+    if _should_relay_to_sidecar(_SCHEDULED_AGENT, registry):
+        return _relay_scheduled_prompt(db, prompt, cancel_event, console)
+
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    except ModuleNotFoundError as e:
+        if (e.name or "").partition(".")[0] != "gaia_agent":
+            raise RuntimeError(_scheduled_import_error(e)) from e
+        raise RuntimeError(_flagship_missing_message(registry)) from e
     except ImportError as e:
-        raise RuntimeError(
-            agent_import_error_message(
-                e,
-                "The GAIA agent is not installed",
-                "gaia-agent-gaia",
-                next_step="Then re-run the scheduled task.",
-            )
-        ) from e
+        raise RuntimeError(_scheduled_import_error(e)) from e
 
     # Beta dynamic tool loader (#1798). Inert here: scheduled runs
     # use the default "full" prompt profile and the loader only
@@ -283,7 +315,7 @@ def _run_scheduled_prompt(
     # (shell, file writes) are denied here — same posture as an
     # autonomous background tick (#2210).
     config = GaiaAgentConfig(
-        max_steps=5,
+        max_steps=_SCHEDULED_MAX_STEPS,
         silent_mode=True,
         debug=False,
         dynamic_tools=dynamic_tools,
@@ -300,6 +332,77 @@ def _run_scheduled_prompt(
         val = result.get("result")
         return val if val is not None else result.get("answer", "")
     return str(result) if result else ""
+
+
+def _scheduled_import_error(error: ImportError) -> str:
+    return agent_wheel_failed_message(
+        "The GAIA agent is not installed",
+        "gaia-agent-gaia",
+        error,
+        next_step="Then re-run the scheduled task.",
+    )
+
+
+def _relay_scheduled_prompt(
+    db: ChatDatabase,
+    prompt: str,
+    cancel_event: Optional[threading.Event],
+    console,
+) -> str:
+    """Relay one scheduled prompt to the flagship's daemon sidecar.
+
+    The chat relay, run fresh each time (no history, no sidecar session) as
+    the in-process run is. Its events are read back off *console*: the answer
+    is returned, and an error the relay reported is raised.
+    """
+    from gaia.ui._chat_helpers import _dispatch_sidecar_query, _memory_mode
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = console if console is not None else SSEOutputHandler(background_mode=True)
+    if not handler.background_mode:
+        raise ValueError(
+            "A scheduled run needs a background-mode console: nobody is there "
+            "to answer its tool prompts."
+        )
+    if (
+        cancel_event is not None and cancel_event.is_set()
+    ) or handler.cancelled.is_set():
+        raise RuntimeError("Scheduled run was stopped before it started.")
+
+    _dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="", message=prompt, agent_type=_SCHEDULED_AGENT),
+        history_pairs=[],
+        model_id=None,
+        agent_type=_SCHEDULED_AGENT,
+        memory=_memory_mode({}, db),
+        max_steps=_SCHEDULED_MAX_STEPS,
+    )
+
+    answer = None
+    failure = None
+    while not handler.event_queue.empty():
+        event = handler.event_queue.get_nowait()
+        if not event:
+            continue
+        if event.get("type") == "agent_error":
+            failure = str(event.get("content") or "The GAIA agent reported an error.")
+        elif event.get("type") == "answer":
+            answer = event
+    if failure:
+        raise RuntimeError(failure)
+    if handler.cancelled.is_set():
+        raise RuntimeError("Scheduled run was stopped before it finished.")
+    if answer is None:
+        raise RuntimeError(
+            "The GAIA agent ended the scheduled run without an answer. Check "
+            "the agent log under ~/.gaia/logs/ and re-run the scheduled task."
+        )
+    content = str(answer.get("content") or "")
+    if answer.get("failed"):
+        raise RuntimeError(content or "The GAIA agent's run failed.")
+    return content
 
 
 class _ScheduledRuns:
@@ -338,6 +441,8 @@ class _ScheduledRuns:
                 return worker.result()
             cancel.set()
             console.cancelled.set()
+            # A relayed run parks in a socket read; this wakes it.
+            console.close_active_relay_response()
             if not await wait_until_off_the_model(
                 worker, console, what="Scheduled run"
             ):

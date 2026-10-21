@@ -1901,6 +1901,7 @@ def _dispatch_sidecar_query(
     documents: list | None = None,
     allowed_paths: list | None = None,
     memory: str = "on",
+    max_steps: int | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
@@ -2080,6 +2081,7 @@ def _dispatch_sidecar_query(
         documents=relayed_documents,
         allowed_paths=relayed_scope,
         memory=relayed_memory,
+        max_steps=max_steps,
     )
 
 
