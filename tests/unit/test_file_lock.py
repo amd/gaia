@@ -546,6 +546,40 @@ def test_an_unchecked_entrys_age_ignores_this_machines_clock(
         pass
 
 
+def test_a_waiter_polling_past_an_aged_out_entry_warns_once(
+    tmp_path, monkeypatch, caplog
+):
+    """Every poll meets the stale entry again; it must be named only once."""
+    import logging
+
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    stuck = queue / _entry_name(0)
+    stuck.write_text("", encoding="utf-8")
+    long_ago = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(stuck, (long_ago, long_ago))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    polls = []
+    real_ahead = mod._ahead
+    monkeypatch.setattr(
+        mod, "_ahead", lambda *a, **k: polls.append(1) or real_ahead(*a, **k)
+    )
+
+    def wait_while_held():
+        with pytest.raises(FileLockTimeout):
+            with file_lock(target, timeout=0.2):
+                pass
+
+    with caplog.at_level(logging.WARNING):
+        _held_elsewhere(target, wait_while_held)
+    assert len(polls) >= 5, "the waiter did not poll repeatedly"
+    warnings = [r for r in caplog.records if str(stuck) in r.getMessage()]
+    assert len(warnings) == 1
+
+
 def test_an_aged_out_entry_is_reported_once_and_the_fast_path_returns(
     tmp_path, monkeypatch, caplog
 ):

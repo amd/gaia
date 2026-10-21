@@ -25,7 +25,9 @@ Waiters queue for it in arrival order through entry files in
 slip in three ways:
 
 - A request that finds the lock busy and has not yet written its entry can be
-  beaten by one that arrives as the lock comes free and takes it at once.
+  beaten by one that arrives as the lock comes free and takes it at once. So
+  can an entry written just after that arrival listed the queue; on NFS that
+  window lasts as long as a directory listing.
 - An entry its owner has created but not yet locked reads as finished, so a
   waiter that polls at that instant can go ahead of it.
 - An entry this user cannot check (another user's, or on NFS) stops holding
