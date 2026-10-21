@@ -475,8 +475,26 @@ class TestCanonicalEventShapes:
             _events({"type": "error", "detail": "Lemonade down", "status": 500})
         )
         relay.relay_query(handler, proxy, query="q", context=[])
-        assert handler.events == [{"type": "agent_error", "content": "Lemonade down"}]
+        assert handler.events == [
+            {"type": "agent_error", "content": "Lemonade down", "fatal": True}
+        ]
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
+
+    def test_a_final_marked_failed_reaches_the_ui_marked_failed(self):
+        """A sidecar turn a model failure ended must not be recorded as done."""
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events(
+                {"type": "token", "delta": "I'll start by loading the skill."},
+                {"type": "final", "answer": "The model stopped.", "failed": True},
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert handler.events[-1] == {
+            "type": "answer",
+            "content": "The model stopped.",
+            "failed": True,
+        }
 
     def test_connection_shaped_error_detail_gains_actionable_hint_appended(self):
         # The sidecar emits str(exc) verbatim, so the most common consumer
@@ -528,7 +546,9 @@ class TestCanonicalEventShapes:
             _events({"type": "error", "detail": raw_detail, "status": 500})
         )
         relay.relay_query(handler, proxy, query="q", context=[])
-        assert handler.events == [{"type": "agent_error", "content": raw_detail}]
+        assert handler.events == [
+            {"type": "agent_error", "content": raw_detail, "fatal": True}
+        ]
 
     def test_unrecognized_type_emits_status_naming_the_type(self):
         handler = _FakeHandler()
@@ -614,6 +634,8 @@ class TestStreamFailureHandling:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        # Ends the turn: the chat is recorded failed, not done.
+        assert agent_errors[0]["fatal"] is True
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
         assert handler.active_relay_response is None
 

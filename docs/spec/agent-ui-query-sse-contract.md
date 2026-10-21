@@ -181,7 +181,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?}` | finalize the message; terminal |
+| `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -274,7 +274,8 @@ indistinguishable from a dead one.
   "properties": {
     "type":   { "const": "final" },
     "answer": { "type": "string" },
-    "usage":  { "type": "object" }   // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "usage":  { "type": "object" },  // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
+    "failed": { "const": true }      // optional; a model failure ended the turn
   } }
 
 // error
