@@ -369,6 +369,54 @@ def test_resume_keeps_the_runs_own_model(harness, capsys):
     assert "A resumed run keeps its own --model" in capsys.readouterr().err
 
 
+def _pin_recorder(monkeypatch):
+    """Record the agent model each scenario was asked to run, and pretend it did."""
+    seen = []
+
+    def stamp(result, _scenario_data, expected, _backend_url):
+        seen.append((result["scenario_id"], expected))
+        result["agent_model_requested"] = expected
+        result["agent_model_observed"] = expected
+
+    monkeypatch.setattr(runner, "_stamp_agent_model", stamp)
+    return seen
+
+
+def test_resume_keeps_the_runs_agent_model_pin(harness, capsys, monkeypatch):
+    seen = _pin_recorder(monkeypatch)
+    harness.use(FakeClaude(budget=2))
+    pinned = AgentEvalRunner(results_dir=harness.tmp / "results", agent_model="Qwen")
+    with pytest.raises(SystemExit):
+        pinned._run_locked(category="cat_a")
+    run_dir = next((harness.tmp / "results").iterdir())
+    first = json.loads((run_dir / "scorecard.json").read_text("utf-8"))
+    assert first["config"]["agent_model"] == "Qwen"
+    assert first["config"]["plan"]["agent_model"] == "Qwen"
+
+    # Resumed with no --agent-model: the rest still runs, and is checked, on Qwen.
+    seen.clear()
+    harness.use(FakeClaude(budget=99))
+    card = AgentEvalRunner()._resume_locked(run_dir)
+    assert seen and {model for _sid, model in seen} == {"Qwen"}
+    assert card["config"]["agent_model"] == "Qwen"
+
+
+def test_resume_refuses_a_different_agent_model(harness, capsys, monkeypatch):
+    _pin_recorder(monkeypatch)
+    harness.use(FakeClaude(budget=2))
+    pinned = AgentEvalRunner(results_dir=harness.tmp / "results", agent_model="Qwen")
+    with pytest.raises(SystemExit):
+        pinned._run_locked(category="cat_a")
+    run_dir = next((harness.tmp / "results").iterdir())
+    capsys.readouterr()
+    harness.use(FakeClaude(budget=99))
+    with pytest.raises(SystemExit) as exc:
+        AgentEvalRunner(agent_model="Gemma")._resume_locked(run_dir)
+    assert exc.value.code == 1
+    assert harness.fake.calls == []
+    assert "A resumed run keeps its own --agent-model" in capsys.readouterr().err
+
+
 def test_resume_of_a_finished_run_runs_nothing(harness, capsys):
     harness.use(FakeClaude(budget=99))
     AgentEvalRunner(results_dir=harness.tmp / "results")._run_locked(category="cat_a")

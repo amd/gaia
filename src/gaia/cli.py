@@ -2186,6 +2186,19 @@ Examples:
         help=f"Judge model that scores the run (default: {DEFAULT_CLAUDE_MODEL})",
     )
     agent_eval_parser.add_argument(
+        "--agent-model",
+        default=None,
+        metavar="MODEL_ID",
+        help=(
+            "Local model the agent must run, e.g. Gemma-4-E4B-it-GGUF. Every "
+            "scenario's session is checked and one that ran another model is "
+            "discarded as INFRA_ERROR. It does not change the model: set "
+            "default_model in the backend's GAIA home (gaia config set "
+            "default_model ...). Without it the scorecard records the model "
+            "the sessions ran, if they all ran one."
+        ),
+    )
+    agent_eval_parser.add_argument(
         "--budget",
         default="2.00",
         help="Max budget per scenario in USD (default: 2.00)",
@@ -2217,7 +2230,10 @@ Examples:
         "--compare",
         nargs="+",
         metavar="PATH",
-        help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
+        help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against "
+        "saved baseline (CURRENT only). Exits 0 with no regression, 2 on a regression, "
+        "and 3 when the two were measured with a different agent model or eval model "
+        "(read from the baseline directory's meta.json when it has one)",
     )
     agent_eval_parser.add_argument(
         "--resume",
@@ -5351,7 +5367,11 @@ Let me know your answer!
             # --compare: diff two scorecard files, no eval run needed
             compare_paths = getattr(args, "compare", None)
             if compare_paths:
-                from gaia.eval.runner import RESULTS_DIR, compare_scorecards
+                from gaia.eval.runner import (
+                    RESULTS_DIR,
+                    ScorecardMismatchError,
+                    compare_scorecards,
+                )
 
                 try:
                     if len(compare_paths) == 1:
@@ -5413,6 +5433,9 @@ Let me know your answer!
                 except FileNotFoundError as e:
                     print(f"[ERROR] {e}")
                     sys.exit(1)
+                except ScorecardMismatchError as e:
+                    print(f"[ERROR] {e}")
+                    sys.exit(3)
                 # compare handled; no further action
 
             iterations = getattr(args, "iterations", 1)
@@ -5497,6 +5520,7 @@ Let me know your answer!
                 exclude_tags=getattr(args, "exclude_tag", None),
                 output_format=getattr(args, "output_format", None),
                 iterations=iterations,
+                agent_model=getattr(args, "agent_model", None),
             )
             # --iterations repeats each SCENARIO in-run (runner.iterations) and
             # folds the repeats into one stability verdict per scenario
