@@ -108,9 +108,19 @@ class RelayProfile:
     #: Contract version from which ``GET /v1/<agent>/skills`` lists the skills
     #: the agent can load. ``None`` means the agent has no such route.
     min_skills_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat's ``allowed_paths``,
+    #: so the agent works in the same scope the Agent UI shows. ``None`` means
+    #: it never does, and keeps its own default scope.
+    min_scope_api_version: Optional[Tuple[int, int]] = None
     #: Shown in the Skills settings when the installed agent is below
     #: :attr:`min_skills_api_version`.
     skills_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``memory`` (on / private /
+    #: off). ``None`` means the relay never sends it.
+    min_memory_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running a private or memory-off turn when the installed
+    #: agent is below :attr:`min_memory_api_version` — it would save to memory.
+    memory_upgrade_message: str = ""
 
 
 # --- email ------------------------------------------------------------------
@@ -420,10 +430,19 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.17 added GET /skills.
     min_skills_api_version=(2, 17),
+    # 2.18 added /query's allowed_paths field.
+    min_scope_api_version=(2, 18),
     skills_upgrade_message=(
         "The installed GAIA agent is too old to list its skills here (needs "
         "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
         "page. Its skills still work in chat."
+    ),
+    # 2.18 added /query's memory field.
+    min_memory_api_version=(2, 18),
+    memory_upgrade_message=(
+        "Memory is off for this chat, but the installed GAIA agent can't be "
+        "told so and would save to memory (needs contract 2.18+). Update the "
+        "GAIA agent from the Hub and retry, or turn memory back on for this chat."
     ),
 )
 
@@ -503,6 +522,24 @@ def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar takes the chat's file scope on ``/query``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_scope_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``memory`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_memory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -527,4 +564,6 @@ __all__ = [
     "confirmations_supported",
     "documents_supported",
     "skills_supported",
+    "scope_supported",
+    "memory_supported",
 ]

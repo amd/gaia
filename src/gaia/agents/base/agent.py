@@ -814,6 +814,17 @@ _FAILED_CALL_ANSWER_PROMPT = (
     "failure itself is reported after your answer; don't repeat it."
 )
 
+# Added when the closing reply called a tool anyway and is asked again, tools gone.
+_NO_TOOLS_RETRY_NOTE = (
+    "Tools are no longer available. Reply with your final answer as plain "
+    "text only, using what the results above already show."
+)
+
+
+class _NotAnAnswer(ValueError):
+    """The closing reply came back, but it was a tool call or nothing."""
+
+
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
@@ -1168,9 +1179,9 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 )
 
 # Test-claim guard: an answer reporting a pass count the turn never produced.
-# One correction — a second disagreement is better than a loop, and the
-# verification footer states the truth either way.
-_MAX_TEST_CLAIM_CORRECTIONS = 1
+# A rewritten answer can make a new false claim, so it gets a second
+# correction; the same claim repeated is a disagreement, kept with a caveat.
+_MAX_TEST_CLAIM_CORRECTIONS = 2
 _THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # Anchored: only a reply that *opens* with an unclosed block was cut off
 # mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
@@ -1387,6 +1398,38 @@ def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
     if not beside or beside in answer or len(answer.strip()) >= len(beside):
         return answer
     return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
+
+
+_GIVE_ANSWER_AGAIN = (
+    "Then give your complete answer again: it replaces the one above, which "
+    "the user will not see."
+)
+
+
+#: A reply that opens by retracting what came before: putting the earlier
+#: answer back would show the user the wrong version first.
+_RETRACTION = re.compile(
+    r"^\W*(?:actually|correction|sorry|apologies|my (?:mistake|apologies)|"
+    r"i was wrong|i misread|i misstated|i made a mistake|to correct|"
+    r"on (?:closer|second) (?:look|inspection|reading))\b",
+    re.IGNORECASE,
+)
+
+
+def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
+    """*replaced* followed by *reply*, when *reply* is only an acknowledgement.
+
+    After a correction a model often answers the correction ("All 55 lines
+    match what was written") instead of the user, and that line would become
+    the whole answer. ``None`` when *reply* stands on its own, or when it
+    retracts the earlier answer ("Actually the file has three owners").
+    """
+    reply, replaced = reply.strip(), replaced.strip()
+    if not replaced or replaced in reply or len(reply) * 3 >= len(replaced):
+        return None
+    if _RETRACTION.search(reply):
+        return None
+    return f"{replaced}\n\n{reply}" if reply else replaced
 
 
 #: Any one of these lets the agent look at a file the request names.
@@ -3033,8 +3076,14 @@ Do NOT wrap conversational replies in JSON.
         if getattr(console, "full_access", False):
             logger.warning("Full access is on: granting %s without asking", path)
             return True
+        watched = getattr(console, "answers_confirmations", False) is True
+        if watched and getattr(console, "grants_paths", False) is True:
+            logger.warning(
+                "Full access is on for this chat: granting %s without asking", path
+            )
+            return True
         auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
-        if callable(auto_approves) and auto_approves():
+        if callable(auto_approves) and auto_approves() and not watched:
             logger.warning(
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
@@ -6826,10 +6875,43 @@ Do NOT wrap conversational replies in JSON.
         """Ask for the final answer on the way out of the loop, no tool calls.
 
         Same model path and tools as the loop (streaming or not), plus
-        ``tool_choice="none"``. Returns the answer, or ``None`` when the user
-        pressed Stop. Raises when the call fails or the reply is not an answer;
-        the caller says why.
+        ``tool_choice="none"``. A model that ignores that and calls a tool, or
+        replies with nothing, is asked once more with no tools offered at all.
+        Returns the answer, or ``None`` when the user pressed Stop. Raises when
+        the call fails or neither reply is an answer; the caller says why.
         """
+        try:
+            return self._closing_answer_once(messages, conversation, instruction, step)
+        except _NotAnAnswer as first:
+            logger.info(
+                "Closing reply was not an answer (%s); retrying without tools", first
+            )
+            try:
+                return self._closing_answer_once(
+                    messages,
+                    conversation,
+                    f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
+                    step,
+                    offer_tools=False,
+                )
+            except _NotAnAnswer:
+                raise first from None
+            except Exception as second:  # noqa: BLE001 - report the first reason
+                cancel_event = getattr(self, "_cancel_event", None)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise
+                logger.warning("Closing retry without tools failed: %s", second)
+                raise first from None
+
+    def _closing_answer_once(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        instruction: str,
+        step: int,
+        offer_tools: bool = True,
+    ) -> Optional[str]:
+        """One closing request; see :meth:`_closing_answer`."""
         cancel_event = getattr(self, "_cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeError("the request was cancelled")
@@ -6842,7 +6924,7 @@ Do NOT wrap conversational replies in JSON.
             + [{"role": "user", "content": instruction}]
         )
         # Tool history needs the tools on some providers; the model may not call one.
-        tools = self._openai_tools
+        tools = self._openai_tools if offer_tools else None
         no_calls = {"tool_choice": "none"} if tools else {}
         # The same effort as the loop: a change rewrites the prompt's start.
         no_calls.update(self._reasoning_request_kwargs())
@@ -6896,7 +6978,7 @@ Do NOT wrap conversational replies in JSON.
             r"<think>.*?</think>", "", response or "", flags=re.DOTALL
         ).strip()
         if not response:
-            raise ValueError("the model returned an empty reply")
+            raise _NotAnAnswer("the model returned an empty reply")
         parsed = self._parse_llm_response(response)
         answer = parsed.get("answer")
         if not isinstance(answer, str):
@@ -6905,12 +6987,12 @@ Do NOT wrap conversational replies in JSON.
         if not requested and parsed.get("tool"):
             requested = [parsed["tool"]]
         if requested or _unfinished_answer_kind(answer) == "tool_markup":
-            raise ValueError(
+            raise _NotAnAnswer(
                 f"the model asked to run {', '.join(requested) or 'another tool'} "
                 "instead of answering"
             )
         if not answer.strip():
-            raise ValueError("the model's reply had no answer in it")
+            raise _NotAnAnswer("the model's reply had no answer in it")
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 
@@ -7333,9 +7415,11 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _is_loaded_ctx_too_small(self) -> bool:
-        """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than the window GAIA loads that
-        model with (``resolve_ctx_size``).
+        """Probe Lemonade's health endpoint to see whether this agent's own
+        model is loaded with a context size below its target window.
+
+        The target is ``resolve_ctx_size`` clamped to the model's trained
+        ``max_context_window``; other loaded models are ignored.
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -7348,9 +7432,11 @@ Do NOT wrap conversational replies in JSON.
 
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                _model_ids_match,
                 cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_ctx_size,
+                resolve_effective_ctx_size,
                 resolve_lemonade_api_key,
                 resolve_lemonade_base_url,
             )
@@ -7374,18 +7460,31 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
+            # Same resolution as the chat config: no model_id runs the default.
+            own_model = getattr(self, "model_id", None) or resolve_default_chat_model()
             for m in data.get("all_models_loaded", []):
-                if m.get("type") in ("llm", "vlm"):
-                    ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Each model against its own window: an NPU model is right
-                    # at 32K, a memory-sized GPU model may be far above 64K.
-                    expected_ctx = resolve_ctx_size(
-                        model=m.get("model_name"),
+                if m.get("type") not in ("llm", "vlm"):
+                    continue
+
+                # Judges only the agent's own model, other residents don't matter.
+                if not (
+                    _model_ids_match(m.get("model_name"), own_model)
+                    or _model_ids_match(m.get("id"), own_model)
+                ):
+                    continue
+
+                ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                # Clamp like the load path: a model at its max can't reload larger.
+                expected_ctx = resolve_effective_ctx_size(
+                    resolve_ctx_size(
+                        model=m.get("model_name") or own_model,
                         device=self.device,
                         base_url=base_url,
-                    )
-                    if 0 < ctx < expected_ctx:
-                        return True
+                    ),
+                    m.get("max_context_window"),
+                )
+                if 0 < ctx < expected_ctx:
+                    return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
             logger.debug("Loaded-context probe failed: %s", e)
@@ -8944,9 +9043,12 @@ Do NOT wrap conversational replies in JSON.
         look_first_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
+        corrected_test_claims: set = set()
         cut_off_continuations = 0
         stream_cut_offs = 0
         completion_corrections = 0
+        # The answer a completion correction asked to replace.
+        answer_before_completion_check: Optional[str] = None
         completion_gaps = []
         # Answer text the model sent alongside its latest tool calls.
         answer_beside_tool_calls: Optional[str] = None
@@ -10387,6 +10489,8 @@ Do NOT wrap conversational replies in JSON.
                 fanout_repeat_break = False
                 post_tool_messages = []
 
+                # One response's calls are one attempt to the failure breaker.
+                self._turn_scope.begin_batch()
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
                     tool_args = tc["tool_args"]
@@ -10585,6 +10689,7 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+                self._turn_scope.end_batch()
 
                 # Anthropic and other spec-strict providers require all native
                 # tool results to immediately follow the assistant tool-call
@@ -11335,6 +11440,7 @@ Do NOT wrap conversational replies in JSON.
                     can_correct_claim = (
                         steps_taken < steps_limit - 1
                         and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                        and claim.lower() not in corrected_test_claims
                     )
                     if not can_correct_claim:
                         logger.warning(
@@ -11351,6 +11457,7 @@ Do NOT wrap conversational replies in JSON.
                         completion_gaps = [why + "."]
                     else:
                         test_claim_corrections += 1
+                        corrected_test_claims.add(claim.lower())
                         logger.debug(
                             "[WORKFLOW] Correcting unsupported test claim %r (%s)",
                             claim,
@@ -11387,11 +11494,27 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
+                unfinalized_answer = _without_tool_markup(answer_candidate)
+                if answer_before_completion_check is not None:
+                    restored = _with_replaced_answer(
+                        unfinalized_answer, answer_before_completion_check
+                    )
+                    answer_before_completion_check = None
+                    # Only once the work done since backs what it said.
+                    restored_soft: List[str] = []
+                    if (
+                        restored is not None
+                        and not self._completion_evidence.gaps(
+                            restored, _claims_file_write, soft=restored_soft
+                        )
+                        and not restored_soft
+                    ):
+                        unfinalized_answer = restored
                 answer_candidate = self.finalize_answer(
-                    _without_tool_markup(answer_candidate), conversation
+                    unfinalized_answer, conversation
                 )
-                soft_gaps: List[str] = []
                 self._check_extraction_sources()
+                soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate, _claims_file_write, soft=soft_gaps
                 )
@@ -11415,6 +11538,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                     ):
                         completion_corrections += 1
+                        answer_before_completion_check = unfinalized_answer
                         correction = (
                             (
                                 "[check:completion] "
@@ -11429,7 +11553,8 @@ Do NOT wrap conversational replies in JSON.
                                 "continuation pages. Report only contents observed in "
                                 "tool results. An unrelated tool or file is not evidence. "
                                 "This check is internal: answer the user without "
-                                "mentioning it or the read's offset and pages."
+                                "mentioning it or the read's offset and pages. "
+                                + _GIVE_ANSWER_AGAIN
                             )
                             if artifact_gaps
                             else (
@@ -11437,7 +11562,8 @@ Do NOT wrap conversational replies in JSON.
                                 + " ".join(soft_gaps)
                                 + " If the file is needed, write it with `write_file` and read it back. "
                                 "If you were describing where something is usually saved, or a file "
-                                "from an earlier turn, say so without claiming you saved it now."
+                                "from an earlier turn, say so without claiming you saved it now. "
+                                + _GIVE_ANSWER_AGAIN
                             )
                         )
                         refused = set(self._completion_evidence.refused.values())

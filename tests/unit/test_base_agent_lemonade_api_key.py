@@ -76,13 +76,13 @@ def test_is_loaded_ctx_too_small_omits_authorization_header_when_no_key(
     [
         ("npu", 32768, False),
         ("npu", 16384, True),
-        ("gpu", 32768, True),
-        (None, 32768, False),
+        ("gpu", 32768, False),
+        (None, 16384, True),
     ],
 )
 @patch("httpx.get")
 @patch("gaia.llm.lemonade_manager.LemonadeManager.get_base_url")
-def test_is_loaded_ctx_too_small_uses_active_device_profile(
+def test_is_loaded_ctx_too_small_judges_the_default_model_by_its_window(
     mock_get_base_url,
     mock_httpx_get,
     device,
@@ -90,7 +90,7 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
     expected_too_small,
     monkeypatch,
 ):
-    """A correctly loaded NPU 32K model must not be routed to reload."""
+    """No model_id: the default model's own window decides, not the device."""
     from gaia.agents.base.agent import Agent
 
     class _DeviceAgent(Agent):
@@ -98,19 +98,20 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
             return None
 
     agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device=device)
-    if device is None:
-        from gaia.config import GaiaConfig
-
-        monkeypatch.setattr(
-            "gaia.config.GaiaConfig.load",
-            lambda: GaiaConfig(default_device="npu"),
-        )
+    monkeypatch.setattr(
+        "gaia.agents.base.agent.resolve_default_chat_model",
+        lambda: "gemma4-it-e2b-FLM",
+    )
     mock_get_base_url.return_value = "http://localhost:13305/api/v1"
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "all_models_loaded": [
-            {"type": "llm", "recipe_options": {"ctx_size": loaded_ctx}}
+            {
+                "type": "llm",
+                "model_name": "gemma4-it-e2b-FLM",
+                "recipe_options": {"ctx_size": loaded_ctx},
+            }
         ]
     }
     mock_httpx_get.return_value = mock_resp
@@ -138,7 +139,9 @@ def test_is_loaded_ctx_too_small_judges_each_model_by_its_own_window(
         def _register_tools(self):
             return None
 
-    agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device="npu")
+    agent = _DeviceAgent(
+        skip_lemonade=True, silent_mode=True, device="npu", model_id=model_name
+    )
     mock_get_base_url.return_value = "http://localhost:13305/api/v1"
     mock_resp = MagicMock()
     mock_resp.status_code = 200

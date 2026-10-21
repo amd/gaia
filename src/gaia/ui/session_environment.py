@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
+from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
 
@@ -100,9 +101,21 @@ def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
     return _compute_allowed_paths(rag + library)
 
 
+def _env_scope_entries() -> List[Path]:
+    """The ``GAIA_ALLOWED_PATHS`` entries, or none when it is unset or invalid."""
+    try:
+        return env_allowed_paths() or []
+    except AllowedPathsEnvError:
+        return []
+
+
 def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
-    """What the session panel shows: every folder and file the chat may touch."""
-    from ._chat_helpers import _managed_documents_dir
+    """What the session panel shows: every folder and file the chat may touch.
+
+    Raises:
+        AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` holds an invalid value.
+    """
+    from ._chat_helpers import _effective_scope, _managed_documents_dir
 
     session_id = session["id"]
     env = load(db, session_id)
@@ -112,7 +125,8 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         scope = [str(p) for p in validator.allowed_paths]
         scratch = str(validator.scratch_dir) if validator.scratch_dir else None
     else:
-        scope = _computed_scope(db, session) + list(env["folders"])
+        # What a new agent's validator would hold, GAIA_ALLOWED_PATHS applied.
+        scope = _effective_scope(_computed_scope(db, session) + list(env["folders"]))
         scratch = None
 
     added = {_norm(p) for p in env["folders"]}
@@ -123,6 +137,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
         if d.get("filepath")
     }
     cwd = _norm(os.getcwd())
+    from_env = {_norm(str(p)) for p in _env_scope_entries()}
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)
@@ -138,6 +153,8 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "document"
         elif key == cwd:
             source = "working_folder"
+        elif key in from_env:
+            source = "allowed_paths"
         elif validator is not None:
             source = "approved"
         else:

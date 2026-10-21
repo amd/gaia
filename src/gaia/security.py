@@ -567,7 +567,9 @@ def _intersect_scopes(
     return _dedupe_paths(kept)
 
 
-def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
+def narrow_allowed_paths(
+    paths: Optional[List[Any]], *, warn: bool = True
+) -> Optional[List[str]]:
     """*paths* narrowed by ``GAIA_ALLOWED_PATHS``, or unchanged when it is unset.
 
     ``None`` stands for the validator default, the working directory; once
@@ -576,6 +578,7 @@ def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
 
     Args:
         paths: An agent's configured ``allowed_paths``.
+        warn: Log the setting's entries that fall outside *paths*.
 
     Returns:
         The narrowed list, or *paths* itself when the variable is unset.
@@ -587,7 +590,7 @@ def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
     if ceiling is None:
         return paths
     base = [Path.cwd()] if paths is None else paths
-    return [str(p) for p in _intersect_scopes(base, ceiling)]
+    return [str(p) for p in _intersect_scopes(base, ceiling, warn=warn)]
 
 
 class PathValidator:
