@@ -122,7 +122,7 @@ def locate_chunks(
         for idx in indices:
             needle = norm(chunks[idx])
             # Chunks come in document order; a match before the previous chunk
-            # could be repeated text elsewhere, so it counts as unlocated.
+            # is usually repeated text elsewhere, so the search starts there.
             pos = doc.text.find(needle, cursor) if needle else -1
             if needle:
                 # One exception: the previous chunk is the short tail of a chunk
