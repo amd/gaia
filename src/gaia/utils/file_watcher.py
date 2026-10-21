@@ -361,7 +361,8 @@ class FileChangeHandler(FileSystemEventHandler):
         with self._cond:
             if self._closed:
                 return
-            # A new change starts a fresh set of locked-file retries.
+            # A new change starts a fresh set of locked-file retries; they still
+            # run out once the program holding the file stops changing it.
             self._locked_retries.pop(file_path, None)
             entry = self._pending.get(file_path)
             first_kind = entry[0] if entry else kind
