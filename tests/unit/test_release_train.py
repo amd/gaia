@@ -207,13 +207,13 @@ def build_art(
             )
         setup = artifacts_for("win-x64", f.npm)[0][0]
         _write(art / f"{p}-windows-setup" / setup, b"MZ setup")
-    for platform, label in (
-        ("darwin-arm64", "macos"),
-        ("darwin-x64", "macos"),
-        ("linux-x64", "linux"),
-    ):
-        for n, _ in artifacts_for(platform, final.npm):
-            _write(art / f"final-tui-installers-{label}" / n, b"pkg")
+        for platform, label in (
+            ("darwin-arm64", "macos"),
+            ("darwin-x64", "macos"),
+            ("linux-x64", "linux"),
+        ):
+            for n, _ in artifacts_for(platform, f.npm):
+                _write(art / f"{p}-tui-installers-{label}" / n, b"pkg " + p.encode())
 
     for platform in ("win32-x64", "darwin-arm64", "linux-x64", "darwin-x64"):
         if skip_intel_sidecar and platform == "darwin-x64":

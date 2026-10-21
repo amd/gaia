@@ -251,14 +251,20 @@ jobs:
       publish_to_release: false
 
   # ── Terminal binaries and installers ───────────────────────────────────────
-  # An rpm Version can't carry -rc.N, so the candidate builds the binaries only.
+  # Both flavors build the packages around this run's own sidecar, as
+  # publish.yml's rc-tui does for a real candidate. The candidate's .deb/.rpm
+  # carry X.Y.Z~rc.N inside (installer/tui/linux/README.md).
   tui-rc:
     name: Terminal (rc)
-    needs: plan
+    needs: [plan, sidecar]
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.sidecar.result == 'success'
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.plan.outputs.rc_npm }}
-      installers: false
+      sidecar: artifact
       artifact_prefix: rc-
 
   tui-final:
