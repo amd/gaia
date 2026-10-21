@@ -11,7 +11,7 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { AnswerStats } from './AnswerStats';
+import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { prefersReducedMotion } from '../utils/motion';
@@ -414,6 +414,20 @@ function formatFullTimestamp(iso: string): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
+/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py). */
+const CUT_OFF_NOTICES = [
+    'This answer was interrupted when GAIA closed. Send again to retry.',
+    'This answer was interrupted before it finished. Send again to retry.',
+    'This answer ended before GAIA could save a reply. Send again to retry.',
+];
+
+/** How an assistant turn ended short of an answer, or undefined when it answered. */
+export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+    if (stopState) return 'stopped';
+    const text = content.trim();
+    return CUT_OFF_NOTICES.some((notice) => text.endsWith(notice)) ? 'interrupted' : undefined;
+}
+
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     useModelNames();
     const isError = message.role === 'assistant' && isErrorContent(message.content);
@@ -587,7 +601,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
