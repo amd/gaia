@@ -16,9 +16,11 @@ The logic lives in ``report_from_sources_lib`` beside this file and is
 unit-tested there. Inputs are only read. ``chart_into_workbook`` writes the one
 file it is given and refuses to write over a source.
 
-Path scope: skill tools run without the agent's per-session path validator,
-so these hold every path to ``GAIA_ALLOWED_PATHS`` when it is set and to
-GAIA's secret-file and protected-folder rules always.
+Path scope: every path goes through the agent's allowed-folders check
+(``gaia.skills.context``), the one ``read_file`` and ``write_file`` use, so a
+folder the user approved this session works and secret files are refused.
+``folder``, ``file_path`` and ``output_path`` are read-checked before a tool
+runs; ``chart_into_workbook`` write-checks its output itself.
 """
 
 from __future__ import annotations
@@ -39,22 +41,16 @@ from report_from_sources_lib.tables import DataFileError
 from report_from_sources_lib.xlsx_chart import ChartWriteError, write_workbook_chart
 
 from gaia.agents.base.tools import tool
+from gaia.agents.tools.path_access import readable_entry
 from gaia.logger import get_logger
+from gaia.skills import context as skill_context
+from gaia.skills.errors import SkillPermissionError
 
 log = get_logger(__name__)
 
 
 class _PathRefused(ValueError):
     pass
-
-
-def _security():
-    from gaia.security import PathValidator, env_allowed_paths
-
-    # The block checks read only module-level rules (secret folders, system
-    # folders, key files), never instance state, so a bare instance is enough
-    # and nothing is written to ~/.gaia by constructing a full validator.
-    return object.__new__(PathValidator), env_allowed_paths
 
 
 def _guard(text: str, *, write: bool = False) -> Path:
@@ -66,31 +62,17 @@ def _guard(text: str, *, write: bool = False) -> Path:
         raise _PathRefused(
             f"{text!r} is not an absolute path. Pass the full path, e.g. C:\\Users\\me\\Documents\\data.xlsx."
         )
-    path = Path(os.path.realpath(raw))
-    checker, env_allowed_paths = _security()
-    scope = env_allowed_paths()
-    if scope is not None and not any(
-        path == root or root in path.parents for root in scope
-    ):
-        raise _PathRefused(
-            f"{path} is outside the folders this agent may use (GAIA_ALLOWED_PATHS)."
-        )
-    blocked, reason = (
-        checker.is_write_blocked(str(path))
-        if write
-        else checker.is_read_blocked(str(path))
-    )
-    if blocked:
-        raise _PathRefused(reason)
-    return path
+    try:
+        if write:
+            return skill_context.check_write(raw)
+        return skill_context.check_read(raw)
+    except SkillPermissionError as e:
+        raise _PathRefused(str(e)) from e
 
 
 def _readable(path: Path) -> bool:
-    try:
-        _guard(str(path))
-        return True
-    except _PathRefused:
-        return False
+    """Whether a file found in the inventoried folder may be read (never asks)."""
+    return readable_entry(skill_context.current().agent, path)
 
 
 def _error(message: str, **extra: Any) -> Dict[str, Any]:
@@ -126,7 +108,7 @@ def inventory_data_files(folder: str, recursive: bool = False) -> dict:
                 f"{path} is not a folder. Pass the folder that holds the files."
             )
         return inventory_folder(path, recursive=bool(recursive), readable=_readable)
-    except _PathRefused as e:
+    except (_PathRefused, SkillPermissionError) as e:
         return _error(str(e))
     except (DataFileError, OSError) as e:
         return _error(str(e))
@@ -173,7 +155,7 @@ def series_from_workbook(
             orientation=orientation,
             filters=filters or None,
         )
-    except _PathRefused as e:
+    except (_PathRefused, SkillPermissionError) as e:
         return _error(str(e))
     except SeriesLookupError as e:
         return _error(str(e), **e.payload)
@@ -219,7 +201,7 @@ def chart_into_workbook(
     """
     try:
         src = _guard(file_path)
-        out = _guard(output_path, write=True)
+        out = _guard(output_path)
         if not src.is_file():
             return _error(f"{src} does not exist.")
         if out == src:
@@ -230,6 +212,8 @@ def chart_into_workbook(
             return _error(f"{out.name}: write the chart to an .xlsx file.")
         if not out.parent.is_dir():
             return _error(f"The folder {out.parent} does not exist.")
+        # Write-checked last: it asks before replacing an existing workbook.
+        out = _guard(output_path, write=True)
         result = extract_series(
             src,
             _labels(labels),
@@ -284,7 +268,7 @@ def chart_into_workbook(
         if result.get("notes"):
             written["notes"] = result["notes"]
         return written
-    except _PathRefused as e:
+    except (_PathRefused, SkillPermissionError) as e:
         return _error(str(e))
     except SeriesLookupError as e:
         return _error(str(e), **e.payload)

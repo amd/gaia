@@ -13,10 +13,28 @@ from __future__ import annotations
 import csv
 import json
 import random
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+
+@contextmanager
+def library_call() -> Iterator[None]:
+    """Run the skill's library code as a tool call would, for an agent with
+    no path validator (library use: nothing is scope-checked).
+
+    The readers open files through ``gaia.skills.context``, which works only
+    inside a skill tool call.
+    """
+    from gaia.skills.context import bind
+
+    skill = SimpleNamespace(name="report-from-sources", parsed_permissions=tuple)
+    with bind(SimpleNamespace(), skill):
+        yield
+
 
 QUARTERS = [(y, q) for y in range(2021, 2027) for q in range(1, 5)]
 

@@ -28,6 +28,15 @@ from report_from_sources_lib import periods as P  # noqa: E402
 from report_from_sources_lib import series as S  # noqa: E402
 from report_from_sources_lib import tables as T  # noqa: E402
 
+from tests.fixtures.report_from_sources_data import library_call  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _in_a_skill_call():
+    with library_call():
+        yield
+
+
 # --------------------------------------------------------------------------- #
 # Periods
 # --------------------------------------------------------------------------- #

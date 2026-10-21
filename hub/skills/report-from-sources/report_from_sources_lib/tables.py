@@ -5,7 +5,9 @@
 Every reader yields ``(row_number, values)`` with 1-based row numbers as Excel
 shows them, so a value can always be cited back to its cell. Nothing is loaded
 whole: workbooks open read-only, CSV is read line by line, and layout
-detection looks at a bounded sample of the top of each sheet.
+detection looks at a bounded sample of the top of each sheet. CSV and JSON
+files open through ``gaia.skills.context.open_read``, which applies the
+agent's allowed folders, so these readers run inside a skill tool call.
 
 :func:`analyze_layout` decides how a sheet is laid out:
 
@@ -28,6 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from gaia.logger import get_logger
+from gaia.skills.context import open_read
 
 from .periods import (
     Period,
@@ -303,7 +306,7 @@ class _CsvTable(Table):
     def rows(
         self, limit: Optional[int] = None
     ) -> Iterator[Tuple[int, Tuple[Any, ...]]]:
-        with open(
+        with open_read(
             path_str(self.path), encoding=self.encoding, errors="replace", newline=""
         ) as f:
             reader = csv.reader(f, delimiter=self.delimiter)
@@ -333,7 +336,7 @@ def path_str(path: Path) -> str:
 
 def _sniff_delimited(path: Path) -> Tuple[str, str]:
     """Encoding and delimiter from the first 64 KB."""
-    with open(path, "rb") as f:
+    with open_read(path, "rb") as f:
         head = f.read(65536)
     encoding = "utf-8-sig"
     try:
@@ -378,7 +381,7 @@ class _JsonTable(Table):
     def _build(self) -> List[List[Any]]:
         if self._grid is not None:
             return self._grid
-        with open(self.path, encoding="utf-8-sig", errors="replace") as f:
+        with open_read(self.path, encoding="utf-8-sig", errors="replace") as f:
             data = json.load(f)
         records = _json_records(data)
         if records is None:
@@ -407,7 +410,7 @@ class _JsonTable(Table):
         keys: List[str] = []
         pending: List[Dict[str, Any]] = []
         number = 0
-        with open(self.path, encoding="utf-8-sig", errors="replace") as f:
+        with open_read(self.path, encoding="utf-8-sig", errors="replace") as f:
             for line_no, line in enumerate(f, start=1):
                 if not line.strip():
                     continue

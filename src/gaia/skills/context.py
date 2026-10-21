@@ -24,6 +24,8 @@ these functions act for that agent and that skill::
   ``output_dir`` …, see :func:`is_path_argument`) is read-checked before the
   tool body runs, so a skill tool cannot be pointed outside the scope by
   default. A tool that writes calls :func:`check_write` itself.
+  :func:`open_read` is ``open()`` for reading after :func:`check_read`, for
+  code that streams a file itself instead of handing the path to a library.
 - **Programs.** :func:`run_program` starts one executable the manifest names
   (``program:run:<name>``): no shell, stdin closed, an environment holding
   only what a program needs to start (no API keys or tokens), and a timeout.
@@ -54,7 +56,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import IO, Any, Dict, Iterator, List, Optional, Sequence
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillPermissionError
@@ -263,6 +265,30 @@ def check_write(path: str | os.PathLike, *, content_size: int = 0) -> Path:
     if refusal is not None:
         raise SkillPermissionError(refusal["error"])
     return resolved
+
+
+def open_read(path: str | os.PathLike, mode: str = "r", **kwargs: Any) -> IO[Any]:
+    """Open a file the agent may read, for reading only.
+
+    ``open(check_read(path), mode, **kwargs)``. The audit does not flag it as
+    an undeclared filesystem read, because this check runs on every call.
+
+    Args:
+        path: The file.
+        mode: ``"r"`` or ``"rb"`` (``"rt"`` too); nothing that writes.
+        **kwargs: Passed to ``open`` (``encoding``, ``errors``, ``newline``).
+
+    Raises:
+        ValueError: *mode* would write.
+        SkillPermissionError: outside the agent's allowed folders, or a secret.
+    """
+    if set(mode) - set("rbt"):
+        raise ValueError(
+            f"open_read opens files for reading; mode {mode!r} would write. Call "
+            "check_write on the path, then write it."
+        )
+    # The caller closes it, normally in a with block.
+    return open(check_read(path), mode, **kwargs)  # pylint: disable=consider-using-with
 
 
 # ----------------------------------------------------------------------
@@ -484,6 +510,7 @@ __all__: List[str] = [
     "current",
     "find_program",
     "is_path_argument",
+    "open_read",
     "preferences",
     "run_program",
     "temp_dir",

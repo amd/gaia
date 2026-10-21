@@ -159,6 +159,40 @@ def test_check_write_outside_the_scope_is_refused(agent, tmp_path, allowed, outs
     assert "new.txt" in result["error"] or "outside" in result["error"]
 
 
+def test_open_read_reads_inside_the_scope_only(agent, tmp_path, allowed, outside):
+    body = (
+        "target = file_path if file_path.endswith('in.txt') else "
+        f"{str(outside)!r}\n"
+        "with ctx.open_read(target, encoding='utf-8') as f:\n"
+        "    return {'status': 'success', 'text': f.read()}\n"
+    )
+    _load(agent, tmp_path, "open-probe", [], body)
+
+    inside = agent._execute_tool(
+        "open-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+    escaped = agent._execute_tool(
+        "open-probe/probe", {"file_path": str(allowed / "other.txt")}
+    )
+
+    assert inside == {"status": "success", "text": "inside"}
+    assert escaped["status"] == "error"
+    assert "secret.txt" in escaped["error"]
+
+
+def test_open_read_refuses_a_mode_that_writes(agent, tmp_path, allowed):
+    body = "ctx.open_read(file_path, 'a').close()\nreturn {'status': 'success'}\n"
+    _load(agent, tmp_path, "append-probe", [], body)
+
+    result = agent._execute_tool(
+        "append-probe/probe", {"file_path": str(allowed / "in.txt")}
+    )
+
+    assert result["status"] == "error"
+    assert "would write" in str(result)
+    assert (allowed / "in.txt").read_text(encoding="utf-8") == "inside"
+
+
 def test_context_functions_refuse_outside_a_skill_tool():
     with pytest.raises(skill_context.SkillContextError):
         skill_context.check_read(".")
@@ -328,6 +362,8 @@ _RUN_SOFFICE = "proc = ctx.run_program('soffice', ['--version'], timeout=60)\n"
         (["program:run:other"], _RUN_SOFFICE, "permission.scope_violation"),
         (["scratch:write"], "ctx.write_temp_file('a.txt', 'x')\n", None),
         ([], "ctx.write_temp_file('a.txt', 'x')\n", "permission.undeclared.scratch"),
+        ([], "ctx.open_read(file_path).close()\n", None),
+        ([], "open(file_path).close()\n", "permission.undeclared.filesystem"),
     ],
 )
 def test_the_audit_matches_context_calls_to_declarations(

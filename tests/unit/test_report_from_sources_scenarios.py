@@ -45,7 +45,10 @@ from report_from_sources_lib.series import (  # noqa: E402
 )
 from report_from_sources_lib.xlsx_chart import write_workbook_chart  # noqa: E402
 
-from tests.fixtures.report_from_sources_data import SCENARIOS  # noqa: E402
+from tests.fixtures.report_from_sources_data import (  # noqa: E402
+    SCENARIOS,
+    library_call,
+)
 
 SEEDS = range(5)
 
@@ -68,6 +71,12 @@ MINIMUM = {
 
 def _ratio(num: int, den: int) -> float:
     return 1.0 if den == 0 else num / den
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _in_a_skill_call():
+    with library_call():
+        yield
 
 
 @pytest.fixture(scope="module")
