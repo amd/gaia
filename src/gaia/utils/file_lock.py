@@ -21,10 +21,15 @@ open for a moment; on Windows the rename waits that out for a bounded time
 The lock is an OS advisory lock on ``<name>.lock`` beside the target
 (:func:`gaia.daemon.lock.try_lock`), released by the OS if the holder dies.
 Waiters queue for it in arrival order through entry files in
-``<name>.lock.d/``, so a later waiter cannot take it ahead of an earlier one.
-The one exception is a moment under a millisecond wide: a request that finds
-the lock busy and is about to queue can be beaten by one that arrives just as
-the lock comes free and takes it straight away.
+``<name>.lock.d/``. Mutual exclusion never depends on that order, which can
+slip in three ways:
+
+- A request that finds the lock busy and has not yet written its entry can be
+  beaten by one that arrives as the lock comes free and takes it at once.
+- An entry its owner has created but not yet locked reads as finished, so a
+  waiter that polls at that instant can go ahead of it.
+- An entry this user cannot check (another user's, or on NFS) stops holding
+  its place once older than :data:`LOCK_TIMEOUT_SECONDS`.
 """
 
 from __future__ import annotations
@@ -281,32 +286,76 @@ def _open_entry(entry: Path) -> int:
 _ALIVE, _UNKNOWN, _STALE, _DEAD = "alive", "unknown", "stale", "dead"
 
 
-def _unchecked(entry: Path) -> str:
+#: Entries already reported as aged out, so each is logged once per process
+#: and the fast path can look past them.
+_stale_entries: Set[str] = set()
+_stale_lock = threading.Lock()
+
+
+def _entry_key(entry: Path) -> str:
+    return os.path.normcase(os.path.abspath(entry))
+
+
+def _unchecked(entry: Path, now: Optional[float]) -> str:
     """The state of an entry this user cannot test (another user's, or NFS).
 
     Once older than :data:`LOCK_TIMEOUT_SECONDS` it no longer counts as ahead:
     a waiter on the default timeout has given up by then, so it is far more
     likely a dead process's entry, which nothing could ever clear. At worst a
-    live one loses its place, never exclusion. On NFS the age compares the
-    server's file time with this clock, so skew moves that point earlier or
-    later.
+    live one loses its place, never exclusion.
+
+    *now* is the time on the entry's own file system (see
+    :meth:`_QueueEntry.fs_now`), so the client's clock never enters into it.
+    A waiter with no entry of its own, in a folder it cannot write, has
+    nothing to compare against and uses this machine's clock.
     """
     try:
-        age = time.time() - os.stat(entry).st_mtime
+        mtime = os.stat(entry).st_mtime
     except FileNotFoundError:
         return _DEAD
+    age = (time.time() if now is None else now) - mtime
     return _STALE if age > LOCK_TIMEOUT_SECONDS else _UNKNOWN
 
 
-def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
+def _report_stale(entry: Path, path: Path) -> None:
+    key = _entry_key(entry)
+    with _stale_lock:
+        if key in _stale_entries:
+            return
+        _stale_entries.add(key)
+    log.warning(
+        "Queue entry %s for the lock %s is over %gs old and this user cannot "
+        "check whether its owner is still running, so it no longer holds a "
+        "place in line. If no other user's GAIA is running, delete it.",
+        entry,
+        path,
+        LOCK_TIMEOUT_SECONDS,
+    )
+
+
+def _may_be_waiting(path: Path) -> bool:
+    """Whether *path*'s queue holds an entry not already reported aged out."""
+    entries = _queue_entries(path)  # listed outside the lock: slow on NFS
+    with _stale_lock:
+        return any(_entry_key(e) not in _stale_entries for _, e in entries)
+
+
+def _entry_state(
+    entry: Path,
+    path: Path,
+    *,
+    now: Optional[float] = None,
+    delete_dead: bool = False,
+) -> str:
     """Whether *entry*'s owner still waits for the lock.
 
     ``_DEAD`` when nobody holds it: its owner finished or crashed, or has
     created it and not locked it yet, so a waiter looks again on its next poll
     rather than skip it for good. ``_UNKNOWN`` or ``_STALE`` when this user
-    cannot tell (see :func:`_unchecked`). With *delete_dead*, a dead entry is
-    deleted; a waiter polls without it, because a delete on Windows costs as
-    much as the whole hand-off, and reaps what it saw after its turn.
+    cannot tell (see :func:`_unchecked`, which *now* goes to). With
+    *delete_dead*, a dead entry is deleted; a waiter polls without it,
+    because a delete on Windows costs as much as the whole hand-off, and reaps
+    what it saw after its turn.
     """
     try:
         fd = _open_entry(entry)
@@ -314,7 +363,7 @@ def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
         return _DEAD
     except PermissionError:
         # Windows: being deleted, or held without sharing by another program.
-        return _DEAD if os.name == "nt" else _unchecked(entry)
+        return _DEAD if os.name == "nt" else _unchecked(entry, now)
     except OSError as e:
         raise FileLockError(
             f"Cannot open the queue entry {entry} for the lock {path}: {e}", path
@@ -322,7 +371,7 @@ def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
     taken = _probe_lock(fd)
     if not taken:
         os.close(fd)
-        return _unchecked(entry) if taken is None else _ALIVE
+        return _unchecked(entry, now) if taken is None else _ALIVE
     if delete_dead:
         _release_and_discard(fd, entry)
     else:
@@ -350,6 +399,13 @@ class _QueueEntry:
         self.place = place
         self.path = path
         self.fd = fd
+        self._created = os.fstat(fd).st_mtime
+        self._joined = time.monotonic()
+
+    def fs_now(self) -> float:
+        """The current time on this entry's file system: its own creation time
+        there plus how long this waiter has been in line."""
+        return self._created + (time.monotonic() - self._joined)
 
     def give_up_place(self) -> Path:
         """Unlock the entry so the waiter behind sees itself next; delete later.
@@ -447,10 +503,13 @@ def _ahead(
         if entry is None or place < entry.place
     ]
     count, unknown = 0, []
+    now = entry.fs_now() if entry is not None else None
     for other in listed:
-        state = _entry_state(other, path)
-        if state == _UNKNOWN:
+        state = _entry_state(other, path, now=now)
+        if state in (_UNKNOWN, _STALE):
             unknown.append(other)
+        if state == _STALE:
+            _report_stale(other, path)
         if state == _DEAD:
             # Not skipped later: it may be a new entry its owner has yet to lock.
             dead.add(other)
@@ -499,9 +558,11 @@ def _timeout_message(
         )
     if unknown:
         message += (
-            f" This user cannot check {len(unknown)} of those queue entries "
-            f"({', '.join(str(p) for p in unknown)}) to tell whether their "
-            "owner is still running; if no other GAIA process is, delete them."
+            f" This user cannot check {len(unknown)} queue "
+            f"entr{'y' if len(unknown) == 1 else 'ies'} "
+            f"({', '.join(str(p) for p in unknown)}) to tell whether the owner "
+            "is still running; if no other user's GAIA is running, delete "
+            f"{'it' if len(unknown) == 1 else 'them'}."
         )
     return message
 
@@ -572,7 +633,7 @@ def acquire_file_lock(
     dead: Set[Path] = set()
     try:
         # Nobody waiting: take it without the cost of a queue entry.
-        if not _queue_entries(path) and try_lock(fd):
+        if not _may_be_waiting(path) and try_lock(fd):
             return HeldFileLock(path, fd)
         entry = _join_queue(path, target)
         while True:

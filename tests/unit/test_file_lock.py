@@ -29,6 +29,16 @@ from tests.unit.denied_folder import cannot_create_files_in
 REPO_SRC = Path(__file__).resolve().parents[2] / "src"
 
 
+@pytest.fixture(autouse=True)
+def _forget_aged_out_entries():
+    """Aged-out entries are remembered per process; no test may see another's."""
+    from gaia.utils import file_lock as mod
+
+    mod._stale_entries.clear()
+    yield
+    mod._stale_entries.clear()
+
+
 def test_lock_file_sits_beside_its_target(tmp_path):
     assert lock_path_for(tmp_path / "config.json") == tmp_path / "config.json.lock"
 
@@ -284,7 +294,7 @@ def test_an_entry_that_cannot_be_checked_is_named_in_the_timeout(tmp_path, monke
             pass
     assert exc.value.ahead == 1
     assert str(unknown) in str(exc.value)
-    assert "delete them" in str(exc.value)
+    assert "delete it." in str(exc.value)
     assert unknown.exists()
 
 
@@ -493,6 +503,88 @@ def test_an_unchecked_entry_stops_counting_once_older_than_the_timeout(
     with file_lock(target, timeout=0.5):
         pass
     assert stuck.exists()  # never deleted: it might still be someone's
+
+
+class _SkewedClock:
+    """This machine's clock, *offset* seconds off the file server's."""
+
+    def __init__(self, offset):
+        self.offset = offset
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        return time.time() + self.offset
+
+
+@pytest.mark.parametrize("offset", [-3600, 3600])
+def test_an_unchecked_entrys_age_ignores_this_machines_clock(
+    tmp_path, monkeypatch, offset
+):
+    """Age is taken on the file server's clock, so skew neither blocks a waiter
+    for an hour nor skips a waiter that only just queued."""
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    old, young = queue / _entry_name(0), queue / _entry_name(1)
+    for entry in (old, young):
+        entry.write_text("", encoding="utf-8")
+    long_ago = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(old, (long_ago, long_ago))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    monkeypatch.setattr(mod, "time", _SkewedClock(offset))
+    with pytest.raises(FileLockTimeout) as exc:
+        with file_lock(target, timeout=0.3):
+            pass
+    # The young entry still holds its place; the old one does not.
+    assert exc.value.ahead == 1, str(exc.value)
+    young.unlink()
+    with file_lock(target, timeout=0.3):
+        pass
+
+
+def test_an_aged_out_entry_is_reported_once_and_the_fast_path_returns(
+    tmp_path, monkeypatch, caplog
+):
+    """Nobody can delete it, so it must be named, once, and not slow every lock."""
+    import logging
+
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    stuck = queue / _entry_name(0)
+    stuck.write_text("", encoding="utf-8")
+    long_ago = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(stuck, (long_ago, long_ago))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    joins = []
+    real_join = mod._join_queue
+    monkeypatch.setattr(mod, "_join_queue", lambda *a: joins.append(1) or real_join(*a))
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            with file_lock(target, timeout=0.5):
+                pass
+    warnings = [r for r in caplog.records if str(stuck) in r.getMessage()]
+    assert len(warnings) == 1
+    assert "delete it" in warnings[0].getMessage()
+    assert joins == [1], "later locks queued behind an entry known to be dead"
+
+    def wait_briefly():
+        # Queue behind the holder, past the stale entry.
+        monkeypatch.setattr(mod, "_may_be_waiting", lambda path: True)
+        with pytest.raises(FileLockTimeout) as exc:
+            with file_lock(target, timeout=0.1):
+                pass
+        return exc.value
+
+    error = _held_elsewhere(target, wait_briefly)
+    assert str(stuck) in str(error)
+    assert "delete it." in str(error)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
