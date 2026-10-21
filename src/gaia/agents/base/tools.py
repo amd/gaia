@@ -339,6 +339,18 @@ def tool(
         return decorator
 
 
+def bare_tool_name(tool_name: str) -> str:
+    """Return *tool_name* without its ``<skill-name>/`` namespace.
+
+    A skill's tools register as ``<skill>/<tool>`` (``rss-digest/fetch_rss``).
+    Checks that classify a tool by name — the confirmation set, "does this
+    write a file" — read the bare name, so a skill tool called ``write_file``
+    is held to the same rule as the core ``write_file``. Core and MCP names
+    carry no ``/`` and come back unchanged.
+    """
+    return tool_name.rpartition("/")[2]
+
+
 def get_tool_display_name(tool_name: str) -> str:
     """Return the display name for a tool, resolving MCP namespacing.
 
