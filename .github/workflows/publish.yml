@@ -670,14 +670,27 @@ jobs:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum
 
-      # Stamped with the RELEASE TAG, not the branch name: `gaia version` is the
-      # first thing asked for in a bug report, and "main" tells nobody which
-      # build they are on.
+      # Go links no Windows resource unless a .syso sits beside the main
+      # package, so without this the .exe has no icon and a blank Details tab.
+      # Same script and version as tui_installers.yml, so this copy and the one
+      # inside the Windows setup describe themselves the same way.
+      - name: Generate Windows resources (icon + version)
+        if: matrix.goos == 'windows'
+        working-directory: .
+        env:
+          VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: tui/scripts/gen-winres.sh --version "${VERSION}"
+
+      # Stamped with the release version (0.25.1, or 0.25.1-rc.2 for an RC), not
+      # the branch name: `gaia version` is the first thing asked for in a bug
+      # report, and "main" tells nobody which build they are on. No `v`, to
+      # match tui_installers.yml's builds of the same release.
       - name: Build
         env:
           CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
@@ -689,11 +702,23 @@ jobs:
           # runner's absolute paths out of the binary.
           DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           go build -trimpath -ldflags="-s -w \
-            -X ${PKG}.version=${{ needs.validate.outputs.tag_name }} \
+            -X ${PKG}.version=${VERSION} \
             -X ${PKG}.commit=${{ github.sha }} \
             -X ${PKG}.date=${DATE}" \
             -o ../release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
+
+      # Reads the linked binary's PE resource directory: the linker silently
+      # drops a .syso whose GOARCH suffix does not match, so only the shipped
+      # bytes prove the icon and version are there.
+      - name: Verify the Windows binary carries its icon and version
+        if: matrix.goos == 'windows'
+        working-directory: .
+        env:
+          VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: |
+          python3 util/check_pe_resources.py --expect-version "${VERSION}" \
+            "release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
 
       - name: Upload
         uses: actions/upload-artifact@v7
@@ -762,12 +787,16 @@ jobs:
     # rc-windows-setup is waited for, not required: its own timeouts bound the
     # wait, it is skipped on a final, and a failure is reported by
     # rc-windows-setup-missing rather than by holding back the pre-release.
+    # build-tui IS required: install.sh / install.ps1 download these binaries
+    # from the latest release, so one missing leg breaks installs on that
+    # platform until the next release.
     needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup, rc-flagship]
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
+      needs.build-tui.result == 'success' &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     permissions:
@@ -880,6 +909,18 @@ jobs:
 
           The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
 
+          ### One-line installer
+
+          Installs this candidate's Python CLI, terminal and GAIA agent together:
+
+          ```bash
+          curl -fsSL https://amd-gaia.ai/install.sh | GAIA_RELEASE_TAG=@TAG_NAME@ sh
+          ```
+
+          ```powershell
+          $env:GAIA_RELEASE_TAG = "@TAG_NAME@"; irm https://amd-gaia.ai/install.ps1 | iex
+          ```
+
           ### Python CLI
 
           ```bash
@@ -918,10 +959,23 @@ jobs:
 
       # A checksum file is what lets install.sh verify what it downloaded. A
       # binary published without one can only be trusted blindly.
+      # Exactly these six, the build-tui matrix: install.sh and install.ps1
+      # refuse a binary with no checksum line, so a missing one is a broken
+      # install for that platform.
       - name: Checksum TUI binaries
         run: |
+          set -euo pipefail
           cd release-assets
-          sha256sum gaia-* > gaia-tui-SHA256SUMS.txt
+          expected=(gaia-linux-amd64 gaia-linux-arm64 gaia-darwin-amd64 gaia-darwin-arm64 gaia-windows-amd64.exe gaia-windows-arm64.exe)
+          missing=()
+          for f in "${expected[@]}"; do
+            [ -s "${f}" ] || missing+=("${f}")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::the release is missing terminal binaries: ${missing[*]}. install.sh / install.ps1 fetch these from the latest release, so it must not ship without them. Re-run the failed 'Build TUI binary' leg, then this job."
+            exit 1
+          fi
+          sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
 
       # After the checksum step, which covers the terminal binaries only.

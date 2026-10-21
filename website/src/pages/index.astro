@@ -32,11 +32,11 @@ const releaseStats = await getReleaseStats();
 const releaseCandidate = await getReleaseCandidate();
 const npmStats = await getNpmDownloadStats();
 
-// The release count includes the site's own download buttons, which link
-// GitHub release assets. It still leaves out installs that never touch GitHub —
-// install.sh / install.ps1, `gaia init` and `gaia hub install` fetch from
-// hub.amd-gaia.ai (R2), and pip and npm have their own registries — so it is
-// labelled as release downloads, not installs. See
+// The release count includes the site's own download buttons and the terminal
+// binary install.sh / install.ps1 fetch, all GitHub release assets. It still
+// leaves out installs that never touch GitHub — `gaia init` and `gaia hub
+// install` fetch agents from hub.amd-gaia.ai (R2), and pip and npm have their
+// own registries — so it is labelled as release downloads, not installs. See
 // docs/plans/website-admin-dashboard.md for the all-source count.
 const STATS = [
   { value: formatCount(repoStats.stars), label: 'GitHub stars' },
