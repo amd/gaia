@@ -38,6 +38,7 @@ from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectorsError,
     NoDeclaredScopesError,
     ScopeMismatchError,
@@ -418,6 +419,10 @@ def list_connections() -> List[Dict[str, Any]]:
     derive it at connect time (Microsoft, from the id_token ``tid`` claim,
     #2466), and ``None`` otherwise — including for every Google connection,
     which has no equivalent notion.
+
+    A row with ``"error": "busy"`` is a connection another GAIA process is
+    writing right now: it is kept, with its metadata as last read, because
+    it is not known to be gone. Asking again shortly gives its real state.
     """
     out: List[Dict[str, Any]] = []
     for provider in _store_list():
@@ -437,9 +442,21 @@ def list_connections() -> List[Dict[str, Any]]:
                 }
             )
             continue
+        except ConnectionBusyError as e:
+            out.append(
+                {
+                    "provider": provider,
+                    "account_email": "",
+                    "scopes": [],
+                    "connected_at": None,
+                    "account_type": None,
+                    **(e.connection or {}),
+                    "error": "busy",
+                }
+            )
+            continue
         except AuthRequiredError:
-            # Tripwire fired (hash OR tenant): cleared, or left in place while
-            # another process holds the lock. Skip either way.
+            # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
             continue
         if blob is None:
             continue
@@ -456,7 +473,11 @@ def list_connections() -> List[Dict[str, Any]]:
 
 
 def get_connection(provider: str) -> Optional[Dict[str, Any]]:
-    """Return one connection's metadata, or None if missing."""
+    """Return one connection's metadata, or None if missing.
+
+    A connection another process is writing comes back as its busy row (see
+    :func:`list_connections`), never as None.
+    """
     for entry in list_connections():
         if entry["provider"] == provider:
             return entry
@@ -811,9 +832,16 @@ def tripwire_check() -> None:
         except ConfigurationError as e:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
-        except AuthRequiredError as e:
-            # Cleared, or left in place while another process holds the lock.
-            logger.info("tripwire: provider %s tripwire fired: %s", provider_id, e)
+        except ConnectionBusyError:
+            logger.info(
+                "tripwire: provider %s is being saved by another GAIA process; "
+                "left in place",
+                provider_id,
+            )
+        except AuthRequiredError:
+            # Tripwire fired (hash OR tenant) — load_connection already
+            # cleared the entry; nothing else to do here.
+            logger.info("tripwire: provider %s entry cleared by tripwire", provider_id)
         except Exception as e:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)
 

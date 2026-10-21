@@ -46,6 +46,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -268,6 +269,17 @@ class ConnectionForwarder:
             token, expires_at = self._mint(
                 provider=provider, scopes=required, agent_id=grant_agent_id
             )
+        except ConnectionBusyError as e:
+            # Another process is mid-save: the connection is not known to be
+            # gone, so the sidecar keeps its forward until the next refresh.
+            logger.warning(
+                "forward-out: '%s' for agent '%s' is busy (%s); retaining any "
+                "existing forward for the next refresh",
+                provider,
+                agent_id,
+                e,
+            )
+            raise
         except (AuthRequiredError, ConnectionRevokedError, ConfigurationError) as e:
             # A revoked / not-connected mint is loud here; also withdraw any
             # stale token already on the sidecar so it cannot keep running on it.

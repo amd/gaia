@@ -226,6 +226,25 @@ class ConnectionRevokedError(ConnectorsError):
         )
 
 
+class ConnectionBusyError(ConnectorsError):
+    """Another GAIA process is writing this connection right now; retry.
+
+    Transient: the connection is NOT known to be gone, so callers must not
+    treat it like ``AuthRequiredError`` (no reconnect prompt, no 401, no
+    withdrawn forward). ``connection`` is the stored connection's metadata
+    as last read (never its tokens), or ``None`` if it could not be read.
+    """
+
+    def __init__(self, provider: str, *, connection: dict | None = None):
+        self.provider = provider
+        self.connection = connection
+        super().__init__(
+            f"The {provider} connection is being saved by another GAIA process "
+            "right now, so it was left as is. Retry in a moment; if this keeps "
+            "happening, look for a stuck `gaia daemon` or Agent UI process."
+        )
+
+
 class ScopeMismatchError(ConnectorsError):
     """Stored connection lacks scopes required by the request."""
 

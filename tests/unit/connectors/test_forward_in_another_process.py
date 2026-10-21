@@ -29,7 +29,7 @@ import pytest
 import respx
 
 from gaia.connectors import _refresh_lock, tokens
-from gaia.connectors.errors import AuthRequiredError
+from gaia.connectors.errors import AuthRequiredError, ConnectionBusyError
 from gaia.connectors.providers import _registry
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.providers.google import GoogleOAuthProvider
@@ -274,24 +274,90 @@ def test_a_forward_landing_after_an_empty_read_is_not_deleted(
     assert _stored_refresh_token() == "forwarded-refresh"
 
 
-def test_a_mismatch_is_not_cleared_while_another_process_holds_the_lock(
-    connected_under_old_client, lock_held_elsewhere
-):
-    from gaia.connectors.api import _authorize_access, get_connection
-
+@pytest.fixture
+def busy_mismatch(connected_under_old_client, lock_held_elsewhere):
+    """A connection that mismatches the configured client, while another
+    process holds its lock — mid-save, so not known to be gone."""
     _written_by_another_process()
     save_provider_credentials("google", client_id="third.apps.example")
+    return lock_held_elsewhere
 
-    with pytest.raises(AuthRequiredError, match="left in place"):
+
+def _busy_error():
+    from gaia.connectors.api import _authorize_access
+
+    with pytest.raises(ConnectionBusyError) as exc:
         _authorize_access(
             provider="google", scopes=[GMAIL], agent_id=None, account_email="default"
         )
-    assert get_connection("google") is None
+    return exc.value
+
+
+def test_a_busy_connection_is_not_reported_as_disconnected(busy_mismatch):
+    from gaia.connectors.formatting import format_connector_error
+    from gaia.ui.routers.connectors import _raise_http_for
+
+    err = _busy_error()
+
+    tool_text = format_connector_error(err)
+    assert tool_text.startswith("CONNECTION_BUSY:")
+    assert "Retry" in tool_text and "click Connect" not in tool_text
+    http = _raise_http_for(err)
+    assert http.status_code == 503
+    assert http.detail["error"] == "connection_busy"
+    assert http.headers["Retry-After"] == "1"
     assert _stored_refresh_token() == "forwarded-refresh"
 
-    _release(lock_held_elsewhere)
+
+def test_the_listing_keeps_a_busy_connection_then_clears_it_once_free(
+    busy_mismatch,
+):
+    from gaia.connectors.api import get_connection
+
+    row = get_connection("google")
+    assert row["error"] == "busy"
+    assert row["scopes"] == [GMAIL]
+    assert row["account_email"] == "alice@example.com"
+    assert "refresh_token" not in row
+    assert _stored_refresh_token() == "forwarded-refresh"
+
+    _release(busy_mismatch)
     assert get_connection("google") is None
     assert _stored_refresh_token() is None
+
+
+def test_the_daemon_keeps_its_forward_while_the_connection_is_busy(busy_mismatch):
+    from gaia.connectors.api import _authorize_access
+    from tests.unit.test_daemon_forward import _forwarder
+
+    def mint(*, provider, scopes, agent_id):
+        _authorize_access(
+            provider=provider, scopes=scopes, agent_id=None, account_email="default"
+        )
+        return ("token", 1_900_000_000.0)
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": [GMAIL]}}, mint=mint)
+    with pytest.raises(ConnectionBusyError):
+        fwd.forward_provider(
+            "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+        )
+
+    assert http.deletes == [], "withdrew a forward that is still valid"
+    assert http.posts == []
+
+
+def test_an_unreadable_connection_is_busy_while_another_process_writes_it(
+    monkeypatch, connected_under_old_client, lock_held_elsewhere
+):
+    from gaia.connectors.api import list_connections
+
+    monkeypatch.setattr(tokens, "peek_connection", lambda *_a, **_k: None)
+
+    rows = list_connections()
+
+    assert [(r["provider"], r["error"]) for r in rows] == [("google", "busy")]
+    monkeypatch.undo()
+    assert _stored_refresh_token() == "old-refresh"
 
 
 def test_a_forward_saves_its_client_only_under_the_lock(

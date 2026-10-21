@@ -53,6 +53,7 @@ from gaia.connectors.api import resolve_declared_scopes
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ConsentDeniedError,
@@ -253,6 +254,16 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
                 "error": "unknown_connector",
                 "connector_id": exc.connector_id,
             },
+        )
+    if isinstance(exc, ConnectionBusyError):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "error": "connection_busy",
+                "connector_id": exc.provider,
+                "message": str(exc),
+            },
+            headers={"Retry-After": "1"},
         )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
