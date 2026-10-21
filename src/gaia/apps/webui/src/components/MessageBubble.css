@@ -60,6 +60,11 @@
 .msg:hover .msg-actions,
 .msg:focus-within .msg-actions { opacity: 1; }
 
+/* The actions hang below the message, over the next one; lift the message
+ * being used so they stay clickable instead of the next message taking the click. */
+.msg:hover,
+.msg:focus-within { z-index: 1; }
+
 .msg-action-btn,
 .msg-copy {
     display: flex;
