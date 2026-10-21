@@ -770,9 +770,11 @@ class SSEOutputHandler(OutputHandler):
                     data,
                 )
                 data = {}
-            # No arguments to describe: keep the tool_start label, don't blank it.
+            # A call with no arguments keeps the tool_start label, not a blank.
             detail = (
-                _format_tool_args(self._last_tool_name, data) or self._last_tool_label
+                _format_tool_args(self._last_tool_name, data)
+                if data
+                else self._last_tool_label
             )
             self.turn_ledger.tool_args(data)
             self._emit(

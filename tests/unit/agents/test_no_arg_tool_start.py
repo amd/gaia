@@ -175,6 +175,20 @@ def test_empty_arguments_are_a_tool_args_event_not_a_result(args):
     assert (call["tool"], call["args"]) == ("list_directory", {})
 
 
+def test_arguments_with_only_empty_values_are_not_given_the_tool_label():
+    handler = SSEOutputHandler()
+    handler.print_tool_usage("list_directory")
+    handler.pretty_print_json(
+        {"recursive": False, "pattern": "", "depth": None}, "Arguments"
+    )
+
+    start, args = _drain(handler)
+    assert start["detail"] != ""
+    # The call had arguments; its label is not a summary of them.
+    assert args["detail"] == ""
+    assert args["args"] == {"recursive": False, "pattern": "", "depth": None}
+
+
 @pytest.mark.parametrize("args", [{}, None], ids=["empty", "none"])
 def test_the_terminal_shows_no_panel_for_a_call_without_arguments(args):
     from gaia.agents.base.console import AgentConsole
