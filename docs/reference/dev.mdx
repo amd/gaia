@@ -371,8 +371,8 @@ legs still only get exercised in CI.
 
 The harness runs on **bogus** credentials against a local Worker, so it proves
 the publish logic and nothing about whether the real key works. Every artifact
-over the Worker's request-body cap — the Agent UI installers, the gaia sidecar's
-Linux build — is PUT straight to R2 instead, and R2 answers both a bad
+over the Worker's request-body cap — today the flagship agent's sidecar
+builds — is PUT straight to R2 instead, and R2 answers both a bad
 credential and a malformed request with the same `Unauthorized`:
 
 ```bash
@@ -392,8 +392,8 @@ Client IP Address Filtering passes locally and fails in CI.
 
 ### The flagship agent in a core release
 
-`gaia init` and the Windows setup install the flagship
-agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
+`gaia init`, the one-line installers (`install.sh` / `install.ps1`) and the
+Windows setup install the flagship agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
 `hub/agents/gaia/npm/binaries.lock.json`. Only `release_agent_gaia.yml` (tag
 `agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
 A final core release therefore fails unless that flagship release was cut from

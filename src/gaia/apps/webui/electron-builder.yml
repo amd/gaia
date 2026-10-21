@@ -97,7 +97,8 @@ afterPack: ../../../../installer/scripts/after-pack.cjs
 #
 # NOTE (#1719): the R2 publish feed + Worker `latest*.yml` channel pointer are
 # milestone-52 work and not live yet; the exact channel path under
-# hub.amd-gaia.ai is finalized there.
+# hub.amd-gaia.ai is finalized there. Nothing uploads the desktop app to R2
+# today: its installers and latest*.yml ship on the GitHub release only.
 publish:
   provider: generic
   url: https://hub.amd-gaia.ai/updates
