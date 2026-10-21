@@ -25,8 +25,10 @@ about to carry on. :func:`monotonic` stops while the PC sleeps:
   that gets no display notifications (no console session: a service, a
   remote logon) can't see standby at all; the monitor says so once at startup.
 * A monitor that dies, fails or stops beating is replaced on the next read,
-  at most :data:`MAX_RESTARTS` times, each logged as an error; after that every
-  read raises :class:`AwakeClockError` telling the user to restart GAIA.
+  at most :data:`MAX_RESTARTS` times, each logged as an error. It also gives up
+  once more than :data:`MAX_WEDGED` replaced monitors never stopped, however
+  far apart their failures. After that every read raises
+  :class:`AwakeClockError` telling the user to restart GAIA.
 * Linux and macOS: ``time.monotonic()``, which already stops during suspend.
 
 Use it for any limit on how long something may take, so a sleep never reads
@@ -40,7 +42,7 @@ import atexit
 import sys
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from gaia.logger import get_logger
 
@@ -59,6 +61,8 @@ MAX_RESTARTS = 3
 HEALTHY_RESET = 600.0
 # Replaced monitors whose threads never stopped; past this many, give up.
 MAX_WEDGED = 2
+# How long a replaced monitor gets to stop before it counts as wedged.
+STOP_WAIT = 2.0
 # Windows sends the current display state on subscribing; this long is too long.
 FIRST_NOTICE_WAIT = 2.0
 
@@ -614,7 +618,7 @@ if sys.platform == "win32":
     _restarts = 0
     _last_problem: Optional[str] = None
     _why_gave_up: Optional[str] = None
-    _wedged: list = []
+    _wedged: List["_StandbyMonitor"] = []
     _shut_down = False
 
     def _gave_up() -> AwakeClockError:
@@ -681,19 +685,11 @@ if sys.platform == "win32":
                     _restarts = 0
                 return _ledger
             _last_problem = problem
-            if _restarts + 1 > MAX_RESTARTS:
-                outcome = "giving up; every time limit now fails with an error"
-            else:
-                outcome = (
-                    "starting a new one; the time since its last beat counts "
-                    "toward limits"
-                )
-            _failure(problem, outcome)
             began = _unbiased()
             # Its time counts, unjudged; then it is told to stop, and forgotten
             # so a failed replacement is retried on the next read.
             _ledger.abandon()
-            _monitor.stop(timeout=0.5)
+            _monitor.stop(timeout=STOP_WAIT)
             if _monitor.alive():
                 _wedged.append(_monitor)
             _monitor = None
@@ -701,12 +697,20 @@ if sys.platform == "win32":
             if wedged > MAX_WEDGED:
                 # Each keeps a thread and a window; no healthy reset frees them.
                 _why_gave_up = f"{wedged} earlier monitors are still stuck"
-                _restarts = MAX_RESTARTS + 1
-                log.error(
-                    "Giving up on the awake-clock standby monitor: %d replaced "
-                    "monitors never stopped.",
-                    wedged,
+                outcome = (
+                    f"giving up: {wedged} replaced monitors never stopped, and "
+                    "every time limit now fails with an error"
                 )
+            elif _restarts + 1 > MAX_RESTARTS:
+                outcome = "giving up; every time limit now fails with an error"
+            else:
+                outcome = (
+                    "starting a new one; the time since its last beat counts "
+                    "toward limits"
+                )
+            _failure(problem, outcome)
+            if _why_gave_up is not None:
+                _restarts = MAX_RESTARTS + 1
             if _restarts > MAX_RESTARTS:
                 raise _gave_up()
             ledger = _start_monitor()

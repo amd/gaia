@@ -796,4 +796,6 @@ def test_monitors_that_never_stop_are_capped(fresh_clock, monkeypatch, caplog):
             awake_clock.monotonic()
         with pytest.raises(awake_clock.AwakeClockError, match="Restart GAIA"):
             awake_clock.monotonic()
-    assert "3 replaced monitors never stopped" in caplog.text
+    [last] = [r.message for r in caplog.records if "never stopped" in r.message]
+    assert "giving up: 3 replaced monitors never stopped" in last
+    assert "starting a new one" not in last
