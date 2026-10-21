@@ -153,3 +153,98 @@ def test_a_real_partial_lock_is_reported_as_file_locked(rag, tmp_path):
             msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 10000)
     assert result["error_type"] == "file_locked"
     assert os.path.exists(doc)
+
+
+def _hash_read_locked(rag, doc, monkeypatch):
+    """Lock the document for every read, the hash read included."""
+    real_open = rag._safe_open
+
+    def _open(path, mode="rb"):
+        if os.path.realpath(path) == os.path.realpath(doc):
+            raise _eacces()
+        return real_open(path, mode)
+
+    monkeypatch.setattr(rag, "_safe_open", _open)
+
+
+def test_a_lock_seen_while_hashing_is_reported_before_any_parser_runs(
+    windows, rag, tmp_path, monkeypatch
+):
+    """A zip parser reports a locked .docx as "not a zip file", hiding the lock."""
+    doc = tmp_path / "report.docx"
+    doc.write_bytes(b"PK\x03\x04 not really a docx")
+    _hash_read_locked(rag, doc, monkeypatch)
+    with patch.object(
+        rag, "_extract_text_from_file", side_effect=ValueError("File is not a zip file")
+    ) as extract:
+        result = rag.index_document(str(doc))
+    assert result["error_type"] == "file_locked"
+    extract.assert_not_called()
+
+
+def test_other_cache_key_callers_still_get_a_path_only_key_for_a_locked_file(
+    windows, rag, doc, monkeypatch
+):
+    _hash_read_locked(rag, doc, monkeypatch)
+    assert rag._content_key(str(doc)).endswith("_notfound")
+
+
+def test_a_lock_is_logged_as_a_warning_not_an_error(
+    windows, rag, doc, monkeypatch, caplog
+):
+    """The file watcher retries a lock; only its final give-up is an error."""
+    real_open = rag._safe_open
+    reads = []
+
+    def _open(path, mode="rb"):
+        reads.append(path)
+        if len(reads) > 1:  # the hash read succeeds, the text read is locked
+            raise _eacces()
+        return real_open(path, mode)
+
+    monkeypatch.setattr(rag, "_safe_open", _open)
+    with caplog.at_level("WARNING"):
+        result = rag.index_document(str(doc))
+    assert result["error_type"] == "file_locked"
+    assert [r for r in caplog.records if r.levelname == "WARNING"]
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def _make(kind, path):
+    if kind == "docx":
+        docx = pytest.importorskip("docx")
+        document = docx.Document()
+        for i in range(200):
+            document.add_paragraph(f"para {i} " * 60)
+        document.save(path)
+    else:
+        pptx = pytest.importorskip("pptx")
+        deck = pptx.Presentation()
+        for i in range(30):
+            slide = deck.slides.add_slide(deck.slide_layouts[1])
+            slide.shapes.title.text = f"slide {i}"
+            slide.placeholders[1].text = f"body {i} " * 80
+        deck.save(path)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows mandatory locks")
+@pytest.mark.parametrize("kind", ["docx", "pptx"])
+@pytest.mark.parametrize("span", ["whole", "partial"])
+def test_a_real_lock_on_an_office_file_is_reported_as_file_locked(
+    rag, tmp_path, kind, span
+):
+    import msvcrt
+
+    doc = tmp_path / f"doc.{kind}"
+    _make(kind, doc)
+    size = os.path.getsize(doc)
+    offset, length = (0, size) if span == "whole" else (size // 3, max(1, size // 10))
+    with open(doc, "r+b") as holder:
+        holder.seek(offset)
+        msvcrt.locking(holder.fileno(), msvcrt.LK_NBLCK, length)
+        try:
+            result = rag.index_document(str(doc))
+        finally:
+            holder.seek(offset)
+            msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, length)
+    assert result["error_type"] == "file_locked", result.get("error")

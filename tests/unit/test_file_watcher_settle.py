@@ -299,6 +299,34 @@ def test_a_new_change_to_a_locked_file_restarts_its_retries(tmp_path):
         handler.close()
 
 
+def test_a_change_queued_during_a_locked_read_is_not_counted_as_a_retry(
+    tmp_path, caplog
+):
+    """The newer change runs on its own; it is not a retry with a back-off."""
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    attempts = []
+
+    def read(path):
+        attempts.append(time.monotonic())
+        if len(attempts) == 1:
+            handler.on_modified(_event(target))  # the writer saved again
+            raise PermissionError(13, "being used by another process", path)
+
+    handler = FileChangeHandler(
+        on_created=read, on_modified=read, extensions=[".txt"], debounce_seconds=0.05
+    )
+    try:
+        with caplog.at_level("WARNING", logger="gaia.utils.file_watcher"):
+            handler.on_created(_event(target))
+            assert handler.wait_idle(30)
+        assert len(attempts) == 2
+        assert "retrying" not in caplog.text
+        assert handler._locked_retries == {}
+    finally:
+        handler.close()
+
+
 def test_deleting_a_locked_file_forgets_its_retries(tmp_path):
     """No delete callback is set, so nothing else would clear the count."""
     target = tmp_path / "locked.txt"

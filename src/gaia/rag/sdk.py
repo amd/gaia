@@ -641,13 +641,18 @@ class RAGSDK:
         )
         return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-    def _content_key(self, file_path: str) -> str:
+    def _content_key(self, file_path: str, raise_locked: bool = False) -> str:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash keeps identical files apart. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
+
+        Raises:
+            PermissionError: With ``raise_locked``, when the read is refused as
+                :func:`held_by_another_program`. Hashing reads every byte, so
+                this sees a lock in any format before a parser misreports it.
         """
         path = Path(file_path).absolute()
         try:
@@ -657,6 +662,8 @@ class RAGSDK:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
         except OSError as e:
+            if raise_locked and held_by_another_program(e):
+                raise
             self.log.warning(f"Cannot read file for cache key: {e}")
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
@@ -1881,7 +1888,8 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            self.log.error(f"Error reading text file {file_path}: {e}")
+            log = self.log.warning if held_by_another_program(e) else self.log.error
+            log(f"Error reading text file {file_path}: {e}")
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -3036,7 +3044,10 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        content_key = self._content_key(file_path)
+        try:
+            content_key = self._content_key(file_path, raise_locked=True)
+        except PermissionError as e:
+            return self._document_locked(stats, file_path, e)
         cache_path = self._get_cache_path(file_path, content_key)
         md_cache_path = self._extracted_markdown_path(content_key)
 
@@ -3408,7 +3419,8 @@ These positions indicate where to split the text."""
         )
         if self.config.show_stats:
             print(f"❌ {message}")
-        self.log.error(f"{message} ({error})")
+        # A warning: the caller gets error_type and decides whether to retry.
+        self.log.warning(f"{message} ({error})")
         stats["error"] = message
         stats["error_type"] = "file_locked"
         return stats
