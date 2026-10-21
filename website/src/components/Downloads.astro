@@ -199,14 +199,17 @@ function primaryRow(platform: PlatformKey): PrimaryRow | null {
       const asset = published(name);
       return asset ? [{ asset, label: l }] : [];
     });
+    const terminal = terminalChoices(tui);
     return {
       platform,
       kind: 'desktop',
       asset: desktop,
       cta: `Download for ${label}`,
       caption: `Desktop app — ${DESKTOP_DOWNLOAD_LABELS[platform]}`,
-      lede: 'The GAIA desktop app: chat, your documents and your files, with every step shown as it runs. The terminal app is under more options.',
-      options: [...extras, ...terminalChoices(tui)],
+      lede:
+        'The GAIA desktop app: chat, your documents and your files, with every step shown as it runs.' +
+        (terminal.length ? ' The terminal app is under more options.' : ''),
+      options: [...extras, ...terminal],
     };
   }
 
