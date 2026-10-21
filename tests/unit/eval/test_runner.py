@@ -16,8 +16,11 @@ Tests cover:
 All file/network/subprocess calls are mocked — no real LLM or Agent UI needed.
 """
 
+import copy
 import json
+import re
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -467,6 +470,159 @@ class TestBuildScenarioPrompt:
             agent_type="gaia-lite",
         )
         assert 'agent_type="gaia-lite"' in prompt
+
+    def _mock_prompt_files(self, monkeypatch):
+        monkeypatch.setattr("gaia.eval.runner._load_simulator_content", lambda: "SIM")
+        monkeypatch.setattr("gaia.eval.runner._load_judge_turn_content", lambda: "TURN")
+        monkeypatch.setattr(
+            "gaia.eval.runner._load_judge_scenario_content", lambda: "SCENARIO"
+        )
+
+    def _pin_today(self, monkeypatch, today, followups=()):
+        """Replace ``date.today`` and count samples. Later calls advance."""
+        queued = (today, *followups)
+        calls = {"n": 0}
+
+        class _PinnedDate(date):
+            @classmethod
+            def today(cls):
+                calls["n"] += 1
+                index = min(calls["n"] - 1, len(queued) - 1)
+                return queued[index]
+
+        monkeypatch.setattr(runner, "date", _PinnedDate)
+        return calls
+
+    def _build(self, scenario):
+        return runner.build_scenario_prompt(
+            scenario, {"documents": []}, "http://localhost:4200"
+        )
+
+    @staticmethod
+    def _scenario_yaml_block(prompt):
+        marker = "## SCENARIO\n```yaml\n"
+        start = prompt.index(marker) + len(marker)
+        end = prompt.index("\n```", start)
+        return prompt[start:end]
+
+    def _load_reminder_scenario(self):
+        path = runner.SCENARIOS_DIR / "memory" / "memory_reminder_management.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        validate_scenario(path, data)
+        return data
+
+    def test_reminder_deadline_resolves_from_eval_date(self, monkeypatch):
+        self._mock_prompt_files(monkeypatch)
+        self._pin_today(monkeypatch, date(2026, 10, 21))
+        scenario = self._load_reminder_scenario()
+        source = yaml.dump(scenario, default_flow_style=False)
+        assert "{{eval_today}}" in source
+        assert "{{eval_today_plus_14_days}}" in source
+        assert "April" not in source
+
+        block = self._scenario_yaml_block(self._build(scenario))
+        parsed = yaml.safe_load(block)
+        assert "{{" not in block
+        assert "April" not in block
+        assert "2026-04" not in block
+        dates = {
+            date.fromisoformat(match)
+            for match in re.findall(r"\d{4}-\d{2}-\d{2}", block)
+        }
+        assert dates == {date(2026, 10, 21), date(2026, 11, 4)}
+
+        for turn in parsed["turns"]:
+            text = " ".join(
+                [
+                    turn["objective"],
+                    turn["user_message"],
+                    turn["ground_truth"]["expected_answer"],
+                    turn["success_criteria"],
+                ]
+            )
+            assert "2026-10-21" in text
+            assert "2026-11-04" in text
+
+        turn3 = parsed["turns"][2]
+        assert turn3["turn"] == 3
+        assert "14 calendar days" in turn3["ground_truth"]["expected_answer"]
+        assert "14 calendar days" in turn3["success_criteria"]
+
+    @pytest.mark.parametrize("today", [date(2026, 12, 25), date(2028, 2, 20)])
+    def test_reminder_deadline_is_fourteen_calendar_days(self, monkeypatch, today):
+        self._mock_prompt_files(monkeypatch)
+        self._pin_today(monkeypatch, today)
+        block = self._scenario_yaml_block(self._build(self._load_reminder_scenario()))
+        parsed = yaml.safe_load(block)
+        dates = {
+            date.fromisoformat(match)
+            for match in re.findall(r"\d{4}-\d{2}-\d{2}", block)
+        }
+        assert dates == {today, today + timedelta(days=14)}
+        assert max(dates) - min(dates) == timedelta(days=14)
+        assert parsed["turns"][2]["turn"] == 3
+        assert "14 calendar days" in parsed["turns"][2]["success_criteria"]
+        assert "{{" not in block
+
+    def test_each_prompt_samples_today_once_without_mutating_scenario(
+        self, monkeypatch
+    ):
+        self._mock_prompt_files(monkeypatch)
+        scenario = self._load_reminder_scenario()
+        snapshot = copy.deepcopy(scenario)
+
+        # Second sample would be the next calendar day, as if midnight passed
+        # between two date.today() calls inside one prompt build.
+        first = self._pin_today(
+            monkeypatch, date(2026, 10, 21), followups=(date(2026, 10, 22),)
+        )
+        first_block = self._scenario_yaml_block(self._build(scenario))
+        assert first["n"] == 1
+        assert "2026-10-21" in first_block
+        assert "2026-11-04" in first_block
+        assert "2026-10-22" not in first_block
+        assert scenario == snapshot
+
+        second = self._pin_today(monkeypatch, date(2026, 5, 1))
+        second_block = self._scenario_yaml_block(self._build(scenario))
+        second_dates = {
+            date.fromisoformat(match)
+            for match in re.findall(r"\d{4}-\d{2}-\d{2}", second_block)
+        }
+        assert second["n"] == 1
+        assert second_dates == {date(2026, 5, 1), date(2026, 5, 15)}
+        assert "2026-11-04" not in second_block
+        assert scenario == snapshot
+        assert "{{eval_today}}" in yaml.dump(scenario, default_flow_style=False)
+
+    def test_unrelated_scenario_braces_and_historical_dates_unchanged(
+        self, monkeypatch
+    ):
+        self._mock_prompt_files(monkeypatch)
+        self._pin_today(monkeypatch, date(2099, 1, 1))
+        scenario = {
+            "id": "historical_braces",
+            "category": "rag",
+            "turns": [
+                {
+                    "turn": 1,
+                    "objective": "Read the April 1, 2024 report",
+                    "user_message": (
+                        'Payload {"year": 2024} and template {name} '
+                        "plus {{not_eval}} from 2024-04-01"
+                    ),
+                    "ground_truth": {"expected_answer": "Filed April 1, 2024"},
+                    "success_criteria": "Keep {braces} and the 2024-04-01 date",
+                }
+            ],
+        }
+        expected = yaml.dump(scenario, default_flow_style=False)
+        block = self._scenario_yaml_block(self._build(scenario))
+        assert block == expected
+        assert "2099-01-01" not in block
+        assert "April 1, 2024" in block
+        assert "{{not_eval}}" in block
+        assert '{"year": 2024}' in block
 
 
 # ---------------------------------------------------------------------------
