@@ -165,8 +165,9 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "real_lemonade: let a unit test spawn or kill a real Lemonade server "
-        "and keep the caller's LEMONADE_BASE_URL",
+        "real_lemonade: keep the caller's LEMONADE_BASE_URL; with "
+        "GAIA_TEST_ALLOW_REAL_LEMONADE=1 also let the test spawn or kill a "
+        "real Lemonade server",
     )
 
 
@@ -289,10 +290,8 @@ def _lemonade_process_name(pid) -> "str | None":
 
 
 def _real_lemonade_allowed() -> bool:
-    return (
-        os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) == "1"
-        or _REAL_LEMONADE_ALLOWED["current_test"]
-    )
+    """Only a marked test, run with the opt-in env var, and never between tests."""
+    return _REAL_LEMONADE_ALLOWED["current_test"]
 
 
 def _refuse_real_lemonade(action: str) -> None:
@@ -390,17 +389,31 @@ def _forbid_real_lemonade_all_session():
 def _forbid_real_lemonade(request, monkeypatch):
     """Point unit tests at an unroutable Lemonade, and fail one that reaches a real one.
 
-    Opt out with @pytest.mark.real_lemonade (or integration / real_model).
+    A @pytest.mark.real_lemonade (or integration / real_model) test keeps the
+    caller's LEMONADE_BASE_URL; it may also spawn or kill a real Lemonade only
+    when GAIA_TEST_ALLOW_REAL_LEMONADE=1 is set as well.
     """
     opted_in = any(request.node.get_closest_marker(m) for m in _REAL_LEMONADE_MARKERS)
     if not opted_in and os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) != "1":
         monkeypatch.setenv("LEMONADE_BASE_URL", _UNROUTABLE_LEMONADE_URL)
         monkeypatch.delenv("LEMONADE_HOST", raising=False)
         monkeypatch.delenv("LEMONADE_PORT", raising=False)
-    _REAL_LEMONADE_ALLOWED["current_test"] = opted_in
+    _REAL_LEMONADE_ALLOWED["current_test"] = (
+        opted_in and os.environ.get(_REAL_LEMONADE_OPT_IN_ENV) == "1"
+    )
     before = len(_REAL_LEMONADE_ATTEMPTS)
     yield
     _REAL_LEMONADE_ALLOWED["current_test"] = False
     caught = _REAL_LEMONADE_ATTEMPTS[before:]
     if caught:
         pytest.fail(_REAL_LEMONADE_MESSAGE.format(action=caught[0][1]), pytrace=False)
+
+
+@pytest.fixture
+def gaia_owned_lemonade(monkeypatch):
+    """Unset the guard's LEMONADE_BASE_URL for a test of GAIA running its own server.
+
+    A set LEMONADE_BASE_URL means "the user's server", which GAIA never starts.
+    The spawn/kill guard and the network block stay on.
+    """
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)

@@ -219,3 +219,40 @@ def test_the_unit_suite_points_lemonade_at_an_unroutable_address():
     assert os.environ["LEMONADE_BASE_URL"] == "http://127.0.0.1:1"
     assert "LEMONADE_HOST" not in os.environ
     assert "LEMONADE_PORT" not in os.environ
+
+
+def test_a_launcher_that_handed_off_to_a_service_is_not_stopped(kill_paths, caplog):
+    """`systemctl --user start lemond` exits at once; the service is not ours."""
+    client = LemonadeClient(host="localhost", port=1, verbose=False)
+    _launch(client, [sys.executable, "-c", "import time; time.sleep(1)"])
+    client.server_process.wait(timeout=15)
+    with caplog.at_level("INFO", logger="gaia.llm.lemonade_client"):
+        client.close()
+    _assert_nothing_killed(kill_paths)
+    assert "launcher" in caplog.text and "already exited" in caplog.text
+    assert client.server_process is None
+
+
+@pytest.mark.real_lemonade
+def test_the_marker_alone_does_not_lift_the_spawn_guard(monkeypatch):
+    monkeypatch.delenv("GAIA_TEST_ALLOW_REAL_LEMONADE", raising=False)
+    attempts = _guard_attempts()
+    before = len(attempts)
+    try:
+        with pytest.raises(RuntimeError, match="real Lemonade server"):
+            subprocess.Popen(["LemonadeServer.exe", "--silent"])
+    finally:
+        del attempts[before:]
+
+
+def test_gaia_owned_lemonade_drops_the_url_but_keeps_the_spawn_guard(
+    gaia_owned_lemonade,
+):
+    assert "LEMONADE_BASE_URL" not in os.environ
+    attempts = _guard_attempts()
+    before = len(attempts)
+    try:
+        with pytest.raises(RuntimeError, match="real Lemonade server"):
+            subprocess.Popen(["lemond", "./", "--port", "1"])
+    finally:
+        del attempts[before:]

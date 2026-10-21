@@ -3812,6 +3812,14 @@ class LemonadeClient:
                     )
                 return
             atexit.unregister(owned.stop_at_exit)
+            if not owned.is_alive():
+                # e.g. `systemctl --user start lemond` exits once the service runs.
+                self.log.info(
+                    f"Not stopping the Lemonade server: its launcher (PID "
+                    f"{owned.pid}) already exited, so the server is not this "
+                    "client's to stop. Stop it with `gaia kill` if you need to."
+                )
+                return
             self.log.info(f"Terminating Lemonade server (PID {owned.pid})...")
             owned.kill_tree(self.log)
             self.log.info("Lemonade server terminated")
