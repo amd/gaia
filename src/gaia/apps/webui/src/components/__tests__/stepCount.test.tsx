@@ -3,8 +3,8 @@
 
 /**
  * "N steps" is the agent's own step count, the figure the TUI and evals report.
- * Thinking, plan, and tool rows are not steps: one turn showed "23 steps" for a
- * 10-step turn, and another turn's final answering step had no row at all.
+ * Thinking, plan, and tool rows are not steps: a 10-step turn showed "23 steps",
+ * and another turn's final answering step had no row at all.
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
