@@ -591,7 +591,9 @@ def catalog(
         )
 
         # Named with f.npm for both flavors; a candidate's .deb/.rpm carry
-        # X.Y.Z~rc.N inside, which the build's own smoke test checks.
+        # X.Y.Z~rc.N inside, which the build's own smoke test checks. A
+        # candidate needs all four (publish.yml's rc-tui-complete), so its
+        # Intel .pkg is required even though the Intel agent is best-effort.
         for platform, label in (
             ("darwin-arm64", "macos"),
             ("darwin-x64", "macos"),
@@ -606,7 +608,7 @@ def catalog(
                         _find(art, f"{p}-tui-installers-{label}", n),
                         f.npm,
                         [_gh(f)],
-                        required=platform in rc_assets.REQUIRED_PLATFORMS,
+                        required=p == "rc" or platform in rc_assets.REQUIRED_PLATFORMS,
                     )
                 )
 

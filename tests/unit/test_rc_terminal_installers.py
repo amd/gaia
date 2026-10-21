@@ -117,6 +117,7 @@ def test_the_attach_job_runs_for_an_rc_after_its_prerelease_exists(publish):
     job = publish[ATTACH_JOB]
     assert IS_RC in job["if"]
     assert "needs.github-release.result == 'success'" in job["if"]
+    assert "needs.rc-tui-complete.result == 'success'" in job["if"]
     assert job["permissions"] == {"contents": "write"}
     assert "environment" not in job
     (download,) = [

@@ -212,6 +212,8 @@ def build_art(
             ("darwin-x64", "macos"),
             ("linux-x64", "linux"),
         ):
+            if skip_intel_sidecar and platform == "darwin-x64":
+                continue  # no agent, so tui_installers.yml builds no Intel .pkg
             for n, _ in artifacts_for(platform, f.npm):
                 _write(art / f"{p}-tui-installers-{label}" / n, b"pkg " + p.encode())
 
@@ -312,8 +314,12 @@ def test_a_missing_best_effort_sidecar_drops_its_lock_entry(tmp_path, flavors):
     lock = json.loads((flagship / "binaries.lock.json").read_text())
     assert "darwin-x64" not in lock["components"]["sidecar"]["platforms"]
     report = run_verify(tmp_path, art, flagship)
-    assert report.errors == []
     assert any("gaia-agent-darwin-x64" in w for w in report.warnings)
+    # The final ships without its Intel .pkg; a candidate does not ship at all.
+    final_pkg = artifacts_for("darwin-x64", flavors[1].npm)[0][0]
+    rc_pkg = artifacts_for("darwin-x64", flavors[0].npm)[0][0]
+    assert any(final_pkg in w for w in report.warnings)
+    assert len(report.errors) == 1 and rc_pkg in report.errors[0]
 
 
 def test_a_missing_required_sidecar_refuses_to_lock(tmp_path, flavors):

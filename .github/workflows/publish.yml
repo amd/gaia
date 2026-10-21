@@ -1138,7 +1138,8 @@ jobs:
     if: >-
       !cancelled() &&
       needs.validate.outputs.is_rc == 'true' &&
-      needs.github-release.result == 'success'
+      needs.github-release.result == 'success' &&
+      needs.rc-tui-complete.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
