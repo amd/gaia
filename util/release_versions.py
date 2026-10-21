@@ -130,6 +130,20 @@ TARGETS: tuple[Target, ...] = (
         _GAIA_FLOOR,
         "core-floor",
     ),
+    # hub/agents/gaia/python/tests/test_npm_doc_min_version.py pins these to
+    # min_gaia_version. Its CHANGELOG line is hand-written per release entry.
+    Target(
+        "hub/agents/gaia/npm/README.md",
+        "minimum core",
+        re.compile(r"(Python CLI \*\*)(\d+\.\d+\.\d+)( or newer\*\*)"),
+        "core-floor",
+    ),
+    Target(
+        "hub/agents/gaia/npm/SKILL.md",
+        "minimum core",
+        re.compile(r"(must also be \*\*)(\d+\.\d+\.\d+)(\+\*\*)"),
+        "core-floor",
+    ),
     Target(CHAT_PYPROJECT, "amd-gaia floor", _GAIA_FLOOR, "core-floor"),
     Target(
         "hub/agents/chat/python/gaia-agent.yaml",

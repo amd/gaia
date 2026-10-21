@@ -222,7 +222,9 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    - the Agent UI's `package.json` and lockfile (formerly `bump-ui-version.mjs`);
    - both hub component manifests' `version` (`hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml`). `release_components.yml` gates the tag against each, and R2 paths are immutable, so a mismatch **fails the release** by design;
    - the `docs.json` navbar label, `v<version> · Lemonade <LEMONADE_VERSION>`. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs;
-   - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`.
+   - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
+
+   Two consequences of the floors moving. The flagship's next `npm/CHANGELOG.md` entry must quote the new minimum (``Python CLI <version>+ on `PATH` ``): `test_npm_doc_min_version.py` reads the first such line, and the stamp never edits a past entry. And the floors live in files the flagship binary is frozen from, so a final needs a flagship release cut from this commit (Phase 3, step 4).
 
    It leaves the flagship and chat agents' own versions alone: they follow their own sources until they join core's (#5172). Two `HELD` lines, the chat agent's `__init__.py` and the flagship npm lockfile's root version, are known drift held for the same reason. They print but don't fail.
 

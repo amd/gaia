@@ -389,7 +389,7 @@ python util/release_versions.py --check   # what lint runs; changes nothing
 
 | Source | Fields that follow it |
 |---|---|
-| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version` |
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
 | `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
 | `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
 
