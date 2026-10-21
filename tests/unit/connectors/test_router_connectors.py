@@ -143,7 +143,7 @@ class TestConfigurableField:
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
         from gaia.connectors.providers import _registry
 
-        _registry.pop("google", None)
+        monkeypatch.delitem(_registry, "google", raising=False)
 
         resp = ui_api_client.get("/api/connectors/google")
         assert resp.status_code == 200
@@ -155,7 +155,7 @@ class TestConfigurableField:
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
         from gaia.connectors.providers import _registry
 
-        _registry.pop("google", None)
+        monkeypatch.delitem(_registry, "google", raising=False)
 
         resp = ui_api_client.get("/api/connectors/google")
         body = resp.json()
@@ -356,7 +356,16 @@ class TestAuthorizeGrantAgents:
         assert kwargs["grant_agents"] is None
 
     @pytest.mark.allow_network
-    def test_authorize_explicit_scope_outside_catalog_is_rejected(self, ui_api_client):
+    def test_authorize_explicit_scope_outside_catalog_is_rejected(
+        self, ui_api_client, monkeypatch
+    ):
+        # A configured client, so the request reaches the scope check rather
+        # than the "client not configured" 503 that comes first.
+        from gaia.connectors.providers import _registry
+
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "test-secret")
+        monkeypatch.delitem(_registry, "google", raising=False)
         bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
 
         resp = ui_api_client.post(
