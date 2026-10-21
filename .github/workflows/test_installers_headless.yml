@@ -1,0 +1,495 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Install every published GAIA installer on a clean GitHub-hosted runner, the
+# way a user would, and prove it works: silent install, a headless launch, a
+# health check, uninstall, and nothing left behind. Plus an upgrade from the
+# previous stable release, and the install.sh / install.ps1 one-liners.
+#
+# Rows (installer x OS):
+#   Windows x64      the one setup as desktop app only, terminal only and both;
+#                    the desktop app's own setup; an upgrade from the previous
+#                    stable release; install.ps1
+#   macOS arm64      the desktop app .dmg; the terminal .pkg; install.sh
+#   macOS x64        the terminal .pkg; install.sh (macos-15-intel: macos-13
+#                    was retired in Dec 2025)
+#   Ubuntu 22.04/24.04  the desktop app .deb and .AppImage; the terminal .deb;
+#                    install.sh; on 24.04 also a terminal .deb upgrade
+#   Fedora           the terminal .rpm, in a fedora:latest container
+# Debian bookworm keeps its install smoke in tui_installers.yml.
+#
+# "Healthy" means:
+#   desktop app   its Python backend answers GET /api/health and is the
+#                 release's version. `gaia init` (Lemonade + several GB of
+#                 models) is skipped with GAIA_SKIP_GAIA_INIT: it needs real
+#                 hardware, which the eval and hardware lanes cover.
+#   terminal      `gaia-tui version` reports the release, and one non-interactive
+#                 turn (`gaia-tui chat --agent gaia --query ...`) completes
+#                 through the installed gaia-agent against a fake model server
+#                 (installer/headless/fake_model_server.py). Then, with no
+#                 Lemonade, the same command must refuse within 120 s and name
+#                 the fix rather than hang.
+#
+# A release candidate publishes no terminal .pkg/.deb/.rpm (an rpm Version
+# cannot carry -rc.N). For one, `rebuild-packages` builds them in this run from
+# the candidate's own gaia-tui and gaia-agent binaries with the repo's build
+# scripts, and those rows say "rebuilt" in the table. A final release must carry
+# them, and a final that does not fails `resolve`.
+#
+# Install time is gated. Each phase is timed with the monotonic clock
+# (installer/headless/journey.py) and compared to
+# installer/install_time_thresholds.json, which records how each threshold was
+# measured. Download time is reported but not gated (network-bound; see that
+# file). To refresh the thresholds from the last N runs:
+#   python installer/headless/propose_thresholds.py --runs 5 --write
+#
+# A failure that is a filed, open installer bug is listed in
+# installer/headless/known_failures.json (issue + output signature). It shows as
+# "known #N" in the table instead of failing the run, and fails it again as soon
+# as it stops reproducing, so the entry goes away with the fix.
+#
+# Triggers:
+#   workflow_dispatch  any release; the default (also used by PRs) is the newest
+#                      release by version whose assets are all attached
+#   push of a v* tag   waits up to 5 h for the release's assets to be attached
+#                      (the publish approval is human), then fails naming the
+#                      missing ones
+#   pull_request       on installer, install-script and download-page changes. A
+#                      PR does not build installers: it runs the newest release's
+#                      installers with the PR's journey scripts, install.sh and
+#                      install.ps1, and (for a candidate) packages rebuilt with
+#                      the PR's build scripts. A change to what an installer
+#                      contains is proven when the next release candidate is cut.
+#
+# Safety: the journey scripts refuse to run outside GitHub Actions, keep
+# everything under $RUNNER_TEMP, and point HOME/USERPROFILE at a fresh sandbox
+# there for the install-script rows. Never run them on a machine you use.
+
+name: Installer journeys (headless)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release to test, e.g. v0.25.1-rc2. Empty: the newest release whose assets are all attached.'
+        required: false
+        default: ''
+        type: string
+  push:
+    tags: ['v*']
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/test_installers_headless.yml'
+      - 'installer/**'
+      - 'LICENSE.md'
+      - 'src/gaia/version.py'
+      - 'website/src/scripts/download-target.ts'
+      - 'website/src/components/Downloads.astro'
+      - 'website/src/data/github.ts'
+      - '.github/workflows/tui_installers.yml'
+      - '.github/workflows/windows_setup.yml'
+      - '.github/workflows/build-installers.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-journeys-${{ github.event.pull_request.number || github.ref }}-${{ inputs.release_tag || '' }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    name: Resolve the release
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 320
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+      core_version: ${{ steps.r.outputs.core_version }}
+      prev_tag: ${{ steps.r.outputs.prev_tag }}
+      tui_packages_published: ${{ steps.r.outputs.tui_packages_published }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - id: r
+        name: Pick the release and wait for its assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_INPUT: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || '' }}
+          WAIT: ${{ github.ref_type == 'tag' && '300' || '0' }}
+        run: python installer/headless/resolve_release.py --tag "${TAG_INPUT}" --wait-minutes "${WAIT}" --out release.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-json
+          path: release.json
+          retention-days: 7
+
+  # A release candidate carries no terminal packages, so build them here from
+  # its own binaries. Unsigned, like the release build (see tui_installers.yml).
+  rebuild-packages:
+    name: Rebuild terminal packages (${{ matrix.label }})
+    needs: resolve
+    if: >-
+      !cancelled() && needs.resolve.result == 'success' &&
+      needs.resolve.outputs.tui_packages_published != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos
+            os: macos-latest
+          - label: linux
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-json
+      - name: Install fpm
+        if: matrix.label == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+      - name: Stage the release's binaries and build
+        env:
+          LABEL: ${{ matrix.label }}
+          CORE: ${{ needs.resolve.outputs.core_version }}
+        run: |
+          set -euo pipefail
+          url() { python3 -c "import json,sys; d=json.load(open('release.json')); print(d['urls'][d['assets'][sys.argv[1]]])" "$1"; }
+          stage() {  # stage <platform> <tui asset id> <sidecar asset id or 'stub'> <dir> [prev]
+            mkdir -p "$4"
+            curl -fL --retry 3 -sS -o "$4/gaia-tui" "$(url "$2")"
+            if [ "$3" = stub ]; then cp "$4/gaia-tui" "$4/gaia-agent"
+            else curl -fL --retry 3 -sS -o "$4/gaia-agent" "$(url "$3")"; fi
+            cp LICENSE.md "$4/LICENSE.md"
+            chmod +x "$4/gaia-tui" "$4/gaia-agent"
+            ls -l "$4"
+          }
+          if [ "${LABEL}" = macos ]; then
+            stage darwin-arm64 tui-bin-darwin-arm64 sidecar-darwin-arm64 stage/darwin-arm64
+            stage darwin-x64 tui-bin-darwin-x64 sidecar-darwin-x64 stage/darwin-x64
+            for arch in arm64 x64; do
+              installer/tui/macos/build-pkg.sh --version "${CORE}" --arch "${arch}" \
+                --payload "stage/darwin-${arch}" --out dist --allow-unsigned
+            done
+          else
+            stage linux-x64 tui-bin-linux-x64 sidecar-linux-x64 stage/linux-x64
+            installer/tui/linux/build-packages.sh --version "${CORE}" --payload stage/linux-x64 --out dist
+          fi
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rebuilt-packages-${{ matrix.label }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The previous stable release's terminal .deb, for the upgrade row -- for
+  # every release, not only candidates, so a final tests its upgrade too.
+  previous-deb:
+    name: Previous release's terminal .deb
+    needs: resolve
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-json
+      # The previous release's own .deb when it published one. If it
+      # published none, it is rebuilt from its own gaia-tui with a
+      # stand-in sidecar: the upgrade row checks the package upgrade and the
+      # user's data, and runs only the NEW version's agent.
+      - name: Previous release's .deb
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, subprocess, sys
+          d = json.load(open("release.json"))
+          if not d["prev_tag"]:
+              sys.exit("::error::no previous stable release to upgrade from")
+          name = d["prev_assets"].get("tui-deb")
+          subprocess.check_call(["mkdir", "-p", "prev"])
+          if name:
+              subprocess.check_call(["curl", "-fL", "--retry", "3", "-sS", "-o", f"prev/{name}", d["prev_urls"][name]])
+          else:
+              subprocess.check_call("sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm ruby ruby-dev build-essential && sudo gem install --no-document fpm", shell=True)
+              bin_name = d["prev_assets"].get("tui-bin-linux-x64")
+              if not bin_name:
+                  sys.exit(f"::error::{d['prev_tag']} publishes neither a terminal .deb nor gaia-linux-amd64")
+              subprocess.check_call(["mkdir", "-p", "prev-stage"])
+              subprocess.check_call(["curl", "-fL", "--retry", "3", "-sS", "-o", "prev-stage/gaia-tui", d["prev_urls"][bin_name]])
+              subprocess.check_call(["cp", "prev-stage/gaia-tui", "prev-stage/gaia-agent"])
+              subprocess.check_call(["cp", "LICENSE.md", "prev-stage/LICENSE.md"])
+              subprocess.check_call(["chmod", "+x", "prev-stage/gaia-tui", "prev-stage/gaia-agent"])
+              core = d["prev_version"].split("-")[0]
+              subprocess.check_call(["installer/tui/linux/build-packages.sh", "--version", core,
+                                     "--payload", "prev-stage", "--out", "prev-out"])
+              subprocess.check_call("cp prev-out/*_amd64.deb prev/", shell=True)
+          PY
+          ls -l prev
+      - uses: actions/upload-artifact@v7
+        with:
+          name: previous-deb
+          path: prev/
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: ${{ matrix.row }}
+    needs: resolve
+    runs-on: windows-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - row: win-setup-ui
+            title: One setup, desktop app only
+            kind: win-setup
+            components: ui
+            phases: download install launch health quit uninstall leftovers
+          - row: win-setup-tui
+            title: One setup, terminal only
+            kind: win-setup
+            components: tui
+            phases: download install launch health preflight uninstall leftovers
+          - row: win-setup-both
+            title: One setup, desktop app and terminal
+            kind: win-setup
+            components: ui,tui
+            phases: download install launch health preflight quit uninstall leftovers
+          - row: win-agent-ui-exe
+            title: Desktop app's own setup
+            kind: agent-ui-exe
+            components: ''
+            phases: download install launch health quit uninstall leftovers
+          - row: win-setup-upgrade
+            title: Upgrade from the previous stable release (installed and launched once) to the one setup
+            kind: win-setup-upgrade
+            components: ''
+            phases: download install upgrade launch health quit uninstall leftovers
+          - row: win-install-ps1
+            title: install.ps1 in a sandbox profile
+            kind: install-ps1
+            components: ''
+            phases: install launch health preflight uninstall leftovers
+    env:
+      ROW: ${{ matrix.row }}
+      KIND: ${{ matrix.kind }}
+      COMPONENTS: ${{ matrix.components }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-json
+          path: ${{ runner.temp }}/release
+      - name: Run the journey
+        env:
+          TITLE: ${{ matrix.title }}
+          PHASES: ${{ matrix.phases }}
+        run: |
+          set -uo pipefail
+          export WORK="${RUNNER_TEMP}/journey" RELEASE_JSON="${RUNNER_TEMP}/release/release.json"
+          R="${RUNNER_TEMP}/results/${ROW}.json"; export RESULTS="$R"
+          J=installer/headless/journey.py
+          python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "Windows x64" \
+            --installer "${KIND}" --release "$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")" --source release
+          python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" \
+            --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
+            -- pwsh -NoProfile -File installer/headless/windows-journey.ps1 -Step '{phase}'
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: install-result-${{ matrix.row }}
+          path: ${{ runner.temp }}/results/
+          retention-days: 30
+      - name: Collect logs
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\failure-logs" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\journey\logs\*" "$env:RUNNER_TEMP\failure-logs" -Recurse -ErrorAction SilentlyContinue
+          foreach ($h in "$env:USERPROFILE\.gaia", "$env:RUNNER_TEMP\journey\home\.gaia") {
+            Get-ChildItem $h -Filter *.log -Recurse -ErrorAction SilentlyContinue | Copy-Item -Destination "$env:RUNNER_TEMP\failure-logs" -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: install-logs-${{ matrix.row }}
+          path: ${{ runner.temp }}/failure-logs/
+          retention-days: 14
+
+  posix:
+    name: ${{ matrix.row }}
+    needs: [resolve, rebuild-packages, previous-deb]
+    # Not gated on rebuild-packages or previous-deb: a row that needs their
+    # artifact fails at the download, naming it, and every other row still runs.
+    if: ${{ !cancelled() && needs.resolve.result == 'success' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {row: mac-arm64-agent-ui-dmg, os: macos-latest, os_label: macOS arm64, kind: agent-ui-dmg, title: Desktop app .dmg, phases: download install launch health quit uninstall leftovers}
+          - {row: mac-arm64-tui-pkg, os: macos-latest, os_label: macOS arm64, kind: tui-pkg, tui_platform: darwin-arm64, packages: macos, title: Terminal .pkg, phases: download install launch health preflight uninstall leftovers}
+          - {row: mac-x64-tui-pkg, os: macos-15-intel, os_label: macOS x64, kind: tui-pkg, tui_platform: darwin-x64, packages: macos, title: Terminal .pkg, phases: download install launch health preflight uninstall leftovers}
+          - {row: mac-arm64-install-sh, os: macos-latest, os_label: macOS arm64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
+          - {row: mac-x64-install-sh, os: macos-15-intel, os_label: macOS x64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
+          - {row: ubuntu22-agent-ui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu22-appimage, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu22-tui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
+          - {row: ubuntu24-tui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
+          - {row: ubuntu24-tui-deb-upgrade, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb-upgrade, packages: linux, title: Terminal .deb upgrade from the previous stable release, phases: download install upgrade launch health uninstall leftovers}
+          - {row: fedora-tui-rpm, os: ubuntu-latest, os_label: Fedora (container), kind: tui-rpm, packages: linux, title: Terminal .rpm, phases: download install launch health preflight uninstall leftovers}
+          - {row: ubuntu22-install-sh, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
+          - {row: ubuntu24-install-sh, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
+    env:
+      ROW: ${{ matrix.row }}
+      KIND: ${{ matrix.kind }}
+      TUI_PLATFORM: ${{ matrix.tui_platform }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-json
+          path: ${{ runner.temp }}/release
+      - uses: actions/download-artifact@v8
+        if: matrix.packages && needs.resolve.outputs.tui_packages_published != 'true'
+        with:
+          name: rebuilt-packages-${{ matrix.packages }}
+          path: ${{ runner.temp }}/rebuilt
+      - uses: actions/download-artifact@v8
+        if: matrix.kind == 'tui-deb-upgrade'
+        with:
+          name: previous-deb
+          path: ${{ runner.temp }}/prev
+      # Host prerequisites a user would already have, installed before the
+      # timed phases: a display for the desktop app, and FUSE for an AppImage.
+      - name: Prepare the runner
+        env:
+          OS_IMAGE: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          case "${KIND}" in
+            agent-ui-deb|appimage)
+              sudo apt-get update
+              pkgs="xvfb xauth"
+              if [ "${KIND}" = appimage ]; then
+                if [ "${OS_IMAGE}" = ubuntu-24.04 ]; then pkgs="${pkgs} libfuse2t64"; else pkgs="${pkgs} libfuse2"; fi
+              fi
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${pkgs}
+              ;;
+            tui-rpm)
+              mkdir -p "${RUNNER_TEMP}/journey"
+              docker run -d --name gaia-fedora --network host -v "${RUNNER_TEMP}/journey:/work" fedora:latest sleep infinity
+              docker exec gaia-fedora cat /etc/os-release | head -n 3
+              ;;
+          esac
+      - name: Run the journey
+        env:
+          TITLE: ${{ matrix.title }}
+          PHASES: ${{ matrix.phases }}
+          OS_LABEL: ${{ matrix.os_label }}
+          PUBLISHED: ${{ needs.resolve.outputs.tui_packages_published }}
+          HAS_PACKAGES: ${{ matrix.packages && 'true' || 'false' }}
+        run: |
+          set -uo pipefail
+          export WORK="${RUNNER_TEMP}/journey" RELEASE_JSON="${RUNNER_TEMP}/release/release.json"
+          export PKG_DIR="${RUNNER_TEMP}/rebuilt" PREV_PKG_DIR="${RUNNER_TEMP}/prev" PYTHON=python
+          R="${RUNNER_TEMP}/results/${ROW}.json"; export RESULTS="$R"
+          J=installer/headless/journey.py
+          source=release
+          if [ "${HAS_PACKAGES}" = true ] && [ "${PUBLISHED}" != true ]; then
+            source="rebuilt from the release's binaries"
+          fi
+          python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "${OS_LABEL}" \
+            --installer "${KIND}" --release "$(python -c "import json;print(json.load(open('${RELEASE_JSON}'))['tag'])")" --source "${source}"
+          if [ "${KIND}" = tui-deb-upgrade ]; then
+            python "$J" note --results "$R" --text "Upgrades from $(ls "${PREV_PKG_DIR}") ($(python -c "import json;print(json.load(open('${RELEASE_JSON}'))['prev_tag'])"); a previous release with no .deb is rebuilt from its own gaia-tui)."
+          fi
+          skip=()
+          if [ "${source}" != release ]; then
+            skip=(--skip "download=rebuilt in this run; the release publishes no such package")
+          fi
+          python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" ${skip[@]+"${skip[@]}"} \
+            --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
+            -- bash installer/headless/posix-journey.sh '{phase}'
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: install-result-${{ matrix.row }}
+          path: ${{ runner.temp }}/results/
+          retention-days: 30
+      - name: Collect logs
+        if: failure()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/failure-logs"
+          cp -R "${RUNNER_TEMP}/journey/logs/." "${RUNNER_TEMP}/failure-logs/" 2>/dev/null || true
+          find "${RUNNER_TEMP}/journey/home/.gaia" -name '*.log' -exec cp {} "${RUNNER_TEMP}/failure-logs/" \; 2>/dev/null || true
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: install-logs-${{ matrix.row }}
+          path: ${{ runner.temp }}/failure-logs/
+          retention-days: 14
+
+  summary:
+    name: Installer journeys summary
+    needs: [resolve, windows, posix]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: install-result-*
+          path: results
+          merge-multiple: true
+      - name: Table and gate
+        run: >-
+          python installer/headless/journey.py summarize --dir results
+          --known installer/headless/known_failures.json
+          --thresholds installer/install_time_thresholds.json --out install-timings.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: install-timings
+          path: install-timings.json
+          retention-days: 90

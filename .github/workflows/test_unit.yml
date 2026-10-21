@@ -29,6 +29,8 @@ on:
       - 'hub/agents/gaia/npm/**'
       - 'hub/skills/**'
       - 'hub/components/*/gaia-agent.yaml'
+      # The flagship pins the install-script tests check install.sh/.ps1 against.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
       # tests/unit/installer covers the installer tree, and
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
@@ -89,6 +91,8 @@ on:
       - 'hub/agents/gaia/npm/**'
       - 'hub/skills/**'
       - 'hub/components/*/gaia-agent.yaml'
+      # The flagship pins the install-script tests check install.sh/.ps1 against.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
       # tests/unit/installer covers the installer tree, and
       # tests/integration/test_tui_control_e2e.py builds and drives the real Go
       # TUI, so a TUI-only change has to run the offline-integration job.
