@@ -1001,24 +1001,33 @@ jobs:
         uses: ./.github/actions/install-lemonade
 
       - name: Start Lemonade Server (version-matched, warmed)
-        # 15 min for the server and Gemma, plus the warm pull's own 20 min cap
-        # for a 23 GB Qwen3.6 that is not cached yet.
-        timeout-minutes: 40
+        # 15 min for the server and Gemma, plus up to 30 min to pull a 23 GB
+        # Qwen3.6 onto a fresh machine.
+        timeout-minutes: 50
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           # Launches the version-matched server as a persistent Scheduled Task
-          # (survives across CI jobs), reuses it if healthy, and warms a model.
-          # Gemma-4-E4B (the script's default) first, always: vision loads it by
-          # name whatever the chat model is, and every PC `gaia init` sets up has
-          # it, Qwen machines included. Then the model under test, if different;
-          # the second call reuses the healthy server and only pulls.
+          # (survives across CI jobs), reuses it if healthy, and warms
+          # Gemma-4-E4B, its default. Gemma is pulled whatever the model under
+          # test: vision loads it by name, and every PC `gaia init` sets up has
+          # it, Qwen machines included.
           powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1
           if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+          # Then the model under test, pulled here rather than through a second
+          # script call: the script returns early on a healthy server without
+          # warming anything, and swallows a failed pull.
           if ($env:AGENT_MODEL -ne 'Gemma-4-E4B-it-GGUF') {
-            powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -WarmModel $env:AGENT_MODEL
-            if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready after warming $env:AGENT_MODEL" }
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $base = $env:LEMONADE_BASE_URL.TrimEnd('/') -replace '/api/v1$', ''
+            $body = @{ model_name = $env:AGENT_MODEL } | ConvertTo-Json
+            try {
+              Invoke-RestMethod "$base/api/v1/pull" -Method POST -ContentType "application/json" -Body $body -TimeoutSec 1800 | Out-Null
+            } catch {
+              throw "Could not pull $env:AGENT_MODEL into Lemonade at $base : $($_.Exception.Message). Check the runner's network and disk, then re-run."
+            }
+            Write-Host "Pulled $env:AGENT_MODEL in $([math]::Round($sw.Elapsed.TotalMinutes, 1)) min."
           }
 
       - name: Preflight — judge key, baselines, Lemonade
