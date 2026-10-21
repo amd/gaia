@@ -549,7 +549,7 @@ class RAGSDK:
         """
         Get or create HMAC key for cache integrity verification.
 
-        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        The key is stored per-installation in <gaia_home>/cache/hmac.key
         and is used to sign cache files to prevent tampering. Cached in
         memory after first load to avoid repeated disk reads.
 
@@ -559,7 +559,7 @@ class RAGSDK:
         if self._hmac_key is not None:
             return self._hmac_key
 
-        key_dir = Path.home() / ".gaia" / "cache"
+        key_dir = gaia_config.gaia_home() / "cache"
         key_path = key_dir / "hmac.key"
 
         # Locked so two first-run processes cannot each mint a key and leave
