@@ -90,6 +90,10 @@ COLLECT_SUBMODULES = [
 # collect-all because the wheel carries native .dll/.pyd payloads that static
 # analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
 COLLECT_ALL = ["faiss", "sherpa_onnx"]
+# Package data the analyzer can't see. pymupdf 2.x imports its layout module on
+# import, which loads ONNX model configs from pymupdf/layout/resources at runtime;
+# without them every ``import pymupdf`` in a run_python script fails.
+COLLECT_DATA = ["pymupdf"]
 # Imported behind an ``except ImportError`` guard, so PyInstaller bundles them
 # only when they are installed and the binary otherwise boots without them.
 # anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
@@ -174,6 +178,7 @@ def _verify_collect_targets() -> None:
         mod
         for mod in COLLECT_SUBMODULES
         + COLLECT_ALL
+        + COLLECT_DATA
         + REQUIRED_IMPORTS
         + SCRIPT_LIBRARIES
         if importlib.util.find_spec(mod) is None
@@ -304,6 +309,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--collect-submodules", mod]
     for mod in COLLECT_ALL:
         args += ["--collect-all", mod]
+    for mod in COLLECT_DATA:
+        args += ["--collect-data", mod]
     for mod in script_hidden_imports():
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:

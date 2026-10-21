@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 
 import worker from "../src/index";
+import { maxBytes, maxReferencedBytes } from "../src/multipart";
 import type { AgentManifest } from "../src/types";
 import { makeEnv, publishByRefRequest, publishRequest, sampleManifest, sha256Of } from "./fake-r2";
 
@@ -203,13 +204,47 @@ describe("publish by reference", () => {
     expect(res.status).toBe(401);
   });
 
-  it("applies MAX_ARTIFACT_BYTES to a by-reference publish too", async () => {
-    // Otherwise the documented artifact ceiling quietly stops covering the one
-    // lane that exists specifically for the largest artifacts.
+  it("accepts a by-reference artifact over the inline cap", async () => {
+    // These bytes never pass through the Worker, so the inline cap must not
+    // apply: reusing it is what refused a 311 MB Windows setup with a 413.
     const env = makeEnv({ maxBytes: "16" });
+    const { sha, bytes } = await stage(env);
+    expect(bytes.byteLength).toBeGreaterThan(16);
+    const res = await publishRef(env, {}, sha, bytes.byteLength);
+    expect(res.status).toBe(201);
+  });
+
+  it("applies MAX_REFERENCED_ARTIFACT_BYTES to a by-reference publish", async () => {
+    const env = makeEnv({ maxReferencedBytes: "16" });
     const { sha, bytes } = await stage(env);
     const res = await publishRef(env, {}, sha, bytes.byteLength);
     expect(res.status).toBe(413);
-    expect(((await res.json()) as any).error.code).toBe("artifact_too_large");
+    const err = ((await res.json()) as any).error;
+    expect(err.code).toBe("artifact_too_large");
+    expect(err.message).toContain("16-byte limit");
+    // Refused before anything is recorded.
+    expect(await env.BUCKET.get("agents/chat/manifest.json")).toBeNull();
+  });
+
+  it("accepts an artifact exactly at MAX_REFERENCED_ARTIFACT_BYTES", async () => {
+    const env = makeEnv({ maxReferencedBytes: String(BYTES.byteLength) });
+    const { sha, bytes } = await stage(env);
+    const res = await publishRef(env, {}, sha, bytes.byteLength);
+    expect(res.status).toBe(201);
+  });
+
+  it("fails loudly on a malformed MAX_REFERENCED_ARTIFACT_BYTES", async () => {
+    for (const bad of ["abc", "0", "-5"]) {
+      const env = makeEnv({ maxReferencedBytes: bad });
+      const { sha, bytes } = await stage(env);
+      const res = await publishRef(env, {}, sha, bytes.byteLength);
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as any).error.code).toBe("server_misconfigured");
+    }
+  });
+
+  it("defaults the by-reference ceiling to R2's 5 GiB single-part limit", () => {
+    expect(maxReferencedBytes(makeEnv() as never)).toBe(5 * 1024 ** 3);
+    expect(maxBytes(makeEnv() as never)).toBe(262_144_000);
   });
 });

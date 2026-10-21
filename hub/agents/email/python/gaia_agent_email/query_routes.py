@@ -73,6 +73,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gaia.agents.base.readiness import start_advice
+from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -636,7 +637,7 @@ async def query(request: QueryRequest) -> StreamingResponse:
         max_steps = request.max_steps
         user_query = request.query
 
-        def _run_agent() -> None:
+        def _run_query() -> None:
             error_detail: Optional[str] = None
             try:
                 if max_steps is not None:
@@ -659,6 +660,15 @@ async def query(request: QueryRequest) -> StreamingResponse:
             if error_detail is not None:
                 handler._emit({"type": "agent_error", "content": error_detail})
             handler.signal_done()
+
+        def _run_agent() -> None:
+            # The user's turn: it leases ahead of background work, a wait for
+            # the model reaches this stream, and /cancel ends that wait.
+            with interactive_turn(
+                on_wait_event=lambda event: handler._emit(queue_status_event(event)),
+                cancel=run.cancel_event,
+            ):
+                _run_query()
 
         thread = threading.Thread(target=_run_agent, daemon=True)
         thread.start()

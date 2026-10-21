@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.17"`                  |
+| Contract version   | `API_VERSION = "2.18"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,7 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`) is optional.
+`documents`, `allowed_paths`, `memory`) is optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -296,6 +296,23 @@ file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
 field, so probe `/version` before sending it.
+
+`allowed_paths` (contract ≥ 2.18) carries the conversation's file scope as the
+caller computed it, so the agent works in the folders the caller's UI shows. A
+new session is built with exactly that scope; a retained session gains any
+entry it lacks and drops none until the session ends — neither what the user
+granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
+still narrows it, and a path outside it is asked about, never silently
+granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
+field.
+
+`memory` (contract ≥ 2.18) is `"on"`, `"private"` (a private chat) or `"off"`
+(memory turned off in the caller's settings). Under `"private"` or `"off"` the
+turn saves nothing to memory, including the errors and lessons the agent saves
+on its own. A retained session keeps the last value, so send it every turn;
+omit it to leave memory as the agent has it. `"on"` never turns memory on when
+the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
+`422` the field.
 
 ```json
 {
@@ -479,7 +496,12 @@ a JSON line carrying a `gaia_control` key: a back-channel that answers a
 confirmation prompt *while* a turn is in flight, toggles full access or
 "accept edits" (file edits inside the starting folder run unasked; commands still
 ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
-"always" grants, history and the permission mode survive a cancel.
+"always" grants, history and the permission mode survive a cancel. When stdin
+closes mid-turn (the host has gone), the running turn is cancelled and saved in
+the session history as interrupted: "This answer was interrupted when GAIA
+closed." The question is saved when the turn starts, so it survives even if the
+host kills the process before the turn ends. Another process sharing the
+history file leaves a turn that is still running out of its model view.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its

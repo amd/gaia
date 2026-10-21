@@ -29,6 +29,9 @@ FULL_READ_MAX_READS = 3
 #: Extraction stops here; a longer document is for index_document.
 MAX_EXTRACT_CHARS = 1_000_000
 
+#: A character ``limit`` this small is almost always meant as a line count.
+SMALL_LIMIT_CHARS = 1000
+
 #: Extracted documents kept per agent, so paging does not re-parse the file.
 _CACHE_ENTRIES = 8
 
@@ -269,3 +272,45 @@ def read_document(
             "read it all only when the task needs every line."
         )
     return result
+
+
+def text_page_notes(
+    page: Dict[str, Any], size_bytes: int, line_ranges: bool = True
+) -> Dict[str, Any]:
+    """Say how much of the file a character page holds, and where the rest is."""
+    returned = len(page.get("content") or "")
+    start = page.get("offset") or 0
+    page = {**page, "chars_returned": returned, "size_bytes": size_bytes}
+    if page.get("next_offset") is not None:
+        by_line = (
+            ", or read by line number with start_line/end_line" if line_ranges else ""
+        )
+        page["note"] = (
+            f"Partial: characters {start:,}-{start + returned:,} of a "
+            f"{size_bytes:,}-byte file. Continue with "
+            f"offset={page['next_offset']}{by_line}."
+        )
+    return page
+
+
+def with_small_limit_warning(
+    result: Dict[str, Any], limit: Optional[int], line_ranges: bool = True
+) -> Dict[str, Any]:
+    """A tiny ``limit`` is usually a line count; say it counts characters."""
+    if (
+        result.get("status") != "success"
+        or not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or limit >= SMALL_LIMIT_CHARS
+    ):
+        return result
+    returned = len(result.get("content") or "")
+    by_line = "To read lines, use start_line/end_line instead. " if line_ranges else ""
+    return {
+        **result,
+        "warning": (
+            f"limit={limit} counts characters, not lines, so only {returned} "
+            f"characters came back. {by_line}For more text per read, raise "
+            "limit or leave it out."
+        ),
+    }

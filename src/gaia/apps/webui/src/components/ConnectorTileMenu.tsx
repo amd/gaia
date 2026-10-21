@@ -21,9 +21,10 @@
  * Click-outside (mousedown on document) and Escape close the menu.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import * as api from '../services/api';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import type { ConnectorRow } from '../types';
 
 interface Props {
@@ -67,15 +68,8 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
         return () => document.removeEventListener('mousedown', handler);
     }, [open]);
 
-    // Close on Escape.
-    useEffect(() => {
-        if (!open) return;
-        const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setOpen(false);
-        };
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [open]);
+    const closeMenu = useCallback(() => setOpen(false), []);
+    useEscapeToClose(open, closeMenu);
 
     // Reposition popup on scroll/resize so it stays anchored to the trigger
     // even as the settings panel scrolls. Using capture:true catches scroll

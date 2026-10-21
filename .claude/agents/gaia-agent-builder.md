@@ -33,10 +33,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - [`src/gaia/agents/base/agent.py`](../../src/gaia/agents/base/agent.py) — base `Agent`
 - [`src/gaia/agents/registry.py`](../../src/gaia/agents/registry.py) — `KNOWN_TOOLS`, `AgentRegistration`, `class_factory`, and the entry-point groups
 - [`hub/agents/hello-world/python/`](../../hub/agents/hello-world/python/) — the smallest complete hub package; copy its shape
-- [`docs/guides/hub-publishing.mdx`](../../docs/guides/hub-publishing.mdx) — packaging + publishing an agent
 - [`docs/sdk/patterns.mdx`](../../docs/sdk/patterns.mdx) — canonical copy-pasteable patterns
-
-**Moving an existing in-repo agent to a hub package instead of writing a new one?** Use the `porting-agent-to-hub` skill — it owns the PORT/MERGE/DISCARD verdict, the capability-truth audit, and the catalog→install→launch→use gate.
 
 ## Agent shape
 
@@ -77,7 +74,7 @@ Fastest path to a package: `gaia agent init <id> -o hub/agents/ --layout hub` sc
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for Hub-card metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for display metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
@@ -96,8 +93,8 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
   ```
 - [ ] `__init__.py` exposes `build_registration()` returning an `AgentRegistration`, with the agent module imported *inside* the factory so discovery stays cheap
 - [ ] Factory wraps the class with `class_factory(...)`, which filters kwargs to valid dataclass fields
-- [ ] `gaia-agent.yaml` present next to `pyproject.toml` (id, name, version, models, `interfaces:`, `requirements:`) — this is what the hub catalog renders
-- [ ] Adding it to AMD's published set? Append the distribution name to `AGENT_WHEEL_PACKAGES` in `setup.py`; `util/list_agent_packages.py` and the publish workflow read from there
+- [ ] `gaia-agent.yaml` present next to `pyproject.toml` (id, name, version, models, `interfaces:`, `requirements:`) — the package manifest
+- [ ] Adding it to AMD's published set? Append the distribution name to `AGENT_WHEEL_PACKAGES` in `setup.py`; `util/list_agent_packages.py` and `build_agent_package.yml` read from there
 
 ### 4. CLI (optional)
 - [ ] Add a subparser in `src/gaia/cli.py` and document in `docs/reference/cli.mdx` — see `cli-developer` for the pattern
@@ -110,7 +107,7 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 - [ ] Integration tests use `require_lemonade` (auto-skips when server offline)
 
 ### 6. Docs (required)
-- [ ] `hub/agents/<id>/python/README.md` — the integrator-facing doc; it's what the hub and PyPI render
+- [ ] `hub/agents/<id>/python/README.md` — the integrator-facing doc; it is what npm and PyPI render
 - [ ] `docs/guides/<agent>.mdx` if user-facing, `docs/spec/<agent>.mdx` if it adds a public API surface
 - [ ] Register the page in `docs/docs.json` or it 404s
 - [ ] Add a row to `CLAUDE.md` "Agent Implementations"

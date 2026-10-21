@@ -43,9 +43,10 @@
 # consistent grep. To bump every model: `git grep -n 'claude-opus-' .github/workflows`
 # (the 7 `--model` lines here, AUDIT_MODEL, WALKTHROUGH_*_MODEL, the canary default,
 # claude-run.yml's evidence stage, and the other scheduled Claude jobs).
-# EVAL_MODEL in eval_flagship.yml is deliberately NOT in that list: it drives and judges
-# the scenario eval, so it stays on claude-sonnet-4-6 until a baseline is captured under
-# a new one (see the note beside it). Moving it changes what a score means.
+# The eval workflows' EVAL_MODEL is deliberately NOT in that list: it drives and judges
+# the scenario eval, so it is read from the flagship baseline's meta.json (eval_model)
+# and moves only when a baseline is captured under a new one. Moving it changes what a
+# score means.
 #
 # Authentication: all 7 jobs prefer a subscription OAuth token over a billed API key.
 # Set the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (generate locally with `claude setup-token`,
@@ -1066,7 +1067,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967  # v1.0.252
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1544,7 +1545,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967  # v1.0.252
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
@@ -1869,3 +1870,27 @@ jobs:
           cc @kovtcharov-amd" \
             --assignee kovtcharov-amd \
             --label "bug,release"
+
+  # When a Claude call above was refused for budget, ask claude-account-switch.yml
+  # to probe both accounts. Separate job so `actions: write` never reaches a job
+  # that reads PR diffs; it runs one fixed command and checks nothing out.
+  request-account-switch:
+    name: Ask the account switch to probe (Claude refused a call)
+    needs: [pr-review, pr-rereview, pr-comment, issue-handler, issue-triage]
+    if: >-
+      always() && github.repository == 'amd/gaia' && (
+      needs.pr-review.outputs.quota_suspected == 'true' ||
+      needs.pr-rereview.outputs.quota_suspected == 'true' ||
+      needs.pr-comment.outputs.quota_suspected == 'true' ||
+      needs.issue-handler.outputs.quota_suspected == 'true' ||
+      needs.issue-triage.outputs.quota_suspected == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch claude-account-switch.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run claude-account-switch.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "::notice title=Claude account switch requested::A Claude call was refused before it reached a model, so claude-account-switch.yml was asked to probe the accounts. See its latest run."

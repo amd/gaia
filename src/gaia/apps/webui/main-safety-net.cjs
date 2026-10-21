@@ -13,6 +13,11 @@
  *   - process.on('unhandledRejection') catches rejected app.whenReady() chain.
  *   - installLogTee() attaches stream.on('error') so stream errors are handled
  *     before they can become uncaughtException (root-cause fix).
+ *
+ * A fatal error quits through app.quit(), not process.exit(): only the quit
+ * path (will-quit in main.cjs) stops the backend and the agents, so exiting
+ * directly left them running after the window was gone (#3498). A timer
+ * still forces the exit if that cleanup hangs.
  */
 
 "use strict";
@@ -60,6 +65,9 @@ function appendLog(logPath, msg) {
   }
 }
 
+/** How long a fatal error's quit may take before the process is ended outright (ms). */
+const FATAL_EXIT_GRACE_MS = 25000;
+
 // ── Core installer ────────────────────────────────────────────────────────────
 
 /**
@@ -70,23 +78,62 @@ function appendLog(logPath, msg) {
  * @param {object}   opts.dialogModule  - Electron dialog (injected for tests).
  * @param {object}   opts.appModule     - Electron app EventEmitter (injected).
  * @param {Function} [opts.homedirFn]   - Override for os.homedir (tests).
+ * @param {Function} [opts.beforeQuit]  - Called before the fatal quit, e.g.
+ *   so the quit guard does not ask the user to confirm it.
+ * @param {number}   [opts.exitGraceMs] - Override for FATAL_EXIT_GRACE_MS.
  */
-function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
+function installSafetyNet({
+  logPath,
+  dialogModule,
+  appModule,
+  homedirFn,
+  beforeQuit,
+  exitGraceMs = FATAL_EXIT_GRACE_MS,
+}) {
   const homedir = homedirFn || (() => os.homedir());
 
   // Per-handler re-entry guard (closure-scoped — each installSafetyNet
   // call gets its own, intentionally; see test_main_error_handling.js).
   let _inFatalHandler = false;
 
+  // Quit through will-quit so its cleanup stops the backend and agents; the
+  // timer ends the process if that cleanup never finishes.
+  function quitAfterFatal() {
+    const timer = setTimeout(() => {
+      appendLog(
+        logPath,
+        `[${new Date().toISOString()}] FATAL_EXIT cleanup did not finish within ${exitGraceMs} ms; exiting`
+      );
+      process.exit(1);
+    }, exitGraceMs);
+    if (typeof beforeQuit === "function") {
+      try {
+        beforeQuit();
+      } catch (hookErr) {
+        appendLog(logPath, `[${new Date().toISOString()}] FATAL_QUIT beforeQuit failed: ${hookErr.stack || hookErr}`);
+      }
+    }
+    try {
+      appModule.quit();
+    } catch (quitErr) {
+      clearTimeout(timer);
+      appendLog(logPath, `[${new Date().toISOString()}] FATAL_QUIT app.quit() failed, exiting now: ${quitErr.stack || quitErr}`);
+      process.exit(1);
+    }
+  }
+
   function fatal(err) {
+    const stack = (err && err.stack) ? err.stack : String(err);
+    const ts = new Date().toISOString();
+
+    // A second fatal while the first is still showing its dialog or quitting
+    // (an EPIPE from a child that died during cleanup, say) is logged only:
+    // exiting here would skip the cleanup that is already under way.
     if (_inFatalHandler) {
-      try { process.exit(2); } catch { }
+      appendLog(logPath, `[${ts}] FATAL (while already quitting) ${stack}`);
       return;
     }
     _inFatalHandler = true;
-
-    const stack = (err && err.stack) ? err.stack : String(err);
-    const ts = new Date().toISOString();
 
     // Write to log BEFORE showing dialog so the entry survives even if
     // dialog.showErrorBox itself crashes.
@@ -112,7 +159,7 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
       }
     } catch { } // intentional: fatal path, no upstream
 
-    try { process.exit(1); } catch { } // intentional: fatal path
+    quitAfterFatal();
   }
 
   // Wire process-level handlers.
@@ -179,4 +226,4 @@ function installLogTee({ stream, logPath }) {
   });
 }
 
-module.exports = { installSafetyNet, installLogTee };
+module.exports = { installSafetyNet, installLogTee, FATAL_EXIT_GRACE_MS };

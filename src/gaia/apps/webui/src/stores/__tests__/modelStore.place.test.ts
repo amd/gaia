@@ -54,6 +54,13 @@ describe('inferencePlace', () => {
         expect(inferencePlace(LOCAL_ACTIVE, location)).toBeNull();
         expect(inferencePlace(null, location)).toBeNull();
     });
+
+    it('before the first chat, uses the backend answer for a new chat (#5253)', () => {
+        const place = inferencePlace({ ...LOCAL_ACTIVE, inference_remote: false }, undefined);
+        expect(place).toEqual({ remote: false, label: 'Local', description: null });
+        // A session's own answer still wins, and an unknown one still claims nothing.
+        expect(inferencePlace({ ...LOCAL_ACTIVE, inference_remote: false }, { inference_remote: null })).toBeNull();
+    });
 });
 
 describe('selectInferenceLocation', () => {

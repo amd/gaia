@@ -13,7 +13,16 @@
 //   services/notification-service.js  — Desktop notifications + permission prompts (T5)
 //   preload.cjs                       — contextBridge for IPC channels (T0/T1)
 
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const {
+  app,
+  autoUpdater: electronAutoUpdater,
+  BrowserWindow,
+  Menu,
+  dialog,
+  ipcMain,
+  powerMonitor,
+  shell,
+} = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -37,12 +46,18 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // very handler we are trying to install, falling through to Electron's bare
 // JS-error dialog.
 let installSafetyNet, installLogTee, _fatalHandler;
+// Set when a fatal error quits the app: the crash dialog was the question,
+// so the quit guard must not ask again.
+let fatalQuitting = false;
 try {
   ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
   ({ fatal: _fatalHandler } = installSafetyNet({
     logPath: _MAIN_LOG_PATH,
     dialogModule: dialog,
     appModule: app,
+    beforeQuit: () => {
+      fatalQuitting = true;
+    },
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -54,8 +69,17 @@ try {
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const {
+  attachWindowGuards,
+  confirmQuit,
+  fetchWorkInProgress,
+  installQuitGuard,
+  QUIT,
+  RESTART_FOR_UPDATE,
+} = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
+const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { buildIndexQuery } = require("./services/index-query.cjs");
@@ -76,6 +100,8 @@ const {
   describeBlockedUrl,
 } = require("./services/link-policy.cjs");
 const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
+const { installWindowKeys } = require("./services/window-keys.cjs");
+const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
 // Electron-recommended switch for distro-agnostic Linux behaviour: picks
@@ -205,6 +231,11 @@ const windowConfig = appConfig.window || {
 // ── State ──────────────────────────────────────────────────────────────────
 
 let backendProcess = null;
+// The in-flight startBackend(), so a quit during startup can wait for the
+// spawn and stop it instead of leaving it behind.
+let backendStarting = null;
+// Set as cleanup() begins; startup stops at its next step once it is.
+let shutdownStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
@@ -224,6 +255,9 @@ let agentProcessManager = null;
 
 /** @type {NotificationService | null} */
 let notificationService = null;
+
+/** @type {KeepAwake | null} */
+let keepAwake = null;
 
 /** @type {PortManager} */
 const portManager = new PortManager({
@@ -386,6 +420,7 @@ async function startBackend() {
     }
     const crashed = !isIntentionalKill && code !== 0 && code !== null;
     backendProcess = null;
+    if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
     if (crashed && !isQuitting) {
       // Fire-and-forget — don't block the event loop.
@@ -523,8 +558,40 @@ function reportBlockedLink(url) {
     );
 }
 
+// No system title bar: the app's own top row is the window's top edge, and
+// the native window controls are drawn into it (traffic lights on macOS).
+// Keep the height in sync with --titlebar-h in src/styles/index.css. The
+// renderer sends its canvas and text colors once it paints; until then the
+// controls use the dark canvas, like the window background.
+const TITLE_BAR_HEIGHT = 48;
+const TITLE_BAR_INITIAL = { color: "#1A1917", symbolColor: "#EFECE6" };
+const IS_MAC = process.platform === "darwin";
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+function titleBarOptions() {
+  return IS_MAC
+    ? { titleBarStyle: "hidden", trafficLightPosition: { x: 16, y: 16 } }
+    : {
+        titleBarStyle: "hidden",
+        titleBarOverlay: { ...TITLE_BAR_INITIAL, height: TITLE_BAR_HEIGHT },
+      };
+}
+
+// The renderer sends its canvas and text colors so the controls match the theme.
+ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
+  const { color, symbolColor } = colors || {};
+  if (!HEX_COLOR.test(color) || !HEX_COLOR.test(symbolColor)) {
+    throw new Error(`Title bar colors must be #rrggbb, got ${JSON.stringify(colors)}`);
+  }
+  if (!IS_MAC && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setTitleBarOverlay({ color, symbolColor });
+  }
+  return true;
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
+    ...titleBarOptions(),
     width: windowConfig.width,
     height: windowConfig.height,
     minWidth: windowConfig.minWidth,
@@ -539,7 +606,12 @@ function createWindow() {
     },
   });
 
-  // Remove default menu bar
+  // No File/Edit/View menu: hiding the bar alone still lets Alt bring it back.
+  // macOS keeps its menu, which carries copy, paste and quit.
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
+  }
   mainWindow.setMenuBarVisibility(false);
 
   // Open external links in the default browser. The URL here is already
@@ -567,18 +639,27 @@ function createWindow() {
     reportBlockedLink(url);
   });
 
-  // ── Minimize-to-tray on close (C4 fix) ──────────────────────────────
-  // Intercept window close — hide instead of closing when tray mode is active
-  mainWindow.on("close", (event) => {
-    if (!isQuitting && trayManager && trayManager.minimizeToTray) {
-      event.preventDefault();
-      mainWindow.hide();
-      console.log("[main] Window hidden to tray");
-    }
+  // ── Minimize-to-tray on close (C4 fix), first-close notice, quit guard ──
+  attachWindowGuards(mainWindow, {
+    app,
+    guard: quitGuard,
+    getTray: () => trayManager,
+    isQuitting: () => isQuitting,
+    platform: process.platform,
+    reportNoticeError: (err) => {
+      console.error("[main] First-close notice failed:", err.message);
+      const where = process.platform === "darwin" ? "menu bar" : "tray";
+      dialog.showErrorBox(
+        "GAIA is still running",
+        `GAIA is still running in the ${where}. Quit from the ${where} menu to stop it.\n\n` +
+          `(The usual notice failed: ${err.message})`
+      );
+    },
   });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+    if (trayManager) trayManager.windowClosed();
   });
 
   // Show window when ready (unless --minimized or startMinimized config)
@@ -631,9 +712,9 @@ async function loadApp() {
              * src/styles/index.css, so the dark theme's role values are
              * mirrored here. Keep them in step with that file. */
             :root {
-              --bg-primary: #17161C;
-              --text-primary: #F0EDE7;
-              --text-secondary: #AAA5B0;
+              --bg-primary: #1A1917;
+              --text-primary: #EFECE6;
+              --text-secondary: #B3ADA5;
             }
             body {
               font-family: -apple-system, BlinkMacSystemFont, sans-serif;
@@ -664,6 +745,25 @@ async function loadApp() {
 
 // ── Services Setup ─────────────────────────────────────────────────────────
 
+/**
+ * Recreate the window after it was closed (macOS keeps the app running).
+ * Services are re-pointed at it, not re-created: their IPC handlers stay.
+ * @returns {Electron.BrowserWindow}
+ */
+function reopenWindow() {
+  createWindow();
+  // Asked for from the tray or the dock: show it even when starting minimized.
+  mainWindow.once("ready-to-show", () => mainWindow && mainWindow.show());
+  if (agentProcessManager) agentProcessManager.mainWindow = mainWindow;
+  if (trayManager) trayManager.mainWindow = mainWindow;
+  if (notificationService) notificationService.mainWindow = mainWindow;
+  loadApp().catch((err) => {
+    console.error("[main] Failed to load the reopened window:", err.message);
+    dialog.showErrorBox("GAIA", `GAIA couldn't reopen its window: ${err.message}`);
+  });
+  return mainWindow;
+}
+
 function initializeServices() {
   console.log("[main] Initializing services...");
 
@@ -676,8 +776,16 @@ function initializeServices() {
   });
 
   // T1: Tray Manager (system tray icon + context menu)
-  trayManager = new TrayManager(mainWindow, { backendPort });
+  trayManager = new TrayManager(mainWindow, {
+    backendPort,
+    reopenWindow: () => reopenWindow(),
+  });
   trayManager.create();
+  try {
+    trayManager.syncLoginItem();
+  } catch (err) {
+    console.error(`[main] Could not read the sign-in start setting: ${err.message}`);
+  }
 
   // T5: Notification Service (routes agent notifications to OS + renderer)
   notificationService = new NotificationService(
@@ -685,6 +793,9 @@ function initializeServices() {
     agentProcessManager,
     trayManager
   );
+
+  // #5226: hold off idle sleep while a chat turn runs
+  keepAwake = new KeepAwake();
 
   // #2007: System metrics for the observability dashboard
   systemMetrics.registerIpcHandlers();
@@ -1111,7 +1222,13 @@ app.whenReady().then(async () => {
   }
 
   // Start the Python backend
-  backendProcess = await startBackend();
+  if (shutdownStarted) return;
+  backendStarting = startBackend();
+  backendProcess = await backendStarting;
+  if (shutdownStarted) {
+    console.log("[main] Quit during startup — not opening the window");
+    return;
+  }
 
   // Create the window (hidden until ready-to-show)
   createWindow();
@@ -1125,7 +1242,7 @@ app.whenReady().then(async () => {
   // Any failure here is logged and swallowed — the app continues to run
   // even if auto-update is unavailable.
   try {
-    autoUpdater.init(mainWindow);
+    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart });
   } catch (err) {
     console.error(
       "[main] Failed to init auto-updater:",
@@ -1169,18 +1286,12 @@ app.whenReady().then(async () => {
     }
   }
 
-  app.on("activate", async () => {
+  // macOS and Linux: the shutdown is the OS's, so don't ask.
+  powerMonitor.on("shutdown", () => quitGuard.allow());
+
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-      // Re-wire existing services to the new window (don't re-create — IPC handlers are already registered)
-      if (agentProcessManager) agentProcessManager.mainWindow = mainWindow;
-      if (trayManager) trayManager.mainWindow = mainWindow;
-      if (notificationService) notificationService.mainWindow = mainWindow;
-      try {
-        await loadApp();
-      } catch (err) {
-        console.error("[main] Failed to load app on activate:", err.message);
-      }
+      reopenWindow();
     } else if (mainWindow) {
       mainWindow.show();
     }
@@ -1215,33 +1326,57 @@ app.on("window-all-closed", () => {
 // Electron's before-quit does NOT await async handlers.
 // We use will-quit + event.preventDefault() to perform async cleanup, then re-quit.
 
-let cleanupDone = false;
+/** Only while the GAIA service runs: without it, no answer is running. */
+function workCanBeLost() {
+  return Boolean(trayManager && backendProcess);
+}
 
-app.on("before-quit", () => {
-  isQuitting = true;
-  // Mark any subsequent backend exit as intentional so we don't pop the
-  // crash dialog during normal shutdown.
-  isIntentionalKill = true;
-});
-
-app.on("will-quit", (event) => {
-  if (cleanupDone) return; // Cleanup already finished, let the app quit
-
-  event.preventDefault(); // Prevent quit until cleanup is done
-  console.log("[main] will-quit: performing async cleanup...");
-
-  cleanup().then(() => {
-    cleanupDone = true;
-    console.log("[main] Cleanup complete, quitting...");
-    app.quit(); // Re-trigger quit — cleanupDone prevents infinite loop
-  }).catch((err) => {
-    console.error("[main] Cleanup error:", err.message);
-    cleanupDone = true;
-    app.quit();
+/** Ask about losing work in front of the window, even when it was hidden in the tray. */
+function askAboutRunningWork(action) {
+  return confirmQuit({
+    action,
+    getWork: () => fetchWorkInProgress(backendPort),
+    showMessageBox: (opts) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return dialog.showMessageBox(opts);
+      if (!mainWindow.isVisible()) mainWindow.show();
+      return dialog.showMessageBox(mainWindow, opts);
+    },
   });
+}
+
+/** The update dialog's "Restart now": the installer starts at once, so ask first. */
+function confirmUpdateRestart() {
+  return workCanBeLost() ? askAboutRunningWork(RESTART_FOR_UPDATE) : Promise.resolve(true);
+}
+
+// Every quit asks first while an answer or index job would be lost; an
+// update restart (asked in confirmUpdateRestart) and an OS shutdown don't.
+const quitGuard = installQuitGuard({
+  app,
+  updater: electronAutoUpdater,
+  shouldAsk: () => !fatalQuitting && workCanBeLost(),
+  confirm: () => askAboutRunningWork(QUIT),
+  onQuitting: () => {
+    isQuitting = true;
+    // Mark any subsequent backend exit as intentional so we don't pop the
+    // crash dialog during normal shutdown.
+    isIntentionalKill = true;
+  },
+  onError: (err) => {
+    console.error("[main] Quit check failed:", err);
+    dialog.showErrorBox(
+      "GAIA",
+      `GAIA couldn't ask whether to stop the running work: ${err.message}\n\n` +
+        "Quit again within a minute to quit anyway; any answer still being written will be lost."
+    );
+  },
 });
+
+installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
+  shutdownStarted = true;
+
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
     autoUpdater.destroy();
@@ -1258,24 +1393,48 @@ async function cleanup() {
     notificationService = null;
   }
 
-  // Stop all managed OS agents gracefully
-  if (agentProcessManager) {
-    console.log("Stopping all managed agents...");
-    try {
-      await agentProcessManager.stopAll();
-    } catch (err) {
-      console.error("Error stopping agents:", err.message);
-    }
-    agentProcessManager = null;
+  if (keepAwake) {
+    keepAwake.destroy();
+    keepAwake = null;
   }
+
+  // The agents and the backend stop side by side: each waits out its own
+  // grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
   }
+}
 
-  // Stop the Python backend via the port-manager (SIGTERM → wait 3 s → SIGKILL).
+async function stopAgentsForQuit() {
+  if (!agentProcessManager) return;
+  console.log("Stopping all managed agents...");
+  try {
+    await agentProcessManager.stopAll();
+  } catch (err) {
+    console.error("Error stopping agents:", err.message);
+  }
+  agentProcessManager = null;
+}
+
+async function stopBackendForQuit() {
+  // A quit during startup: wait for the spawn so it can be stopped below.
+  if (backendStarting) {
+    try {
+      const started = await backendStarting;
+      if (started && !backendProcess && started.exitCode === null && started.signalCode === null) {
+        backendProcess = started;
+      }
+    } catch (err) {
+      console.error("[main] Backend start failed during quit:", err.message);
+    }
+  }
+
+  // Stop the Python backend and everything it started via the port-manager
+  // (SIGTERM → wait 3 s → SIGKILL).
   // F5: previously we did this inline; extracted so main.cjs stays lean and
   // to prevent orphan leaks across runs (issue #782).
   if (backendProcess) {

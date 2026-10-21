@@ -9,6 +9,30 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A `/query` run waiting for the model streams that it is waiting.** The run
+  thread runs as the user's turn: `status` events with `phase: "model_queue"`
+  and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and
+  `/query/{run_id}/cancel` ends the wait. The translator keeps `phase` and
+  `queue` on those events only.
+- **A scheduled send or snooze cut off mid-fire no longer stays stuck, and a
+  failed send is listed.** A crash, or a locked database when the result was
+  written, left the job in `firing` forever, never retried and never reported.
+  A claim is now a lease: the scheduler renews it every minute while the job
+  runs, and only the holder can record the outcome (`claim_id`,
+  `superseded_claim` and `claimed_at` are added to `email_scheduled_jobs` on
+  startup). A lease with no renewal for 10 minutes, still unrenewed two minutes
+  later, is recovered. A scheduled send is marked `failed` with the reason and
+  never run a second time, because it may already have gone out. A snooze is
+  re-queued, since putting a message back in the inbox twice is harmless; a
+  snooze moved onto the daemon clock carries `"rerunnable": true` so the daemon
+  re-queues it too.
+  `list_scheduled_jobs` now also returns `failed`: the jobs that failed in the
+  last 7 days, with the error, so the user hears about a send that did not go
+  out. A driver that was alive after all (two schedulers on one database, a
+  laptop waking from sleep) keeps its job, and its own outcome replaces the
+  recovery's guess. The failure names the last heartbeat in local time and
+  tells the user to check the Sent folder before scheduling the mail again.
+
 - **A batch organize that failed for every message is reported as a failure.**
   `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,
   `add_star_batch`, `remove_star_batch`, `label_message_batch` and

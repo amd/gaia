@@ -15,7 +15,7 @@ const { EventEmitter } = require("events");
 const mockChildren = [];
 function mockMakeChild() {
   const child = new EventEmitter();
-  child.stdin = { write: jest.fn(), destroyed: false };
+  child.stdin = Object.assign(new EventEmitter(), { write: jest.fn(), destroyed: false });
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 40000 + mockChildren.length;
@@ -93,7 +93,7 @@ describe("agent crash loop -> notification -> tray", () => {
     win.isMinimized = jest.fn(() => false);
     win.restore = jest.fn();
     manager = new AgentProcessManager(win);
-    tray = new TrayManager(win);
+    tray = new TrayManager(win, { reopenWindow: () => win });
     tray.create();
     service = new NotificationService(win, manager, tray);
   });
@@ -131,7 +131,7 @@ describe("agent crash loop -> notification -> tray", () => {
     expect(limitNotice.message).toContain("crashy");
 
     expect(tray.notificationCount).toBe(1);
-    expect(tray.tray._toolTip).toBe("GAIA — 1 unread notification");
+    expect(tray.tray._toolTip).toBe("GAIA — starting · 1 unread notification");
     expect(logSpy.mock.calls.map((c) => c.join(" "))).toContain("[tray] Unread notifications: 1");
   });
 });

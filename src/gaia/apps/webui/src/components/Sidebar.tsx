@@ -3,17 +3,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, HelpCircle, Loader2, PanelLeftClose, PanelLeftOpen,
-    Search, Settings, Smartphone, SquarePen, Trash2, X,
+    Bell, Brain, Clock, EyeOff, FileText, PanelLeftClose, PanelLeftOpen,
+    Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
-import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
+import { ModelStatusPill } from './ModelStatusPill';
+import { useNotificationStore, selectUnreadCount, selectPromptingSessionIds } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { groupSessionsByRecency } from '../utils/sessionGrouping';
+import {
+    groupSessionsForList, hiddenAutomatedCount, sessionRowStatus, type LiveRuns, type RowStatus,
+} from '../utils/sessionGrouping';
+import { ordinal } from '../utils/chatAlerts';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
+import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import gaiaRobot from '../assets/gaia-robot.png';
+import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
 import './Sidebar.css';
 
@@ -23,12 +29,37 @@ interface SidebarProps {
     tunnelActive?: boolean;
 }
 
-function SessionRow({ session, active, running, onSelect, onDelete }: {
+const STATUS_LABEL: Record<RowStatus, string> = {
+    running: 'Running',
+    queued: 'Waiting for the GPU',
+    waiting: 'Waiting for you',
+    done: 'Done',
+    failed: 'Failed',
+};
+
+const SHOW_AUTOMATED_KEY = 'gaia-show-automated-runs';
+
+function readShowAutomated(): boolean {
+    try {
+        return localStorage.getItem(SHOW_AUTOMATED_KEY) === '1';
+    } catch (err) {
+        log.system.warn('Chat-list filter unreadable (site data blocked); hiding eval and scheduled runs.', err);
+        return false;
+    }
+}
+
+function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin }: {
     session: Session;
     active: boolean;
-    running: boolean;
+    status: RowStatus | null;
+    /** 1-based place in line for the GPU while queued; 0 otherwise. */
+    queuePlace: number;
+    /** Messages typed into this chat that have not gone out yet, and how many of them failed. */
+    unsent: number;
+    failed: number;
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
+    onPin: (id: string, pinned: boolean) => void;
 }) {
     const [confirm, setConfirm] = useState(false);
     useEffect(() => {
@@ -37,27 +68,54 @@ function SessionRow({ session, active, running, onSelect, onDelete }: {
         return () => clearTimeout(t);
     }, [confirm]);
 
+    const unread = !!session.unread && !active;
+    // Done is news only until read; failed stays until the next turn.
+    const dot = status === 'done' && !unread ? null : status;
+    const place = queuePlace > 0 ? `${ordinal(queuePlace)} in line` : null;
+    const label = dot ? [STATUS_LABEL[dot], place].filter(Boolean).join(', ') : undefined;
+    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
+    const note = [place, waiting].filter(Boolean).join(' · ');
+    const unsentWords = `${unsent} unsent message${unsent === 1 ? '' : 's'}`;
+
     return (
-        <li className={`sb-row${active ? ' is-active' : ''}`}>
+        <li className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}`} data-status={dot ?? undefined}>
             <button
                 type="button"
                 className="sb-row-main"
                 onClick={() => onSelect(session.id)}
                 aria-current={active ? 'page' : undefined}
+                aria-label={[session.title, label, waiting, unread ? 'unread' : null].filter(Boolean).join(', ')}
                 title={session.title}
             >
-                {running && <Loader2 size={12} className="spin sb-row-icon" aria-label="Running" />}
+                {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
                 {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
                 <span className="sb-row-title">{session.title}</span>
+                {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
+            </button>
+            <button
+                type="button"
+                className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
+                onClick={() => onPin(session.id, !session.pinned)}
+                aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+                aria-pressed={!!session.pinned}
+                title={session.pinned ? 'Unpin' : 'Pin to top'}
+            >
+                {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
             </button>
             <button
                 type="button"
                 className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
                 onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
-                aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}
-                title={confirm ? 'Click again to delete' : 'Delete'}
+                aria-label={confirm
+                    ? `Confirm delete ${session.title}${unsent > 0 ? ` and its ${unsentWords}` : ''}`
+                    : `Delete ${session.title}`}
+                title={confirm
+                    ? (unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : 'Click again to delete')
+                    : 'Delete'}
             >
-                {confirm ? <span className="sb-row-delete-label">Delete?</span> : <Trash2 size={13} />}
+                {confirm
+                    ? <span className="sb-row-delete-label">{unsent > 0 ? `Delete ${unsent} unsent?` : 'Delete?'}</span>
+                    : <Trash2 size={13} />}
             </button>
         </li>
     );
@@ -67,6 +125,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const sessions = useChatStore((s) => s.sessions);
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const runningSessionIds = useChatStore((s) => s.runningSessionIds);
+    const queuedSessionIds = useChatStore((s) => s.queuedSessionIds);
+    const awaitingBySession = useChatStore((s) => s.awaitingBySession);
+    const messageQueues = useChatStore((s) => s.messageQueues);
+    const updateSessionInList = useChatStore((s) => s.updateSessionInList);
+    const prompting = useNotificationStore(useShallow(selectPromptingSessionIds));
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
     const collapsed = useChatStore((s) => s.sidebarCollapsed);
     const toggleCollapsed = useChatStore((s) => s.toggleSidebarCollapsed);
@@ -82,14 +145,14 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
     const showMemory = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
-    const active = useModelStore((s) => s.active);
-    const place = useInferencePlace();
     const unread = useNotificationStore(selectUnreadCount);
     const showNotifications = useNotificationStore((s) => s.showPanel);
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
 
     const [query, setQuery] = useState('');
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    const [rowError, setRowError] = useState<string | null>(null);
+    const [showAutomated, setShowAutomated] = useState(readShowAutomated);
     const searchRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -101,11 +164,64 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         return () => window.removeEventListener('gaia:focus-search', focusSearch);
     }, [collapsed, toggleCollapsed]);
 
+    const live: LiveRuns = useMemo(() => ({
+        running: runningSessionIds,
+        queued: queuedSessionIds,
+        awaiting: awaitingBySession,
+        prompting,
+    }), [runningSessionIds, queuedSessionIds, awaitingBySession, prompting]);
+
+    const hiddenCount = hiddenAutomatedCount(sessions);
     const groups = useMemo(() => {
         const q = query.trim().toLowerCase();
         const list = q ? sessions.filter((s) => s.title.toLowerCase().includes(q)) : sessions;
-        return groupSessionsByRecency(list);
-    }, [sessions, query]);
+        return groupSessionsForList(list, live, { showAutomated });
+    }, [sessions, query, live, showAutomated]);
+
+    const toggleAutomated = useCallback(() => {
+        setShowAutomated((on) => {
+            try {
+                localStorage.setItem(SHOW_AUTOMATED_KEY, on ? '0' : '1');
+            } catch (err) {
+                log.system.warn('Chat-list filter not saved; it will reset on reload.', err);
+            }
+            return !on;
+        });
+    }, []);
+
+    const markRead = useCallback((id: string) => {
+        updateSessionInList(id, { unread: false });
+        // No rollback: flipping unread back would re-fire this effect in a tight loop.
+        api.markSessionRead(id).catch((err) => {
+            log.chat.error(`Could not mark chat ${id} read`, err);
+            setRowError(`Could not mark the chat read: ${err instanceof Error ? err.message : err}`);
+        });
+    }, [updateSessionInList]);
+
+    // A reply that lands while you're looking at the chat is already read.
+    const currentUnread = sessions.find((s) => s.id === currentSessionId)?.unread;
+    useEffect(() => {
+        if (!currentSessionId || !currentUnread) return;
+        if (document.hasFocus()) {
+            markRead(currentSessionId);
+            return;
+        }
+        const onFocus = () => markRead(currentSessionId);
+        window.addEventListener('focus', onFocus, { once: true });
+        return () => window.removeEventListener('focus', onFocus);
+    }, [currentSessionId, currentUnread, markRead]);
+
+    const pin = useCallback(async (id: string, pinned: boolean) => {
+        setRowError(null);
+        updateSessionInList(id, { pinned });
+        try {
+            await api.pinSession(id, pinned);
+        } catch (err) {
+            log.chat.error(`Could not ${pinned ? 'pin' : 'unpin'} chat ${id}`, err);
+            updateSessionInList(id, { pinned: !pinned });
+            setRowError(err instanceof Error ? err.message : `Could not ${pinned ? 'pin' : 'unpin'} the chat.`);
+        }
+    }, [updateSessionInList]);
 
     const closeOnMobile = useCallback(() => {
         if (window.innerWidth <= 768) setSidebarOpen(false);
@@ -138,9 +254,12 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
     }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const LocationIcon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
     const isCollapsed = collapsed && !isMobile;
+    const setSidebarCollapsed = useChatStore((s) => s.setSidebarCollapsed);
+    const collapse = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
+    const pane = useSidebarWidth(collapse);
+    const resizable = !isMobile && !isCollapsed;
 
     const nav = [
         { key: 'memory', label: 'Memory', icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
@@ -150,16 +269,17 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
 
     return (
         <aside
-            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}`}
+            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}${pane.resizing ? ' is-resizing' : ''}`}
+            style={resizable ? { width: pane.width, minWidth: pane.width } : undefined}
             aria-label="Chats"
         >
+            {resizable && pane.handle}
             <div className="sb-top">
-                {!isCollapsed && (
-                    <div className="sb-brand">
-                        <img src={gaiaRobot} alt="" width={22} height={22} />
-                        <span>GAIA</span>
-                    </div>
-                )}
+                {/* The icon stays when collapsed: with no title bar it is the app's mark. */}
+                <div className="sb-brand">
+                    <img src={gaiaRobot} alt="" width={22} height={22} />
+                    {!isCollapsed && <span>GAIA</span>}
+                </div>
                 <button
                     type="button"
                     className="sb-icon-btn"
@@ -188,7 +308,8 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             type="search"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); } }}
+                            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setQuery(''); searchRef.current?.blur(); } }}
+                            {...CLAIMS_ESCAPE}
                             placeholder="Search chats"
                             aria-label="Search chats (Ctrl+K)"
                         />
@@ -216,7 +337,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                         <p className="sb-empty">{query ? 'No chats match.' : 'No chats yet.'}</p>
                     )}
                     {groups.map((g) => (
-                        <section key={g.label} className="sb-group">
+                        <section key={g.label} className={`sb-group${g.label === 'Needs you' ? ' is-needs-you' : ''}`}>
                             <h2 className="sb-group-label">{g.label}</h2>
                             <ul>
                                 {g.sessions.map((s) => (
@@ -224,35 +345,37 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         key={s.id}
                                         session={s}
                                         active={s.id === currentSessionId}
-                                        running={runningSessionIds.includes(s.id)}
+                                        status={sessionRowStatus(s, live)}
+                                        queuePlace={queuedSessionIds.indexOf(s.id) + 1}
+                                        unsent={messageQueues[s.id]?.length ?? 0}
+                                        failed={messageQueues[s.id]?.filter((m) => m.state === 'failed').length ?? 0}
                                         onSelect={select}
                                         onDelete={remove}
+                                        onPin={(id, pinned) => void pin(id, pinned)}
                                     />
                                 ))}
                             </ul>
                         </section>
                     ))}
+                    {hiddenCount > 0 && (
+                        <button
+                            type="button"
+                            className="sb-filter"
+                            onClick={toggleAutomated}
+                            aria-pressed={showAutomated}
+                        >
+                            {showAutomated
+                                ? 'Hide background runs'
+                                : `Show ${hiddenCount} background run${hiddenCount === 1 ? '' : 's'}`}
+                        </button>
+                    )}
                     {deleteError && <p className="sb-error" role="alert">{deleteError}</p>}
+                    {rowError && <p className="sb-error" role="alert">{rowError}</p>}
                 </nav>
             )}
 
             <div className="sb-bottom">
-                {!isCollapsed && (
-                    <button
-                        type="button"
-                        className="sb-location"
-                        onClick={() => openSettings('model')}
-                        title={!place
-                            ? UNKNOWN_PLACE_TITLE
-                            : place.description
-                                ?? (place.remote ? `Chat history is sent to ${place.label}` : 'Runs on this PC')}
-                    >
-                        <LocationIcon size={13} aria-hidden="true" />
-                        <span className="sb-location-text">
-                            {[place?.label, active && shortModelName(active.model)].filter(Boolean).join(' · ') || 'Model'}
-                        </span>
-                    </button>
-                )}
+                {!isCollapsed && <ModelStatusPill />}
                 <div className="sb-bottom-actions">
                     <button
                         type="button"

@@ -281,7 +281,11 @@ def test_history_cut_streams_one_notice(monkeypatch):
         db.add_message(session, "user", f"q{i}")
         db.add_message(session, "assistant", f"a{i}")
         helpers._restore_model_history(agent, db, session, "next", handler)
-    events = [c.args[0] for c in handler._emit.call_args_list]
+    events = [
+        c.args[0]
+        for c in handler._emit.call_args_list
+        if c.args[0]["type"] != "context_usage"
+    ]
     assert len(events) == 1
     assert events[0]["status"] == "history_cut"
     assert (events[0]["turns"], events[0]["tokens"]) == (6, 60)
@@ -304,7 +308,11 @@ def test_switching_to_a_smaller_model_streams_the_cut(monkeypatch):
     helpers._restore_model_history(agent, db, session, "next", handler)
     budget["value"] = 60
     helpers._restore_model_history(agent, db, session, "next", handler)
-    events = [c.args[0] for c in handler._emit.call_args_list]
+    events = [
+        c.args[0]
+        for c in handler._emit.call_args_list
+        if c.args[0]["type"] != "context_usage"
+    ]
     assert [(e["turns"], e["tokens"]) for e in events] == [(4, 40)]
     db.close()
 
@@ -379,7 +387,9 @@ def test_http_turn_persists_evidence_and_restores_it_to_fresh_agent(
     monkeypatch.setattr(helpers, "_agent_registry", registry)
     monkeypatch.setattr(helpers, "_get_cached_agent", lambda *args: None)
     monkeypatch.setattr(helpers, "_store_agent", lambda *args: None)
-    monkeypatch.setattr(helpers, "_maybe_load_expected_model", lambda *args: None)
+    monkeypatch.setattr(
+        helpers, "_maybe_load_expected_model", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(helpers, "_maybe_update_session_title", AsyncMock())
     monkeypatch.setattr("gaia.ui.routers.chat._notify_loop", lambda *args: None)
     stats = MagicMock(status_code=200)
@@ -458,3 +468,32 @@ def test_discovered_cloud_history_uses_cached_provider_metadata(monkeypatch):
     helpers._restore_model_history(agent, db, session, "follow-up")
     assert agent.conversation_history == _trace()
     db.close()
+
+
+def test_cloud_history_budget_does_not_reserve_the_reply_in_its_input_budget(
+    monkeypatch,
+):
+    """A 64K input budget minus a 32K reply reserve left ~12K for a 1M-token model's history."""
+    from gaia.agents.base.history import history_budget
+
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 20000)
+    agent = SimpleNamespace(
+        model_id="fireworks.deepseek-v4p1-flash",
+        system_prompt="large",
+        chat=SimpleNamespace(config=SimpleNamespace(max_tokens=32768)),
+    )
+    assert history_budget(agent, "q") == 32768
+
+
+def test_local_history_budget_still_reserves_the_reply(monkeypatch):
+    from gaia.agents.base.history import history_budget
+
+    monkeypatch.setenv("GAIA_CTX_SIZE", "65536")
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 20000)
+    agent = SimpleNamespace(
+        model_id="Gemma-4-E4B-it-GGUF",
+        device="gpu",
+        system_prompt="large",
+        chat=SimpleNamespace(config=SimpleNamespace(max_tokens=32768)),
+    )
+    assert history_budget(agent, "q") == 65536 - 20000 - 32768 - 2048

@@ -1,7 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback } from 'react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useShallow } from 'zustand/react/shallow';
 import {
   Bell,
@@ -95,24 +96,9 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   const markAllRead = useNotificationStore((s) => s.markAllRead);
   const clearAll = useNotificationStore((s) => s.clearAll);
   const dismiss = useNotificationStore((s) => s.dismiss);
-  const addNotification = useNotificationStore((s) => s.addNotification);
   const respondToPermission = useNotificationStore((s) => s.respondToPermission);
   const typeFilter = useNotificationStore((s) => s.typeFilter);
   const setTypeFilter = useNotificationStore((s) => s.setTypeFilter);
-
-  // Listen for IPC notifications from Electron.
-  // Use a ref guard to ensure registration happens only once — Electron IPC
-  // listeners don't return an unsubscribe handle, so re-running would leak.
-  const ipcRegisteredRef = useRef(false);
-  useEffect(() => {
-    const api = window.gaiaAPI;
-    if (!api?.notification?.onNotification || ipcRegisteredRef.current) return;
-    ipcRegisteredRef.current = true;
-
-    api.notification.onNotification((data: GaiaNotification) => {
-      addNotification(data);
-    });
-  }, [addNotification]);
 
   // Handle clicking a notification item (mark as read)
   const handleClick = useCallback(
@@ -138,14 +124,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
     [respondToPermission]
   );
 
-  // Close on Escape — skip if a higher-priority modal already handled it
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEscapeToClose(true, onClose);
 
   // Filter type tabs
   const filterTypes: Array<{ key: NotificationType | null; label: string }> = [

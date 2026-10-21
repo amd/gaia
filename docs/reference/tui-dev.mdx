@@ -7,7 +7,7 @@ icon: "wrench"
 # GAIA Terminal UI — Developer Manual
 
 For working *on* the TUI, or driving it from a test or an assistant. Using it
-day to day is the [user manual](/guides/terminal-hub).
+day to day is the [user manual](/guides/tui).
 
 ## What it is made of
 
@@ -53,6 +53,13 @@ scripts/dev/run-tui.sh --dev --control
 
 `--dev` shows per-turn timings, steps, and tool arguments **on screen**;
 `--trace=<path>` writes the same events to JSONL instead. They are independent.
+
+To profile the TUI's own startup and rendering, add `--pprof 127.0.0.1:6060`
+(loopback addresses only) and read it with Go's profiler:
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=20
+```
 
 ### Point it at your checkout, not the published sidecar
 
@@ -320,6 +327,6 @@ registration and 400 (#1655). `gaia init` gets this right;
 
 ## Related
 
-- [User manual](/guides/terminal-hub)
+- [User manual](/guides/tui)
 - [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md) — install and binaries
 - [CLI reference](/reference/cli)

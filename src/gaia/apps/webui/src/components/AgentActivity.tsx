@@ -27,6 +27,7 @@ import {
     ShieldAlert,
     Brain,
     MessageCircleQuestionMark,
+    Circle,
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
@@ -89,6 +90,13 @@ const TOOL_META: Record<string, ToolMeta> = {
     request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };
 
+// Memory works in the background: its steps show only when they fail.
+const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+
+function isBackgroundStep(step: AgentStep): boolean {
+    return step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '');
+}
+
 const DEFAULT_TOOL_META: ToolMeta = {
     label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
@@ -99,6 +107,202 @@ function getToolMeta(toolName?: string): ToolMeta {
         return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
     }
     return TOOL_META[toolName] || DEFAULT_TOOL_META;
+}
+
+/** What the live line says while a tool runs: the step row's own wording, never the raw tool id. */
+export function toolActiveLabel(toolName?: string): string {
+    return getToolMeta(toolName).activeLabel;
+}
+
+/** The fallback line for a tool row that arrived without a narration (older saved turns). */
+function toolFallbackLabel(step: AgentStep): string {
+    const meta = getToolMeta(step.tool);
+    // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
+    const unfinished = step.success == null && !step.result;
+    return step.active
+        ? meta.activeLabel
+        : step.success === false ? `${meta.activeLabel} failed`
+        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
+}
+
+/** The one plain line a tool row shows by default. */
+export function toolRowText(step: AgentStep): string {
+    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step);
+}
+
+const COMPACT_DETAIL_CHARS = 48;
+
+/** Below this many call rows the list is short enough to scan without a filter. */
+const FILTER_MIN_TOOL_ROWS = 6;
+
+/**
+ * Shorten the detail of "Reading file: <long path>" to the part that differs
+ * between similar rows (a path's tail, a URL's host and page) instead of
+ * letting the row cut off at a shared prefix.
+ */
+export function compactNarration(text: string): string {
+    const split = /^([^:\n]{1,40}): (.+)$/.exec(text);
+    if (!split) return text;
+    const [, base, detail] = split;
+    if (/^https?:\/\//i.test(detail)) {
+        const bare = detail.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '');
+        const segments = bare.split('/').filter(Boolean);
+        const short = bare.length > COMPACT_DETAIL_CHARS && segments.length > 2
+            ? `${segments[0]}/…/${segments[segments.length - 1]}`
+            : bare;
+        return `${base}: ${short}`;
+    }
+    if (detail.length > COMPACT_DETAIL_CHARS && /[\\/]/.test(detail) && !/\s/.test(detail)) {
+        const sep = detail.includes('\\') ? '\\' : '/';
+        const segments = detail.split(/[\\/]/).filter(Boolean);
+        if (segments.length > 2) return `${base}: …${sep}${segments.slice(-2).join(sep)}`;
+    }
+    return text;
+}
+
+export type PlanItemStatus = 'done' | 'running' | 'failed' | 'stopped' | 'pending';
+
+/** A display row: an agent step, plus how many identical calls it stands for. */
+export interface ActivityRow extends AgentStep {
+    /** Identical tool calls merged into this row (absent for a single call). */
+    count?: number;
+    /** Per-plan-step status, parallel to planSteps (plan rows with a known current step). */
+    planStatuses?: PlanItemStatus[];
+}
+
+/** The agent's own bookkeeping lines while it walks a plan; the checklist already says this. */
+const PLAN_BOOKKEEPING_RE = /^(?:Executing step \d+ of the plan\.?|Following the plan to [\s\S]*)$/;
+
+function samePlan(a?: string[], b?: string[]): boolean {
+    return !!a && !!b && a.length === b.length && a.every((s, i) => s === b[i]);
+}
+
+function sameCall(a: AgentStep, b: AgentStep): boolean {
+    return a.tool === b.tool && (a.detail ?? '') === (b.detail ?? '') && a.mcpServer === b.mcpServer;
+}
+
+/** Status of each plan step, from the step being executed and the calls made since. */
+export function planStatuses(
+    stepCount: number,
+    current: number | undefined,
+    callsSince: AgentStep[],
+    isActive: boolean,
+): PlanItemStatus[] | undefined {
+    if (current == null || current < 0) return undefined;
+    const last = callsSince[callsSince.length - 1];
+    let currentStatus: PlanItemStatus;
+    if (last?.active) currentStatus = 'running';
+    else if (last?.success === false) currentStatus = 'failed';
+    else if (last && (last.success === true || last.result)) currentStatus = 'done';
+    else if (isActive) currentStatus = 'running';
+    // A call with no outcome after the turn ended was cut short (Stop, timeout).
+    else currentStatus = last ? 'stopped' : 'pending';
+    return Array.from({ length: stepCount }, (_, i) =>
+        i < current ? 'done' : i === current ? currentStatus : 'pending');
+}
+
+/**
+ * Fold the raw step stream into display rows: merge runs of thinking/status,
+ * keep one row per plan (the agent re-sends it before every step), and merge
+ * identical tool calls into one ×N row.
+ */
+export function consolidateSteps(steps: AgentStep[], isActive: boolean): ActivityRow[] {
+    const result: ActivityRow[] = [];
+    // Per plan row: raw index of its latest copy, and where the next different plan starts.
+    const planSpan = new Map<number, { anchor: number; end: number }>();
+    let lastPlan: ActivityRow | undefined;
+    let seenPlan = false;
+
+    steps.forEach((step, rawIdx) => {
+        if (isBackgroundStep(step)) return;
+        const prev = result[result.length - 1];
+
+        if (seenPlan && (step.type === 'thinking' || step.type === 'status')) {
+            if (PLAN_BOOKKEEPING_RE.test((step.detail || step.label || '').trim())) return;
+        }
+
+        if (step.type === 'plan') {
+            seenPlan = true;
+            // Only a re-send of the latest plan folds in; a replan gets its own checklist.
+            if (lastPlan && samePlan(lastPlan.planSteps, step.planSteps)) {
+                if (step.currentStep != null) lastPlan.currentStep = step.currentStep;
+                if (step.planNarrations) lastPlan.planNarrations = step.planNarrations;
+                planSpan.get(lastPlan.id)!.anchor = rawIdx;
+                return;
+            }
+            if (lastPlan) planSpan.get(lastPlan.id)!.end = rawIdx;
+            lastPlan = { ...step };
+            result.push(lastPlan);
+            planSpan.set(step.id, { anchor: rawIdx, end: steps.length });
+            return;
+        }
+
+        if (step.type === 'tool') {
+            // Look back past thinking/status only: a plan or error between two calls keeps them apart.
+            let j = result.length - 1;
+            while (j >= 0 && (result[j].type === 'thinking' || result[j].type === 'status')) j--;
+            const prevTool = j >= 0 ? result[j] : undefined;
+            if (prevTool && prevTool.type === 'tool' && !prevTool.active && sameCall(prevTool, step)
+                && (step.active || prevTool.success === step.success)) {
+                result[j] = { ...step, id: prevTool.id, count: (prevTool.count ?? 1) + 1 };
+                return;
+            }
+            result.push({ ...step });
+            return;
+        }
+
+        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        if (step.type === 'thinking' && prev && prev.type === 'thinking') {
+            const merged = (prev.detail || '') + (step.detail || '');
+            result[result.length - 1] = { ...step, detail: merged || prev.detail };
+            return;
+        }
+        // Merge consecutive status steps
+        if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+            result[result.length - 1] = { ...step, label: step.label || prev.label };
+            return;
+        }
+        // Absorb thinking into adjacent status — keep thinking detail
+        if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
+            result[result.length - 1] = { ...prev, type: 'thinking', detail: step.detail || prev.detail, active: step.active };
+            return;
+        }
+        // Absorb status into adjacent thinking — preserve thinking detail
+        if (step.type === 'status' && prev && prev.type === 'thinking') {
+            result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
+            return;
+        }
+        result.push({ ...step });
+    });
+
+    for (const row of result) {
+        const span = planSpan.get(row.id);
+        if (row.type !== 'plan' || !row.planSteps || !span) continue;
+        const callsSince = steps.slice(span.anchor + 1, span.end).filter((s) => s.type === 'tool');
+        // A plan the agent replaced is no longer running, whatever the turn is doing.
+        const running = isActive && row === lastPlan;
+        row.planStatuses = planStatuses(row.planSteps.length, row.currentStep, callsSince, running);
+    }
+    return result;
+}
+
+/** `8` -> "8s", `125` -> "2m 05s". */
+export function formatElapsed(seconds: number): string {
+    const s = Math.max(0, Math.floor(seconds));
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+/** Wall-clock milliseconds, re-rendering once a second while `ticking`. */
+function useNow(ticking: boolean): number {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        if (!ticking) return;
+        setNow(Date.now());
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, [ticking]);
+    return now;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -119,7 +323,6 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
-    const prevStepCountRef = useRef(0);
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
     const prevIsActiveRef = useRef(isActive);
 
@@ -136,41 +339,13 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
         };
     }, []);
 
-    // ── Consolidate display steps ────────────────────────────────────
-    // Merge consecutive thinking/status steps into one.
-    // IMPORTANT: Use concatenation for detail fields (not `||`) to
-    // preserve accumulated thinking text across multiple steps.
-    const displaySteps = useMemo(() => {
-        const result: AgentStep[] = [];
-        for (const step of steps) {
-            const prev = result[result.length - 1];
-            // Merge consecutive thinking steps — concatenate details
-            if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-                const merged = (prev.detail || '') + (step.detail || '');
-                result[result.length - 1] = { ...step, detail: merged || prev.detail };
-                continue;
-            }
-            // Merge consecutive status steps
-            if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
-                result[result.length - 1] = { ...step, label: step.label || prev.label };
-                continue;
-            }
-            // Absorb thinking into adjacent status — keep thinking detail
-            if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
-                result[result.length - 1] = { ...prev, type: 'thinking', detail: step.detail || prev.detail, active: step.active };
-                continue;
-            }
-            // Absorb status into adjacent thinking — preserve thinking detail
-            if (step.type === 'status' && prev && prev.type === 'thinking') {
-                result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
-                continue;
-            }
-            result.push(step);
-        }
-        return result;
-    }, [steps]);
+    const displaySteps = useMemo(() => consolidateSteps(steps, isActive), [steps, isActive]);
+    const now = useNow(isActive);
 
     const toolSteps = displaySteps.filter((s) => s.type === 'tool');
+    const toolCallCount = toolSteps.reduce((n, s) => n + (s.count ?? 1), 0);
+    // While the turn runs, the latest plan stays in view as a live checklist.
+    const livePlan = isActive ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
     const policySteps = displaySteps.filter((s) => s.type === 'policy_alert');
     const hasPolicyAlerts = policySteps.length > 0;
 
@@ -184,7 +359,9 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
         if (!toolNameFilter && statusFilter === 'all') return displaySteps;
         return displaySteps.filter(s => {
             if (s.type !== 'tool') return true;
-            if (toolNameFilter && !s.tool?.toLowerCase().includes(toolNameFilter.toLowerCase())) return false;
+            const needle = toolNameFilter.toLowerCase();
+            if (needle && !s.tool?.toLowerCase().includes(needle)
+                && !toolRowText(s).toLowerCase().includes(needle)) return false;
             if (statusFilter === 'success' && s.success !== true) return false;
             if (statusFilter === 'error' && s.success !== false) return false;
             return true;
@@ -198,22 +375,6 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     useEffect(() => {
         if (hasPolicyAlerts || hasErrors) setExpanded(true);
     }, [hasPolicyAlerts, hasErrors]);
-
-    // Auto-expand native tools for visibility. MCP tools start collapsed
-    // by default (users expand on demand) to reduce noise in busy sessions.
-    useEffect(() => {
-        prevStepCountRef.current = displaySteps.length;
-        const toolIds = displaySteps
-            .filter((s) => s.type === 'tool' && !s.mcpServer)
-            .map((s) => s.id);
-        if (toolIds.length > 0) {
-            setExpandedTools((prev) => {
-                const next = new Set(prev);
-                toolIds.forEach((id) => next.add(id));
-                return next;
-            });
-        }
-    }, [displaySteps]);
 
     const toggleTool = useCallback((id: number) => {
         // Clear any pending collapse timer when user manually toggles
@@ -236,13 +397,25 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
     // Messages saved before the agent's count was recorded only have their rows to go by.
-    const stepCount = agentStepCount && agentStepCount > 0
+    const rowCount = displaySteps
+        .filter((s) => s.type !== 'status')
+        .reduce((n, s) => n + (s.count ?? 1), 0);
+    // The agent's own count includes the hidden memory steps, so it would disagree with the list.
+    const stepCount = agentStepCount && agentStepCount > 0 && !steps.some(isBackgroundStep)
         ? agentStepCount
-        : displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
+        : rowCount || displaySteps.length;
+    const runningTool = isActive ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active) : undefined;
+    const lastStep = steps[steps.length - 1];
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
-            + (toolSteps.length > 0 ? ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}` : '');
+            + (toolCallCount > 0 ? ` \u00b7 ${toolCallCount} tool${toolCallCount !== 1 ? 's' : ''}` : '');
+    // What GAIA is waiting on right now, and for how long.
+    const liveText = runningTool
+        ? `${toolRowText(runningTool)} \u00b7 ${formatElapsed((now - runningTool.timestamp) / 1000)}`
+        : isActive && lastStep
+            ? `Waiting on the model \u00b7 ${formatElapsed((now - lastStep.timestamp) / 1000)}`
+            : '';
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>
@@ -256,15 +429,20 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                 <div className="agent-summary-left">
                     {hasErrors ? (
                         <AlertCircle size={14} className="agent-icon-error" />
+                    ) : isActive ? (
+                        <Loader2 size={14} className="flow-tool-spinner" />
                     ) : (
                         <Zap size={14} className="agent-icon-done" />
                     )}
                     <span className="agent-summary-text">{summaryText}</span>
+                    {liveText && <span className="agent-summary-live">{liveText}</span>}
                 </div>
                 <div className="agent-summary-right">
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </div>
             </button>
+
+            {livePlan && <PlanChecklist step={livePlan} />}
 
             {/* Flow content — thinking text + inline tool cards.
                 Uses a wrapper div that's always mounted so CSS can animate
@@ -272,13 +450,46 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
             {displaySteps.length > 0 && (
                 // Inert while collapsed: invisible buttons must not be tabbable or announced.
                 <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`} inert={!expanded}>
-                    {/* Filter bar — shown when expanded and 2+ tool steps */}
-                    {expanded && toolSteps.length >= 2 && (
+                    <div className="agent-flow">
+                        {filteredSteps.map((step) => {
+                            if (step.type === 'thinking') {
+                                return <FlowThought key={step.id} step={step} live={isActive && !!step.active} />;
+                            }
+                            if (step.type === 'status') {
+                                // Progress notes ("Sending to model…") mean nothing once the turn is over.
+                                return isActive ? <FlowStatus key={step.id} step={step} /> : null;
+                            }
+                            if (step.type === 'tool') {
+                                return (
+                                    <FlowToolCard
+                                        key={step.id}
+                                        step={step}
+                                        isExpanded={expandedTools.has(step.id)}
+                                        now={now}
+                                        onToggle={() => toggleTool(step.id)}
+                                    />
+                                );
+                            }
+                            if (step.type === 'plan') {
+                                // While the turn runs, the live checklist above stands in for it.
+                                return step === livePlan ? null : <PlanChecklist key={step.id} step={step} />;
+                            }
+                            if (step.type === 'error') {
+                                return <FlowError key={step.id} step={step} />;
+                            }
+                            if (step.type === 'policy_alert') {
+                                return <FlowPolicyAlert key={step.id} step={step} />;
+                            }
+                            return null;
+                        })}
+                    </div>
+                    {/* Filter bar: after the steps, and only once there are enough calls to sift */}
+                    {expanded && toolSteps.length >= FILTER_MIN_TOOL_ROWS && (
                         <div className="activity-filter-bar">
                             <input
                                 type="text"
                                 className="activity-filter-input"
-                                placeholder="Filter by tool name..."
+                                placeholder="Filter steps…"
                                 aria-label="Filter by tool name"
                                 value={toolNameFilter}
                                 onChange={(e) => setToolNameFilter(e.target.value)}
@@ -295,61 +506,52 @@ export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCo
                             </select>
                         </div>
                     )}
-                    <div className="agent-flow">
-                        {filteredSteps.map((step) => {
-                            if (step.type === 'thinking') {
-                                return <FlowThought key={step.id} step={step} />;
-                            }
-                            if (step.type === 'status') {
-                                return <FlowStatus key={step.id} step={step} />;
-                            }
-                            if (step.type === 'tool') {
-                                return (
-                                    <FlowToolCard
-                                        key={step.id}
-                                        step={step}
-                                        isExpanded={expandedTools.has(step.id)}
-                                        onToggle={() => toggleTool(step.id)}
-                                    />
-                                );
-                            }
-                            if (step.type === 'plan') {
-                                return <FlowPlan key={step.id} step={step} />;
-                            }
-                            if (step.type === 'error') {
-                                return <FlowError key={step.id} step={step} />;
-                            }
-                            if (step.type === 'policy_alert') {
-                                return <FlowPolicyAlert key={step.id} step={step} />;
-                            }
-                            return null;
-                        })}
-                    </div>
                 </div>
             )}
         </div>
     );
 }
 
-// ── Flow: Thinking text (hacker-style with red cursor) ────────────────────
+// ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
 
-function FlowThought({ step }: { step: AgentStep }) {
+function FlowThought({ step, live }: { step: AgentStep; live: boolean }) {
     const text = step.detail || step.label || '';
+    const [open, setOpen] = useState(live);
     const containerRef = useRef<HTMLDivElement>(null);
+
+    // Fold the reasoning away once the agent moves on or the answer arrives.
+    useEffect(() => {
+        if (!live) setOpen(false);
+    }, [live]);
 
     // Auto-scroll to keep cursor visible as text streams in
     useEffect(() => {
-        if (step.active && containerRef.current) {
+        if (live && open && containerRef.current) {
             containerRef.current.scrollTop = containerRef.current.scrollHeight;
         }
-    }, [text, step.active]);
+    }, [text, live, open]);
 
     if (!text) return null;
+    const words = text.trim().split(/\s+/).length;
 
     return (
-        <div ref={containerRef} className="flow-thought-hacker">
-            <span>{text}</span>
-            {step.active && <span className="flow-thought-cursor" />}
+        <div className="flow-reasoning">
+            <button
+                className="flow-reasoning-toggle"
+                onClick={() => setOpen((o) => !o)}
+                aria-expanded={open}
+            >
+                <Brain size={13} className="flow-tool-icon" />
+                <span>{live ? 'Thinking' : 'Reasoning'}</span>
+                <span className="flow-reasoning-count">{words} word{words !== 1 ? 's' : ''}</span>
+                {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+            {open && (
+                <div ref={containerRef} className="flow-thought-hacker">
+                    <span>{text}</span>
+                    {live && <span className="flow-thought-cursor" />}
+                </div>
+            )}
         </div>
     );
 }
@@ -458,28 +660,30 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
 // ── Flow: Tool Card ──────────────────────────────────────────────────────
 
 interface FlowToolCardProps {
-    step: AgentStep;
+    step: ActivityRow;
     isExpanded: boolean;
     onToggle: () => void;
+    /** Wall-clock ms, for a running call's timer. */
+    now: number;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
-    const meta = getToolMeta(step.tool);
-    const Icon = meta.icon;
-    // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
-    const unfinished = step.success == null && !step.result;
-    const friendlyLabel = step.active
-        ? meta.activeLabel
-        : step.success === false ? `${meta.activeLabel} failed`
-        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
-    const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
+function FlowToolCard({ step, isExpanded, onToggle, now }: FlowToolCardProps) {
+    const Icon = getToolMeta(step.tool).icon;
+    const line = toolRowText(step);
+    const count = step.count ?? 1;
+    // A failed call's reason belongs on its row; a success's output stays one click deeper.
+    const failure = step.success === false && step.result ? step.result : '';
+    const timing = step.active
+        ? formatElapsed((now - step.timestamp) / 1000)
+        : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
         <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''}`}>
             <button
                 className="flow-tool-header"
-                onClick={hasDetail ? onToggle : undefined}
-                style={hasDetail ? undefined : { cursor: 'default' }}
+                onClick={onToggle}
+                aria-expanded={isExpanded}
+                title={step.narration && step.narration !== line ? step.narration : undefined}
             >
                 <div className="flow-tool-left">
                     {step.active ? (
@@ -491,26 +695,29 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{friendlyLabel}</span>
-                    <span className="flow-tool-badge">{step.tool}</span>
-                    {step.mcpServer && (
-                        <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
+                    <span className="flow-tool-label">{line}</span>
+                    {count > 1 && (
+                        <span className="flow-tool-count" aria-label={`${count} identical calls`}>{'×'}{count}</span>
                     )}
+                    {failure && <span className="flow-tool-failure">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
-                    {step.latencyMs != null && !step.active && (
-                        <span className="flow-tool-latency">{formatToolLatency(step.latencyMs)}</span>
-                    )}
-                    {hasDetail && (
-                        <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
-                            <ChevronRight size={12} />
-                        </span>
-                    )}
+                    {timing && <span className="flow-tool-latency">{timing}</span>}
+                    <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
+                        <ChevronRight size={12} />
+                    </span>
                 </div>
             </button>
 
-            {isExpanded && hasDetail && (
+            {isExpanded && (
                 <div className="flow-tool-detail">
+                    <div className="flow-tool-raw">
+                        <span className="detail-section-label">Tool</span>
+                        <code className="flow-tool-badge">{step.tool || 'unknown'}</code>
+                        {step.mcpServer && (
+                            <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
+                        )}
+                    </div>
                     {/* Arguments (except for commands) */}
                     {step.detail && !step.commandOutput && (
                         <div className="step-detail-args">
@@ -551,30 +758,49 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
 
 // ── Flow: Plan ───────────────────────────────────────────────────────────
 
-function FlowPlan({ step }: { step: AgentStep }) {
-    const [isOpen, setIsOpen] = useState(false);
-    if (!step.planSteps || step.planSteps.length === 0) return null;
+const PLAN_STATUS_LABEL: Record<PlanItemStatus, string> = {
+    done: 'Done', running: 'Running', failed: 'Failed', stopped: 'Stopped', pending: 'Not started',
+};
+
+function PlanStatusIcon({ status }: { status?: PlanItemStatus }) {
+    if (status === 'done') return <CheckCircle2 size={13} className="plan-icon-done" />;
+    if (status === 'running') return <Loader2 size={13} className="flow-tool-spinner" />;
+    if (status === 'failed') return <AlertCircle size={13} className="plan-icon-failed" />;
+    if (status === 'stopped') return <AlertCircle size={13} className="plan-icon-stopped" />;
+    return <Circle size={13} className="plan-icon-pending" />;
+}
+
+/** The plan as a checklist: each step done, running, failed or not started. */
+export function PlanChecklist({ step }: { step: ActivityRow }) {
+    const items = step.planSteps ?? [];
+    if (items.length === 0) return null;
+    const statuses = step.planStatuses;
+    const done = statuses?.filter((s) => s === 'done').length ?? 0;
 
     return (
         <div className="flow-plan">
-            <button
-                className="flow-plan-header flow-plan-toggle"
-                onClick={() => setIsOpen((o) => !o)}
-                aria-expanded={isOpen}
-                title={isOpen ? 'Collapse plan' : 'Expand plan'}
-            >
-                <ListChecks size={12} />
+            <div className="flow-plan-header">
+                <ListChecks size={13} />
                 <span>Plan</span>
-                <span className="flow-plan-count">({step.planSteps.length})</span>
-                {isOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            </button>
-            {isOpen && (
-                <ol className="flow-plan-list">
-                    {step.planSteps.map((ps, i) => (
-                        <li key={i} className="flow-plan-item">{ps}</li>
-                    ))}
-                </ol>
-            )}
+                {statuses && <span className="flow-plan-count">{done} of {items.length} done</span>}
+            </div>
+            <ol className="flow-plan-list">
+                {items.map((raw, i) => {
+                    const status = statuses?.[i];
+                    const text = compactNarration(step.planNarrations?.[i] || raw);
+                    return (
+                        <li
+                            key={i}
+                            className={`flow-plan-item ${status ?? ''}`}
+                            title={raw}
+                            aria-label={status ? `${PLAN_STATUS_LABEL[status]}: ${text}` : undefined}
+                        >
+                            <PlanStatusIcon status={status} />
+                            <span className="flow-plan-text">{text}</span>
+                        </li>
+                    );
+                })}
+            </ol>
         </div>
     );
 }
@@ -762,13 +988,22 @@ export function formatToolLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** `['owner', 'task']` -> "owner, task"; anything else is returned as is. */
+export function readableListValue(value: string): string {
+    const list = /^\[(.*)\]$/s.exec(value);
+    if (!list) return value;
+    const items = list[1].split(/,\s*/).map((v) => v.trim().replace(/^(['"])(.*)\1$/s, '$2'));
+    return items.filter(Boolean).join(', ');
+}
+
 /** `key: value`, where the colon is followed by a space — so `C:\x` is never read as key `C`. */
 const ARG_ROW_RE = /^([A-Za-z_][\w.-]{0,29}):(?:\s+([\s\S]*))?$/;
 
 export function formatArgsDisplay(detail: string): React.ReactNode {
+    // Split on ", " only where a new `key: ` starts, so a list value stays on one row.
     const parts = detail.includes('\n')
         ? detail.split('\n').filter(Boolean)
-        : detail.split(', ').filter(Boolean);
+        : detail.split(/, (?=[A-Za-z_][\w.-]{0,29}:(?:\s|$))/).filter(Boolean);
 
     if (parts.length <= 1) {
         return <span className="arg-value">{detail}</span>;
@@ -780,7 +1015,7 @@ export function formatArgsDisplay(detail: string): React.ReactNode {
                 const row = ARG_ROW_RE.exec(part.trim());
                 if (row) {
                     const key = row[1];
-                    const val = (row[2] ?? '').trim();
+                    const val = readableListValue((row[2] ?? '').trim());
                     return (
                         <div key={i} className="arg-row">
                             <span className="arg-key">{key}</span>

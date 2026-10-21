@@ -146,6 +146,25 @@ func (c *Client) verify(ctx context.Context, inst *Instance) error {
 type statusBody struct {
 	Service string `json:"service"`
 	PID     int    `json:"pid"`
+	// Raw, to tell absent (an older daemon) from null (no limit) from a number.
+	AgentReadTimeoutS  json.RawMessage `json:"agent_read_timeout_s"`
+	AgentReadTimeoutEr string          `json:"agent_read_timeout_error"`
+}
+
+func (b statusBody) relayBudget() RelayBudget {
+	switch {
+	case b.AgentReadTimeoutEr != "":
+		return RelayBudget{Known: true, Err: b.AgentReadTimeoutEr}
+	case len(b.AgentReadTimeoutS) == 0:
+		return RelayBudget{}
+	case string(b.AgentReadTimeoutS) == "null":
+		return RelayBudget{Known: true}
+	}
+	var secs float64
+	if err := json.Unmarshal(b.AgentReadTimeoutS, &secs); err != nil || secs <= 0 {
+		return RelayBudget{Known: true, Err: fmt.Sprintf("the daemon reported an unreadable relay budget %s", b.AgentReadTimeoutS)}
+	}
+	return RelayBudget{Known: true, Seconds: secs}
 }
 
 // probe checks the recorded port with the recorded token. It returns a nil error
@@ -189,6 +208,7 @@ func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 		return StaleForeign, fmt.Errorf("port %d is served by pid %d but the registry records pid %d",
 			inst.Port, body.PID, inst.PID)
 	}
+	inst.RelayBudget = body.relayBudget()
 	return StaleCorrupt, nil
 }
 
@@ -464,6 +484,10 @@ type Request struct {
 	HTTPClient *http.Client
 	// Op names the operation for error messages, e.g. "stream the 'email' query".
 	Op string
+	// RunScoped marks a call about state held by a running sidecar (a run or a
+	// session). A restarted daemon starts fresh sidecars, so such a call is not
+	// carried over to it; it fails with DaemonRestartedError instead.
+	RunScoped bool
 }
 
 // Do sends an authenticated request to the daemon.
@@ -473,11 +497,36 @@ type Request struct {
 // the request replayed exactly once. The instance whose token authorized the
 // response is returned so the caller can reuse it (e.g. to cancel a run).
 //
+// A daemon restart can also move it to a new port. When the connection cannot
+// be made, instance.json is re-read once and, if it names a different live
+// daemon, the request goes there: a failed dial never reached any server, so
+// nothing can run twice. A relayed call first ensures its agent there, since
+// sidecars do not survive a restart; a RunScoped call is not sent at all.
+//
 // The caller owns resp.Body and must close it.
 func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Response, *Instance, error) {
 	resp, err := c.send(ctx, inst, r)
 	if err != nil {
-		return nil, inst, err
+		if !isDialFailure(err) {
+			return nil, inst, err
+		}
+		moved, rerr := c.rediscover(ctx, inst)
+		if rerr != nil {
+			return nil, inst, fmt.Errorf("%w (instance.json was rewritten, but the daemon it names is not usable either: %w)", err, rerr)
+		}
+		if moved == nil {
+			return nil, inst, err
+		}
+		c.opts.Logf("daemon: could not reach %s (%v); instance.json now names %s",
+			inst.BaseURL(), dialCause(err), moved.BaseURL())
+		if moved, err = c.afterRestart(ctx, moved, r); err != nil {
+			return nil, moved, err
+		}
+		c.opts.Logf("daemon: retrying %s %s on %s", r.Method, r.Path, moved.BaseURL())
+		inst = moved
+		if resp, err = c.send(ctx, inst, r); err != nil {
+			return nil, inst, err
+		}
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, inst, nil
@@ -487,6 +536,10 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 	fresh, err := c.refresh(ctx, inst, r.Path)
 	if err != nil {
 		return nil, inst, err
+	}
+	// The token rotates only when the daemon restarts, here on the same port.
+	if fresh, err = c.afterRestart(ctx, fresh, r); err != nil {
+		return nil, fresh, err
 	}
 	c.opts.Logf("daemon: client token rotated; retrying %s %s", r.Method, r.Path)
 
@@ -540,6 +593,69 @@ func (c *Client) refresh(ctx context.Context, old *Instance, path string) (*Inst
 	return fresh, nil
 }
 
+// afterRestart prepares a call for a daemon that replaced the one it was meant
+// for. That daemon starts with no sidecars, so a RunScoped call has nothing to
+// go to, and a relayed call needs its agent ensured there first.
+func (c *Client) afterRestart(ctx context.Context, fresh *Instance, r Request) (*Instance, error) {
+	if r.RunScoped {
+		return fresh, &DaemonRestartedError{Op: c.opDescription(r)}
+	}
+	agentID := relayedAgent(r.Path)
+	if agentID == "" {
+		return fresh, nil
+	}
+	ensured, err := c.ensureOn(ctx, fresh, agentID)
+	if err != nil {
+		return fresh, err
+	}
+	return ensured, nil
+}
+
+// isDialFailure reports a request that never connected, so no server saw it.
+func isDialFailure(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
+// dialCause is the dial's own failure (refused, timed out, unreachable) for the log.
+func dialCause(err error) error {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Err != nil {
+		return op.Err
+	}
+	return err
+}
+
+// relayedAgent is the agent id a /v1/<agent>/... relay path addresses, or "".
+func relayedAgent(path string) string {
+	rest, ok := strings.CutPrefix(path, "/v1/")
+	if !ok {
+		return ""
+	}
+	agentID, _, _ := strings.Cut(rest, "/")
+	return agentID
+}
+
+// rediscover returns the daemon instance.json now records in place of old: nil
+// when it names no other daemon, an error when it names one that is unusable.
+func (c *Client) rediscover(ctx context.Context, old *Instance) (*Instance, error) {
+	fresh, err := ReadInstance()
+	if err != nil {
+		c.opts.Logf("daemon: no replacement for %s in instance.json: %v", old.BaseURL(), err)
+		return nil, nil
+	}
+	if fresh.BaseURL() == old.BaseURL() && fresh.Token == old.Token {
+		return nil, nil
+	}
+	if err := c.verify(ctx, fresh); err != nil {
+		return nil, err
+	}
+	if err := fresh.CheckVersion(); err != nil {
+		return nil, err
+	}
+	return fresh, nil
+}
+
 func (c *Client) send(ctx context.Context, inst *Instance, r Request) (*http.Response, error) {
 	req, err := c.newRequest(ctx, inst, r.Method, r.Path, r.Body, r.Header)
 	if err != nil {
@@ -551,7 +667,7 @@ func (c *Client) send(ctx context.Context, inst *Instance, r Request) (*http.Res
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, &RequestError{Op: c.opDescription(r), Detail: err.Error()}
+		return nil, &RequestError{Op: c.opDescription(r), Detail: err.Error(), Err: err}
 	}
 	return resp, nil
 }
@@ -603,6 +719,18 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if agentID == "" {
 		return nil, &RequestError{Op: "ensure an agent sidecar", Detail: "no agent id was given"}
 	}
+	inst, err := c.StartOrAttach(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.ensureOn(ctx, inst, agentID)
+}
+
+// ensureOn asks the daemon at inst to start-or-attach agentID's sidecar.
+func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string) (*Instance, error) {
+	if err := inst.CheckAgentsFloor(); err != nil {
+		return nil, err
+	}
 	body, err := ensureRequestBody(agentID)
 	if err != nil {
 		return nil, &RequestError{
@@ -610,14 +738,6 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 			Detail: err.Error(),
 		}
 	}
-	inst, err := c.StartOrAttach(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := inst.CheckAgentsFloor(); err != nil {
-		return nil, err
-	}
-
 	resp, inst, err := c.Do(ctx, inst, Request{
 		Method:     http.MethodPost,
 		Path:       APIPrefix + "/agents/" + agentID + "/ensure",

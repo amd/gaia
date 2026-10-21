@@ -4,9 +4,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useChatStore } from '../../stores/chatStore';
-import { useModelStore, shortModelName } from '../../stores/modelStore';
+import { useModelStore, displayModelName } from '../../stores/modelStore';
+import { ModelContextSize } from './ModelContextSize';
+import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
+import '../ModelPicker.css';
+import { CloudPrices } from './CloudPrices';
+import { SpendingLimit } from './SpendingLimit';
+import { formatPrice } from './cloudPrice';
+import './CloudSpending.css';
 import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
+
+const DOWNLOAD_POLL_MS = 2000;
 
 function keyStatus(p: ProviderInfo): string {
     switch (p.key_source) {
@@ -28,10 +36,7 @@ export function ModelSettings() {
     const active = useModelStore((s) => s.active);
     const selectModel = useModelStore((s) => s.select);
     const refreshActive = useModelStore((s) => s.refresh);
-    const systemStatus = useChatStore((s) => s.systemStatus);
-    const activeDevice = useChatStore((s) => s.activeDevice);
-    const setActiveDevice = useChatStore((s) => s.setActiveDevice);
-    const detectedDevices = useChatStore((s) => s.detectedDevices);
+    const rememberNames = useModelStore((s) => s.rememberNames);
 
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -42,6 +47,7 @@ export function ModelSettings() {
     const [key, setKey] = useState('');
     const [amd, setAmd] = useState({ base_url: '', auth_header_name: '', auth_header_prefix: '' });
     const [busy, setBusy] = useState<string | null>(null);
+    const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
@@ -58,15 +64,20 @@ export function ModelSettings() {
         }
     }, []);
 
-    const loadModels = useCallback(async (id: ProviderId) => {
-        setModels(null);
-        setModelsError(null);
+    const loadModels = useCallback(async (id: ProviderId, quiet = false) => {
+        if (!quiet) {
+            setModels(null);
+            setModelsError(null);
+        }
         try {
-            setModels((await api.listProviderModels(id)).models);
+            const r = await api.listProviderModels(id);
+            rememberNames(r.models);
+            setModels(r.models);
+            setMemory(r.memory_gb ? `${r.memory_gb} GB (${r.memory_source})` : r.capacity_error ?? null);
         } catch (err) {
             setModelsError(err instanceof Error ? err.message : String(err));
         }
-    }, []);
+    }, [rememberNames]);
 
     useEffect(() => { void loadProviders(); }, [loadProviders]);
     const activeProvider = active?.provider;
@@ -125,7 +136,7 @@ export function ModelSettings() {
         setNotice(null);
         try {
             await selectModel(model);
-            setNotice({ ok: true, text: `New messages use ${shortModelName(model)}. It is remembered across restarts.` });
+            setNotice({ ok: true, text: `New messages use ${displayModelName(model)}. It is remembered across restarts.` });
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
@@ -138,23 +149,78 @@ export function ModelSettings() {
         setNotice(null);
         try {
             await api.downloadModel(model);
-            setNotice({ ok: true, text: `Downloading ${model}. Progress shows below.` });
+            await loadModels('local', true);
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setBusy(null);
         }
-    }, []);
+    }, [loadModels]);
 
-    const progress = systemStatus?.download_progress ?? null;
+    // Poll while a download runs so its row shows progress, then its new state.
+    const anyDownloading = !!models?.some(isDownloading);
     useEffect(() => {
-        if (progress?.state === 'complete' && chosen === 'local') void loadModels('local');
-    }, [progress?.state, chosen, loadModels]);
+        if (chosen !== 'local' || !anyDownloading) return;
+        const t = setInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(t);
+    }, [anyDownloading, chosen, loadModels]);
 
     const filtered = useMemo(() => {
         const q = query.trim().toLowerCase();
-        return (models ?? []).filter((m) => !q || m.id.toLowerCase().includes(q));
+        return (models ?? []).filter(
+            (m) => !q || m.id.toLowerCase().includes(q) || (m.display_name ?? '').toLowerCase().includes(q),
+        );
     }, [models, query]);
+    const runnable = filtered.filter((m) => m.available !== false);
+    const unavailable = filtered.filter((m) => m.available === false);
+    const activeLocal = active && !active.remote && active.model ? active.model : null;
+
+    const renderRow = (m: ProviderModel) => {
+        const current = active?.model === m.id;
+        const progress = isDownloading(m) ? m.download_progress : null;
+        const meta = [
+            placementText(m.placement),
+            m.size_gb ? `${m.size_gb} GB ${m.downloaded ? 'on disk' : 'download'}` : null,
+            m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s measured here` : null,
+            !m.placement && m.context_length ? `Context ${m.context_length.toLocaleString()} tokens` : null,
+        ].filter(Boolean).join(' · ');
+        return (
+            <li key={m.id} className={`model-row${current ? ' is-current' : ''}`}>
+                <div className="model-row-text">
+                    <span className="model-row-name" title={m.id}>
+                        {m.display_name ?? displayModelName(m.id)}
+                        {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
+                        {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
+                        {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
+                    </span>
+                    {provider?.remote && (
+                        <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
+                    )}
+                    {m.display_name && <span className="model-row-meta">{m.id}</span>}
+                    {meta && <span className="model-row-meta">{meta}</span>}
+                    {m.placement?.warning && <span className="model-row-meta is-warning" role="alert">{m.placement.warning}</span>}
+                    {m.unavailable_reason && <span className="model-row-meta">Can't run here: {m.unavailable_reason}</span>}
+                    {m.evidence && <span className="model-row-meta">Measured: {m.evidence}</span>}
+                    {progress && (
+                        <progress max={100} value={progress.percent} aria-label={`Downloading ${m.display_name ?? m.id}`} />
+                    )}
+                </div>
+                {current ? (
+                    <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
+                ) : m.available === false ? null : progress ? (
+                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
+                ) : !m.downloaded ? (
+                    <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${m.display_name ?? displayModelName(m.id)}`}>
+                        {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
+                    </button>
+                ) : (
+                    <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null} aria-label={`Use ${m.display_name ?? displayModelName(m.id)}`}>
+                        {busy === m.id ? <Loader2 size={13} className="spin" /> : null} Use
+                    </button>
+                )}
+            </li>
+        );
+    };
 
     return (
         <div className="settings-pane">
@@ -186,24 +252,17 @@ export function ModelSettings() {
                 <section className="settings-card" aria-label={provider.name}>
                     <p className="settings-note">{provider.privacy_notice}</p>
 
-                    {provider.id === 'local' && detectedDevices.length > 1 && (
+                    {provider.id === 'local' && (
+                        <p className="settings-hint">
+                            Each model runs where it was built to: GGUF models on the GPU, FLM models on the NPU.
+                            {memory && ` Memory for models: ${memory}.`}
+                        </p>
+                    )}
+
+                    {provider.remote && !connected && (
                         <div className="settings-field">
-                            <span className="settings-label">Run local models on</span>
-                            <div className="segmented" role="radiogroup" aria-label="Device">
-                                {detectedDevices.map((d) => (
-                                    <button
-                                        key={d}
-                                        type="button"
-                                        role="radio"
-                                        aria-checked={activeDevice === d}
-                                        className={activeDevice === d ? 'is-active' : ''}
-                                        onClick={() => setActiveDevice(d)}
-                                    >
-                                        {d.toUpperCase()}
-                                    </button>
-                                ))}
-                            </div>
-                            <span className="settings-hint">Applies to new chats.</span>
+                            <span className="settings-label">Prices</span>
+                            <CloudPrices provider={provider.id} />
                         </div>
                     )}
 
@@ -263,11 +322,8 @@ export function ModelSettings() {
                         </p>
                     )}
 
-                    {progress && (progress.state === 'downloading' || progress.state === 'starting') && (
-                        <div className="settings-progress" role="status">
-                            <span>Downloading {progress.model_name} — {Math.round(progress.percent)}%</span>
-                            <progress max={100} value={progress.percent} aria-label={`Downloading ${progress.model_name}`} />
-                        </div>
+                    {provider.id === 'local' && activeLocal && active?.downloaded !== false && (
+                        <ModelContextSize model={activeLocal} />
                     )}
 
                     {connected && (
@@ -286,38 +342,17 @@ export function ModelSettings() {
                             {modelsError && <p className="settings-error" role="alert">{modelsError}</p>}
                             {!models && !modelsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading…</p>}
                             {models && filtered.length === 0 && <p className="settings-hint">No models match.</p>}
-                            <ul className="model-list">
-                                {filtered.map((m) => {
-                                    const current = active?.model === m.id;
-                                    return (
-                                        <li key={m.id} className={`model-row${current ? ' is-current' : ''}`}>
-                                            <div className="model-row-text">
-                                                <span className="model-row-name">
-                                                    {shortModelName(m.id)}
-                                                    {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
-                                                </span>
-                                                {m.evidence && <span className="model-row-meta">Measured: {m.evidence}</span>}
-                                                {m.context_length && (
-                                                    <span className="model-row-meta">Context {m.context_length.toLocaleString()} tokens</span>
-                                                )}
-                                            </div>
-                                            {current ? (
-                                                <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
-                                            ) : !m.downloaded ? (
-                                                <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null}>
-                                                    {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
-                                                </button>
-                                            ) : (
-                                                <button type="button" className="btn-secondary" onClick={() => void use(m.id)} disabled={busy !== null}>
-                                                    {busy === m.id ? <Loader2 size={13} className="spin" /> : null} Use
-                                                </button>
-                                            )}
-                                        </li>
-                                    );
-                                })}
-                            </ul>
+                            <ul className="model-list">{runnable.map(renderRow)}</ul>
+                            {unavailable.length > 0 && (
+                                <details className="model-unavailable">
+                                    <summary>Not available on this PC ({unavailable.length})</summary>
+                                    <ul className="model-list">{unavailable.map(renderRow)}</ul>
+                                </details>
+                            )}
                         </div>
                     )}
+
+                    {provider.remote && <SpendingLimit />}
                 </section>
             )}
         </div>

@@ -9,9 +9,11 @@ import {
     Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────
@@ -45,12 +47,14 @@ interface MemoryStats {
         upcoming_count: number;
         overdue_count: number;
     };
+    /** Null when the coverage query failed; ``embedding_error`` says why. */
     embedding?: {
         total_items: number;
         with_embedding: number;
         without_embedding: number;
         coverage_pct: number;
-    };
+    } | null;
+    embedding_error?: string;
     db_size_bytes: number;
 }
 
@@ -257,7 +261,7 @@ const ALL_CATEGORIES = ['fact', 'preference', 'error', 'skill', 'note', 'reminde
 
 type ProfilePhase = 'idle' | 'running' | 'review' | 'saving' | 'done';
 
-type DashboardTab = 'dashboard' | 'goals' | 'profile';
+type DashboardTab = 'about' | 'goals' | 'profile' | 'advanced';
 
 interface CheckedDiscoveryFinding extends memoryApi.DiscoveryFinding {
     _checked: boolean;
@@ -340,13 +344,15 @@ export function MemoryDashboard() {
     const [betaConfirm, setBetaConfirm] = useState<null | 'memory' | 'mcp' | 'discovery'>(null);
 
     // Tab state
-    const [activeTab, setActiveTab] = useState<DashboardTab>('dashboard');
+    const [activeTab, setActiveTab] = useState<DashboardTab>('about');
+    const [aboutReloadKey, setAboutReloadKey] = useState(0);
 
     // Goals tab state
     const [goals, setGoals] = useState<Goal[]>([]);
     const [goalStats, setGoalStats] = useState<GoalStats | null>(null);
     const [goalsLoading, setGoalsLoading] = useState(false);
     const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
+    const [confirmGoalDeleteId, setConfirmGoalDeleteId] = useState<string | null>(null);
     const [showAddGoalForm, setShowAddGoalForm] = useState(false);
     const [goalForm, setGoalForm] = useState({ title: '', description: '', priority: 'medium' as memoryApi.Priority });
 
@@ -404,33 +410,27 @@ export function MemoryDashboard() {
         return () => document.removeEventListener('mousedown', handler);
     }, [showMaintenanceMenu]);
 
-    // Close on Escape key
-    useEffect(() => {
-        const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                if (betaConfirm) {
-                    setBetaConfirm(null);
-                } else if (deleteConfirm) {
-                    setDeleteConfirm(false);
-                } else if (reinitConfirm) {
-                    setReinitConfirm(false);
-                } else if (convDetail) {
-                    setConvDetail(null);
-                } else if (showMaintenanceMenu) {
-                    setShowMaintenanceMenu(false);
-                } else if (showAddForm || editingId) {
-                    setShowAddForm(false);
-                    setEditingId(null);
-                } else if (expandedRowId) {
-                    setExpandedRowId(null);
-                } else {
-                    setShowMemoryDashboard(false);
-                }
-            }
-        };
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [convDetail, showMaintenanceMenu, showAddForm, editingId, expandedRowId, setShowMemoryDashboard, betaConfirm, deleteConfirm, reinitConfirm]);
+    // Escape backs out one level: the innermost open piece first, then the dashboard.
+    useEscapeToClose(true, () => {
+        if (betaConfirm) {
+            setBetaConfirm(null);
+        } else if (deleteConfirm) {
+            setDeleteConfirm(false);
+        } else if (reinitConfirm) {
+            setReinitConfirm(false);
+        } else if (convDetail) {
+            setConvDetail(null);
+        } else if (showMaintenanceMenu) {
+            setShowMaintenanceMenu(false);
+        } else if (showAddForm || editingId) {
+            setShowAddForm(false);
+            setEditingId(null);
+        } else if (expandedRowId) {
+            setExpandedRowId(null);
+        } else {
+            setShowMemoryDashboard(false);
+        }
+    });
 
     // Modal focus handling for the beta-confirm dialog: move focus in, keep Tab
     // inside it, and hand focus back to the toggle that opened it.
@@ -582,6 +582,24 @@ export function MemoryDashboard() {
         }
     }, []);
 
+    /** Run a goal action, reload, and say so when it fails instead of leaving the form as-is. */
+    const runGoalAction = useCallback(async (action: () => Promise<unknown>, failure: string) => {
+        try {
+            await action();
+        } catch (err) {
+            log.system.error(failure, err);
+            showToast(`${failure}: ${err instanceof Error ? err.message : err}`, 'error');
+            return;
+        }
+        loadGoals();
+    }, [loadGoals, showToast]);
+
+    useEffect(() => {
+        if (!confirmGoalDeleteId) return;
+        const t = setTimeout(() => setConfirmGoalDeleteId(null), 3000);
+        return () => clearTimeout(t);
+    }, [confirmGoalDeleteId]);
+
     const loadAll = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -598,6 +616,7 @@ export function MemoryDashboard() {
                 loadSettings(),
                 loadGoals(),
             ]);
+            setAboutReloadKey(k => k + 1);
         } catch (err) {
             setError('Failed to load memory data. Is the backend running?');
             log.system.error('Memory dashboard load failed', err);
@@ -637,13 +656,18 @@ export function MemoryDashboard() {
 
     // Every panel that shows a memory: a changed due date or entity moves it
     // in Upcoming and the entity filter, not just in the table.
-    const refreshKnowledgeViews = useCallback(() => {
+    const refreshAdvancedViews = useCallback(() => {
         loadKnowledge();
         loadStats();
         loadEmbeddingCoverage();
         loadUpcoming();
         loadEntities();
     }, [loadKnowledge, loadStats, loadEmbeddingCoverage, loadUpcoming, loadEntities]);
+
+    const refreshKnowledgeViews = useCallback(() => {
+        refreshAdvancedViews();
+        setAboutReloadKey(k => k + 1);
+    }, [refreshAdvancedViews]);
 
     const handleCreateKnowledge = useCallback(async () => {
         if (!formData.content.trim()) return;
@@ -946,13 +970,14 @@ export function MemoryDashboard() {
             const result = await memoryApi.commitDiscovery(payload);
             setDiscSavedCount(result.stored);
             setDiscPhase('done');
+            refreshKnowledgeViews();
             showToast(`Saved ${result.stored} items to memory`, 'success');
         } catch (err) {
             log.system.error('Failed to commit discovery items', err);
             showToast('Failed to save discovery items', 'error');
             setDiscPhase('review');
         }
-    }, [discItems, showToast]);
+    }, [discItems, refreshKnowledgeViews, showToast]);
 
     // ── Profile Setup: Inference ───────────────────────────────────────
 
@@ -1007,13 +1032,14 @@ export function MemoryDashboard() {
             const result = await memoryApi.commitInference(payload);
             setInfSavedCount(result.stored);
             setInfPhase('done');
+            refreshKnowledgeViews();
             showToast(`Saved ${result.stored} insights to memory`, 'success');
         } catch (err) {
             log.system.error('Failed to commit inference insights', err);
             showToast('Failed to save inference insights', 'error');
             setInfPhase('review');
         }
-    }, [infItems, showToast]);
+    }, [infItems, refreshKnowledgeViews, showToast]);
 
     // Auto-scroll log containers
     useEffect(() => {
@@ -1065,9 +1091,10 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h1>Memory Dashboard <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h1>
+                        <h1>Memory <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
+                        {activeTab === 'advanced' && <>
                         {/* Embedding coverage indicator */}
                         {embeddingCoverage && embeddingCoverage.total_items > 0 && (
                             <div className="mem-embedding-coverage" title={`${embeddingCoverage.with_embedding} of ${embeddingCoverage.total_items} entries embedded`}>
@@ -1151,6 +1178,7 @@ export function MemoryDashboard() {
                                 </div>
                             )}
                         </div>
+                        </>}
 
                         <button className="btn-icon" onClick={loadAll} title="Refresh" aria-label="Refresh dashboard">
                             <RefreshCw size={16} />
@@ -1161,12 +1189,12 @@ export function MemoryDashboard() {
                 {/* Tab bar */}
                 <div className="mem-tab-bar" role="tablist">
                     <button
-                        className={`mem-tab-btn${activeTab === 'dashboard' ? ' mem-tab-active' : ''}`}
-                        onClick={() => setActiveTab('dashboard')}
+                        className={`mem-tab-btn${activeTab === 'about' ? ' mem-tab-active' : ''}`}
+                        onClick={() => setActiveTab('about')}
                         role="tab"
-                        aria-selected={activeTab === 'dashboard'}
+                        aria-selected={activeTab === 'about'}
                     >
-                        <Brain size={14} /> Dashboard
+                        <User size={14} /> About you
                     </button>
                     <button
                         className={`mem-tab-btn${activeTab === 'goals' ? ' mem-tab-active' : ''}`}
@@ -1185,12 +1213,30 @@ export function MemoryDashboard() {
                         role="tab"
                         aria-selected={activeTab === 'profile'}
                     >
-                        <User size={14} /> Profile
+                        <Sparkles size={14} /> Profile setup
+                    </button>
+                    <button
+                        className={`mem-tab-btn${activeTab === 'advanced' ? ' mem-tab-active' : ''}`}
+                        onClick={() => setActiveTab('advanced')}
+                        role="tab"
+                        aria-selected={activeTab === 'advanced'}
+                    >
+                        <Brain size={14} /> Advanced
                     </button>
                 </div>
 
                 <div className="memory-dashboard-body">
-                    {activeTab === 'dashboard' && (<>
+                    {activeTab === 'about' && (
+                        <MemoryDashboardAboutYou
+                            memoryEnabled={memoryEnabled}
+                            reloadKey={aboutReloadKey}
+                            onChanged={refreshAdvancedViews}
+                            onOpenAdvanced={() => setActiveTab('advanced')}
+                            showToast={showToast}
+                        />
+                    )}
+
+                    {activeTab === 'advanced' && (<>
                     {loading && !stats ? (
                         <div className="mem-loading">
                             <div className="mem-spinner" />
@@ -1211,11 +1257,16 @@ export function MemoryDashboard() {
                                     <div className="mem-empty-icon" style={{ opacity: 0.5 }}>
                                         <Shield size={32} />
                                     </div>
-                                    <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Memory is disabled. Enable it in Settings below to start storing knowledge, conversations, and preferences.</p>
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Memory is off. Turn it on in Settings below to let GAIA remember what you tell it.</p>
                                 </div>
                             )}
 
                             {memoryEnabled && <>
+                            {stats?.embedding_error && (
+                                <div className="mem-advanced-error" role="alert">
+                                    <AlertTriangle size={14} /> {stats.embedding_error}
+                                </div>
+                            )}
                             {/* ── 1. Header Stat Cards ─────────────── */}
                             <div className="mem-stat-cards">
                                 <div className="mem-stat-card" data-accent="purple">
@@ -1737,12 +1788,12 @@ export function MemoryDashboard() {
                                                 {kOffset + 1}{'\u2013'}{Math.min(kOffset + kLimit, knowledge.total)} of {knowledge.total}
                                             </span>
                                             <div className="mem-pagination-btns">
-                                                <button className="mem-page-btn"
+                                                <button type="button" className="mem-page-btn" aria-label="Previous page"
                                                     disabled={kOffset === 0}
                                                     onClick={() => setKOffset(Math.max(0, kOffset - kLimit))}>
                                                     <ChevronLeft size={14} />
                                                 </button>
-                                                <button className="mem-page-btn"
+                                                <button type="button" className="mem-page-btn" aria-label="Next page"
                                                     disabled={kOffset + kLimit >= knowledge.total}
                                                     onClick={() => setKOffset(kOffset + kLimit)}>
                                                     <ChevronRight size={14} />
@@ -2238,10 +2289,14 @@ export function MemoryDashboard() {
                                                     setSettingsLoading(true);
                                                     try {
                                                         const result = await memoryApi.reinitializeMemory();
-                                                        showToast(
-                                                            `Re-initialized: cleared ${result.cleared.knowledge} entries, restored ${result.system_context.stored} system facts`,
-                                                            'info'
-                                                        );
+                                                        if (result.system_context.error) {
+                                                            showToast(result.system_context.error, 'error');
+                                                        } else {
+                                                            showToast(
+                                                                `Re-initialized: cleared ${result.cleared.knowledge} entries, restored ${result.system_context.stored} system facts`,
+                                                                'info'
+                                                            );
+                                                        }
                                                         loadAll();
                                                     } catch (err) {
                                                         log.system.warn('Failed to reinitialize memory', err);
@@ -2412,13 +2467,13 @@ export function MemoryDashboard() {
                                                 )}
                                             </button>
                                             <span className="mem-review-select-links">
-                                                <a onClick={() => setDiscItems(prev => prev.map(i => ({ ...i, _checked: true })))}>
+                                                <button type="button" className="mem-link-btn" onClick={() => setDiscItems(prev => prev.map(i => ({ ...i, _checked: true })))}>
                                                     Select All
-                                                </a>
+                                                </button>
                                                 {' / '}
-                                                <a onClick={() => setDiscItems(prev => prev.map(i => ({ ...i, _checked: false })))}>
+                                                <button type="button" className="mem-link-btn" onClick={() => setDiscItems(prev => prev.map(i => ({ ...i, _checked: false })))}>
                                                     None
-                                                </a>
+                                                </button>
                                             </span>
                                         </div>
                                     </div>
@@ -2514,13 +2569,13 @@ export function MemoryDashboard() {
                                                 )}
                                             </button>
                                             <span className="mem-review-select-links">
-                                                <a onClick={() => setInfItems(prev => prev.map(i => ({ ...i, _checked: true })))}>
+                                                <button type="button" className="mem-link-btn" onClick={() => setInfItems(prev => prev.map(i => ({ ...i, _checked: true })))}>
                                                     Select All
-                                                </a>
+                                                </button>
                                                 {' / '}
-                                                <a onClick={() => setInfItems(prev => prev.map(i => ({ ...i, _checked: false })))}>
+                                                <button type="button" className="mem-link-btn" onClick={() => setInfItems(prev => prev.map(i => ({ ...i, _checked: false })))}>
                                                     None
-                                                </a>
+                                                </button>
                                             </span>
                                         </div>
                                     </div>
@@ -2565,14 +2620,12 @@ export function MemoryDashboard() {
                                                 <span>{goal.description}</span>
                                             </div>
                                             <div className="mem-goals-approval-actions">
-                                                <button className="btn-danger-sm" onClick={async () => {
-                                                    await memoryApi.rejectGoal(goal.id);
-                                                    loadGoals();
-                                                }}>Reject</button>
-                                                <button className="btn-secondary" onClick={async () => {
-                                                    await memoryApi.approveGoal(goal.id);
-                                                    loadGoals();
-                                                }}>Accept</button>
+                                                <button className="btn-danger-sm" onClick={() => runGoalAction(
+                                                    () => memoryApi.rejectGoal(goal.id), "Couldn't reject the goal",
+                                                )}>Reject</button>
+                                                <button className="btn-secondary" onClick={() => runGoalAction(
+                                                    () => memoryApi.approveGoal(goal.id), "Couldn't accept the goal",
+                                                )}>Accept</button>
                                             </div>
                                         </div>
                                     ))}
@@ -2612,12 +2665,13 @@ export function MemoryDashboard() {
                                             <option value="medium">Medium priority</option>
                                             <option value="high">High priority</option>
                                         </select>
-                                        <button className="btn-primary" onClick={async () => {
+                                        <button className="btn-primary" onClick={() => {
                                             if (!goalForm.title.trim()) return;
-                                            await memoryApi.createGoal(goalForm);
-                                            setGoalForm({ title: '', description: '', priority: 'medium' });
-                                            setShowAddGoalForm(false);
-                                            loadGoals();
+                                            runGoalAction(async () => {
+                                                await memoryApi.createGoal(goalForm);
+                                                setGoalForm({ title: '', description: '', priority: 'medium' });
+                                                setShowAddGoalForm(false);
+                                            }, "Couldn't create the goal");
                                         }}>Create</button>
                                         <button className="btn-secondary" onClick={() => setShowAddGoalForm(false)}>Cancel</button>
                                     </div>
@@ -2638,7 +2692,20 @@ export function MemoryDashboard() {
                                         .filter(g => g.status !== 'pending_approval' && g.status !== 'rejected')
                                         .map(goal => (
                                         <div key={goal.id} className={`mem-goal-card mem-goal-status-${goal.status.replace('_','-')}`}>
-                                            <div className="mem-goal-header" onClick={() => setExpandedGoalId(id => id === goal.id ? null : goal.id)}>
+                                            <div
+                                                className="mem-goal-header"
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-expanded={expandedGoalId === goal.id}
+                                                onClick={() => setExpandedGoalId(id => id === goal.id ? null : goal.id)}
+                                                onKeyDown={e => {
+                                                    if (e.target !== e.currentTarget) return;
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        setExpandedGoalId(id => id === goal.id ? null : goal.id);
+                                                    }
+                                                }}
+                                            >
                                                 <div className="mem-goal-header-left">
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <span className="mem-goal-title">{goal.title}</span>
@@ -2656,19 +2723,29 @@ export function MemoryDashboard() {
                                                     </span>
                                                     {goal.status === 'queued' && (
                                                         <button className="mem-goal-action-btn mem-goal-cancel-btn"
-                                                            onClick={async (e) => { e.stopPropagation(); await memoryApi.cancelGoal(goal.id); loadGoals(); }}>
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                runGoalAction(() => memoryApi.cancelGoal(goal.id), "Couldn't cancel the goal");
+                                                            }}>
                                                             Cancel
                                                         </button>
                                                     )}
-                                                    <button className="mem-goal-action-btn mem-goal-delete-btn"
-                                                        onClick={async (e) => {
-                                                            e.stopPropagation();
-                                                            if (!confirm(`Delete goal "${goal.title}"?`)) return;
-                                                            await memoryApi.deleteGoal(goal.id);
-                                                            loadGoals();
-                                                        }}>
-                                                        <Trash2 size={12} />
-                                                    </button>
+                                                    {confirmGoalDeleteId === goal.id ? (
+                                                        <button className="mem-goal-action-btn mem-goal-delete-btn mem-goal-delete-confirm"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setConfirmGoalDeleteId(null);
+                                                                runGoalAction(() => memoryApi.deleteGoal(goal.id), "Couldn't delete the goal");
+                                                            }}>
+                                                            Delete?
+                                                        </button>
+                                                    ) : (
+                                                        <button className="mem-goal-action-btn mem-goal-delete-btn"
+                                                            aria-label={`Delete goal ${goal.title}`}
+                                                            onClick={(e) => { e.stopPropagation(); setConfirmGoalDeleteId(goal.id); }}>
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    )}
                                                     <ChevronDown size={14} className={expandedGoalId === goal.id ? 'mem-chevron-open' : ''} />
                                                 </div>
                                             </div>

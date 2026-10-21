@@ -86,7 +86,7 @@ correcting them abstractly.
 **Docs** (external site: https://amd-gaia.ai):
 - Getting started: [`docs/setup.mdx`](../../../docs/setup.mdx), [`docs/quickstart.mdx`](../../../docs/quickstart.mdx)
 - Guides: [`docs/guides/`](../../../docs/guides/) — gaia, chat, agent-ui, email, talk,
-  memory, starter-skills, composing-skills, terminal-hub, install, npu (list the
+  memory, starter-skills, composing-skills, tui, install, npu (list the
   directory; it changes)
 - SDK reference: [`docs/sdk/`](../../../docs/sdk/) — core concepts, SDKs, infrastructure, mixins
 - CLI: [`docs/reference/cli.mdx`](../../../docs/reference/cli.mdx)

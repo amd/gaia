@@ -2,7 +2,6 @@
 
 This directory is the contribution entry point for community-authored skills. A
 **skill** is a reusable capability any agent composes — see the
-[publishing guide](https://amd-gaia.ai/docs/guides/hub-publishing) and the
 [skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).
 
 [`hub/skills/`](../../hub/skills/) is the AMD starter pack — worked examples to
