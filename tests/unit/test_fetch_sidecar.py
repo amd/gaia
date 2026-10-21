@@ -153,7 +153,8 @@ def test_placeholder_digest_is_a_hard_stop(write_lock):
         fetch_sidecar._expected_sha256(sidecar, WIN_KEY, lock_path)
     message = str(e.value)
     assert PLACEHOLDER in message
-    assert fetch_sidecar.LOCK_GENERATOR in message  # names the fix
+    assert fetch_sidecar.LOCK_GENERATOR in message
+    assert "release/flagship-lock-v" in message  # names the fix: merge the lock PR
     assert "origin verifying itself" in message  # rules out the tempting fallback
 
 
@@ -209,6 +210,7 @@ def test_digest_mismatch_deletes_the_partial_and_stops(tmp_path, serve):
         )
     assert exit_status(e) == 1
     assert "SHA-256 mismatch" in str(e.value)
+    assert "release/flagship-lock-v" in str(e.value)  # a stale lock names its fix
     assert not dest.exists()
     assert list(tmp_path.iterdir()) == []  # no .partial left for a later step
 
