@@ -119,6 +119,79 @@ describe('DocumentLibrary with no chat open', () => {
     });
 });
 
+describe('DocumentLibrary says where documents go', () => {
+    const chat = {
+        id: 'sess-1', title: 'Budget review', created_at: '', updated_at: '', model: '',
+        system_prompt: null, message_count: 1, document_ids: [],
+    };
+
+    beforeEach(() => {
+        useChatStore.setState({ currentSessionId: 'sess-1', sessions: [chat] });
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        mockedApi.attachDocument.mockResolvedValue(undefined);
+    });
+
+    const indexPath = () => {
+        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+    };
+
+    it('names the open chat as the destination and confirms the attach', async () => {
+        render(<DocumentLibrary />);
+
+        const choice = screen.getByRole('combobox', { name: 'Add documents to' });
+        expect(choice).toHaveValue('chat');
+        expect(screen.getByRole('option', { name: 'This chat: “Budget review”' })).toBeInTheDocument();
+        indexPath();
+
+        expect(await screen.findByRole('status')).toHaveTextContent('Attached good.pdf to “Budget review”.');
+    });
+
+    it('holds documents for the next new chat when chosen, leaving the open chat alone', async () => {
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
+        indexPath();
+
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+        expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+    });
+
+    it('says so when indexing worked but attaching did not', async () => {
+        mockedApi.attachDocument.mockRejectedValue(new Error('Session not found'));
+        render(<DocumentLibrary />);
+
+        indexPath();
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Indexed, but not attached to “Budget review”: Session not found');
+    });
+
+    it('with no chat open, says documents go to the next new chat', () => {
+        useChatStore.setState({ currentSessionId: null });
+        render(<DocumentLibrary />);
+
+        expect(screen.getByText('Documents you add here are attached to your next new chat.')).toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: 'Add documents to' })).toBeNull();
+    });
+
+    it('explains a file outside the readable folders without asking for a bug report', async () => {
+        mockedApi.uploadDocumentByPath.mockRejectedValue(Object.assign(
+            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there, or add its folder to GAIA_DOCUMENT_ROOTS and restart GAIA.'),
+            { httpStatus: 403 },
+        ));
+        render(<DocumentLibrary />);
+
+        indexPath();
+
+        const toast = await screen.findByRole('alert');
+        expect(toast).toHaveTextContent('Move or copy the file there');
+        expect(toast).toHaveTextContent('Or drop the file here instead');
+        expect(screen.queryByRole('link', { name: /report this issue/i })).toBeNull();
+    });
+});
+
 describe('DocumentLibrary failed doc', () => {
     it('renders a failed document with a Retry button', async () => {
         render(<DocumentLibrary />);

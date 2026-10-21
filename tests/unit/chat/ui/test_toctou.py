@@ -93,6 +93,11 @@ class TestSafeOpenDocument:
             with safe_open_document("/etc/passwd"):
                 pass
         assert exc_info.value.status_code == 403
+        # An expected limit, so it says what to do rather than "access denied".
+        detail = exc_info.value.detail
+        assert detail.startswith(f"GAIA can only read documents under {Path.home()}")
+        assert "Move or copy the file there" in detail
+        assert DOCUMENT_ROOTS_ENV in detail
 
     def test_safe_open_rejects_directory(self, home_tmp_dir):
         """Directory path must return 400 (not a regular file)."""
