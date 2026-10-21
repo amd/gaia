@@ -402,6 +402,22 @@ def test_status_answering_model_is_loaded_and_busy(client, lemonade):
     assert body["memory"]["model_gb"] == pytest.approx(16.2 * 1.05 + 1.0, abs=0.1)
 
 
+def test_status_sizes_a_custom_model_listed_without_its_namespace(client, lemonade):
+    """Lemonade lists a registered ``user.X`` as ``X``; the size must still match."""
+    lemonade.loaded = [_entry("user.Custom-Chat-GGUF")]
+    lemonade.models.append(
+        {
+            "id": "Custom-Chat-GGUF",
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 16.2,
+            "labels": ["chat"],
+        }
+    )
+    body = client.get("/api/providers/local/status").json()
+    assert body["memory"]["model_gb"] == pytest.approx(16.2 * 1.05 + 1.0, abs=0.1)
+
+
 def test_status_needs_the_ui_header(client, lemonade):
     resp = client.get("/api/providers/local/status", headers={"X-Gaia-UI": ""})
     assert resp.status_code == 403

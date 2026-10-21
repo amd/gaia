@@ -99,6 +99,25 @@ def held_sync(provider_id: str) -> Iterator[None]:
         os.close(fd)
 
 
+@contextmanager
+def try_held_sync(provider_id: str) -> Iterator[bool]:
+    """Take ``provider_id``'s connection lock only if it is free now.
+
+    Yields whether it was taken. It never waits, so unlike :func:`held_sync`
+    it is safe on an event loop thread.
+    """
+    fd = _open(provider_id)
+    try:
+        acquired = try_lock(fd)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                unlock(fd)
+    finally:
+        os.close(fd)
+
+
 async def run_to_completion(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
     """Run a blocking keyring call in a thread, and finish it even if cancelled.
 

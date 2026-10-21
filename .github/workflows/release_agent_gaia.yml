@@ -1247,7 +1247,7 @@ jobs:
     needs: [version, publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     permissions:
-      contents: write        # push the release/flagship-lock-v<version> branch
+      contents: write        # push the flagship-lock/v<version> branch
       pull-requests: write   # open the PR
     concurrency:
       group: flagship-lock-pr-${{ needs.version.outputs.version }}

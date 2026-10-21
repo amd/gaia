@@ -3411,8 +3411,10 @@ class LemonadeClient:
         last: Optional[GaiaLemonadeNotAnsweringError] = None
         while True:
             try:
+                # With nothing recorded, following already asks for a start.
+                asked = self._gaia_lemonade_state() is None
                 self._follow_gaia_lemonade(model)
-                if self._gaia_lemonade_gone():
+                if not asked and self._gaia_lemonade_gone():
                     self._start_gaia_lemonade()
                     self._replay_cloud_key(model)
                 if not self._gaia_lemonade_gone():

@@ -116,6 +116,7 @@ module_skips:
     runs_in: test_gaia_agent.yml
     paths:
       - tests/unit/messaging/test_bridge_contract.py
+      - tests/unit/messaging/test_bridge_hung_tool.py
       - tests/unit/test_execute_python_file_cwd.py
       - tests/unit/test_flagship_code_index_scope.py
       - tests/unit/test_stdio_permission_control.py

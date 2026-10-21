@@ -73,7 +73,7 @@ LOCK_GENERATOR = "hub/agents/gaia/python/packaging/gen_binaries_lock.py"
 # The committed lock is only filled in by the PR the flagship release opens.
 LOCK_FIX = (
     "Each flagship release (release_agent_gaia.yml) opens a PR that pins its "
-    "published hashes on main (branch release/flagship-lock-v<version>): merge it, "
+    "published hashes on main (branch flagship-lock/v<version>): merge it, "
     "or re-run that release's pin-lock job if the PR is missing."
 )
 

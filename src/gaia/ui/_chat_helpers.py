@@ -4593,9 +4593,10 @@ async def _index_document(filepath: Path) -> int:
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
-    awaiting task stops indexing at its next page or embedding batch, and so
-    does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
-    for a worker doesn't count.
+    awaiting task stops indexing at its next page or embedding batch, or
+    ends a wait for the model slot at once; so does going
+    ``GAIA_INDEX_TIMEOUT`` seconds without progress. Queue updates from the
+    broker count as progress; time spent waiting for a worker doesn't.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
@@ -4615,7 +4616,13 @@ async def _index_document(filepath: Path) -> int:
         if stop.is_set():
             raise IndexingStopped(filepath.name)
 
+    def _queue_update(_event: dict) -> None:
+        # Waiting in line for the embedder or vision model is not a stall.
+        # Runs on the waiting thread, so it only notes the time.
+        progress["at"] = _time.monotonic()
+
     def _do_index():
+        from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
@@ -4624,11 +4631,16 @@ async def _index_document(filepath: Path) -> int:
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(
-            str(filepath),
-            progress_callback=lambda _done, _total: _step(),
-            heartbeat=_step,
-        )
+        # Cancel and the no-progress stop also end a wait for the model.
+        try:
+            with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
+                result = rag.index_document(
+                    str(filepath),
+                    progress_callback=lambda _done, _total: _step(),
+                    heartbeat=_step,
+                )
+        except LeaseWaitCancelled as e:
+            raise IndexingStopped(filepath.name) from e
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
