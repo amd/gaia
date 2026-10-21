@@ -292,3 +292,37 @@ def test_a_tool_that_overruns_while_awake_is_still_timed_out(pc):
             Agent._call_tool_bounded(_Host(), stuck_tool, {}, "stuck_tool")
     finally:
         release.set()
+
+
+def test_a_tool_whose_clock_fails_is_cancelled_not_left_running(monkeypatch):
+    """A broken awake clock fails the call; the tool body must be told to stop."""
+    from gaia.agents.base.agent import Agent
+    from gaia.tool_cancellation import tool_cancelled
+
+    class _Host:
+        def _bounded_tool_timeout(self, _name, _args):
+            return 180.0
+
+    reads = []
+
+    def failing_clock():
+        reads.append(1)
+        if len(reads) > 1:
+            raise awake_clock.AwakeClockError("the standby monitor gave up")
+        return 1000.0
+
+    monkeypatch.setattr(awake_clock, "monotonic", failing_clock)
+    started, told_to_stop = threading.Event(), threading.Event()
+
+    def polite_tool():
+        started.set()
+        for _ in range(100):
+            if tool_cancelled():
+                told_to_stop.set()
+                return
+            time.sleep(0.05)
+
+    with pytest.raises(awake_clock.AwakeClockError):
+        Agent._call_tool_bounded(_Host(), polite_tool, {}, "polite_tool")
+    assert started.wait(5)
+    assert told_to_stop.wait(5)

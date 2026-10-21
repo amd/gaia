@@ -52,8 +52,10 @@ HEARTBEAT = 1.0
 STUCK_AFTER = 5 * HEARTBEAT
 # A gap this long between ticks means the whole process was frozen.
 TICK_BREAK = 3 * HEARTBEAT
-# A stuck, dead or failed monitor is replaced at most this many times.
+# A stuck, dead or failed monitor is replaced at most this many times in a row.
 MAX_RESTARTS = 3
+# A replacement this long without trouble wipes the slate for the next one.
+HEALTHY_RESET = 600.0
 # Windows sends the current display state on subscribing; this long is too long.
 FIRST_NOTICE_WAIT = 2.0
 
@@ -381,6 +383,7 @@ if sys.platform == "win32":
             self.error: Optional[BaseException] = None
             self._ready = threading.Event()
             self._stopping = False
+            self.started_at = 0.0
             self.notify: Optional[int] = None
             self._display_seen = False
             self._quiet_reported = False
@@ -408,6 +411,7 @@ if sys.platform == "win32":
                 self.stop(timeout)
                 raise self.error
             self._ticker.start()
+            self.started_at = _unbiased()
 
         def _tick(self) -> None:
             while not self._tick_stop.wait(HEARTBEAT):
@@ -605,9 +609,22 @@ if sys.platform == "win32":
             "attach the bundle to an issue at https://github.com/amd/gaia/issues"
         )
 
+    def _failure(what: str, detail: object) -> None:
+        """Count one failure of the monitor, and say so loudly."""
+        global _restarts
+        _restarts += 1
+        log.error(
+            "The awake-clock standby monitor %s (failure %d of %d before GAIA "
+            "gives up): %s",
+            what,
+            _restarts,
+            MAX_RESTARTS + 1,
+            detail,
+        )
+
     def _start_monitor() -> SleepLedger:
         """Start a monitor, carrying over the standby already left out."""
-        global _ledger, _monitor, _restarts, _last_problem
+        global _ledger, _monitor, _last_problem
         if _restarts > MAX_RESTARTS:
             raise _gave_up()
         excluded = _ledger.excluded if _ledger is not None else 0.0
@@ -616,15 +633,8 @@ if sys.platform == "win32":
             monitor = _StandbyMonitor(ledger)
             monitor.start()
         except (AwakeClockError, OSError) as exc:
-            _restarts += 1
-            _last_problem = f"could not start ({exc})"
-            log.error(
-                "The awake-clock standby monitor could not start (attempt %d of "
-                "%d): %s",
-                _restarts,
-                MAX_RESTARTS + 1,
-                exc,
-            )
+            _last_problem = "could not start"
+            _failure("could not start", exc)
             if _restarts > MAX_RESTARTS:
                 raise _gave_up() from exc
             raise
@@ -640,23 +650,34 @@ if sys.platform == "win32":
                 return _ledger
             problem = _monitor.problem()
             if problem is None:
+                if _restarts and _unbiased() - _monitor.started_at > HEALTHY_RESET:
+                    log.info(
+                        "The awake-clock standby monitor has run for %.0f s "
+                        "without trouble; its failure count is reset.",
+                        HEALTHY_RESET,
+                    )
+                    _restarts = 0
                 return _ledger
-            _restarts += 1
             _last_problem = problem
-            if _restarts > MAX_RESTARTS:
-                raise _gave_up()
-            log.error(
-                "The awake-clock standby monitor %s. Starting a new one (restart "
-                "%d of %d); the time since its last beat counts toward limits.",
+            _failure(
                 problem,
-                _restarts,
-                MAX_RESTARTS,
+                "starting a new one; the time since its last beat counts "
+                "toward limits",
             )
+            began = _unbiased()
+            # Its time counts, unjudged; then it is told to stop, and forgotten
+            # so a failed replacement is retried on the next read.
             _ledger.abandon()
             _monitor.stop(timeout=0.5)
-            # Cleared first: if the new one fails, the next read tries again.
             _monitor = None
-            return _start_monitor()
+            if _restarts > MAX_RESTARTS:
+                raise _gave_up()
+            ledger = _start_monitor()
+            log.debug(
+                "Replaced the awake-clock standby monitor in %.2f s",
+                _unbiased() - began,
+            )
+            return ledger
 
     def monotonic() -> float:
         """Seconds since boot, not counting time the PC slept or was in standby.

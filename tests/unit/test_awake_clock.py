@@ -429,7 +429,7 @@ def test_a_monitor_that_fails_is_replaced_and_says_why(child):
     time.sleep(1.5)
     after = c.ask("read")
     assert isinstance(after, float) and after >= before, after
-    failed = [line for line in c.logs if "restart 1 of 3" in line]
+    failed = [line for line in c.logs if "failure 1 of 4" in line]
     assert failed and "failed (NULL pointer access)" in failed[0], c.logs
 
 
@@ -441,7 +441,7 @@ def test_a_monitor_thread_that_exits_is_replaced_and_says_why(child):
     time.sleep(1.5)
     assert isinstance(c.ask("read"), float)
     assert any(
-        "thread exited" in line and "restart 1 of 3" in line for line in c.logs
+        "thread exited" in line and "failure 1 of 4" in line for line in c.logs
     ), c.logs
 
 
@@ -504,7 +504,7 @@ def test_a_stuck_monitor_is_replaced_and_its_time_counts(
         wall = time.perf_counter() - began
     finally:
         release.set()
-    assert "has not beaten for" in caplog.text and "restart 1 of 3" in caplog.text
+    assert "has not beaten for" in caplog.text and "failure 1 of 4" in caplog.text
     # Replaced within a few beats, without waiting on the wedged monitor.
     assert wall < 10.0
     # The stuck stretch counts toward limits: nothing said it was standby.
@@ -527,10 +527,16 @@ def test_a_monitor_that_cannot_start_is_retried_then_names_the_fix(
             with pytest.raises(awake_clock.AwakeClockError, match="display power"):
                 awake_clock.monotonic()
         for _ in range(2):  # out of restarts: every reader is told what to do
-            with pytest.raises(awake_clock.AwakeClockError, match="Restart GAIA"):
+            with pytest.raises(
+                awake_clock.AwakeClockError, match="Restart GAIA"
+            ) as excinfo:
                 awake_clock.monotonic()
     assert len(attempts) == awake_clock.MAX_RESTARTS + 1
-    assert "could not start (attempt 1 of 4)" in caplog.text
+    assert "could not start (failure 1 of 4 before GAIA gives up)" in caplog.text
+    gave_up = str(excinfo.value)
+    # Short and actionable: the subscribe error's own report line isn't repeated.
+    assert gave_up.count("gaia diagnostics") == 1
+    assert "could not start, and 3 restarts did not fix it" in gave_up
     monkeypatch.undo()
     awake_clock._reset_for_tests()
     assert awake_clock.monotonic() > 0
@@ -560,6 +566,21 @@ def test_a_replacement_that_cannot_start_is_retried_not_skipped(
     awake_clock.monotonic()
     assert awake_clock._monitor is not old
     assert awake_clock._monitor.problem() is None
+
+
+@windows_only
+def test_a_healthy_replacement_wipes_the_failure_count(fresh_clock, monkeypatch):
+    """Weeks apart, unrelated failures must not add up to giving up."""
+    awake_clock.monotonic()
+    old = awake_clock._monitor
+    awake_clock._kernel32.SetEvent(old._stop_event)  # the monitor thread exits
+    old._thread.join(5)
+    awake_clock.monotonic()
+    assert awake_clock._restarts == 1
+    monkeypatch.setattr(awake_clock, "HEALTHY_RESET", 0.2)
+    time.sleep(0.3)
+    awake_clock.monotonic()
+    assert awake_clock._restarts == 0
 
 
 @windows_only
@@ -609,8 +630,15 @@ def test_stopping_the_monitor_unsubscribes_and_destroys_its_window(
     assert not monitor._ticker.is_alive()
 
 
+def _in_console_session():
+    session, console = awake_clock._session_ids()
+    return session == console
+
+
 @windows_only
 def test_the_monitor_says_once_that_display_notices_arrive(fresh_clock, caplog):
+    if not _in_console_session():
+        pytest.skip("outside the console session Windows sends no display notices")
     with caplog.at_level(logging.INFO, logger=LEDGER_LOG):
         awake_clock.monotonic()
         deadline = time.perf_counter() + 5
