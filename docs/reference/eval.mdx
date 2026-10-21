@@ -193,7 +193,7 @@ gaia eval agent --resume eval/results/eval-20261021-141300
 
 `--resume` runs only the scenarios without a result, under the run's own model,
 agent and settings, and rewrites that run's scorecard with everything merged.
-Each scenario records the commit and time it ran at (`commit`, `ran_at`), so a
+Each scenario that ran records the commit and time it ran at (`commit`, `ran_at`), so a
 scorecard that mixes commits says so. In CI, where the run directory doesn't
 outlive the lane, re-dispatch the printed `-f scenarios=...` list instead.
 

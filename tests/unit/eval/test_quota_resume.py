@@ -90,10 +90,11 @@ QUOTA_HIT = {
 class FakeClaude:
     """A ``claude -p`` that answers ``budget`` scenarios, then is out of quota."""
 
-    def __init__(self, budget, verdicts=None, timeout_ids=()):
+    def __init__(self, budget, verdicts=None, timeout_ids=(), unanswered_ids=()):
         self.budget = budget
         self.verdicts = verdicts or {}
         self.timeout_ids = set(timeout_ids)
+        self.unanswered_ids = set(unanswered_ids)
         self.calls = []
 
     def __call__(
@@ -103,6 +104,14 @@ class FakeClaude:
         self.calls.append(sid)
         if sid in self.timeout_ids:
             raise subprocess.TimeoutExpired(cmd, timeout)
+        if sid in self.unanswered_ids:
+            # Zero tokens, no quota or credential wording.
+            refused = {
+                **QUOTA_HIT,
+                "result": "API Error: 400 bad request",
+                "api_error_status": 400,
+            }
+            return SimpleNamespace(returncode=1, stdout=json.dumps(refused), stderr="")
         if len(self.calls) > self.budget:
             return SimpleNamespace(
                 returncode=1, stdout=json.dumps(QUOTA_HIT), stderr=""
@@ -237,6 +246,34 @@ def test_a_genuine_failure_or_timeout_never_stops_the_run(harness, capsys):
     assert statuses == ["PASS", "FAIL", "PASS", "TIMEOUT", "PASS"]
     assert "stopped" not in card
     assert card["summary"]["not_run"] == 0
+
+
+def test_one_unexplained_zero_token_failure_does_not_stop_the_run(harness, capsys):
+    harness.use(FakeClaude(budget=99, unanswered_ids={"bravo"}))
+    card = AgentEvalRunner(results_dir=harness.tmp / "results")._run_locked(
+        category="cat_a"
+    )
+    assert harness.fake.calls == IDS
+    bravo = card["scenarios"][1]
+    assert bravo["status"] == "INFRA_ERROR"
+    assert bravo["claude_outage"]["kind"] == UNREACHABLE
+    assert "stopped" not in card
+    assert "stops if the next scenario fails the same way" in capsys.readouterr().out
+
+
+def test_two_in_a_row_stop_the_run(harness, capsys):
+    harness.use(FakeClaude(budget=99, unanswered_ids={"bravo", "charlie"}))
+    with pytest.raises(SystemExit) as exc:
+        AgentEvalRunner(results_dir=harness.tmp / "results")._run_locked(
+            category="cat_a"
+        )
+    assert exc.value.code == EXIT_CLAUDE_OUTAGE
+    assert harness.fake.calls == ["alpha", "bravo", "charlie"]
+    run_dir = next((harness.tmp / "results").iterdir())
+    card = json.loads((run_dir / "scorecard.json").read_text("utf-8"))
+    # Both unexplained failures are resumed, along with what never started.
+    assert card["stopped"]["not_run"] == ["bravo", "charlie", "delta", "echo"]
+    assert "Claude never answered during charlie" in capsys.readouterr().err
 
 
 def test_an_outage_inside_iterations_stops_and_keeps_all_usage(harness, capsys):
@@ -479,6 +516,34 @@ def test_gate_counts_not_run_as_unmeasured_and_as_claude_unavailable(tmp_path, c
     out = capsys.readouterr().out
     assert "not_run=1" in out
     assert "Claude was unavailable: b, c" in out
+
+
+def test_gate_fails_on_an_outage_even_with_a_stale_summary(tmp_path, capsys):
+    current = {
+        "config": {},
+        "summary": {},
+        "scenarios": [
+            {"scenario_id": "a", "status": "PASS"},
+            {"scenario_id": "b", "status": "NOT_RUN", "not_run_reason": QUOTA},
+        ],
+    }
+    (tmp_path / "res" / "c").mkdir(parents=True)
+    (tmp_path / "base").mkdir()
+    for path in (
+        tmp_path / "res" / "c" / "scorecard.json",
+        tmp_path / "base" / "scorecard_c.json",
+    ):
+        path.write_text(json.dumps(current), "utf-8")
+    argv = [
+        "--baseline-dir",
+        str(tmp_path / "base"),
+        "--results-dir",
+        str(tmp_path / "res"),
+        "--category",
+        "c",
+    ]
+    assert gate_main(argv) == 0
+    assert gate_main(argv + ["--fail-on-zero-token-errors"]) == 1
 
 
 def test_compare_never_reads_not_run_as_a_regression(tmp_path):
