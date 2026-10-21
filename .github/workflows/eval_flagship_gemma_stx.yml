@@ -13,30 +13,31 @@
 #
 # WHY A SUBSET, AND WHY ONE LANE AT A TIME
 # ------------------------------------------------------------------------------
-# The Strix Point pool is about two machines, shared with the RAG retrieval
+# The Strix Point pool is a handful of machines, shared with the RAG retrieval
 # benchmark (eval_retrieval.yml, up to 8 h), the RAG integration tests
 # (test_rag.yml) and the C++ integration tests (build_cpp.yml), and the last
-# two run on PRs. So this workflow holds at most ONE of them: `max-parallel: 1`
+# two run on PRs. So this workflow holds at most ONE machine: `max-parallel: 1`
 # on the lane matrix and one run at a time workflow-wide. The whole 29-category
 # suite (~26 machine-hours on Halo) does not fit that; the default is a smoke
-# set that does, about 90 minutes on one machine.
+# set that does, about 85 minutes on one machine.
 #
-# Default categories, with their wall clock on Strix Halo in v0.25.1-rc2:
+# Strix Point runs a scenario ~3x slower than Halo: error_recovery took 34 min
+# here (3 scenarios, 8-14 min each) against 10.6 min on Halo in v0.25.1-rc2,
+# and setup on a fresh machine took ~5 min. Default categories:
 #
-#   tool_selection     28.7 min  7 scenarios  the core agentic skill a ~4B model
-#                                             is most likely to lose
-#   context_retention  13.3 min  4 scenarios  multi-turn plus document Q&A, so
-#                                             the embedder co-resident with the
-#                                             chat model (the #1030 class)
-#   error_recovery     10.6 min  3 scenarios  tool failures handled honestly
-#                      ---------
-#                      52.6 min on Halo, ~70-80 min expected on Strix Point
-#                      plus ~10-15 min of setup on an ephemeral machine
+#   context_retention  4 scenarios, 13.3 min on Halo, ~43 expected here.
+#                      Multi-turn document Q&A with the embedder co-resident
+#                      beside the chat model, the #1030 class of regression,
+#                      under Strix Point's tighter memory.
+#   error_recovery     3 scenarios, 34 min measured here. Tool failures
+#                      handled honestly instead of invented.
 #
-# Next to add when there is room: adversarial (8.6 min, prompt injection),
-# then mcp_reliability (17.6). Each lane is ~10-15 min of setup on top of its
-# categories, so a dispatch naming memory or gaia_* categories gets extra lanes
-# that run one after another.
+# tool_selection (7 scenarios, 28.7 min on Halo, ~90 expected here) is the
+# first to add, and the most important one left out: it alone fills the 90
+# minutes. Dispatch it on its own, or add it once two machines can be spared.
+# Then adversarial (3 scenarios, prompt injection). A dispatch naming memory or
+# gaia_* categories gets extra lanes, each with its own setup, run one after
+# another.
 #
 # BASELINE. tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/ has its
 # meta.json and no scorecards until a real run on this pool produces them
@@ -59,9 +60,9 @@ on:
   workflow_dispatch:
     inputs:
       categories:
-        description: 'Space-separated categories (each must be in eval/ci_lanes.json). Default is the ~90 min smoke set.'
+        description: 'Space-separated categories (each must be in eval/ci_lanes.json). Default is the ~85 min smoke set.'
         required: false
-        default: 'tool_selection context_retention error_recovery'
+        default: 'context_retention error_recovery'
       enforce:
         description: 'Fail the build on a regression or an incomplete run (false = report as ::warning::)'
         required: false
@@ -72,7 +73,7 @@ on:
         required: false
         default: ''
 
-# One run at a time, so two dispatches never hold both Strix Point machines.
+# One run at a time, so two dispatches never hold two Strix Point machines.
 # The lanes' own groups are named after this workflow plus the lane, so this
 # group is never one a lane waits on.
 concurrency:
@@ -115,18 +116,18 @@ jobs:
       - name: Validate the categories and emit the matrix
         id: build
         env:
-          CATEGORIES: ${{ github.event.inputs.categories || 'tool_selection context_retention error_recovery' }}
+          CATEGORIES: ${{ github.event.inputs.categories || 'context_retention error_recovery' }}
         run: python util/eval_lane_matrix.py --categories "$CATEGORIES" >> "$GITHUB_OUTPUT"
 
   agent-eval:
-    name: Gemma on Strix Point
+    name: Gemma on Strix Point - ${{ matrix.lane }}
     needs: [eval-gate, lanes]
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
       needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success'
     strategy:
       fail-fast: false
-      # The pool's other consumers include per-PR jobs; never take both machines.
+      # The pool's other consumers include per-PR jobs; hold one machine at most.
       max-parallel: 1
       matrix: ${{ fromJSON(needs.lanes.outputs.matrix) }}
     uses: ./.github/workflows/eval_scenario_lane.yml
@@ -144,8 +145,9 @@ jobs:
       artifact-name: eval-gemma-stx-${{ matrix.lane }}
       enforce: ${{ github.event.inputs.enforce == 'true' }}
       eval-model: ${{ github.event.inputs.eval_model || '' }}
-      # Sized for the default set at up to ~2x its Halo time; a dispatch of a
-      # big category (memory is 131 min on Halo) should stay under it too.
-      eval-timeout-minutes: 300
-      job-timeout-minutes: 360
+      # Room for the default set plus tool_selection, and short enough that a
+      # hung lane frees the machine within hours. Raise it here before
+      # dispatching more: at ~3x Halo, memory alone (131 min there) won't fit.
+      eval-timeout-minutes: 180
+      job-timeout-minutes: 240
     secrets: inherit

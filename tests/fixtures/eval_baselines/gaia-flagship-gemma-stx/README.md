@@ -17,7 +17,7 @@ for a scorecard measured with a different agent model or eval model.
 Only from a real run on the pool. Never write, estimate or edit a number here.
 
 1. Dispatch the workflow on `main` with the categories to baseline:
-   `gh workflow run eval_flagship_gemma_stx.yml --ref main -f categories="tool_selection context_retention error_recovery"`
+   `gh workflow run eval_flagship_gemma_stx.yml --ref main -f categories="context_retention error_recovery"`
 2. Check the run measured everything: each lane's integrity gate is clean (no missing or
    unmeasured scenarios), and each scorecard's `config.agent_model` is
    `Gemma-4-E4B-it-GGUF` and `config.model` matches `eval_model` in `meta.json`.
