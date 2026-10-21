@@ -298,3 +298,37 @@ def test_the_recovery_error_names_a_local_time(tmp_path):
     error = store.get_job(db, job_id=jid)["error"]
     assert "14:05 on 2026-10-18 (45 minutes ago)" in error
     assert str(int(claimed)) not in error
+
+
+@pytest.mark.parametrize("kind", [KIND_ONE_SHOT, KIND_RECURRING])
+def test_a_stale_read_never_recovers_a_new_claim_made_at_the_same_time(tmp_path, kind):
+    """Two claims can share a ``claimed_at``; only the ``claim_id`` tells them
+    apart. A driver acting on a stale read of the first must not take over the
+    second while it runs."""
+    db = _db(tmp_path / "clock.db")
+    interval = 60 if kind == KIND_RECURRING else None
+    jid = store.register_job(
+        db, source="t", kind=kind, fire_at=1.0, interval_seconds=interval
+    )
+    first = store.claim_job(db, job_id=jid, now=1.0)
+    [stale] = store.find_stale_firing(db, now=STALE + 2, stale_after=STALE)
+    assert store.recover_claim(db, stale, now=STALE + 2) is not None
+    # Back to pending (re-queued, or re-scheduled by the user) and claimed
+    # again by a driver whose pass carries the same timestamp.
+    db.update(
+        "daemon_jobs",
+        {"status": STATUS_PENDING, "error": None},
+        "job_id = :id",
+        {"id": jid},
+    )
+    second = store.claim_job(db, job_id=jid, now=1.0)
+    assert second not in (None, first)
+
+    # Another driver acts on the same stale read.
+    outcome = store.recover_claim(db, stale, now=STALE + 3)
+    job = store.get_job(db, job_id=jid)
+    # Taken over, it would be failed while it runs, or queued to run again.
+    assert job["status"] == STATUS_FIRING and job["claim_id"] == second
+    assert job["error"] is None
+    assert store.fetch_due(db, now=STALE + 3) == []
+    assert outcome is None
