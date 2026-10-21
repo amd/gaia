@@ -447,3 +447,16 @@ def test_the_skill_registers_verify_workbook_under_its_namespace(tmp_path):
         unregister_skill_tools("office-docs")
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(before)
+
+
+def test_skill_md_body_stays_lean_with_rules_and_linked_references():
+    body = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 2)[-1]
+    assert len(body) // 4 <= 1200
+    assert "formulas, not hard-coded values" in body
+    assert "Verify before handing over" in body
+    refs = re.findall(r"`(references/[\w-]+\.md)`", body)
+    assert len(refs) == 3
+    for ref in refs:
+        text = (SKILL_DIR / ref).read_text(encoding="utf-8")
+        for block in re.findall(r"```python\n(.*?)\n```", text, re.S):
+            compile(block, ref, "exec")

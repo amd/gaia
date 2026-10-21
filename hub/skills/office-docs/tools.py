@@ -37,10 +37,9 @@ WORKBOOK_SUFFIXES = (".xlsx", ".xlsm")
 def verify_workbook(file_path: str) -> Dict[str, Any]:
     """Check every formula in an .xlsx workbook; run it after you build or change one.
 
-    Recalculates a copy (the file is not changed) and reports error values,
-    circular references, SUM/SUMIFS over text or empty cells and criteria
-    matching no row, each with cell and formula. Report numbers from the
-    computed values it returns. Fix every error, save, check again.
+    Recalculates a copy (the file is not changed) and names each broken
+    formula by cell. Report numbers from the computed values it returns; fix
+    every error and check again.
 
     Args:
         file_path: Absolute path of the .xlsx or .xlsm file.
