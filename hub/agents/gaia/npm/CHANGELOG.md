@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A new chat starts about 45 s sooner once memory has changed.** Each chat
+  rendered the memory section of its system prompt afresh, and on Gemma-4 any
+  change there made the model re-read the whole ~19K-token prompt, tool
+  schemas included. New chats in the same agent process now reuse the section
+  for up to an hour; what was learned since still reaches them through
+  per-turn recall, and forgetting or editing a shown memory re-renders it at
+  once.
 - **Full access in the Agent UI grants the folders you name.** Turning it on
   over `/sessions/{id}/bypass` refused every path outside the chat's scope with
   nobody asked. On a run the caller can answer for, Full access now grants the

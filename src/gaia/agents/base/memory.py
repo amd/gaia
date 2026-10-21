@@ -317,6 +317,15 @@ EXTRACTION_EXIT_WAIT_S = 15.0
 #: local model with the conversation, so a turn sent while it runs queues behind it.
 EXTRACTION_IDLE_S = 3.0
 
+#: The stable memory section, shared by every session of this process that
+#: reads the same store and context: (rendered_at, prompt, memory ids, lesson
+#: ids). A new chat otherwise re-renders it, and on Gemma-4 any change there
+#: makes the server re-read the whole ~19K-token prompt (~45 s).
+_SHARED_STABLE_PROMPTS: Dict[tuple, tuple] = {}
+_SHARED_STABLE_GUARD = threading.Lock()
+#: Facts learned since reach new chats through per-turn recall meanwhile.
+SHARED_STABLE_TTL_S = 3600.0
+
 #: How often a running extraction checks whether a user turn wants the model.
 EXTRACTION_CANCEL_POLL_S = 0.1
 
@@ -2348,7 +2357,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # The session's frozen memory section is taken after upkeep, before the
         # first request that carries it.
-        self._refresh_stable_memory_prompt()
+        self._refresh_stable_memory_prompt(share=True)
 
     # ==================================================================
     # Conversation Consolidation
@@ -2846,10 +2855,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         per-turn via get_memory_dynamic_context() to keep this prompt frozen for
         LLM KV-cache reuse.
 
-        Rendered once per session. The store changes under it every turn
+        Rendered once per session, and new sessions of this process reuse it
+        for up to ``SHARED_STABLE_TTL_S``. The store changes under it every turn
         (extraction, auto-stored tool errors, confidence bumps), and any prompt
         recomposition would otherwise carry that drift into the system prompt
-        and force a full re-read. What is stored mid-session reaches the model
+        and force a full re-read. What is stored since reaches the model
         through the per-turn recall instead. A context switch, a session reset,
         or an explicit edit of an item shown here re-renders it.
         """
@@ -2857,12 +2867,49 @@ class MemoryMixin(ProceduralMemoryMixin):
             return ""
 
         if getattr(self, "_stable_memory_prompt", None) is None:
-            self._stable_memory_prompt = self._build_stable_memory_prompt()
+            key = self._shared_stable_key()
+            with _SHARED_STABLE_GUARD:
+                shared = _SHARED_STABLE_PROMPTS.get(key)
+            if (
+                shared is not None
+                and time.monotonic() - shared[0] < SHARED_STABLE_TTL_S
+            ):
+                _, prompt, memory_ids, lesson_ids = shared
+                self._stable_memory_ids = set(memory_ids)
+                self._stable_lesson_ids = set(lesson_ids)
+                self._stable_memory_prompt = prompt
+            else:
+                prompt = self._build_stable_memory_prompt()
+                self._stable_memory_prompt = prompt
+                with _SHARED_STABLE_GUARD:
+                    _SHARED_STABLE_PROMPTS[key] = (
+                        time.monotonic(),
+                        prompt,
+                        frozenset(getattr(self, "_stable_memory_ids", set())),
+                        frozenset(getattr(self, "_stable_lesson_ids", set())),
+                    )
         return self._stable_memory_prompt
 
-    def _refresh_stable_memory_prompt(self) -> None:
-        """Re-render the stable memory section now and recompose the prompt."""
+    def _shared_stable_key(self) -> tuple:
+        store = self._memory_store
+        return (
+            str(getattr(store, "_db_path", id(store))),
+            getattr(self, "_memory_context", "global"),
+        )
+
+    def _refresh_stable_memory_prompt(self, *, share: bool = False) -> None:
+        """Re-render the stable memory section now and recompose the prompt.
+
+        ``share=True`` takes the section other sessions of this process already
+        render, so a new chat's system prompt — and the ~19K tokens of tool
+        schemas the chat template places after it — stay cached. Every other
+        caller is an explicit change (an edit, a context switch, a reset) and
+        drops the shared copy too.
+        """
         self._stable_memory_prompt = None
+        if not share and getattr(self, "_memory_store", None) is not None:
+            with _SHARED_STABLE_GUARD:
+                _SHARED_STABLE_PROMPTS.pop(self._shared_stable_key(), None)
         if hasattr(self, "rebuild_system_prompt"):
             self.rebuild_system_prompt()
 
