@@ -2291,7 +2291,7 @@ These positions indicate where to split the text."""
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
             block = match.group(0)
             content = block.rstrip()
-            vlm_blocks.append({"placeholder": placeholder, "content": content.strip()})
+            vlm_blocks.append({"placeholder": placeholder, "content": content})
             # Keep the whitespace after the block, or restoring it fuses its last
             # word to the next image or page marker.
             protected_text = protected_text.replace(
