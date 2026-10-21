@@ -78,12 +78,23 @@ def _tar_gz(path: Path, files: dict[str, bytes]) -> None:
             tf.addfile(info, io.BytesIO(data))
 
 
-def make_sdist(path: Path, pep: str):
+def make_sdist(path: Path, pep: str, chunk: str, extra_listed: tuple = ()):
+    # setuptools sorts SOURCES.txt by name, so a renamed Vite chunk can move.
+    listed = sorted(
+        [
+            f"src/gaia/apps/webui/dist/assets/index-{chunk}.js",
+            "src/gaia/apps/webui/dist/assets/index-M0n0p0q0.css",
+            *extra_listed,
+        ]
+    )
     _tar_gz(
         path,
         {
             f"amd_gaia-{pep}/PKG-INFO": f"Metadata-Version: 2.1\nName: amd-gaia\nVersion: {pep}\n".encode(),
             f"amd_gaia-{pep}/src/gaia/version.py": f'__version__ = "{pep}"\n'.encode(),
+            f"amd_gaia-{pep}/src/amd_gaia.egg-info/SOURCES.txt": "\n".join(
+                listed
+            ).encode(),
         },
     )
 
@@ -166,7 +177,7 @@ def build_art(
         make_wheel(
             core / f"amd_gaia-{f.pep440}-py3-none-any.whl", f.pep440, f.npm, chunk
         )
-        make_sdist(core / f"amd_gaia-{f.pep440}.tar.gz", f.pep440)
+        make_sdist(core / f"amd_gaia-{f.pep440}.tar.gz", f.pep440, chunk)
         make_npm(
             core / f"amd-gaia-agent-ui-{f.npm}.tgz", "@amd-gaia/agent-ui", f.npm, chunk
         )
@@ -321,6 +332,23 @@ def test_an_altered_twin_fails_the_twin_diff(tmp_path, flavors):
     )
     report = run_verify(tmp_path, art, flagship)
     assert any("only in the twin: gaia/backdoor.py" in e for e in report.errors)
+
+
+def test_a_file_listing_compares_as_a_set(tmp_path, flavors):
+    """The RC and twin listings sort differently; one extra entry still fails."""
+    art, _ = build_art(tmp_path, flavors)
+    rc, final = flavors
+    a = art / "rc-core-dist" / f"amd_gaia-{rc.pep440}.tar.gz"
+    b = art / "final-core-dist" / f"amd_gaia-{final.pep440}.tar.gz"
+    listing = "amd_gaia-{}/src/amd_gaia.egg-info/SOURCES.txt"
+    first_a = rt.archive_files(a)[listing.format(rc.pep440)].splitlines()[0]
+    first_b = rt.archive_files(b)[listing.format(final.pep440)].splitlines()[0]
+    assert first_a != first_b, "the fixture must reorder the listing"
+    assert rt.twin_diff(a, b, rc, final) == []
+    make_sdist(b, final.pep440, "Fn9zY_2w", extra_listed=("src/gaia/extra.py",))
+    assert rt.twin_diff(a, b, rc, final) == [
+        f"differs beyond its version: {listing.format(final.pep440)}"
+    ]
 
 
 def test_twin_content_that_differs_beyond_its_version_fails(tmp_path, flavors):

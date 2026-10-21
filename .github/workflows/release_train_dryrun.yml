@@ -336,10 +336,12 @@ jobs:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum
 
+      # Outside the checkout: Go stamps vcs.modified=true into a binary built
+      # from a tree with untracked files, which would differ for that alone.
       - uses: actions/download-artifact@v8
         with:
           name: rc-tui-binaries
-          path: built
+          path: ${{ runner.temp }}/built
 
       - name: Rebuild linux-x64 and compare
         env:
@@ -352,12 +354,17 @@ jobs:
           tui/scripts/gen-winres.sh --version "${VERSION}"
           (cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
             -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${COMMIT} -X ${PKG}.date=${DATE}" \
-            -o ../rebuilt ./cmd/gaia)
-          a="$(sha256sum built/gaia-linux-x64 | cut -d' ' -f1)"
-          b="$(sha256sum rebuilt | cut -d' ' -f1)"
+            -o "${RUNNER_TEMP}/rebuilt" ./cmd/gaia)
+          a="$(sha256sum "${RUNNER_TEMP}/built/gaia-linux-x64" | cut -d' ' -f1)"
+          b="$(sha256sum "${RUNNER_TEMP}/rebuilt" | cut -d' ' -f1)"
           echo "built   ${a}"
           echo "rebuilt ${b}"
-          [ "${a}" = "${b}" ] || { echo "::error::gaia-linux-x64 is not reproducible: a second build of the same commit differs."; exit 1; }
+          if [ "${a}" != "${b}" ]; then
+            go version -m "${RUNNER_TEMP}/built/gaia-linux-x64"
+            go version -m "${RUNNER_TEMP}/rebuilt"
+            echo "::error::gaia-linux-x64 is not reproducible: a second build of the same commit differs."
+            exit 1
+          fi
 
   # ── The combined Windows setup, embedding this run's own builds ────────────
   setup-rc:

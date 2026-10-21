@@ -84,6 +84,9 @@ TUI_NPM_KEY = {
 # A build file the wheel lists with each file's hash. Every file it describes is
 # compared directly, so comparing it too would only report the version again.
 TWIN_DIFF_SKIP = re.compile(r"(^|/)[^/]+\.dist-info/RECORD$")
+# File listings sorted by name: renamed Vite chunks sort differently, so these
+# compare as a set of lines. An added or dropped entry still differs.
+TWIN_DIFF_UNORDERED = re.compile(r"(^|/)[^/]+\.egg-info/SOURCES\.txt$")
 # Vite names a chunk after a hash of its content, so a chunk holding the version
 # gets a new name, and so does every chunk that imports it.
 _VITE_HASHED = re.compile(
@@ -413,7 +416,10 @@ def twin_diff(rc_path: Path, final_path: Path, rc: Flavor, final: Flavor) -> lis
             if TWIN_DIFF_SKIP.search(name):
                 continue
             key = normalise(name.encode(), subs).decode()
-            out.setdefault(key, []).append(normalise(data, subs))
+            data = normalise(data, subs)
+            if TWIN_DIFF_UNORDERED.search(name):
+                data = b"\n".join(sorted(data.splitlines()))
+            out.setdefault(key, []).append(data)
         return {k: sorted(v) for k, v in out.items()}
 
     a = view(archive_files(rc_path), pairs)
