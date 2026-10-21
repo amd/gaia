@@ -214,10 +214,7 @@ setup(
             # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            # pymupdf 2.x has no Intel-Mac wheel and its sdist doesn't build;
-            # same split as the "rag" extra.
-            "pymupdf>=1.24.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
-            "pymupdf>=1.24.0,<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+            "pymupdf>=1.24.0,<2",
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
@@ -314,10 +311,9 @@ setup(
             # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            # pymupdf 2.x ships no macOS x86_64 wheel and its sdist fails to
-            # build (metadata name mismatch), so Intel Macs stay on 1.x.
-            "pymupdf>=1.24.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
-            "pymupdf>=1.24.0,<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+            # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
+            # platform marker: `gaia init` refuses to evaluate one (install_hints).
+            "pymupdf>=1.24.0,<2",
             "pypdf",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,

@@ -73,35 +73,26 @@ def test_every_declaration_excludes_the_breaking_major(
         )
 
 
-_PLATFORM_ENVS = {
-    "darwin-x64": {"sys_platform": "darwin", "platform_machine": "x86_64"},
-    "darwin-arm64": {"sys_platform": "darwin", "platform_machine": "arm64"},
-    "linux-x64": {"sys_platform": "linux", "platform_machine": "x86_64"},
-    "linux-arm64": {"sys_platform": "linux", "platform_machine": "aarch64"},
-    "win-x64": {"sys_platform": "win32", "platform_machine": "AMD64"},
-}
+def test_pymupdf_is_capped_below_2() -> None:
+    """pymupdf 2.0 ships no macOS x86_64 wheel and its sdist fails to build.
 
-
-@pytest.mark.parametrize("platform", list(_PLATFORM_ENVS))
-@pytest.mark.parametrize("extra", ["[rag]", "[ui]"])
-def test_pymupdf_resolves_to_a_wheel_on_every_platform(
-    extra: str, platform: str
-) -> None:
-    """pymupdf 2.0 has no Intel-Mac wheel and its sdist fails to build there.
-
-    Each platform must get exactly one pymupdf requirement (RAG/PDF support is
-    never dropped), and only Intel Macs are held below 2.
+    The cap is global because ``gaia init`` refuses a platform marker on an
+    extra's requirement, so every platform resolves to a 1.x wheel.
     """
-    env = _PLATFORM_ENVS[platform]
-    active = [
-        req
-        for where, req in _requirements("pymupdf")
-        if where == extra and (req.marker is None or req.marker.evaluate(env))
-    ]
-    assert len(active) == 1, f"{extra} on {platform}: active pymupdf reqs {active}"
-    admits_2 = active[0].specifier.contains(Version("2.0"))
-    assert admits_2 == (platform != "darwin-x64"), (
-        f"{extra} on {platform} declares '{active[0]}'; only darwin-x64 must "
-        "exclude pymupdf 2.x (no macOS x86_64 wheel)"
-    )
-    assert active[0].specifier.contains(Version("1.28.2"))
+    declared = _requirements("pymupdf")
+    assert {where for where, _ in declared} >= {"[rag]", "[ui]"}
+    for where, req in declared:
+        assert req.marker is None, f"{where} declares '{req}' with a marker"
+        assert req.specifier.contains(Version("1.28.2")), f"{where}: '{req}'"
+        assert not req.specifier.contains(Version("2.0")), f"{where}: '{req}'"
+
+
+def test_extras_carry_no_platform_markers() -> None:
+    """``gaia init`` adds extras by reading these requirements back from the
+    installed metadata and refuses any condition beyond ``extra == ...``."""
+    for extra, reqs in _setup_kwargs()["extras_require"].items():
+        for raw in reqs:
+            assert Requirement(raw).marker is None, (
+                f"[{extra}] declares '{raw}'; `gaia init --profile ...` fails on "
+                "it (gaia.agents.install_hints.gaia_extra_requirements)"
+            )
