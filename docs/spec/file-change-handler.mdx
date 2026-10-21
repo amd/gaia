@@ -482,9 +482,14 @@ and stats each due path outside the lock:
 - gone: it is dropped, since its delete event reports it.
 
 Deletes and moves are dispatched in arrival order and cancel a pending report
-for their path. A callback that raises is logged with its traceback; one that
-hits `PermissionError` (the writer still holds the file exclusively) is
-retried after 1, 2 and 4 windows, then given up on with an error. A file that
+for their path. A callback that raises is logged with its traceback. An
+`on_created` or `on_modified` callback that raises `PermissionError` (the writer
+still holds the file exclusively) is retried after 1, 2 and 4 windows; an
+`on_moved` callback that raises it has its destination retried the same way,
+as a modification. After the last retry the file is given up on with one
+error, logged with its traceback, that tells the user to close the program
+using the file and save it again. A callback must let `PermissionError`
+propagate for this to work; catching it disables the retry. A file that
 never pauses (a log written constantly) is not reported until it does.
 `wait_idle()` blocks until everything queued has been dispatched, and
 `close()` stops the dispatcher, dropping (and logging) what it had not yet
