@@ -1191,6 +1191,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         page_warning = (
                             f"image extraction failed on page {i}: {img_error}"
@@ -1573,6 +1575,8 @@ class RAGSDK:
                             if image_texts:
                                 vlm_slides_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
                     except Exception as img_error:
                         self.log.warning(
                             f"Image extraction failed on slide {i}: {img_error}"

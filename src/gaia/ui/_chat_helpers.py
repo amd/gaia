@@ -4552,9 +4552,10 @@ async def _index_document(filepath: Path) -> int:
 
     Runs on an indexing pool (``_INDEX_MAX_PARALLEL`` at once per pool; small
     files have their own, and the rest wait their turn). Cancelling the
-    awaiting task stops indexing at its next page or embedding batch, and so
-    does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
-    for a worker doesn't count.
+    awaiting task stops indexing at its next page or embedding batch, or
+    ends a wait for the model slot at once; so does going
+    ``GAIA_INDEX_TIMEOUT`` seconds without progress. Queue updates from the
+    broker count as progress; time spent waiting for a worker doesn't.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
