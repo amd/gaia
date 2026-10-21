@@ -499,9 +499,7 @@ def test_a_writer_killed_mid_rewrite_leaves_a_whole_file(tmp_path):
         assert isinstance(doc["n"], int)
 
 
-def test_leaving_never_deletes_a_newer_entry_with_the_same_name(
-    tmp_path, monkeypatch
-):
+def test_leaving_never_deletes_a_newer_entry_with_the_same_name(tmp_path, monkeypatch):
     """A newcomer that reuses a leaving waiter's entry name keeps its entry."""
     from gaia.utils import file_lock as mod
 
