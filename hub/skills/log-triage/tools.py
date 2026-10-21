@@ -3360,11 +3360,9 @@ def triage_logs(
 ) -> dict:
     """Find what went wrong in log files: call this first for any log question.
 
-    Reads every file in full (read-only, any size), detects the format and
-    separates steady BASELINE templates (routine even at ERROR/FATAL) from
-    ANOMALY ones. Returns coverage, top anomalies and bursts with exact
-    timestamps and file:line, baseline, entities, checks and warnings.
-    Quote its numbers, then read_file before the first burst line.
+    Reads every file in full (read-only, any size) and separates steady
+    baseline templates from anomalies. Returns checks, coverage, anomalies,
+    bursts, baseline, entities and warnings; quote its numbers exactly.
 
     Args:
         paths: Log files and/or folders (folders are walked recursively).

@@ -762,3 +762,21 @@ def test_skill_manifest_declares_the_tool_and_it_registers():
         assert not params["output_path"]["required"]
     finally:
         unregister_skill_tools("log-triage")
+
+
+def test_skill_md_body_stays_lean_with_rules_and_linked_references():
+    import re
+
+    skill_dir = Path(TOOLS_PATH).parent
+    body = (skill_dir / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 2)[-1]
+    assert len(body) // 4 <= 1200
+    assert "do not rebuild them by hand" in body
+    assert "Baseline is not the incident" in body
+    refs = re.findall(r"`(references/[\w-]+\.md)`", body)
+    assert len(refs) >= 4
+    for ref in refs:
+        assert (skill_dir / ref).is_file(), ref
+    fallback = (skill_dir / "references" / "fallback-python.md").read_text(
+        encoding="utf-8"
+    )
+    assert "assert share >= 0.95" in fallback
