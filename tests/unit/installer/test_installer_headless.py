@@ -84,8 +84,20 @@ class TestReleaseNaming:
             "v0.25.1",
         ]
 
+    @staticmethod
+    def _rel(tag, pre, complete=True):
+        names = resolve.expected_assets(tag)
+        ids = resolve.required(tag)
+        if not complete:
+            ids = ids[1:]
+        return {
+            "tag_name": tag,
+            "prerelease": pre,
+            "assets": [{"name": names[i]} for i in ids],
+        }
+
     def test_default_is_newest_prerelease_unless_a_final_is_newer(self):
-        rel = lambda t, pre: {"tag_name": t, "prerelease": pre}  # noqa: E731
+        rel = self._rel
         assert (
             resolve.pick_default([rel("v0.25.0", False), rel("v0.25.1-rc2", True)])
             == "v0.25.1-rc2"
@@ -94,6 +106,20 @@ class TestReleaseNaming:
             resolve.pick_default([rel("v0.25.1", False), rel("v0.25.1-rc2", True)])
             == "v0.25.1"
         )
+
+    def test_default_skips_a_release_still_being_attached(self, capsys):
+        rels = [
+            self._rel("v0.25.1-rc2", True),
+            self._rel("v0.25.1-rc3", True, complete=False),
+        ]
+        assert resolve.pick_default(rels) == "v0.25.1-rc2"
+        assert "skipping v0.25.1-rc3" in capsys.readouterr().out
+
+    def test_no_complete_release_is_an_error(self):
+        with pytest.raises(
+            SystemExit, match="no amd/gaia release carries a complete set"
+        ):
+            resolve.pick_default([self._rel("v0.25.1-rc3", True, complete=False)])
 
     def test_previous_stable_skips_candidates_of_the_same_version(self):
         rels = [

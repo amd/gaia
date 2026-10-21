@@ -49,8 +49,8 @@
 # as it stops reproducing, so the entry goes away with the fix.
 #
 # Triggers:
-#   workflow_dispatch  any release; the default is the newest pre-release, or a
-#                      final that is newer than it
+#   workflow_dispatch  any release; the default (also used by PRs) is the newest
+#                      release by version whose assets are all attached
 #   push of a v* tag   waits up to 5 h for the release's assets to be attached
 #                      (the publish approval is human), then fails naming the
 #                      missing ones
@@ -71,7 +71,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release to test, e.g. v0.25.1-rc2. Empty: the newest pre-release (or a newer final).'
+        description: 'Release to test, e.g. v0.25.1-rc2. Empty: the newest release whose assets are all attached.'
         required: false
         default: ''
         type: string

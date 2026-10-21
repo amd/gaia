@@ -9,8 +9,8 @@ and say which installers it carries.
 
 Writes ``release.json`` and, under Actions, the same keys to $GITHUB_OUTPUT.
 
-An empty --tag picks the newest pre-release -- unless a final release is newer
-than it, in which case the final: once v0.25.1 ships, v0.25.1-rc2 is history.
+An empty --tag picks the newest release by version (a final sorts after its own
+candidates) whose assets are all attached, and names any newer one it skipped.
 
 Asset names come from the same places the release pipeline uses
 (installer/tui/artifacts.py for the terminal packages; electron-builder's
@@ -145,17 +145,28 @@ def list_releases() -> List[Dict[str, Any]]:
 
 
 def pick_default(releases: List[Dict[str, Any]]) -> str:
-    pre = [r["tag_name"] for r in releases if r.get("prerelease")]
-    final = [r["tag_name"] for r in releases if not r.get("prerelease")]
-    if not pre and not final:
+    """The newest release, by version, that carries everything the journeys need.
+
+    "Newest by version" is the newest pre-release unless a final is newer, since a
+    final sorts after its own candidates. A release still being attached is
+    skipped by name rather than failing a PR that did not ask for it.
+    """
+    if not releases:
         raise SystemExit("error: amd/gaia has no published release to test.")
-    newest_pre = max(pre, key=sort_key) if pre else None
-    newest_final = max(final, key=sort_key) if final else None
-    if newest_pre and (
-        not newest_final or sort_key(newest_pre) > sort_key(newest_final)
-    ):
-        return newest_pre
-    return newest_final  # type: ignore[return-value]
+    for rel in sorted(releases, key=lambda r: sort_key(r["tag_name"]), reverse=True):
+        tag = rel["tag_name"]
+        have = {a["name"] for a in rel.get("assets", [])}
+        names = expected_assets(tag)
+        missing = [names[i] for i in required(tag) if names[i] not in have]
+        if not missing:
+            return tag
+        print(
+            f"::notice::skipping {tag}: its release is missing {len(missing)} asset(s) "
+            f"(e.g. {missing[0]}); testing an older complete release instead. "
+            f"Pass release_tag to test {tag} once it is complete.",
+            flush=True,
+        )
+    raise SystemExit("error: no amd/gaia release carries a complete set of installers.")
 
 
 def previous_stable(
