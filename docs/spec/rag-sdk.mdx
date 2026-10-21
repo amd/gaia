@@ -127,8 +127,17 @@ class RAGSDK:
                 "total_chunks": int,
                 "vlm_pages": int (pages enhanced with VLM),
                 "total_images": int (images processed),
-                "error": str (if failed)
+                "error": str (if failed),
+                "error_type": str (some failures, see below)
             }
+
+        error_type, when set, names a failure a caller can act on:
+            "file_locked": Windows refused the read; another program holds
+                the document exclusively or has locked part of it (or the user
+                lacks read permission, which Windows reports the same way).
+                Any format. Index it again once the program lets go.
+            "cache_busy": another GAIA process holds this document's cache.
+            "embedding_unavailable": the embedder or Lemonade could not run.
         """
         ...
 

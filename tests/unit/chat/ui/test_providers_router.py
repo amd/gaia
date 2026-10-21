@@ -340,6 +340,39 @@ def test_active_restore_fails_for_a_local_model_not_downloaded(
     assert "not downloaded" in body["restore"]["message"]
 
 
+# Lemonade lists a registered ``user.X`` model as ``X`` (seen on v2026.40.0).
+_CUSTOM = "user.ggml-gpt-oss-20b-MXFP4-GGUF"
+_CUSTOM_LISTED = {"id": "ggml-gpt-oss-20b-MXFP4-GGUF", "downloaded": True, "labels": []}
+
+
+def test_active_custom_model_is_downloaded_under_its_listed_name(
+    client, lemonade, keys, db
+):
+    """The chip showed a download icon for gpt-oss 20B that was on disk."""
+    _write_config({"default_model": _CUSTOM})
+    lemonade.models = [_CUSTOM_LISTED]
+    body = client.get("/api/providers/active").json()
+    assert body["model"] == _CUSTOM
+    assert body["downloaded"] is True
+
+
+def test_selecting_a_downloaded_custom_model_by_its_user_name_works(
+    client, lemonade, keys, db
+):
+    lemonade.models = [_CUSTOM_LISTED]
+    resp = client.post("/api/providers/select", json={"model": _CUSTOM})
+    assert resp.status_code == 200, resp.json()
+    assert db.get_setting("custom_model") == _CUSTOM
+
+
+def test_restoring_a_downloaded_custom_model_works(client, lemonade, keys, db):
+    _write_config({"last_model": _CUSTOM})
+    lemonade.models = [_CUSTOM_LISTED]
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "restored", body["restore"]
+    assert body["model"] == _CUSTOM
+
+
 def test_active_restore_reports_a_corrupt_config(client, lemonade, keys, db):
     config_mod.GAIA_CONFIG_FILE.write_text("{not json", encoding="utf-8")
     body = client.get("/api/providers/active").json()

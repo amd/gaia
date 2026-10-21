@@ -5932,6 +5932,7 @@ Let me know your answer!
             from gaia.installer.lemonade_installer import (
                 LemonadeInstaller,
                 discard_download,
+                discard_kept_installers,
             )
             from gaia.version import LEMONADE_VERSION
 
@@ -5970,12 +5971,14 @@ Let me know your answer!
                     installer_path = None
                 else:
                     print("Downloading Lemonade Server...")
+                    download_started = time.time()
                     installer_path = installer.download_installer()
                     print("Installing...")
                 result = installer.install(installer_path, silent=args.silent)
                 # A failed install keeps the file: its retry hint names it.
                 if installer_path is not None and result.success:
                     discard_download(installer_path)
+                    discard_kept_installers(installer_path.parent, download_started)
                 elif installer_path is not None:
                     print(f"   The downloaded installer is kept at {installer_path}")
 

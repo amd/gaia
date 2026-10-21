@@ -51,7 +51,9 @@ from gaia.connectors.errors import (
     ConnectionRevokedError,
     ConnectorsError,
 )
+from gaia.connectors.providers import OAuthProvider
 from gaia.connectors.providers import get as get_provider
+from gaia.connectors.providers import reload as reload_provider
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
@@ -94,6 +96,101 @@ def _cache_key(provider_id: str, account_email: str) -> Tuple[str, str]:
 def _is_expired(entry: _AccessTokenCache) -> bool:
     return entry.access_token is None or (
         entry.expires_at - time.monotonic() < _EXPIRY_BUFFER_SECONDS
+    )
+
+
+def load_current_connection(
+    provider_id: str,
+    *,
+    account_email: str = DEFAULT_ACCOUNT,
+    lock_held: bool = False,
+) -> Tuple[OAuthProvider, Optional[dict]]:
+    """Return ``(provider, stored connection or None)``, checked against the
+    client config in the credential store, not just this process's cache.
+
+    Another GAIA process may have forwarded or reconnected the connection under
+    a new client or tenant, leaving the cached provider stale. On a mismatch
+    the provider is rebuilt from the stored client config and checked again.
+
+    A connection that still mismatches is cleared (the store's tripwire raises
+    ``AuthRequiredError``) only under the connection lock, so a forward landing
+    meanwhile is never the one deleted. ``lock_held`` says the caller holds it;
+    otherwise it is taken without waiting, and when anything else holds it
+    (another process, or another thread here) the connection is left in place
+    and ``AuthRequiredError`` is raised. An unreadable blob (absent, torn or
+    corrupt) is handed to the store under the lock too, and reads as ``None``
+    while the lock is busy.
+    Blocking keyring I/O.
+    """
+    provider = get_provider(provider_id)
+    current = peek_connection(provider_id, account_email=account_email)
+    if current is None:
+        # Absent, torn or corrupt: the store's own read decides, and may delete,
+        # so it runs under the lock. Busy means a writer is mid-save.
+        if lock_held:
+            return provider, _load(provider_id, provider, account_email)
+        with _refresh_lock.try_held_sync(provider_id) as acquired:
+            if acquired:
+                return load_current_connection(
+                    provider_id, account_email=account_email, lock_held=True
+                )
+        return provider, None
+    if _disagrees(provider, current):
+        logger.info(
+            "connectors: %s client config changed outside this process "
+            "(cached hash=%s tenant=%s, stored hash=%s tenant=%s); reloading",
+            provider_id,
+            provider.client_id_hash,
+            getattr(provider, "tenant", None),
+            current.get("client_id_hash"),
+            current.get("tenant"),
+        )
+        provider = reload_provider(provider_id)
+    if not _disagrees(provider, current):
+        return provider, current
+    if lock_held:
+        return provider, _load(provider_id, provider, account_email)
+    with _refresh_lock.try_held_sync(provider_id) as acquired:
+        if acquired:
+            return load_current_connection(
+                provider_id, account_email=account_email, lock_held=True
+            )
+    raise AuthRequiredError(
+        AuthRequiredError.Reason.REAUTH_REQUIRED,
+        provider=provider_id,
+        message=(
+            f"The stored {provider_id} connection does not match the configured "
+            "OAuth client or tenant, and another GAIA operation (in this process or "
+            "another) is writing it now, so it was left in place. Retry; if this "
+            "keeps happening, reconnect from "
+            f"Settings → Connections or run `gaia connectors connect {provider_id}`."
+        ),
+    )
+
+
+def _load(
+    provider_id: str, provider: OAuthProvider, account_email: str
+) -> Optional[dict]:
+    # ``current_tenant`` (A18) is the LIVE provider's resolved tenant —
+    # ``getattr`` because Google has no ``.tenant`` attribute at all.
+    return load_connection(
+        provider_id,
+        current_client_id_hash=provider.client_id_hash,
+        current_tenant=getattr(provider, "tenant", None),
+        account_email=account_email,
+    )
+
+
+def _disagrees(provider: OAuthProvider, stored: dict) -> bool:
+    """Whether ``stored`` would trip the store's client or tenant check."""
+    if stored.get("client_id_hash") != provider.client_id_hash:
+        return True
+    stored_tenant = stored.get("tenant")
+    live_tenant = getattr(provider, "tenant", None)
+    return (
+        stored_tenant is not None
+        and live_tenant is not None
+        and stored_tenant != live_tenant
     )
 
 
@@ -142,22 +239,17 @@ async def _refresh_locked(
     provider_id: str, account_email: str, entry: _AccessTokenCache
 ) -> str:
     """Refresh ``entry``; the caller holds its slot lock and the refresh lock."""
-    # Resolved again under the lock: a forwarded import that ran while we
-    # waited replaced the client, and the old client hash would trip the
-    # store's mismatch check and clear the connection it just saved.
-    provider = get_provider(provider_id)
+    # Loaded under the lock: a forward or reconnect that ran while we waited,
+    # in this process or another, may have replaced the client.
     # The store raises AuthRequiredError(REAUTH_REQUIRED / TENANT_MISMATCH)
     # directly when the client_id_hash / tenant tripwire fires; we let
     # that propagate without interpretation. ``None`` means the user
-    # never connected. ``current_tenant`` (A18) is the LIVE provider's
-    # resolved tenant — ``getattr`` because non-Microsoft providers
-    # (Google) have no ``.tenant`` attribute at all.
-    stored = await _refresh_lock.run_to_completion(
-        load_connection,
+    # never connected.
+    provider, stored = await _refresh_lock.run_to_completion(
+        load_current_connection,
         provider_id,
-        current_client_id_hash=provider.client_id_hash,
-        current_tenant=getattr(provider, "tenant", None),
         account_email=account_email,
+        lock_held=True,
     )
     if stored is None:
         raise AuthRequiredError(

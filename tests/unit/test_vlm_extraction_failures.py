@@ -56,6 +56,14 @@ class TestTheThreeFailureSites:
         with pytest.raises(VLMExtractionError):
             vlm.extract_from_image(b"fake-png")
 
+    def test_a_cancelled_wait_for_the_model_is_a_stop_not_a_failed_page(self, vlm):
+        from gaia.daemon.broker_client import LeaseWaitCancelled
+
+        vlm.client.chat_completions.side_effect = LeaseWaitCancelled("stopped")
+
+        with pytest.raises(LeaseWaitCancelled):
+            vlm.extract_from_image(b"fake-png", page_num=2)
+
     def test_an_unexpected_exception_raises_with_the_cause_attached(self, vlm):
         vlm.client.chat_completions.side_effect = ConnectionError("refused")
 

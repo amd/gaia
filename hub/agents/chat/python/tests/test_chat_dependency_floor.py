@@ -33,6 +33,9 @@ PATH_ACCESS_FLOOR = (0, 25, 0)
 # First core release shipping gaia.agents.tools.reasoning_tools.
 REASONING_TOOLS_FLOOR = (0, 25, 1)
 
+# First core release shipping gaia.utils.file_lock.held_by_another_program.
+FILE_LOCK_HELD_FLOOR = (0, 25, 1)
+
 # Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
 # (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
 _AMD_GAIA_FLOOR_RE = r'"amd-gaia(?:\[[^\]]*\])?>=([0-9.]+)"'
@@ -135,6 +138,34 @@ def test_floor_guard_fails_a_release_that_forgets_the_bump(monkeypatch, tmp_path
     ahead.write_text('dependencies = ["amd-gaia>=0.26.0"]', encoding="utf-8")
     with pytest.raises(AssertionError, match="above the in-tree core"):
         test_floor_rises_with_the_core_that_ships_reasoning_tools(ahead)
+
+
+@pytest.mark.parametrize("pyproject", [CHAT_ROOT / "pyproject.toml"], ids=["chat"])
+def test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(pyproject):
+    """The chat agent imports gaia.utils.file_lock.held_by_another_program at
+    start, which no core before 0.25.1 ships."""
+    from gaia.utils.file_lock import held_by_another_program
+
+    assert callable(held_by_another_program)
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
+    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
+    floor = _floor_tuple(match.group(1))
+    if _core_release() >= FILE_LOCK_HELD_FLOOR:
+        assert floor >= FILE_LOCK_HELD_FLOOR, (
+            f"core is now {_core_release()}, but the chat agent's amd-gaia floor "
+            f"is still {match.group(1)}; raise it (and min_gaia_version) to "
+            "0.25.1, the first core with file_lock.held_by_another_program"
+        )
+
+
+def test_held_by_another_program_guard_fails_a_release_that_forgets_the_bump(
+    monkeypatch, tmp_path
+):
+    stale = tmp_path / "pyproject.toml"
+    stale.write_text('dependencies = ["amd-gaia>=0.25.0"]', encoding="utf-8")
+    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 1))
+    with pytest.raises(AssertionError, match="held_by_another_program"):
+        test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(stale)
 
 
 def test_manifest_floors_match_pyproject():

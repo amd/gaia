@@ -487,7 +487,7 @@ def _check_model_available(model_id: str) -> Optional[str]:
             _require_loopback(_base_url())
             if not ensure_authenticated(provider):
                 return f"{_NAMES[provider]} has no working key"
-        models = {m["id"]: m for m in _list_models(provider)}
+        models = _list_models(provider)
     except ProviderError as e:
         if e.status == 503:
             raise _ServerNotReady(str(e)) from e
@@ -498,7 +498,7 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return str(e)
     except requests.RequestException as e:
         return str(e)
-    found = models.get(model_id)
+    found = _listed(models, model_id)
     if found is None:
         return "the model is no longer listed"
     if provider == LOCAL and not found["downloaded"]:
@@ -633,13 +633,20 @@ def _local_downloaded(view: Dict[str, Any]) -> Optional[bool]:
     if view["remote"] or not view["model"]:
         return None
     try:
-        models = {m["id"].lower(): m for m in _list_models(LOCAL, offer_optional=False)}
+        models = _list_models(LOCAL, offer_optional=False)
     except ProviderError as e:
         # Unknown, not an error: the chip simply makes no download claim.
         logger.info("Could not tell whether %s is downloaded: %s", view["model"], e)
         return None
-    found = models.get(view["model"].lower())
+    found = _listed(models, view["model"])
     return bool(found and found["downloaded"])
+
+
+def _listed(models: List[Dict[str, Any]], model_id: str) -> Optional[Dict[str, Any]]:
+    """*model_id*'s entry in *models*; Lemonade lists ``user.X`` as ``X``."""
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    return next((m for m in models if _model_ids_match(m["id"], model_id)), None)
 
 
 class ConnectRequest(BaseModel):
@@ -1049,13 +1056,8 @@ def _memory_view(
         )
     elif model_id:
         # Unknown KV cost: weights plus the shared margin, from Lemonade's size.
-        size = next(
-            (
-                m.get("size_gb")
-                for m in _list_models(LOCAL, offer_optional=False)
-                if m["id"] == model_id
-            ),
-            None,
+        size = (_listed(_list_models(LOCAL, offer_optional=False), model_id) or {}).get(
+            "size_gb"
         )
         if isinstance(size, (int, float)) and size > 0:
             model_gb = required_memory_gb(size)

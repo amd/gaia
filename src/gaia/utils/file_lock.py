@@ -61,6 +61,29 @@ class FileLockTimeout(FileLockError, TimeoutError):
     """Another process held a file's lock for longer than the caller would wait."""
 
 
+_WINDOWS = os.name == "nt"
+# ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION.
+_LOCKED_WINERRORS = frozenset({32, 33})
+
+
+def held_by_another_program(error: BaseException) -> bool:
+    """True when *error* may be another program holding the file, worth retrying.
+
+    Windows reports an exclusive open, a byte-range lock and a missing read
+    permission alike, as ``PermissionError`` with errno EACCES, so a caller
+    cannot tell them apart; messages built on this must name both causes.
+    POSIX reads are never blocked by another program, so there EACCES is only
+    a permission. A ``PermissionError`` GAIA raises itself (a path-policy
+    refusal) has no errno and is never a lock.
+    """
+    if not _WINDOWS or not isinstance(error, PermissionError):
+        return False
+    return (
+        error.errno == errno.EACCES
+        or getattr(error, "winerror", None) in _LOCKED_WINERRORS
+    )
+
+
 def lock_dir_unwritable(error: FileLockError) -> bool:
     """True when *error* means only that the lock file's directory is read-only.
 
