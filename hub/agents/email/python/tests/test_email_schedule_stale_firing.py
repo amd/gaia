@@ -306,3 +306,34 @@ def test_bad_lease_settings_rejected(tmp_path):
             stale_firing_seconds=60,
             heartbeat_seconds=90,
         )
+
+
+@pytest.mark.parametrize("kind", [SEND, SNOOZE])
+def test_a_stale_read_never_recovers_a_new_claim_made_at_the_same_time(tmp_path, kind):
+    """Two claims can share a ``claimed_at``; only the ``claim_id`` tells them
+    apart. A driver acting on a stale read of the first must not fail a send,
+    or re-queue a snooze, that the second claim is firing right now."""
+    db = _db(tmp_path / "state.db")
+    job_id = schedule_store.create_job(db, kind=kind, due_at=1.0, payload={})
+    first = schedule_store.claim_job(db, job_id=job_id, now=1.0)
+    [stale] = schedule_store.find_stale_firing(db, now=STALE + 2, stale_after=STALE)
+    assert schedule_store.recover_claim(db, stale, now=STALE + 2) is not None
+    # Back to pending (re-queued, or re-scheduled by the user) and claimed
+    # again by a driver whose pass carries the same timestamp.
+    db.update(
+        "email_scheduled_jobs",
+        {"status": "pending", "error": None},
+        "job_id = :id",
+        {"id": job_id},
+    )
+    second = schedule_store.claim_job(db, job_id=job_id, now=1.0)
+    assert second not in (None, first)
+
+    # Another driver acts on the same stale read.
+    outcome = schedule_store.recover_claim(db, stale, now=STALE + 3)
+    job = schedule_store.get_job(db, job_id=job_id)
+    # Taken over, the send would be failed mid-send, or the snooze re-run.
+    assert job["status"] == "firing" and job["claim_id"] == second
+    assert job["error"] is None
+    assert schedule_store.fetch_due(db, now=STALE + 3) == []
+    assert outcome is None
