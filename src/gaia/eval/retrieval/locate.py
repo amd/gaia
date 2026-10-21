@@ -101,6 +101,15 @@ class Evidence:
     span: Optional[Tuple[int, int]] = None
 
 
+def _find_through(text: str, needle: str, start: int, cursor: int) -> int:
+    """First copy of ``needle`` at or after ``start`` that runs past ``cursor``."""
+    limit = cursor + len(needle)
+    pos = text.find(needle, start, limit)
+    while 0 <= pos and pos + len(needle) <= cursor:
+        pos = text.find(needle, pos + 1, limit)
+    return pos
+
+
 def locate_chunks(
     chunks: Sequence[str], file_chunks: Dict[str, List[int]], docs: Dict[str, DocText]
 ) -> Tuple[Dict[int, ChunkSpan], List[int]]:
@@ -115,13 +124,14 @@ def locate_chunks(
             # Chunks come in document order; a match before the previous chunk
             # could be repeated text elsewhere, so it counts as unlocated.
             pos = doc.text.find(needle, cursor) if needle else -1
-            if pos < 0 and needle:
+            if needle:
                 # One exception: the previous chunk is the short tail of a chunk
                 # split to fit the embedder, and this one's overlap, cut from the
                 # unsplit chunk, starts before that tail and runs through it.
-                pos = doc.text.find(needle, before, cursor + len(needle))
-                if pos + len(needle) <= cursor:
-                    pos = -1
+                # That copy wins over an in-order one, which is a later repeat.
+                back = _find_through(doc.text, needle, before, cursor)
+                if back >= 0 and (pos < 0 or back < cursor):
+                    pos = back
             if pos < 0:
                 unlocated.append(idx)
                 continue
