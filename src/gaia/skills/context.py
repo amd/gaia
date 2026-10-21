@@ -24,6 +24,9 @@ these functions act for that agent and that skill::
   ``output_dir`` …, see :func:`is_path_argument`) is read-checked before the
   tool body runs, so a skill tool cannot be pointed outside the scope by
   default. A tool that writes calls :func:`check_write` itself.
+- **Files.** :func:`open_read`, :func:`list_readable` and :func:`open_write`
+  open, list and create files behind those same checks, so a skill that
+  reads the user's files (logs, exports) needs no ``open()`` of its own.
 - **Programs.** :func:`run_program` starts one executable the manifest names
   (``program:run:<name>``): no shell, stdin closed, an environment holding
   only what a program needs to start (no API keys or tokens), and a timeout.
@@ -54,7 +57,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import IO, Any, Dict, Iterator, List, Optional, Sequence
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillPermissionError
@@ -263,6 +266,73 @@ def check_write(path: str | os.PathLike, *, content_size: int = 0) -> Path:
     if refusal is not None:
         raise SkillPermissionError(refusal["error"])
     return resolved
+
+
+def open_read(path: str | os.PathLike) -> IO[bytes]:
+    """Open a file the agent may read, in binary mode.
+
+    The same check as :func:`check_read`, then ``open(path, "rb")``. The
+    caller decodes (and may wrap it in ``gzip`` or ``io.TextIOWrapper``). A
+    skill that reads only through here needs no ``filesystem`` permission:
+    the agent's allowed folders already bound what it can open.
+
+    Raises:
+        SkillPermissionError: outside the agent's allowed folders, or a secret.
+        OSError: the file cannot be opened.
+    """
+    return open(check_read(path), "rb")
+
+
+def open_write(
+    path: str | os.PathLike,
+    *,
+    binary: bool = False,
+    encoding: str = "utf-8",
+    newline: Optional[str] = None,
+) -> IO[Any]:
+    """Create or replace a file the agent may write, after :func:`check_write`.
+
+    Missing parent folders are created inside the checked path's scope. An
+    existing file goes through the validator's overwrite confirmation.
+
+    Raises:
+        SkillPermissionError: outside the allowed folders, a protected
+            location, or the user declined the overwrite.
+        OSError: the file cannot be created.
+    """
+    target = check_write(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if binary:
+        return open(target, "wb")
+    return open(target, "w", encoding=encoding, newline=newline)
+
+
+def list_readable(root: str | os.PathLike, *, recursive: bool = True) -> List[Path]:
+    """Files under *root* the agent may read, sorted, hidden entries skipped.
+
+    *root* itself goes through :func:`check_read` (with its approval prompt);
+    entries found inside never prompt, and secrets or links that leave the
+    allowed folders are left out, as the agent's own folder walks do.
+
+    Raises:
+        SkillPermissionError: *root* is outside the agent's allowed folders.
+    """
+    from gaia.agents.tools.path_access import readable_entry
+
+    call = current()
+    base = check_read(root)
+    found: List[Path] = []
+    if recursive:
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for name in sorted(filenames):
+                if not name.startswith("."):
+                    found.append(Path(dirpath) / name)
+    else:
+        found = sorted(
+            p for p in base.iterdir() if p.is_file() and not p.name.startswith(".")
+        )
+    return [p for p in found if readable_entry(call.agent, p)]
 
 
 # ----------------------------------------------------------------------

@@ -445,6 +445,8 @@ functions act for that agent and that skill:
 | Function | Needs | Does |
 |----------|-------|------|
 | `check_read(path)` / `check_write(path)` | — | The agent's allowed-folders check, the same `validate_read` / `validate_write` that `read_file` / `write_file` use, including the approval prompt. Returns the resolved `Path` or raises `SkillPermissionError`. |
+| `open_read(path)`, `list_readable(root, recursive=True)` | — | Open a file in binary mode after `check_read`; list the readable files under a checked folder (hidden entries, secrets and links out of scope left out, no prompt per file). Reading through these needs no `filesystem` permission. |
+| `open_write(path, *, binary=False, encoding="utf-8", newline=None)` | — | Create or replace a file after `check_write` (the overwrite confirmation included), creating missing parent folders. |
 | `run_program(name, args, *, timeout, cwd=None)` | `program:run:<name>` | Starts the named program, found on PATH or in its usual install folder. Runs with no shell, stdin closed, and an environment without the agent's keys and tokens. Returns a `CompletedProcess`. It does **not** block network access. |
 | `temp_dir(sub=None)`, `write_temp_file(name, data)`, `copy_to_temp(path)` | `scratch:write` | A fresh folder under `<gaia_home>/skill-temp/<skill>/`, deleted when the call returns. `copy_to_temp` read-checks its source first. |
 | `preferences().get()` / `.update(dict)` / `.reset()` | — | The skill's own saved preferences, described below. |

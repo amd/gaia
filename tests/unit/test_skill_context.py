@@ -346,3 +346,65 @@ def test_the_audit_still_flags_a_raw_subprocess(tmp_path):
     body = "import subprocess\nsubprocess.run(['soffice'])\nreturn {}\n"
     skill_dir = _write_skill(tmp_path, "raw-probe", ["program:run:soffice"], body)
     assert audit_skill(skill_dir).verdict != "ALLOW"
+
+
+# --------------------------------------------------------------------------
+# Files: open_read / list_readable / open_write
+# --------------------------------------------------------------------------
+
+
+def test_open_read_and_list_readable_stay_in_scope(agent, tmp_path, allowed, outside):
+    (allowed / ".hidden").write_text("x", encoding="utf-8")
+    (allowed / ".env").write_text("TOKEN=x", encoding="utf-8")
+    body = (
+        "names = [p.name for p in ctx.list_readable(file_path)]\n"
+        "with ctx.open_read(str(__import__('pathlib').Path(file_path) / 'in.txt')) as f:\n"
+        "    text = f.read().decode()\n"
+        "return {'status': 'success', 'names': names, 'text': text}\n"
+    )
+    _load(agent, tmp_path, "files-probe", [], body)
+
+    result = agent._execute_tool("files-probe/probe", {"file_path": str(allowed)})
+    assert result == {"status": "success", "names": ["in.txt"], "text": "inside"}
+
+    body = "ctx.open_read(file_path)\nreturn {'status': 'success'}\n"
+    _load(agent, tmp_path, "files-probe-2", [], body)
+    module = sys.modules["gaia_skill_files_probe_2_tools"]
+    refused = agent._execute_tool("files-probe-2/probe", {"file_path": str(outside)})
+    assert refused["status"] == "error" and module.CALLS == []
+
+
+def test_open_write_creates_inside_and_refuses_outside(
+    agent, tmp_path, allowed, outside
+):
+    body = (
+        "with ctx.open_write(file_path) as f:\n"
+        "    f.write('done')\n"
+        "return {'status': 'success'}\n"
+    )
+    _load(agent, tmp_path, "write-file-probe", [], body)
+    target = allowed / "sub" / "out.txt"
+    assert (
+        agent._execute_tool("write-file-probe/probe", {"file_path": str(target)})[
+            "status"
+        ]
+        == "success"
+    )
+    assert target.read_text(encoding="utf-8") == "done"
+    escaped = outside.parent / "new.txt"
+    refused = agent._execute_tool("write-file-probe/probe", {"file_path": str(escaped)})
+    assert refused["status"] == "error" and not escaped.exists()
+
+
+def test_the_audit_accepts_reads_and_writes_through_the_context(tmp_path):
+    body = (
+        "with ctx.open_read(file_path) as f:\n"
+        "    f.read()\n"
+        "ctx.list_readable(file_path)\n"
+        "ctx.open_write(file_path + '.out').close()\n"
+        "return {}\n"
+    )
+    report = audit_skill(_write_skill(tmp_path, "files-audit", [], body))
+    assert report.verdict == "ALLOW", [f.rule_id for f in report.findings]
+    raw = "open(file_path).read()\nreturn {}\n"
+    assert audit_skill(_write_skill(tmp_path, "raw-open", [], raw)).verdict != "ALLOW"
