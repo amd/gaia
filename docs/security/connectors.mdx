@@ -66,7 +66,11 @@ connection lock. If another process holds it, the connection is left in
 place and the call raises `ConnectionBusyError`, a transient error rather
 than a disconnect: agent tools report it as busy, HTTP returns `503` with
 `Retry-After`, the connection listing keeps the row marked `"error": "busy"`,
-and the daemon keeps the token it already forwarded to a sidecar.
+and the daemon keeps the token it already forwarded to a sidecar. A
+forwarded connection saves its client config and its connection in one
+lock hold, and a forward that fails partway puts both back before letting
+go of the lock, so no process ever sees a new client next to an old
+connection.
 
 ## What we do not protect
 

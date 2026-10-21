@@ -29,7 +29,11 @@ import pytest
 import respx
 
 from gaia.connectors import _refresh_lock, tokens
-from gaia.connectors.errors import AuthRequiredError, ConnectionBusyError
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConnectionBusyError,
+    ConnectorsError,
+)
 from gaia.connectors.providers import _registry
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.providers.google import GoogleOAuthProvider
@@ -528,7 +532,7 @@ def test_a_mismatch_is_not_cleared_while_another_thread_here_holds_the_lock(
     holder.start()
     try:
         assert holding.wait(_CHILD_TIMEOUT)
-        with pytest.raises(AuthRequiredError, match="this process or another"):
+        with pytest.raises(ConnectionBusyError):
             _authorize_access(
                 provider="google",
                 scopes=[GMAIL],
@@ -554,3 +558,60 @@ async def test_reloading_a_stale_client_never_logs_a_secret(
     assert "reloading" in caplog.text
     for secret in ("forwarded-refresh", "old-refresh"):
         assert secret not in caplog.text
+
+
+def _forward_with_failing_connection_write(monkeypatch):
+    from gaia.connectors import store
+    from gaia.connectors.api import import_forwarded_connection
+
+    def locked_keyring(**_kwargs):
+        raise ConnectorsError("keyring locked (simulated)")
+
+    monkeypatch.setattr(store, "save_connection", locked_keyring)
+    try:
+        import_forwarded_connection(
+            provider="google",
+            client_id=NEW_CLIENT,
+            client_secret="forwarded-secret",
+            refresh_token="forwarded-refresh",
+            scopes=[GMAIL],
+            required_scopes=[],
+        )
+    finally:
+        monkeypatch.setattr(store, "save_connection", save_connection)
+
+
+@respx.mock
+async def test_a_forward_that_fails_halfway_keeps_the_existing_connection(
+    monkeypatch, connected_under_old_client
+):
+    from gaia.connectors.api import list_connections
+
+    with pytest.raises(ConnectorsError, match="keyring locked"):
+        _forward_with_failing_connection_write(monkeypatch)
+
+    assert peek_provider_credentials("google")["client_id"] == OLD_CLIENT
+    _registry.clear()  # any process, starting fresh
+    assert [c["provider"] for c in list_connections()] == ["google"]
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"access_token": "a", "expires_in": 60})
+    )
+    assert await tokens.get_or_refresh("google") == "a"
+    assert _stored_refresh_token() == "old-refresh"
+
+
+def test_a_failed_undo_of_a_halfway_forward_says_so(
+    monkeypatch, connected_under_old_client
+):
+    from gaia.connectors import store
+
+    def also_fails(_snapshot):
+        raise ConnectorsError("keyring gone (simulated)")
+
+    monkeypatch.setattr(store, "restore_connection_slots", also_fails)
+
+    with pytest.raises(ConnectorsError, match="putting back the previous") as exc:
+        _forward_with_failing_connection_write(monkeypatch)
+
+    assert "keyring locked" in str(exc.value)
+    assert "keyring gone" in str(exc.value)

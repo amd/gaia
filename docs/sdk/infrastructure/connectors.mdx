@@ -193,6 +193,9 @@ GAIA refuses to persist tokens to an insecure keyring backend (plaintext /
 weak file-backed stores). On such a backend the import fails loudly with an
 actionable error pointing at the system credential-store setup. Forwarded
 secrets are never written to `~/.gaia/` and never echoed in any response.
+If a forward fails partway through saving, GAIA puts back the client and
+connection that were there before, so a failed forward never costs the user
+the connection they already had.
 </Note>
 
 ## SDK use — MCP server

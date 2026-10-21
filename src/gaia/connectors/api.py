@@ -573,16 +573,22 @@ def import_forwarded_connection(
         (``_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER``, empty for unknown providers);
         an explicit ``[]`` means "require nothing" at import time. GAIA cannot
         widen scope at refresh time, so a shortfall is unrecoverable without
-        re-consent by the host app.
+        re-consent by the host app;
+      - a keyring write that fails partway → the previous client config and
+        connection are put back before the error propagates (and a failed
+        put-back raises a ``ConnectorsError`` naming both failures).
 
     Returns a metadata-only summary — NEVER the refresh token or client secret.
     """
     # Local imports keep the module-level dependency graph (and the lazy
     # keyring import contract in connectors/__init__.py) unchanged.
+    from gaia.connectors.providers import _registry as _provider_registry
     from gaia.connectors.providers import reload as reload_provider
     from gaia.connectors.store import (
+        restore_connection_slots,
         save_connection,
         save_provider_credentials,
+        snapshot_connection_slots,
         verify_keyring_backend,
     )
     from gaia.connectors.tokens import _cache as _token_cache
@@ -633,39 +639,56 @@ def import_forwarded_connection(
     account = account_email or DEFAULT_ACCOUNT
 
     # Steps 4-6 share one lock hold, so a refresh in another process never
-    # sees the new client next to the old connection and clears it.
+    # sees the new client next to the old connection and clears it. A write
+    # that fails partway is undone before the lock is released, for the same
+    # reason.
     with held_sync(provider):
-        # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
-        save_provider_credentials(
-            provider, client_id=client_id, client_secret=client_secret
-        )
+        previous = snapshot_connection_slots(provider)
+        try:
+            # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
+            save_provider_credentials(
+                provider, client_id=client_id, client_secret=client_secret
+            )
 
-        # 5. Rebuild the cached provider from the forwarded client so
-        #    ``client_id_hash`` is recomputed from it.
-        prov = reload_provider(provider)
+            # 5. Rebuild the cached provider from the forwarded client so
+            #    ``client_id_hash`` is recomputed from it.
+            prov = reload_provider(provider)
 
-        # 6. Persist the connection (refresh_token + metadata) →
-        #    ``<provider>:default`` keyed by the forwarded client's hash so the
-        #    tripwire passes coherently. ``save_connection`` rewrites the whole
-        #    blob, so the account kind must be threaded through explicitly or a
-        #    forwarded grant silently downgrades an already-classified mailbox
-        #    to unknown (#2466). A caller that knows the kind passes it;
-        #    otherwise the stored value carries over.
-        resolved_account_type = account_type or (
-            (peek_connection(provider) or {}).get("account_type")
-        )
-        save_connection(
-            provider=provider,
-            account_email=account,
-            refresh_token=refresh_token,
-            scopes=list(scopes),
-            client_id_hash=prov.client_id_hash,
-            connected_at=connected_at,
-            account_type=resolved_account_type,
-            # #2591 review: mark it so a later disconnect never revokes the
-            # host app's own OAuth grant — see save_connection's docstring.
-            forwarded=True,
-        )
+            # 6. Persist the connection (refresh_token + metadata) →
+            #    ``<provider>:default`` keyed by the forwarded client's hash so the
+            #    tripwire passes coherently. ``save_connection`` rewrites the whole
+            #    blob, so the account kind must be threaded through explicitly or a
+            #    forwarded grant silently downgrades an already-classified mailbox
+            #    to unknown (#2466). A caller that knows the kind passes it;
+            #    otherwise the stored value carries over.
+            resolved_account_type = account_type or (
+                (peek_connection(provider) or {}).get("account_type")
+            )
+            save_connection(
+                provider=provider,
+                account_email=account,
+                refresh_token=refresh_token,
+                scopes=list(scopes),
+                client_id_hash=prov.client_id_hash,
+                connected_at=connected_at,
+                account_type=resolved_account_type,
+                # #2591 review: mark it so a later disconnect never revokes the
+                # host app's own OAuth grant — see save_connection's docstring.
+                forwarded=True,
+            )
+        except BaseException as e:
+            _provider_registry.pop(provider, None)
+            try:
+                restore_connection_slots(previous)
+            except Exception as restore_err:
+                raise ConnectorsError(
+                    f"Forwarding the {provider} connection failed ({e}), and "
+                    "putting back the previous client config and connection also "
+                    f"failed ({restore_err}). They may no longer match: reconnect "
+                    f"from Settings → Connections, or run `gaia connectors connect "
+                    f"{provider}`, or forward the connection again."
+                ) from restore_err
+            raise
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh
     #    refreshes against the forwarded client. The v1 store is single-slot
