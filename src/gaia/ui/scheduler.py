@@ -1446,7 +1446,9 @@ class Scheduler:
                     "system",
                     f"[schedule-run] Run #{task.run_count} \u00b7 {ts}",
                 )
-                self._db.add_message(task.session_id, "user", task.prompt)
+                # Marked as an unfinished turn until its reply is saved, so a
+                # restart mid-run says the run was interrupted.
+                self._db.begin_turn(task.session_id, task.prompt)
             except Exception as exc:
                 logger.error(
                     "Failed to add session messages for schedule '%s': %s",
@@ -1476,7 +1478,9 @@ class Scheduler:
         if task.session_id and has_sessions:
             try:
                 content = f"Error: {error}" if error else (result or "(no output)")
-                self._db.add_message(task.session_id, "assistant", content)
+                self._db.add_message(
+                    task.session_id, "assistant", content, ends_turn=True
+                )
             except Exception as exc:
                 logger.error(
                     "Failed to store response for schedule '%s': %s",

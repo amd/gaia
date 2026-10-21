@@ -41,7 +41,10 @@ var runCmd = &cobra.Command{
 		"the agent still wrote an answer, so `gaia tui run … && next-step` does not " +
 		"fire over work that never happened\n" +
 		"  exit 3  a confirmation gate held back a destructive action this run has " +
-		"no way to approve: nothing broke, and nothing was done\n\n" +
+		"no way to approve: nothing broke, and nothing was done\n" +
+		"  exit 130  Ctrl+C (or SIGTERM/SIGHUP) stopped the turn. The agent is asked " +
+		"to stop and given 10s to confirm; a second Ctrl+C quits without waiting, and " +
+		"stderr says when the turn may still be running\n\n" +
 		"A tool that reports no outcome at all is named on stderr as unverified " +
 		"rather than counted as a success.\n\n" +
 		"A one-shot checks its preconditions first and refuses in seconds — naming " +
@@ -188,7 +191,7 @@ func orDash(s string) string {
 func init() {
 	runCmd.Flags().StringVar(&runQuery, "query", "",
 		"run one query non-interactively: answer on stdout, exit 0 answered / "+
-			"1 failed / 3 needs approval")
+			"1 failed / 3 needs approval / 130 interrupted")
 	runCmd.Flags().StringVar(&runModel, "model", "",
 		"model id override (the agent's default is used when unset)")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", ui.DefaultOneShotTimeout,

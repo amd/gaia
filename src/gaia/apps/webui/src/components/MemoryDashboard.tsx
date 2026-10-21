@@ -9,6 +9,7 @@ import {
     Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -409,33 +410,27 @@ export function MemoryDashboard() {
         return () => document.removeEventListener('mousedown', handler);
     }, [showMaintenanceMenu]);
 
-    // Close on Escape key
-    useEffect(() => {
-        const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                if (betaConfirm) {
-                    setBetaConfirm(null);
-                } else if (deleteConfirm) {
-                    setDeleteConfirm(false);
-                } else if (reinitConfirm) {
-                    setReinitConfirm(false);
-                } else if (convDetail) {
-                    setConvDetail(null);
-                } else if (showMaintenanceMenu) {
-                    setShowMaintenanceMenu(false);
-                } else if (showAddForm || editingId) {
-                    setShowAddForm(false);
-                    setEditingId(null);
-                } else if (expandedRowId) {
-                    setExpandedRowId(null);
-                } else {
-                    setShowMemoryDashboard(false);
-                }
-            }
-        };
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [convDetail, showMaintenanceMenu, showAddForm, editingId, expandedRowId, setShowMemoryDashboard, betaConfirm, deleteConfirm, reinitConfirm]);
+    // Escape backs out one level: the innermost open piece first, then the dashboard.
+    useEscapeToClose(true, () => {
+        if (betaConfirm) {
+            setBetaConfirm(null);
+        } else if (deleteConfirm) {
+            setDeleteConfirm(false);
+        } else if (reinitConfirm) {
+            setReinitConfirm(false);
+        } else if (convDetail) {
+            setConvDetail(null);
+        } else if (showMaintenanceMenu) {
+            setShowMaintenanceMenu(false);
+        } else if (showAddForm || editingId) {
+            setShowAddForm(false);
+            setEditingId(null);
+        } else if (expandedRowId) {
+            setExpandedRowId(null);
+        } else {
+            setShowMemoryDashboard(false);
+        }
+    });
 
     // Modal focus handling for the beta-confirm dialog: move focus in, keep Tab
     // inside it, and hand focus back to the toggle that opened it.

@@ -51,11 +51,11 @@ LINUX_DEB_DISTRO_TAG = "debian13"
 # tests/integration/test_lemonade_embeddable_assets.py checks them against the
 # live release.
 INSTALLER_SHA256 = {
-    "v2026.40.0/lemonade.msi": "e10bc07d69e668338bf01e1a599b4f6e684bf7d217f14cb3744668291bd8bbf0",
-    "v2026.40.0/lemonade-server-minimal.msi": "95ad5b18eba1c1b42228ebceefcdd2eb949d2dde6bb5405141e2cbc169260d66",
-    "v2026.40.0/lemonade-server_2026.40.0-debian13_amd64.deb": "823596e7d1036cc254b93dcfe76ea3690d0a1003bf738dc16be588a376664729",
-    "v2026.40.0/lemonade-server_2026.40.0-debian13_arm64.deb": "ea9e91b3eb69a2986201431a4bc6134bd46d5413479b7cc6256992decaad0522",
-    "v2026.40.0/Lemonade-2026.40.0-Darwin.pkg": "0502d82967b1281580074a622380b1bb03fcbd8faf54466a568e811ebd99485f",
+    "v2026.42.1/lemonade.msi": "94ec399d71fe0d3fa4386aca440374f167c27d2dd0479055c8d8b3da869058d4",
+    "v2026.42.1/lemonade-server-minimal.msi": "463e76b01de44d3ffac87bfc29405a933246e149ea435f5eac6aea4b944476f3",
+    "v2026.42.1/lemonade-server_2026.42.1-debian13_amd64.deb": "872729cb257962e3c7746f6ba76301247bd85de98b1f6bca936bc35a7a3af1eb",
+    "v2026.42.1/lemonade-server_2026.42.1-debian13_arm64.deb": "78373174403df63f87bbca9bc5d1a44417b4a104e2446b5f93589d012ae49de9",
+    "v2026.42.1/Lemonade-2026.42.1-Darwin.pkg": "c2d99fb22860e8288f46ce4cb32c3853c287c668b63f2a1e0cf8ebab355e7291",
 }
 
 # The Windows installers of every older release GAIA supports (back to
@@ -105,6 +105,8 @@ LEGACY_MSI_SHA256 = {
     "v11.9.0/lemonade.msi": "f105e07e12c8c5fa2f54807532ed6fdda13708ca00a3619f24fcb3b7f08c4451",
     "v2026.39.1/lemonade-server-minimal.msi": "0a6bdc9e49ef819e17f29d4432fa1c78f363cb086d64ffd661b1553de16f09b7",
     "v2026.39.1/lemonade.msi": "8e778d01b6e5fe10dbee6bc017e58b1b9b35758b7507c1b188d99ba77906d838",
+    "v2026.40.0/lemonade-server-minimal.msi": "95ad5b18eba1c1b42228ebceefcdd2eb949d2dde6bb5405141e2cbc169260d66",
+    "v2026.40.0/lemonade.msi": "e10bc07d69e668338bf01e1a599b4f6e684bf7d217f14cb3744668291bd8bbf0",
 }
 
 # platform.machine() varies by OS/libc for the same hardware.
