@@ -38,8 +38,8 @@
 
 import SurfacePreview from './SurfacePreview.astro';
 import { formatBytes, getStableRelease, type ReleaseAsset } from '../data/github';
+import { primaryDownloads } from '../data/primary-downloads';
 import {
-  WINDOWS_INSTALL_COMMAND,
   DESKTOP_DOWNLOAD_LABELS,
   DESKTOP_MISSING_PLATFORMS,
   DESKTOP_PLATFORMS,
@@ -50,7 +50,6 @@ import {
   PLATFORM_ORDER,
   artifactFileName,
   desktopArtifactFileName,
-  desktopExtraFileNames,
   windowsSetupOffersChoice,
   type DownloadKey,
   type InstallerKey,
@@ -124,110 +123,8 @@ const windowsSetup = windowsCombined
   ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
   : undefined;
 
-// ---- The primary download, one per platform ----
-//
-// Each row is the one button a placed visitor sees, plus the files folded under
-// it. Every file is looked up on the release; a missing primary file drops the
-// row, and a missing option drops just that option.
-
-interface Choice {
-  asset: ReleaseAsset;
-  label: string;
-  note?: string;
-  command?: string;
-}
-
-interface PrimaryRow {
-  platform: PlatformKey;
-  // What the button installs: the Windows setup, the desktop app, or the terminal.
-  kind: 'setup' | 'desktop' | 'terminal';
-  asset: ReleaseAsset;
-  cta: string;
-  caption: string;
-  lede: string;
-  options: Choice[];
-}
-
-const BINARY_NOTE = 'A single file with no installer: put it on your PATH yourself.';
-
-const terminalChoices = (row: TuiRow): Choice[] => [
-  ...row.installers.map((i) => ({ asset: i.artifact, label: `Terminal app — ${DOWNLOAD_LABELS[i.key]}` })),
-  ...(row.binary
-    ? [{ asset: row.binary, label: `Terminal app — ${DOWNLOAD_LABELS[row.platform]}`, note: BINARY_NOTE }]
-    : []),
-];
-
-function primaryRow(platform: PlatformKey): PrimaryRow | null {
-  const label = PLATFORM_LABELS[platform];
-  const tui = tuiRow(platform);
-
-  if (platform === 'win-x64' && windowsCombined) {
-    if (!windowsSetup) return null;
-    const desktopOnly = published(desktopArtifactFileName(platform, version));
-    const options: Choice[] = [];
-    if (desktopOnly) {
-      options.push({
-        asset: desktopOnly,
-        label: 'Desktop app only (.exe)',
-        note: 'Installs just the desktop app. It downloads the GAIA agent the first time it runs.',
-      });
-    }
-    if (tui.binary) {
-      options.push({
-        asset: tui.binary,
-        label: 'Terminal app only (.exe)',
-        note: 'The terminal app as a single file, with no installer: put it on your PATH yourself. Or let PowerShell install it for you:',
-        command: WINDOWS_INSTALL_COMMAND,
-      });
-    }
-    return {
-      platform,
-      kind: 'setup',
-      asset: windowsSetup,
-      cta: INSTALLER_CTA_LABELS['win-x64-setup'],
-      caption: 'Installer (.exe)',
-      lede: 'One installer: it installs the desktop app, the terminal app, or both, and asks which while it runs. Both share the same local models.',
-      options,
-    };
-  }
-
-  const desktopName = desktopArtifactFileName(platform, version);
-  if (desktopName) {
-    const desktop = published(desktopName);
-    if (!desktop) return null;
-    const extras = desktopExtraFileNames(platform, version).flatMap(({ label: l, name }) => {
-      const asset = published(name);
-      return asset ? [{ asset, label: l }] : [];
-    });
-    const terminal = terminalChoices(tui);
-    return {
-      platform,
-      kind: 'desktop',
-      asset: desktop,
-      cta: `Download for ${label}`,
-      caption: `Desktop app — ${DESKTOP_DOWNLOAD_LABELS[platform]}`,
-      lede:
-        'The GAIA desktop app: chat, your documents and your files, with every step shown as it runs.' +
-        (terminal.length ? ' The terminal app is under more options.' : ''),
-      options: [...extras, ...terminal],
-    };
-  }
-
-  // No desktop build here: the terminal app is the primary download.
-  const [first, ...rest] = terminalChoices(tui);
-  if (!first) return null;
-  return {
-    platform,
-    kind: 'terminal',
-    asset: first.asset,
-    cta: `Download for ${label}`,
-    caption: first.label,
-    lede: `There is no desktop app for ${label}, so this is the GAIA terminal app.${first.note ? ` ${first.note}` : ''}`,
-    options: rest,
-  };
-}
-
-const primaryRows = PLATFORM_ORDER.flatMap((p) => primaryRow(p) ?? []);
+// The one primary download per platform, shared with the header Install button.
+const primaryRows = primaryDownloads(release);
 
 // Neither card offers Windows x64 a button: the setup is where that choice is
 // made, and a release without the setup offers no Windows button rather than a

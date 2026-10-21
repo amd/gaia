@@ -732,3 +732,86 @@ describe('Downloads.astro against an incomplete release', () => {
     await expect(renderHtml()).rejects.toThrow(/\[github\].*releases.*HTTP 403.*GITHUB_TOKEN/s);
   });
 });
+
+// ---- The header's Install button -------------------------------------------
+//
+// Install starts the same file the install section leads with. The script
+// swaps the href in once pickInstallTarget places the machine on exactly one
+// platform; these read the per-platform targets the header ships and run the
+// same picker the script does.
+
+async function renderHeader(): Promise<El> {
+  vi.resetModules();
+  const { experimental_AstroContainer } = await import('astro/container');
+  const Header = (await import('./Header.astro')).default;
+  const container = await experimental_AstroContainer.create();
+  return parse(await container.renderToString(Header));
+}
+
+const installLinks = (header: El) =>
+  descendants(header).filter((e) => 'data-install-link' in e.attrs);
+
+// The minimal reader leaves entities as written; the browser decodes them.
+const decode = (v: string) =>
+  v.replace(/&(#34|quot);/g, '"').replace(/&(#39|apos);/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const targetsOf = (link: El): Record<string, { href: string; label: string }> =>
+  JSON.parse(decode(String(link.attrs['data-install-targets'])));
+
+describe('Header.astro Install button', () => {
+  it('starts each platform on the same file as its primary download', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES)];
+    rendered = await render();
+    const links = installLinks(await renderHeader());
+    // The desktop nav and the mobile menu.
+    expect(links).toHaveLength(2);
+
+    for (const link of links) {
+      // No JS, or a machine the script cannot place, lands on the section.
+      expect(link.attrs.href).toBe('/#install');
+      const targets = targetsOf(link);
+      const primary = Object.fromEntries(
+        ctas()
+          .filter((b) => b.attrs['data-surface'] === 'primary')
+          .map((b) => [b.attrs['data-platform'], primaryButtons(b)[0]]),
+      );
+      expect(Object.keys(targets)).toEqual(Object.keys(primary));
+      expect(Object.keys(targets)).toHaveLength(6);
+      for (const [platform, href] of Object.entries(primary)) {
+        expect(targets[platform].href).toBe(href);
+      }
+      expect(targets['darwin-arm64'].label).toBe(
+        'Download GAIA for macOS (Apple Silicon) (gaia-agent-ui-0.25.0-arm64.dmg)',
+      );
+      expect(targets['win-x64'].href).toBe(fullUrl('gaia-0.25.0-win-x64-setup.exe'));
+      expect(targets['linux-x64'].href).toBe(fullUrl('gaia-agent-ui-0.25.0-x86_64.AppImage'));
+      expect(targets['darwin-x64'].href).toBe(fullUrl('gaia-0.25.0-darwin-x64.pkg'));
+      expect(targets['win-arm64'].href).toBe(fullUrl('gaia-windows-arm64.exe'));
+    }
+  });
+
+  it('keeps the section for a Mac of unknown architecture and an unknown OS', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES)];
+    const [link] = installLinks(await renderHeader());
+    const targets = targetsOf(link);
+    const { pickInstallTarget, resolveTargets } = await import('../scripts/download-target');
+    const pick = async (n: ReturnType<typeof fakeNav>) =>
+      pickInstallTarget<{ href: string; label: string }>(await resolveTargets(n), targets);
+
+    expect(await pick(fakeNav(UA.macSafari))).toBeNull();
+    expect(
+      await pick(
+        fakeNav('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'),
+      ),
+    ).toBeNull();
+    expect((await pick(fakeNav(UA.mac, 'arm')))?.href).toBe(fullUrl('gaia-agent-ui-0.25.0-arm64.dmg'));
+  });
+
+  it('keeps the section on a platform whose primary file is missing', async () => {
+    RELEASES = [stable(SETUP_VERSION, FULL_FILES.filter((f) => f !== 'gaia-0.25.0-win-x64-setup.exe'))];
+    const [link] = installLinks(await renderHeader());
+    const targets = targetsOf(link);
+    expect(targets['win-x64']).toBeUndefined();
+    const { pickInstallTarget } = await import('../scripts/download-target');
+    expect(pickInstallTarget(['win-x64'], targets)).toBeNull();
+  });
+});
