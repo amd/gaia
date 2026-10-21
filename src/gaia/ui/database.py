@@ -407,9 +407,9 @@ class ChatDatabase:
     @contextmanager
     def _transaction(self):
         """Execute operations atomically with thread safety."""
-        if self._conn is None:
-            raise RuntimeError("Database connection is closed")
         with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed")
             try:
                 yield
                 self._conn.commit()
