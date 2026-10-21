@@ -170,14 +170,11 @@ def build_deck(
     template_path: str = "",
     prefs: Optional[dict] = None,
 ) -> dict:
-    """Build a .pptx from a slide outline and check it; never hand-write python-pptx.
+    """Build a .pptx from a JSON slide outline and check it; never hand-write python-pptx.
 
-    The outline is {"slides": [...]}: each slide has a "type" (title, section,
-    agenda, bullets, two_column, chart, table, kpi, quote, image, diagram,
-    timeline) with the fields the skill's instructions list, plus optional
-    "notes" and "source". Charts are native and editable. Returns status,
-    path, slides, warnings and verify {status, issues}: fix the issues and
-    build again. Status "error" lists every outline problem.
+    The outline is {"slides": [...]}, each slide a "type" plus its fields
+    (references/outline-json.md). Returns status, path, slides and verify
+    {status, issues}; fix the issues and build again.
 
     Args:
         outline: The slide outline object, or its JSON text.
@@ -240,12 +237,9 @@ def build_deck_from_markdown(
 ) -> dict:
     """Build and check a .pptx from Markdown: the easiest way to make a deck.
 
-    '# Title' is the cover; each '## Claim as a sentence' starts a slide; '-'
-    lists are bullets ('  -' a sub-bullet); 'Source:' and 'Notes:' lines add
-    the source line and speaker notes. A ```chart line block (y_title: and
-    source: lines, then CSV: header row, one row per category), a ```table
-    CSV block, or a ```kpi block (label,value,delta rows) makes that slide a
-    chart, table or KPI tiles. Returns what build_deck returns.
+    '# Title' is the cover, each '## Takeaway sentence' a slide, '-' lines
+    bullets; ```chart, ```table and ```kpi blocks take CSV
+    (references/markdown-format.md). Returns what build_deck returns.
 
     Args:
         markdown: The deck as Markdown.
@@ -272,10 +266,9 @@ def verify_deck(
     outline: Optional[dict] = None,
     required_items: Optional[list] = None,
 ) -> dict:
-    """Check a saved .pptx: slide count, overflow, overlaps, fonts, contrast, charts, sources, notes, style.
+    """Check a saved .pptx: slide count, required items, overflow, overlaps, fonts, charts, sources, notes.
 
-    Renders the slides with LibreOffice when it is installed to confirm text
-    stays in its boxes. Works on any deck, not only ones build_deck made.
+    Works on any deck; renders with LibreOffice when it is installed.
 
     Args:
         path: Absolute path of the .pptx to check.
@@ -288,9 +281,8 @@ def verify_deck(
         required_items: Facts the request needs visible on slides (not only in notes).
 
     Returns:
-        {"status": "pass"|"fail", "errors", "warnings", "style_score",
-        "issues": [{slide, check, severity, detail, fix}], "titles",
-        "slides_overview", "render"}. Fix every error, rebuild, check again.
+        {"status": "pass"|"fail", "issues": [{slide, check, severity, fix}],
+        "slides_overview", ...}. Fix every error, rebuild, check again.
     """
     try:
         deck = _readable(path, "path")
@@ -434,11 +426,9 @@ def outline_from_blueprint(
 
 @tool(display_label="Reading deck Markdown")
 def deck_outline_from_markdown(markdown: str) -> dict:
-    """Turn Markdown into a build_deck outline: '# ' cover, '## ' per slide, lists as bullets.
+    """Turn deck Markdown into a build_deck outline without building it.
 
-    Pipe tables become table slides, '![alt](path)' image slides, '>' quotes,
-    two '###' headings a two-column slide, 'Source:' and 'Notes:' lines the
-    source line and speaker notes, and a ```slide JSON block any slide fields.
+    Same format as build_deck_from_markdown (references/markdown-format.md).
 
     Args:
         markdown: The Markdown text.

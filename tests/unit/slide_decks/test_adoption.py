@@ -101,13 +101,31 @@ def test_the_skill_md_quick_example_builds_clean(out):
     assert all(x["slide"] for x in r["verify"]["required_items"])
 
 
+def test_the_full_markdown_reference_example_builds_clean(out):
+    ref = (SKILL_DIR / "references" / "markdown-format.md").read_text(encoding="utf-8")
+    md = re.search(r"````markdown\n(.*?)\n````", ref, re.S).group(1)
+    r = build_deck(outline_from_markdown(md), out())
+    assert r["verify"]["status"] == "pass", r["verify"]["issues"]
+    assert all(x["slide"] for x in r["verify"]["required_items"])
+
+
 def test_skill_md_leads_with_the_no_code_rule():
     body = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 2)[-1]
-    head = body.split("## 1.")[0]
+    head = body.split("## Hard rules")[0]
     assert "Do not write python-pptx code" in head
     assert "build_deck_from_markdown" in head and "````markdown" in head
     assert "Never move requested content into the notes" in body
     assert "required_items" in body and "ledger" in body
+    assert "expected_slides" in body
+
+
+def test_skill_md_stays_lean_and_every_reference_exists():
+    body = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 2)[-1]
+    assert len(body) // 4 <= 1200
+    refs = re.findall(r"`(references/[\w-]+\.md)`", body)
+    assert refs
+    for ref in refs:
+        assert (SKILL_DIR / ref).is_file(), ref
 
 
 def test_bad_csv_block_and_bad_json_block_say_how_to_fix():

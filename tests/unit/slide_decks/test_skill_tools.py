@@ -171,18 +171,22 @@ def test_tool_errors_are_returned_not_raised(tools, tmp_path):
 
 
 def test_the_procedure_asks_at_most_once_and_never_blocks():
-    """The SKILL.md rule for asking: one question, with a default and a short timeout."""
+    """The rule for asking: one question, with a default and a short timeout."""
     import re
 
     body = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
     assert "request_user_input" in body
     assert re.search(r"Ask \*\*one\*\* short question \*\*only\*\*", body)
     assert "Never ask about anything a default covers" in body
-    timeouts = [int(t) for t in re.findall(r"timeout_seconds=(\d+)", body)]
+    assert "references/brief-and-sources.md" in body
+    ref = (SKILL_DIR / "references" / "brief-and-sources.md").read_text(
+        encoding="utf-8"
+    )
+    timeouts = [int(t) for t in re.findall(r"timeout_seconds=(\d+)", ref)]
     assert timeouts and all(t <= 60 for t in timeouts)
-    assert "default_if_no_response=" in body
+    assert "default_if_no_response=" in ref
     # The example of a request that must NOT trigger a question is there too.
-    assert "no question" in body
+    assert "no question" in ref
 
 
 def test_markdown_tool_and_required_items_through_the_tool_layer(tools, tmp_path):

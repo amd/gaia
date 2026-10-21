@@ -184,192 +184,82 @@ metadata:
 
 **Do not write python-pptx code. Build the deck with
 `slide-decks/build_deck_from_markdown` (or `slide-decks/build_deck` for a JSON
-outline), then check it with `slide-decks/verify_deck`.** The tools measure
-every text box, build native editable charts, and apply the theme, fonts and
-grid. Hand-written python-pptx code gets charts as pictures, text off the
-slide and the wrong slide count. Your job is the story and the numbers.
-
-The quickest deck: write Markdown and make one call.
+outline), then check it with `slide-decks/verify_deck`.** The tools fit the
+text, build native editable charts and apply the theme. Hand-written
+python-pptx gets charts as pictures, text off the slide and the wrong slide
+count. Your job is the story and the numbers.
 
 ````markdown
 # Northwind Q3 2026 review
 Leadership team | October 2026
-Must show: Revenue $12.4M; 3 site closures; West +37%
+Must show: Revenue $12.4M; West +37%
 
 ## Q3 revenue grew 12% as the West launch landed
 - Revenue $12.4M, up 12% on Q2
 - West +37% year on year
-  - Two new distributors
-- 3 site closures, all in the East
 Source: finance_q3.xlsx, Jul-Sep 2026
-Notes: Lead with West.
 
 ## West drove most of the quarter's growth
-- West +37% in a year
 ```chart column
 y_title: Revenue ($M)
 source: sales.xlsx, Q3 2025-Q3 2026
 Quarter,West,East
 Q3 25,4.1,3.9
-Q1 26,4.6,4.0
 Q3 26,5.6,4.1
-```
-
-## Every headline metric moved the right way
-```kpi
-source: metrics.xlsx, Q3 2026
-label,value,delta
-Revenue ($M),12.4,+12%
-Churn,2.1%,-0.4 pts
 ```
 ````
 
-`build_deck_from_markdown(markdown=..., output_path=r"C:\Users\me\Documents\q3_review.pptx")`.
-`# ` is the cover, every `## ` line is one slide and its title, `-` lines are
-bullets (indent for a sub-bullet), `Source:` and `Notes:` lines add the source
-line and speaker notes. A ```` ```chart <type> ```` block (column, bar, line,
-pie, area, combo...), a ```` ```table ```` block or a ```` ```kpi ```` block
-holds `key: value` lines then CSV. `Must show:` lists what has to be visible.
+`# ` is the cover, each `## ` line is one slide titled with its takeaway, `-`
+lines are bullets, `Must show:` lists what has to be visible.
 
-## 1. Settle the brief (usually without asking)
+## Hard rules
 
-- **List the must-show items first.** Write down every number, name, event,
-  section and message the request asks to see. Pass them as `required_items`
-  (or a `Must show:` line). `verify_deck` fails if one is missing from the
-  slides, or is only in the speaker notes.
-- **Everything the request asks to show goes on the slides.** Density limits
-  (words and bullets per slide) are soft. When a slide is too full, cut other
-  words or split it. Never move requested content into the notes. Notes are
-  for extra detail and the spoken script only.
-- Decide audience, purpose and the **exact slide count**. If the user named a
-  number, that is the number (`expected_slides`). Otherwise use the
-  blueprint's default.
-- Saved preferences (theme, brand colours, density, notes, template) apply
-  automatically. What this request says wins: pass it as `prefs`, `theme` or
-  `template_path`.
-- Ask **one** short question **only** for a material ambiguity: two
-  instructions that conflict, or a deck for an outside audience with no brand
-  (template or colours) known. Use `request_user_input` with 3-4 choices, a
-  default and `timeout_seconds` of 60 or less. If nobody answers, go on with
-  the default. Never ask about anything a default covers.
+- **Exact slide count.** If the user named a number, build exactly that many
+  and pass it as `expected_slides`. Otherwise use the blueprint's default.
+- **Every must-show item is visible on a slide.** List each number, name,
+  event, section and message the request asks for and pass them as
+  `required_items`. Never move requested content into the notes: cut other
+  words or split the slide. Notes hold extra detail and the spoken script.
+- **Every number comes from a source**, with its unit and period. Every
+  chart, table and KPI slide names its source.
+- **On `status: "error"`**, fix every listed problem and call again. Never
+  switch to writing code.
 
-  > *"Make a 6-slide pitch for the Lakeside Clinics partnership"* (no
-  > template, outside audience) → `request_user_input(message="This deck goes
-  > outside the team. Use a brand template, or a built-in theme?", choices=["Light
-  > corporate theme", "Minimal theme", "Dark theme", "I'll give a template
-  > path"], default_if_no_response="Light corporate theme", timeout_seconds=45)`.
-  > *"Turn these notes into slides for our team meeting"* → no question.
+## Procedure
 
-## 2. Pull the key facts from the sources
+1. **Brief.** Settle audience, purpose and slide count. Saved preferences
+   apply automatically; what this request says wins (`prefs`, `theme`,
+   `template_path`). Ask **one** short question **only** for a material
+   ambiguity, through `request_user_input` with a default.
+   Never ask about anything a default covers.
+2. **Key facts.** From files: `list_files`, read each document in full with
+   `read_file`, compute numbers from data with `run_python`. Keep a ledger
+   (fact, value, source) of headline numbers, changes, events and risks.
+   Every ledger row goes on a slide and into `required_items`. Several files
+   on one topic: use the newest for the requested period.
+3. **Storyline.** One message per slide, answer first, end with next steps.
+   For a standard deck call `list_blueprints`, then
+   `outline_from_blueprint(name, slide_count=N)` and fill every TODO slot.
+4. **Build** with Markdown, or `build_deck` with JSON for diagrams, timelines
+   and combo charts. Big decks: 6-8 slides first, then `add_slide`.
+5. **Verify** with `verify_deck(path, expected_slides=N, required_items=[...])`.
+   Fix every error, rebuild (or `update_slide`) and verify until `status` is
+   `pass`.
+6. **Report** the path, one line per slide from `slides_overview`, the verify
+   status and anything not done. On style feedback call
+   `update_deck_prefs(feedback=...)` and say whether it was saved.
 
-When the deck is built from documents or data, do this before writing slides.
-Find the files with `list_files`, read each document in full with
-`read_file` (follow `next_offset`), and compute numbers from data with
-`run_python`. Never retype a number from a page. For **each source**, write a
-short ledger:
+## References (paths relative to this skill's folder)
 
-| Fact | Value | Source |
-|---|---|---|
-| Headline numbers (totals, rates, counts) | Revenue $12.4M | finance_q3.xlsx |
-| Change vs the prior period, as the source states it | +12% vs Q2 | finance_q3.xlsx |
-| Notable events and their counts (closures, incidents, launches) | 3 site closures | board_memo.docx |
-| Risks, caveats, missed targets | single supplier for part B | board_memo.docx |
-
-Every ledger row goes on a slide, in the source's own framing ("fell 8% to
-$4.2M"), and into `required_items`. When several files cover the same thing,
-use the newest one for the requested period. `report-from-sources` has the
-longer version of this step.
-
-## 3. Plan the storyline
-
-For a standard deck, `list_blueprints` then `outline_from_blueprint(name,
-slide_count=N)` gives exactly N slides with a guidance line per slot. Unfilled
-slots stay TODO, and `verify_deck` fails on them.
-
-| The user wants | Blueprint |
-|---|---|
-| Quarterly / monthly / annual review, QBR, KPI review | `quarterly_review` |
-| Executive summary, briefing, board update | `executive_summary` |
-| Pitch, proposal, investor or sales deck | `pitch` |
-| Project or programme status, steering committee | `project_status` |
-| Training, tutorial, explainer, onboarding | `training` |
-| Research, survey or analysis readout | `research_findings` |
-| Choosing between options, recommendation | `decision` |
-| Roadmap, plan, timeline, launch plan | `roadmap` |
-| One slide: 2x2, pyramid, cycle, process, layer stack, canvas | `one_slide_framework` (`variant`) |
-
-- **Action titles**: each title is the slide's takeaway as one sentence, about
-  15 words at most, no full stop ("Revenue grew 12% on West demand", not
-  "Revenue"). The titles alone should tell the story.
-- One message per slide; aim for 6 bullets or fewer, 12 words each, one level
-  of sub-bullets.
-- Answer first: an executive summary states the conclusions later slides
-  prove. Decks over 10 slides get section dividers. End with next steps
-  (action, owner, date).
-- Numbers carry units and periods ("$4.2M, Q3 2026"). Every chart, table and
-  KPI slide names its source and period.
-
-## 4. Build
-
-- Markdown (above) suits most decks. For diagrams, timelines, combo charts or
-  blueprint outlines, use `build_deck(outline, output_path)` with JSON. Each
-  slide has a `type` and its fields:
-
-```json
-{"required_items": ["Revenue $12.4M"], "slides": [
-  {"type": "title", "title": "Northwind Q3 review", "subtitle": "October 2026"},
-  {"type": "bullets", "title": "Q3 revenue grew 12% to $12.4M", "bullets": ["West +37%", ["two new distributors"]]},
-  {"type": "chart", "title": "West drove the growth", "chart_type": "column", "categories": ["Q1", "Q2", "Q3"],
-   "series": {"West": [4.6, 5.0, 5.6]}, "y_title": "Revenue ($M)", "source": "sales.xlsx, 2026"},
-  {"type": "diagram", "diagram": "process", "title": "Onboarding takes four steps", "items": ["Sign up", "Verify", "Train", "Order"]}
-]}
-```
-
-  Other types: `section`, `agenda{items}`, `two_column{left, right}`,
-  `table{columns, rows}`, `kpi{metrics}`, `quote{quote, attribution}`,
-  `image{path, alt}`, `timeline{milestones}` or `{periods, lanes}`. Diagrams:
-  `process`, `flow`, `cycle`, `pyramid`, `matrix` (2x2), `grid`, `boxes`,
-  `tree`, `stack`. Charts: `column`, `bar`, `line`, `area`, `pie`,
-  `doughnut`, `scatter`, `combo`, `auto`.
-- **On `status: "error"`**, the `problems` list names every field to fix and
-  gives a corrected example for that slide type. Fix them all and call
-  again. Do not switch to writing code.
-- **Big decks in steps**: build 6-8 slides, then `add_slide(deck_path,
-  {"slides": [...]})` a few at a time. `update_slide(deck_path, index,
-  slide)` replaces one slide.
-
-## 5. Verify and fix
-
-`verify_deck(path, expected_slides=N, required_items=[...])` checks the saved
-file:
-- slide count, and every required item visible on a slide
-- text overflow (rendered with LibreOffice when it is installed)
-- overlaps, fonts, contrast, titles and density
-- chart values, pictures used instead of charts
-- sources, alt text, notes (`require_notes=True` when a script is wanted)
-- TODO slots left unfilled
-
-Fix every error, rebuild (or `update_slide`) and verify again until `status`
-is `pass`.
-
-## 6. Report
-
-Give the path, then one line per slide from `slides_overview` (title, what is
-on it, its source), the verify status, and anything you could not do. Offer
-the `style_options` in one line. When the user gives style feedback ("less
-text", "use our blue #1F4E79", "no notes"), call
-`update_deck_prefs(feedback=...)`, apply it, and say it is saved (or, if
-`saved` is false, that this chat does not save it).
-
-## When the tools are not offered
-
-Run the same engine through `run_python`. Still no hand-written python-pptx:
-
-```python
-import sys; sys.path.insert(0, r"<this skill's folder>")
-from slidedeck.markdown import outline_from_markdown
-from slidedeck.build import build_deck
-print(build_deck(outline_from_markdown(open(r"C:\Users\me\deck.md", encoding="utf-8").read()), r"C:\Users\me\deck.pptx"))
-```
+- `references/markdown-format.md` - read when a slide needs a chart, table,
+  KPI tiles, image, quote, two columns or speaker notes.
+- `references/outline-json.md` - read before calling `build_deck`,
+  `add_slide` or `update_slide` with JSON, or after an outline error.
+- `references/storyline.md` - read when picking a blueprint, writing titles,
+  or fixing density warnings.
+- `references/brief-and-sources.md` - read when unsure whether to ask the
+  user, or when building the key-facts ledger.
+- `references/without-tools.md` - read only when the slide-decks tools are
+  not offered.
 
 `office-docs` covers Word and Excel files.
