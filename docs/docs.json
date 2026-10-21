@@ -438,7 +438,8 @@
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
-              "plans/eval-hillclimbing"
+              "plans/eval-hillclimbing",
+              "plans/release-train"
             ]
           },
           {
