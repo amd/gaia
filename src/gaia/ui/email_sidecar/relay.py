@@ -372,9 +372,14 @@ def relay_query(
     session_id: Optional[str] = None,
     answers_confirmations: bool = False,
     documents: Optional[List[str]] = None,
+    allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *allowed_paths* — the chat's file scope, for a sidecar the caller has
+    established takes it (``profiles.scope_supported``); ``None`` leaves the
+    sidecar on its own default.
 
     *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
     sidecar the caller has established takes it (``profiles.memory_supported``).
@@ -446,6 +451,8 @@ def relay_query(
         body["session_id"] = session_id
     if documents:
         body["documents"] = list(documents)
+    if allowed_paths is not None:
+        body["allowed_paths"] = list(allowed_paths)
     if memory is not None:
         body["memory"] = memory
 
