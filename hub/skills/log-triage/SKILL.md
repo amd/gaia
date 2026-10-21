@@ -1,11 +1,52 @@
 ---
 name: log-triage
-description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, cluster, device or audit logs. Covers each file's full time range, groups messages into templates, ranks by severity, rarity and number of hosts hit rather than by volume, finds bursts, and gives exact first and last timestamps.
+description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, cluster, device or audit logs. Its triage_logs tool reads every file over its full range, keeps steady baseline noise apart from anomalies, finds bursts with exact first and last timestamps, and lists the hosts and ids an incident hit.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
+    tools:
+      - name: triage_logs
+        description: Parse, template and rank log files; return anomalies, bursts, baseline, coverage, entities and checks.
+        parameters:
+          paths:
+            type: array
+            required: true
+          glob:
+            type: string
+            required: false
+            default: ""
+          timestamp_regex:
+            type: string
+            required: false
+            default: ""
+          level_regex:
+            type: string
+            required: false
+            default: ""
+          host_regex:
+            type: string
+            required: false
+            default: ""
+          entity_regex:
+            type: string
+            required: false
+            default: ""
+          bucket:
+            type: string
+            required: false
+            default: ""
+          top_n:
+            type: integer
+            required: false
+            default: 10
+          output_path:
+            type: string
+            required: false
+            default: ""
+        returns:
+          type: object
     tools_required:
       - list_files
       - read_file
@@ -18,50 +59,126 @@ metadata:
 
 The loudest message in a log is usually routine. The incident is the rare,
 severe message that hit many hosts at once, often in a few minutes of a
-multi-day file. Counting by volume finds the noise; this procedure finds the
+multi-day file. Counting by volume finds the noise; this skill finds the
 incident.
 
-## Procedure
+## Call `triage_logs` first, then interpret
 
-1. **Inventory every log.** `list_files(path)` for the folder. Every file the
-   user gave you is in scope, and every file is analysed over its full time
-   range, not the first page.
-2. **Learn the line format from a sample.** `read_file(file_path,
-   start_line=1, end_line=40)`, plus a slice from the middle of the file.
-   Never read a whole large log into the conversation: you will see the start
-   and report it as the whole.
-3. **Parse, template and rank with `run_python`** (snippet below). Fit the
-   `LINE` pattern to the sample. If more than a few percent of lines do not
-   parse, fix the pattern before going on. Indented continuation lines (stack
-   traces) are the only acceptable leftovers.
-4. **Rank templates by severity, then hosts hit, then rarity**, never by count.
-   Read the table this way:
-   - **Baseline**: present across most of the range (`span_pct` near 100) at a
-     steady rate, whatever its level. Routine, even when it says "error" or
-     "fatal": a platform that logs thousands of FATAL lines every day is
-     telling you its normal, not an incident. Never count baseline lines as
-     alerts or add them to an anomaly total; report them once as background.
-   - **Anomaly**: a high-severity template, a template that appears in only a
-     short window (`span_pct` near 0), a high `peak` against its own normal
-     rate, or a template that hit many distinct hosts at once.
-5. **Find the bursts** (second snippet): time buckets where errors jump far
-   above their median. For each burst, record the exact first and last
-   timestamp, how many lines, how many distinct hosts, and which templates
-   occur only there (`share_of_all` near 1.0).
-6. **Read around the first burst line.** With the burst's `file` and `line`,
-   `read_file(file_path, start_line=line - 30, end_line=line + 10)` shows what
-   happened just before. The cause comes before its symptoms. A flood of
-   timeouts after a hardware fault is the effect, not the root cause.
-7. **Check the numbers add up.** Template counts sum to the parsed line count
-   (the snippet asserts this). Per-level counts sum to the same total. Hosts
-   in a burst are no more than total hosts. Every timestamp you quote is
-   copied from the output, not rounded.
-8. **Derive everything from the logs you were given.** Do not fill in results
-   from a public dataset you recognise, from memory, or from a labels or
-   expected-results file found beside the logs, unless the user says it is an
-   input. If you find such a file, mention it and leave it unused.
+`log-triage/triage_logs(paths=[folder or files])` reads every file over its full
+range (streaming, read-only, any size, `.gz` included) and returns one compact
+result. Never read a large log into the conversation instead: you will see the
+start and report it as the whole.
 
-## Parse, template, rank
+Read the result in this order:
+
+1. **`checks`** — `ok` must be true (template and level counts add up to the
+   parsed entries). If `parsed_share_ok` is false, a file in
+   `files_below_parsed_share` was misread: look at its `unparsed_samples`,
+   then call again with `timestamp_regex` (and `level_regex` / `host_regex` if
+   needed) fitted to those lines. Do not report from a misread file.
+2. **`coverage`** — every file with format, first and last timestamp, line,
+   entry, continuation (stack-trace) and unparsed counts. `times_in` says
+   whether times are UTC (offsets in the logs were converted) or as written.
+3. **`anomalies`** — templates ranked by severity, then hosts hit, then rarity.
+   Each has `why` (short window, new, spike against its own median,
+   escalating, many hosts at once), exact `first` / `last` / `peak_at` with
+   `file` and `line`, `hosts` and `host_sample`.
+4. **`bursts`** — windows where errors and anomaly lines rose far above their
+   median: exact `start` / `end`, `lines`, `hosts`, `first_line`, the
+   templates found `only_here`, and `vs_quiet_window`: the same-length quiet
+   stretch just before, with what `rose` and what `fell_silent` (a heartbeat
+   or a host's routine traffic stopping is often the clearest clue).
+5. **`baseline`** — templates steady across the range. Routine, even when they
+   say ERROR or FATAL: a platform that logs thousands of FATAL lines a day is
+   telling you its normal. Report them once as background; never add them to
+   an anomaly or alert total.
+6. **`timeline`**, **`clock_offsets`**, **`quiet_hosts`**, **`warnings`** —
+   the cross-file order of first occurrences, steady offsets measured on ids
+   that two files share (clock skew, a pipeline delay, or close to whole hours:
+   a time zone written without an offset), hosts that stopped logging early,
+   and everything the tool could not do. Repeat every warning that limits your
+   answer.
+
+Then:
+
+- **Read before the first burst line.** `next_step` names it:
+  `read_file(file_path, start_line=line - 30, end_line=line + 10)`. Causes come
+  before their symptoms; a flood of timeouts after a hardware fault is the
+  effect.
+- **Quote, do not round.** Every timestamp, count and host number in your
+  answer is copied from the result. When `clock_offsets` reports a skew, say
+  that cross-file order inside that offset is uncertain.
+- **Narrow when it helps.** `glob="*.log"` for a mixed folder, `bucket="1min"`
+  for a short incident, `entity_regex` for the id the user asked about,
+  `output_path` (a new `.json` for full detail, `.csv` for the entity list,
+  inside a folder that holds the logs) when the user wants the full list.
+
+## Lists of anomalous entities
+
+When the user asks for a list of bad items (blocks, hosts, users, requests,
+sessions, jobs), use `entities` from the result. It is built only from anomaly
+templates, inside each anomaly's own window, never from baseline errors.
+
+- Pin `entity_regex` to the id the user means (`"(blk_-?[0-9]+)"`,
+  `"(req-[0-9a-f]+)"`); the default finds request, session, job, block, node
+  and host style ids and `key=value` ids.
+- Report how many entities exist (`total`), how many are flagged, and which
+  template put each group on the list (`by_template`). For more than the
+  sample, write the CSV with `output_path` and say where it is.
+- If a warning says a template was left out because it covers most entities,
+  or that a large share is flagged, the rule matches the baseline: say so and
+  do not present that list as the anomaly.
+
+## Report shape: a blameless postmortem
+
+Describe systems and events, not people. In this order:
+
+1. **Summary** — what happened, in one or two sentences, with the exact window.
+2. **Impact** — in user terms: which requests, jobs, sessions or hosts failed,
+   how many (`lines`, `hosts`, flagged `entities`), for how long.
+3. **Detection** — the first signal and when it appeared (`first` of the
+   earliest anomaly, the burst `first_line`), and what would have caught it.
+4. **Timeline** — UTC when `times_in` says so; the lines before the first
+   anomaly, then the sequence across files (`timeline`).
+5. **Contributing factors** — plural. The trigger and what let it spread or
+   last, each with its evidence, worded as likely unless the log states it.
+   Name symptoms as symptoms.
+6. **Mitigation and recovery** — what the logs show ended it (a restart, a
+   failover, the burst `end`); if nothing in the logs shows recovery, say so.
+7. **Action items** — each with an owner taken from the user's context, or
+   marked "owner: to assign"; never invent a person.
+8. **Confidence** — high, medium or low, and why: parse coverage, clock
+   offsets, files or hosts with no data, a cause inferred rather than logged.
+
+Close with **Baseline** (the top routine templates and why they are routine)
+and **Limits** (unparsed lines, gaps, warnings).
+
+Example (invented): *"Summary: disk controller faults on 31 of 40 nodes,
+2024-03-06 13:13:00 to 13:16:58 UTC, 120 FATAL lines from a template seen
+nowhere else in the 3.5-day log. Impact: 31 jobs aborted. The 3,002 request
+timeouts are baseline: steady across the whole range, about 9 per 15 minutes."*
+
+## Derive everything from the logs you were given
+
+Do not fill in results from a public dataset you recognise, from memory, or
+from a labels or expected-results file found beside the logs, unless the user
+says it is an input. If you find such a file, mention it and leave it unused.
+
+## Fallback: when `triage_logs` is not available or cannot parse
+
+If the tool is not registered, or a file stays below the parsed share even
+with `timestamp_regex`, do the same analysis yourself with `run_python`:
+
+1. `list_files(path)`; every file is in scope over its full range.
+2. Learn the line format: `read_file(file_path, start_line=1, end_line=40)`
+   plus a slice from the middle.
+3. Parse, template and rank (snippet below). Fit `LINE` to the sample; the
+   snippet stops when under 95% of lines parse. Indented continuation lines
+   (stack traces) are the only acceptable leftovers.
+4. Rank by severity, then hosts hit, then rarity; baseline is `span_pct` near
+   100 at a steady rate, whatever its level.
+5. Find bursts (second snippet), compare each with the quiet window before
+   it, and read around the first burst line.
 
 ```python
 import os, re, tempfile
@@ -70,7 +187,8 @@ import pandas as pd
 PATHS = [r"C:\Users\me\logs\app-01.log", r"C:\Users\me\logs\app-02.log"]
 # Fit this to the sample you read. Example line:
 # 2024-03-04 00:00:05,760 node-31 WARN cache miss for key 0x63ca828d
-LINE = re.compile(r"^(?P<ts>\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)\S*\s+(?P<host>\S+)\s+(?P<level>[A-Z]+)\s+(?P<msg>.*)$")
+LINE = re.compile(r"^(?P<ts>\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d\S*)\s+(?P<host>\S+)\s+(?P<level>[A-Z]+)\s+(?P<msg>.*)$")
+CONT = re.compile(r"^(\s|at |Caused by:|\.\.\. \d+ more|Traceback|\w+(\.\w+)*(Exception|Error)\b)")
 MASKS = [
     (r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b", "<ID>"),
     (r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b", "<IP>"),
@@ -87,24 +205,29 @@ def template(msg):
         msg = re.sub(pattern, token, msg)
     return msg
 
-rows, unparsed = [], {}
+rows, unparsed, cont = [], {}, 0
 for path in PATHS:
     with open(path, encoding="utf-8", errors="replace") as f:
         for n, line in enumerate(f, 1):
             m = LINE.match(line.rstrip("\n"))
             if m:
                 rows.append({**m.groupdict(), "file": os.path.basename(path), "line": n})
+            elif CONT.match(line):
+                cont += 1
             elif line.strip():
                 unparsed.setdefault(path, []).append(n)
 df = pd.DataFrame(rows)
-df["ts"] = pd.to_datetime(df["ts"].str.replace("T", " "), errors="coerce")
-df["sev"] = df["level"].str.upper().map(SEVERITY).fillna(1).astype(int)
-df["tpl"] = df["msg"].map(template)
-print("parsed", len(df), "| bad timestamps", int(df["ts"].isna().sum()), "| hosts", df["host"].nunique())
+bad = sum(len(v) for v in unparsed.values())
+share = len(df) / max(1, len(df) + bad)
+print(f"parsed {len(df)}, continuation {cont}, unparsed {bad} ({share:.1%} parsed)")
 for path, lines in unparsed.items():
     print("unparsed", len(lines), "in", path, "e.g. lines", lines[:5])
+assert share >= 0.95, "under 95% of lines parsed: fix LINE before going on"
+# utc=True converts lines that carry an offset; lines without one are taken as written.
+df["ts"] = pd.to_datetime(df["ts"].str.replace(",", "."), errors="coerce", utc=True, format="mixed")
+df["sev"] = df["level"].str.upper().map(SEVERITY).fillna(1).astype(int)
+df["tpl"] = df["msg"].map(template)
 print(df.groupby("file")["ts"].agg(["min", "max", "size"]).to_string())  # every file, full range
-print(df["level"].value_counts().to_string())
 
 span = df["ts"].max() - df["ts"].min()
 bucket = next((b for b in ["1min", "5min", "15min", "1h", "6h", "1D"] if span / pd.Timedelta(b) <= 500), "7D")
@@ -114,23 +237,10 @@ g = df.groupby("tpl").agg(count=("tpl", "size"), sev=("sev", "max"), hosts=("hos
 g["span_pct"] = ((g["last"] - g["first"]) / span * 100).round(0)
 g["peak_per_" + bucket] = df.groupby(["tpl", "bucket"]).size().groupby(level=0).max()
 assert g["count"].sum() == len(df), "template counts do not add up to parsed lines"
-print(len(g), "templates; ranked by severity, then hosts hit, then rarity:")
 pd.set_option("display.width", 250, "display.max_colwidth", 70)
 print(g.sort_values(["sev", "hosts", "count"], ascending=[False, False, True]).head(15).to_string())
 df.to_pickle(os.path.join(tempfile.gettempdir(), "log_triage.pkl"))  # the burst step reads this
 ```
-
-Adapting it:
-
-- **No level field?** Map keywords instead: lines matching
-  `fatal|panic|corrupt|crash|abort|out of memory` get 4, `error|fail|exception|timeout|refused` get 3.
-- **No host field?** Use the component, process, or device ID as `host`, so
-  "hosts hit" still measures spread.
-- **No year in the timestamp** (`Mar  5 14:22:01`)? Add the year from the file
-  name or context and say you did.
-- **Very large files** (millions of lines): raise `run_python`'s `timeout`.
-
-## Bursts
 
 ```python
 import os, tempfile
@@ -142,10 +252,8 @@ bucket = next((b for b in ["1min", "5min", "15min", "1h", "6h", "1D"] if span / 
 step = pd.Timedelta(bucket)
 bad = df[df["sev"] >= 3].set_index("ts").sort_index()  # errors and worse; >= 2 adds warnings
 counts = bad.resample(bucket).size()
-threshold = max(10, 5 * counts.median())
+threshold = max(10, 3 * counts.median(), counts.median() + 6 * counts.std())
 hot = list(counts[counts >= threshold].index)
-print(f"bucket {bucket}, median {counts.median():.0f}/bucket, threshold {threshold:.0f}, hot buckets {len(hot)}")
-
 bursts = []  # adjacent hot buckets merge into one burst
 for t in hot:
     if bursts and t - bursts[-1][1] <= step:
@@ -155,64 +263,25 @@ for t in hot:
 overall = df["tpl"].value_counts()
 for start, end in bursts:
     win = bad[(bad.index >= start) & (bad.index < end + step)].reset_index()
-    print(f"\nBURST {start} -> {end + step}: {len(win)} lines, {win['host'].nunique()} hosts")
-    t = win.groupby("tpl").agg(count=("tpl", "size"), sev=("sev", "max"), hosts=("host", "nunique"),
-                               first=("ts", "min"), last=("ts", "max"))
+    print(f"\nBURST {win['ts'].min()} -> {win['ts'].max()}: {len(win)} lines, {win['host'].nunique()} hosts")
+    t = win.groupby("tpl").agg(count=("tpl", "size"), sev=("sev", "max"), hosts=("host", "nunique"))
     t["share_of_all"] = (t["count"] / overall.reindex(t.index)).round(2)  # 1.0 = happens only here
-    t = t.join(win.sort_values("ts").groupby("tpl")[["file", "line"]].first())  # where it starts
     print(t.sort_values(["sev", "share_of_all"], ascending=False).head(5).to_string())
+    length = end + step - start  # the quiet window: the same length, just before
+    quiet = df[(df["ts"] >= start - length) & (df["ts"] < start)]["tpl"].value_counts()
+    burst = df[(df["ts"] >= start) & (df["ts"] < end + step)]["tpl"].value_counts()
+    both = pd.concat({"burst": burst, "quiet": quiet}, axis=1).fillna(0).astype(int)
+    print("rose:\n", both[both["burst"] >= 2 * both["quiet"] + 3].head(5).to_string())
+    print("fell silent:\n", both[(both["quiet"] >= 5) & (both["burst"] * 4 <= both["quiet"])].head(3).to_string())
 ```
 
-No hot buckets does not mean no incident: re-run with `sev >= 2`, a smaller
-bucket, or a single template's rows.
-
-## Lists of anomalous entities
-
-When the user asks for a list of bad items (blocks, hosts, users, requests,
-sessions), it has to be precise as well as complete:
-
-- An entity goes on the list only if at least one of its events belongs to an
-  anomaly template from step 4, never because it appears next to a baseline
-  warning or error. Build the list from the anomaly templates, not from all
-  non-INFO lines.
-- Check the share you flagged. If the list holds most of the entities in the
-  log, your rule matches the baseline: drop the templates that are present for
-  most entities and rebuild. Real anomalies are usually a small minority.
-- Report how many entities exist, how many you flagged, and the template(s)
-  that put each group on the list.
-
-```python
-ENTITY = r"\b(req-[0-9a-f]{8}|host-\w+)\b"   # pin to your log's entity id: request, host, block, user...
-df["entity"] = df["msg"].str.extract(ENTITY, expand=False)
-ents = df.dropna(subset=["entity"])
-share = ents.groupby("tpl")["entity"].nunique() / ents["entity"].nunique()
-print(share.sort_values(ascending=False).head(10))   # near 1.0 = baseline, not anomaly
-anomaly_tpls = set(ANOMALY_TEMPLATES)                  # the ones you judged anomalous above
-flagged = sorted(ents.loc[ents["tpl"].isin(anomaly_tpls), "entity"].unique())
-print(len(flagged), "of", ents["entity"].nunique(), "entities flagged")
-```
-
-## Report shape
-
-- **Coverage**: each file with its first and last timestamp and line count,
-  plus the unparsed count.
-- **Incident(s)**: what happened, in one line each. Exact first and last
-  timestamp, severity, line count, hosts hit (count plus a few names).
-- **Timeline**: the few lines before the first incident line, then the
-  sequence.
-- **Likely cause**: the evidence for it, worded as likely unless the log
-  states it outright. Name symptoms as symptoms.
-- **Baseline**: the top routine templates and why they are routine (steady
-  across the whole range).
-- **Limits**: unparsed lines, gaps in time, hosts or files with no data.
-
-Example (invented): *"Incident: disk controller faults on 31 of 40 nodes,
-2024-03-06 13:13:00 to 13:16:58, 120 FATAL lines, a template seen nowhere else
-in the 3.5-day log. The 3,002 request timeouts are baseline: steady across the
-whole range, about 9 per 15 minutes."*
+No level field: map keywords (`fatal|panic|corrupt|crash|abort|out of memory`
+gives 4, `error|fail|exception|timeout|refused` gives 3). No host field: use
+the component, process or file name, so "hosts hit" still measures spread. No
+year (`Mar  5 14:22:01`): take it from the file date and say you did.
 
 ## Fork this
 
-Pin `LINE`, `SEVERITY` and the host field to your platform's log format, and
-add the templates your team already knows are harmless to a baseline list, so
-the ranking starts from the unfamiliar.
+Pin `timestamp_regex`, `host_regex` and `entity_regex` to your platform's
+format, and keep a list of the templates your team already knows are harmless,
+so the ranking starts from the unfamiliar.
