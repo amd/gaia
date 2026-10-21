@@ -398,9 +398,11 @@ class ChatDatabase:
 
     def close(self):
         """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        # Wait for a query on another thread; closing under it crashes SQLite.
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
     @contextmanager
     def _transaction(self):
