@@ -58,11 +58,12 @@ on:
         required: false
         type: boolean
         default: false
-      # The release-train dry run builds a named commit twice in one run (a
-      # release candidate and its final-stamped twin). Both default to empty,
-      # which is exactly what every other caller gets.
+      # The release-train dry run builds its own commit twice in one run (a
+      # release candidate and its final-stamped twin) under tags that don't
+      # exist yet. Both default to empty, which is exactly what every other
+      # caller gets.
       ref:
-        description: 'Commit to build and test. Empty (the default) checks out the tag, or the caller''s ref.'
+        description: 'Commit to build, when `tag` names a version rather than an existing tag. Empty (the default) checks out the tag, or the caller''s ref.'
         required: false
         type: string
         default: ''
@@ -142,7 +143,7 @@ concurrency:
   # push on stale builds. Tag/release runs and manual dispatches must
   # NOT cancel — a mid-build cancel on a release tag leaves the draft
   # release in a partial state.
-  group: build-installers-${{ github.workflow }}-${{ github.ref }}${{ inputs.artifact_prefix }}${{ inputs.ref }}
+  group: build-installers-${{ github.workflow }}-${{ github.ref }}${{ inputs.artifact_prefix }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -782,8 +783,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -830,8 +829,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Download macOS installer artifact
         uses: actions/download-artifact@v8
@@ -862,8 +859,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -1125,8 +1120,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -1235,8 +1228,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v7

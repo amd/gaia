@@ -3,36 +3,33 @@
 #
 # Release-train dry run (Phase 2 of docs/plans/release-train.mdx, #5172).
 #
-# Builds every first-party artifact of one commit the way the release train
-# will: once as a release candidate, and once more as the final-stamped twin a
-# final would promote. Then it verifies them and writes the manifest of what a
-# real train would publish, and where. It publishes nothing:
+# Builds every first-party artifact of the commit it is dispatched on, the way
+# the release train will: once as a release candidate, and once more as the
+# final-stamped twin a final would promote. Then it verifies them and writes the
+# manifest of what a real train would publish, and where. It publishes nothing:
 #
 #   - workflow_dispatch only, so nothing a contributor pushes can start it;
 #   - no environment, no secret, and every job's token is read-only, except the
 #     Agent UI installer jobs, which build-installers.yml forces to declare
 #     contents: write and id-token: write (see below);
-#   - tests/unit/test_release_train_dryrun_workflow.py fails if a publish step,
-#     a secret, an environment or a write permission appears here.
+#   - it only ever builds its own commit. Checking out another ref would run that
+#     code with this branch's cache scope, which later release builds restore;
+#   - tests/unit/test_release_train_dryrun_workflow.py fails if a publish step, a
+#     secret, an environment, a write permission or a foreign checkout appears.
 #
-# The builds are the release's own reusable workflows, called with `ref` (build
-# this commit, not the workflow's) and `artifact_prefix` (rc- / final-, so the
-# two builds don't collide). Both inputs default to empty, which is what
-# publish.yml, release_components.yml and the PR gates still get.
+# The builds are the release's own reusable workflows. `artifact_prefix` (rc- /
+# final-) keeps the two builds' artifacts apart; it defaults to empty, which is
+# what publish.yml, release_components.yml and the PR gates still get.
 #
-# Run it:  gh workflow run release_train_dryrun.yml -f ref=main -f rc_tag=v0.25.1-rc3
+# Run it:  gh workflow run release_train_dryrun.yml --ref main -f rc_tag=v0.25.1-rc3
 
 name: Release train dry run
 
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'Commit, branch or tag to build. A branch is resolved to one commit first.'
-        required: true
-        type: string
       rc_tag:
-        description: 'The release candidate to build it as (vX.Y.Z-rcN; X.Y.Z must match src/gaia/version.py). Its twin is vX.Y.Z.'
+        description: 'The release candidate to build this commit as (vX.Y.Z-rcN; X.Y.Z must match src/gaia/version.py). Its twin is vX.Y.Z.'
         required: true
         type: string
 
@@ -48,7 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      sha: ${{ steps.resolve.outputs.sha }}
       rc_tag: ${{ steps.plan.outputs.rc_tag }}
       final_tag: ${{ steps.plan.outputs.final_tag }}
       base_version: ${{ steps.plan.outputs.base_version }}
@@ -56,28 +52,11 @@ jobs:
       rc_pep440: ${{ steps.plan.outputs.rc_pep440 }}
       agent_version: ${{ steps.plan.outputs.agent_version }}
     steps:
-      # The verify tooling is this workflow's own commit; the code under release
-      # is the named one. A dry run of an older commit still gets today's checks.
       - uses: actions/checkout@v7
-        with:
-          path: tools
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
-          path: target
 
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-
-      - name: Resolve the commit
-        id: resolve
-        run: |
-          set -euo pipefail
-          sha="$(git -C target rev-parse HEAD)"
-          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
-          echo "Building ${{ inputs.ref }} = ${sha}"
 
       - name: Check the tag against the tree
         id: plan
@@ -85,18 +64,13 @@ jobs:
           RC_TAG: ${{ inputs.rc_tag }}
         run: |
           set -euo pipefail
-          python3 tools/util/release_train.py plan --tag "${RC_TAG}" --target target | tee -a "$GITHUB_OUTPUT"
+          echo "Building ${GITHUB_REF_NAME} = ${GITHUB_SHA}"
+          python3 util/release_train.py plan --tag "${RC_TAG}" --target . | tee -a "$GITHUB_OUTPUT"
 
       # Phase 1's single version source: every generated version field must
       # already agree with src/gaia/version.py before anything is stamped.
       - name: Check every version field against its source
-        run: |
-          set -euo pipefail
-          if [ ! -f tools/util/release_versions.py ]; then
-            echo "::error::util/release_versions.py is missing from this workflow's commit. It lands with Phase 1 of the release train (#5508); dispatch this from a commit that has it."
-            exit 1
-          fi
-          python3 tools/util/release_versions.py --check --root target
+        run: python3 util/release_versions.py --check
 
   # ── Core wheel + sdist and the @amd-gaia/agent-ui tarball ──────────────────
   # Same steps as publish.yml's build-npm and build-pypi, which can't be called
@@ -112,13 +86,6 @@ jobs:
         flavor: [rc, final]
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: tools
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          path: target
 
       - uses: actions/setup-python@v7
         with:
@@ -130,10 +97,10 @@ jobs:
 
       - name: Stamp the release-candidate version
         if: matrix.flavor == 'rc'
-        run: python3 tools/util/release_versions.py --stamp "${{ needs.plan.outputs.rc_tag }}" --root target
+        run: python3 util/release_versions.py --stamp "${{ needs.plan.outputs.rc_tag }}"
 
       - name: Build the frontend
-        working-directory: target/src/gaia/apps/webui
+        working-directory: src/gaia/apps/webui
         run: |
           set -euo pipefail
           npm ci
@@ -142,7 +109,6 @@ jobs:
           node --check bin/gaia-ui.cjs
 
       - name: Check the bundle carries the version
-        working-directory: target
         run: |
           set -euo pipefail
           PY_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
@@ -154,7 +120,6 @@ jobs:
           echo "bundle reports ${PY_VERSION}"
 
       - name: Build the wheel and sdist
-        working-directory: target
         run: |
           set -euo pipefail
           python util/verify_wheel_dist.py src/gaia/apps/webui/dist
@@ -165,16 +130,16 @@ jobs:
 
       # --ignore-scripts: the bundle is built above; npm publish runs the same way.
       - name: Pack @amd-gaia/agent-ui
-        working-directory: target/src/gaia/apps/webui
+        working-directory: src/gaia/apps/webui
         run: npm pack --ignore-scripts --pack-destination ../../../../dist
 
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.flavor }}-core-dist
           path: |
-            target/dist/*.whl
-            target/dist/*.tar.gz
-            target/dist/*.tgz
+            dist/*.whl
+            dist/*.tar.gz
+            dist/*.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -243,15 +208,11 @@ jobs:
     name: Flagship sidecar
     needs: plan
     uses: ./.github/workflows/build_flagship_sidecar.yml
-    with:
-      ref: ${{ needs.plan.outputs.sha }}
 
   flagship-npm-tests:
     name: Flagship npm tests
     needs: plan
     uses: ./.github/workflows/test_agent_gaia_npm.yml
-    with:
-      ref: ${{ needs.plan.outputs.sha }}
 
   # ── Agent UI installers ─────────────────────────────────────────────────────
   # The two write grants are build-installers.yml's, not this workflow's:
@@ -260,6 +221,9 @@ jobs:
   # contents: write (its publish_to_release job). Nothing here can reach either:
   # publish_to_release is false, no signing secret is passed, and no secret
   # exists for SignPath. The unit test pins all three.
+  #
+  # `tag` names the version to stamp, which isn't a tag yet, so `ref` keeps the
+  # checkout on this commit.
   ui-rc:
     name: Agent UI installers (rc)
     needs: plan
@@ -269,7 +233,7 @@ jobs:
     uses: ./.github/workflows/build-installers.yml
     with:
       tag: ${{ needs.plan.outputs.rc_tag }}
-      ref: ${{ needs.plan.outputs.sha }}
+      ref: ${{ github.sha }}
       artifact_prefix: rc-
       publish_to_release: false
 
@@ -282,7 +246,7 @@ jobs:
     uses: ./.github/workflows/build-installers.yml
     with:
       tag: ${{ needs.plan.outputs.final_tag }}
-      ref: ${{ needs.plan.outputs.sha }}
+      ref: ${{ github.sha }}
       artifact_prefix: final-
       publish_to_release: false
 
@@ -295,7 +259,6 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.rc_npm }}
       installers: false
-      ref: ${{ needs.plan.outputs.sha }}
       artifact_prefix: rc-
 
   tui-final:
@@ -309,12 +272,11 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.base_version }}
       sidecar: artifact
-      ref: ${{ needs.plan.outputs.sha }}
       artifact_prefix: final-
 
   # Go builds with -trimpath and the commit's date are reproducible, which is
-  # what lets a final promote the candidate's binaries' twins without trusting
-  # one runner. Rebuild one target and compare.
+  # what lets a final promote the candidate's twins without trusting one runner.
+  # Rebuild one target and compare.
   tui-reproducible:
     name: Terminal build is reproducible
     needs: [plan, tui-rc]
@@ -325,13 +287,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
 
       - uses: actions/setup-go@v7
         with:
           go-version-file: tui/go.mod
-          cache-dependency-path: tui/go.sum
+          cache: false
 
       # Outside the checkout: Go stamps vcs.modified=true into a binary built
       # from a tree with untracked files, which would differ for that alone.
@@ -346,11 +306,10 @@ jobs:
         run: |
           set -euo pipefail
           PKG=github.com/amd/gaia/tui/internal/cli
-          COMMIT="$(git rev-parse HEAD)"
           DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           tui/scripts/gen-winres.sh --version "${VERSION}"
           (cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-            -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${COMMIT} -X ${PKG}.date=${DATE}" \
+            -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
             -o "${RUNNER_TEMP}/rebuilt" ./cmd/gaia)
           a="$(sha256sum "${RUNNER_TEMP}/built/gaia-linux-x64" | cut -d' ' -f1)"
           b="$(sha256sum "${RUNNER_TEMP}/rebuilt" | cut -d' ' -f1)"
@@ -380,7 +339,6 @@ jobs:
       version: ${{ needs.plan.outputs.rc_npm }}
       sidecar: artifact
       agent_ui_artifact: rc-windows-installer
-      ref: ${{ needs.plan.outputs.sha }}
       artifact_prefix: rc-
 
   setup-final:
@@ -399,7 +357,6 @@ jobs:
       version: ${{ needs.plan.outputs.base_version }}
       sidecar: artifact
       agent_ui_artifact: final-windows-installer
-      ref: ${{ needs.plan.outputs.sha }}
       artifact_prefix: final-
 
   # ── The lock, generated from this run instead of committed ─────────────────
@@ -414,13 +371,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: tools
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          path: target
 
       - uses: actions/setup-python@v7
         with:
@@ -433,43 +383,45 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: gaia-agent-*
-          path: art
+          path: ${{ runner.temp }}/art
 
       - uses: actions/download-artifact@v8
         with:
           name: final-tui-binaries
-          path: art/final-tui-binaries
+          path: ${{ runner.temp }}/art/final-tui-binaries
 
       - name: Generate binaries.lock.json
         run: |
           set -euo pipefail
-          python3 tools/util/release_train.py lock --target target --sidecars art \
-            --tui art/final-tui-binaries --tui-version "${{ needs.plan.outputs.base_version }}" \
-            --out flagship/binaries.lock.json
+          python3 util/release_train.py lock --target . --sidecars "${RUNNER_TEMP}/art" \
+            --tui "${RUNNER_TEMP}/art/final-tui-binaries" \
+            --tui-version "${{ needs.plan.outputs.base_version }}" \
+            --out "${RUNNER_TEMP}/flagship/binaries.lock.json"
 
       # What publish.yml attaches to an RC so its core installs this flagship.
       - name: Assemble the candidate's flagship manifest
         run: |
           set -euo pipefail
-          python3 target/util/flagship_rc_assets.py release --artifacts art \
-            --tag "${{ needs.plan.outputs.rc_tag }}" --commit "${{ needs.plan.outputs.sha }}" \
-            --out rc-assets-full
-          mkdir -p flagship/rc-assets
-          cp rc-assets-full/gaia-agent-release.json rc-assets-full/gaia-agent.yaml flagship/rc-assets/
+          python3 util/flagship_rc_assets.py release --artifacts "${RUNNER_TEMP}/art" \
+            --tag "${{ needs.plan.outputs.rc_tag }}" --commit "${GITHUB_SHA}" \
+            --out "${RUNNER_TEMP}/rc-assets-full"
+          mkdir -p "${RUNNER_TEMP}/flagship/rc-assets"
+          cp "${RUNNER_TEMP}/rc-assets-full/gaia-agent-release.json" \
+            "${RUNNER_TEMP}/rc-assets-full/gaia-agent.yaml" "${RUNNER_TEMP}/flagship/rc-assets/"
 
       - name: Pack the flagship npm package with that lock
-        working-directory: target/hub/agents/gaia/npm
+        working-directory: hub/agents/gaia/npm
         run: |
           set -euo pipefail
-          cp "${GITHUB_WORKSPACE}/flagship/binaries.lock.json" binaries.lock.json
+          cp "${RUNNER_TEMP}/flagship/binaries.lock.json" binaries.lock.json
           npm ci
           npm run build
-          npm pack --ignore-scripts --pack-destination "${GITHUB_WORKSPACE}/flagship"
+          npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/flagship"
 
       - uses: actions/upload-artifact@v7
         with:
           name: flagship-npm
-          path: flagship/
+          path: ${{ runner.temp }}/flagship/
           if-no-files-found: error
           retention-days: 7
 
@@ -497,13 +449,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-        with:
-          path: tools
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          path: target
 
       - uses: actions/setup-python@v7
         with:
@@ -511,24 +456,23 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          path: art
+          path: ${{ runner.temp }}/art
 
       - name: Verify
-        id: verify
         run: |
           set -euo pipefail
           rc=0
-          python3 tools/util/release_train.py verify --art art --target target \
-            --tag "${{ needs.plan.outputs.rc_tag }}" --sha "${{ needs.plan.outputs.sha }}" \
-            --flagship art/flagship-npm --out out || rc=$?
-          cat out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          python3 util/release_train.py verify --art "${RUNNER_TEMP}/art" --target . \
+            --tag "${{ needs.plan.outputs.rc_tag }}" --sha "${GITHUB_SHA}" \
+            --flagship "${RUNNER_TEMP}/art/flagship-npm" --out "${RUNNER_TEMP}/out" || rc=$?
+          cat "${RUNNER_TEMP}/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
           exit "${rc}"
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: release-train-manifest
-          path: out/
+          path: ${{ runner.temp }}/out/
           if-no-files-found: error
           retention-days: 30
 

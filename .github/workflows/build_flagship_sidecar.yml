@@ -11,8 +11,6 @@
 #                           GitHub pre-release so the RC runs a flagship built
 #                           from its own commit (the hub has no pre-release
 #                           channel)
-#   release_train_dryrun.yml  the release-train dry run, which builds a named
-#                           commit (`ref`) and publishes nothing
 #
 # One definition, so the binary an RC tester runs is built exactly the way the
 # released one will be. Dispatch it on its own to check that main still
@@ -22,12 +20,6 @@ name: Build flagship sidecar
 
 on:
   workflow_call:
-    inputs:
-      ref:
-        description: 'Commit to build. Empty (the default) builds the caller''s commit.'
-        required: false
-        type: string
-        default: ''
   workflow_dispatch:
 
 permissions:
@@ -86,8 +78,6 @@ jobs:
             required: false
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v7

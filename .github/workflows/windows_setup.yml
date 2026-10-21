@@ -22,9 +22,9 @@
 #                              windows-installer build-installers.yml uploaded
 #                              (the release-train dry run).
 #
-# `ref` and `artifact_prefix` let one run build a named commit twice (a release
-# candidate and its final-stamped twin) without the artifacts colliding. Both
-# default to empty, which is exactly the behaviour every other caller gets.
+# `artifact_prefix` lets one run build twice (a release candidate and its
+# final-stamped twin) without the artifacts colliding. It defaults to empty,
+# which is exactly the behaviour every other caller gets.
 #
 # `sidecar` works as it does in tui_installers.yml: pinned fetches the real
 # gaia-agent against the committed digest; stub stands gaia-tui in for it on
@@ -65,11 +65,6 @@ on:
         required: false
         default: ''
         type: string
-      ref:
-        description: 'Commit to build. Empty (the default) builds the caller''s commit.'
-        required: false
-        default: ''
-        type: string
       artifact_prefix:
         description: 'Prefix for every artifact this uploads or reads, except the sidecar. Empty (the default) keeps today''s names.'
         required: false
@@ -95,8 +90,6 @@ jobs:
       actions: read   # publish.yml's run artifacts
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v7
         with:
@@ -160,8 +153,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v7
         with:
@@ -273,8 +264,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v7
         with:

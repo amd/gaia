@@ -155,6 +155,24 @@ def test_the_installer_write_grant_cannot_be_used(workflow):
             )
 
 
+def test_it_only_builds_its_own_commit(workflow):
+    """A foreign checkout would run that code with this branch's cache scope.
+
+    Later builds on the branch, releases included, restore those caches, so the
+    dry run takes no ref to build: it is dispatched on the commit it builds.
+    """
+    assert set(_triggers(workflow)["workflow_dispatch"]["inputs"]) == {"rc_tag"}
+    for name, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            if str(step.get("uses", "")).startswith("actions/checkout@"):
+                opts = step.get("with") or {}
+                assert not {"ref", "repository"} & set(
+                    opts
+                ), f"{name} checks out {opts}"
+        if job.get("uses") == "./.github/workflows/build-installers.yml":
+            assert job["with"]["ref"] == "${{ github.sha }}", name
+
+
 def test_job_conditions_survive_a_skipped_ancestor(workflow):
     for name, job in workflow["jobs"].items():
         cond = str(job.get("if", ""))
@@ -166,10 +184,8 @@ def test_job_conditions_survive_a_skipped_ancestor(workflow):
 
 NEW_INPUTS = {
     "build-installers.yml": ["ref", "artifact_prefix"],
-    "build_flagship_sidecar.yml": ["ref"],
-    "test_agent_gaia_npm.yml": ["ref"],
-    "tui_installers.yml": ["ref", "artifact_prefix"],
-    "windows_setup.yml": ["ref", "artifact_prefix", "agent_ui_artifact"],
+    "tui_installers.yml": ["artifact_prefix"],
+    "windows_setup.yml": ["artifact_prefix", "agent_ui_artifact"],
 }
 
 

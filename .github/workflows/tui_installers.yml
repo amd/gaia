@@ -26,9 +26,9 @@
 #           caller's own build_flagship_sidecar.yml run uploaded, verified
 #           against the hash each freeze leg recorded.
 #
-# `ref` and `artifact_prefix` let one run build a named commit twice (a release
-# candidate and its final-stamped twin) without the artifacts colliding. Both
-# default to empty, which is exactly the behaviour every other caller gets.
+# `artifact_prefix` lets one run build twice (a release candidate and its
+# final-stamped twin) without the artifacts colliding. It defaults to empty,
+# which is exactly the behaviour every other caller gets.
 #
 # Outputs let a caller treat the installers as optional without treating the
 # binaries as optional -- release_components.yml publishes the six raw binaries
@@ -48,11 +48,6 @@ on:
         description: 'pinned (fetch + verify the real gaia-agent), stub (PR gate), or artifact (this run''s gaia-agent-<platform> builds).'
         required: false
         default: pinned
-        type: string
-      ref:
-        description: 'Commit to build. Empty (the default) builds the caller''s commit.'
-        required: false
-        default: ''
         type: string
       artifact_prefix:
         description: 'Prefix for every artifact this uploads or reads. Empty (the default) keeps today''s names.'
@@ -86,8 +81,6 @@ jobs:
       ok: ${{ steps.done.outputs.ok }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-go@v7
         with:
@@ -114,14 +107,10 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
-          REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           mkdir -p bin
           PKG=github.com/amd/gaia/tui/internal/cli
-          # The commit actually built: the caller's own unless it named one.
-          COMMIT="${GITHUB_SHA}"
-          if [ -n "${REF}" ]; then COMMIT="$(git rev-parse HEAD)"; fi
           # The COMMIT's timestamp, never `now` — a wall-clock stamp makes every
           # rebuild of the same commit differ, so re-publishing a released
           # version can never reconcile against the bytes already stored.
@@ -132,7 +121,7 @@ jobs:
             [ "${goos}" = "windows" ] && EXT=".exe"
             # -trimpath keeps the runner's absolute paths out of the binary.
             CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath \
-              -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${COMMIT} -X ${PKG}.date=${DATE}" \
+              -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
               -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
             echo "built gaia-${platform}${EXT}"
           done <<'TARGETS'
@@ -215,8 +204,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v7
         with:
@@ -380,8 +367,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v7
         with:
