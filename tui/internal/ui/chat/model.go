@@ -1877,6 +1877,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
 
+	case "/sessions":
+		return m, func() tea.Msg { return OpenSessionsMsg{} }
+
+	case "/sessions all":
+		return m, func() tea.Msg { return OpenSessionsMsg{AllKinds: true} }
+
 	case "/clear":
 		return m.clearConversation()
 

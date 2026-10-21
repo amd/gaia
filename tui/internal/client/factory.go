@@ -37,7 +37,24 @@ type ForAgentOptions struct {
 	// transports: the flagship's is chosen by install state, so tracing only
 	// one of them would leave --trace silently recording nothing.
 	Trace *event.TraceWriter
+	// HistoryFile is the flagship session transcript to open (or reopen), and
+	// SessionKind asks the agent to keep a listing of it beside the file — what
+	// /sessions and --resume read (see sessionstore). Subprocess flagship only.
+	// A file with no kind is kept but not listed.
+	HistoryFile string
+	SessionKind string
 }
+
+// Flags the flagship's stdio child takes for a listed session. Must match
+// gaia_agent.stdio's parser; pinned by tests/fixtures/stdio/gaia_stdio_wire.json.
+const (
+	HistoryFileFlag = "--history-file"
+	SessionKindFlag = "--session-kind"
+)
+
+// HistoryFileEnv pins the flagship's transcript to one file for every launch
+// (gaia_agent.stdio reads the same variable as --history-file's default).
+const HistoryFileEnv = "GAIA_HISTORY_FILE"
 
 // FullAccessFlag is the argument that starts a subprocess agent with
 // prompts off. Must match the flag gaia_agent.stdio's parser declares, and
@@ -78,6 +95,15 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		return nil, fmt.Errorf(
 			"a Claude model (%q) was set without Claude mode — pass --use-claude too, "+
 				"or drop --claude-model", opts.ClaudeModel)
+	}
+
+	if opts.SessionKind != "" && opts.HistoryFile == "" {
+		return nil, fmt.Errorf("session kind %q was set with no history file: the listing lives beside it",
+			opts.SessionKind)
+	}
+	if opts.HistoryFile != "" && (agent.ID != catalog.FlagshipID || agent.Transport != catalog.TransportSubprocess) {
+		return nil, fmt.Errorf("agent %q cannot keep a resumable session: only the built-in GAIA "+
+			"agent the TUI starts itself writes one", agent.ID)
 	}
 
 	switch agent.Transport {
@@ -134,6 +160,12 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
 			}
 			args = append(append([]string{}, args...), "--model", opts.Model)
+		}
+		if opts.HistoryFile != "" {
+			args = append(append([]string{}, args...), HistoryFileFlag, opts.HistoryFile)
+		}
+		if opts.SessionKind != "" {
+			args = append(args, SessionKindFlag, opts.SessionKind)
 		}
 		if agent.CanonicalEvents {
 			return NewCanonicalSubprocessClient(bin, args).WithTrace(opts.Trace), nil

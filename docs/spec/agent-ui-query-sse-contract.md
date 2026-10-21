@@ -685,6 +685,28 @@ turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once.
 
+### 10.4 Session listing
+
+Launched with `--history-file <dir>/<id>.sqlite3 --session-kind <kind>`, the
+agent keeps a listing beside the transcript so a host can show and reopen the
+session without reading SQLite. `<id>.json` holds `version`, `id`, `title` (the
+first line of the first question), `kind`, `status`, `created_at`, `updated_at`,
+`pid` and `turns`, and is replaced atomically on every change. `status` is
+`running` while a turn runs, `waiting` while it is parked on a
+`needs_confirmation`, then `done` or `failed` by the turn's terminal event; `pid`
+is cleared to 0 on a clean exit. `<id>.jsonl` gains one line per finished turn:
+`{"user", "answer"}` or `{"user", "error"}`. `clear_conversation` empties it.
+The agent holds an exclusive lock on the first byte of `<id>.lock` for its whole
+life; that lock, not `pid`, is how a host tells an open session from a closed
+one, since it dies with the process and a reused pid cannot fake it. Reopening
+a session takes the lock and rewrites `<id>.json` at once (a status left at
+`running` or `waiting` becomes `failed`); if another process still holds the
+lock after a short wait (a host's probe takes and drops it), the agent refuses
+to start. `<id>` must be hex, as the TUI mints it.
+Only real turns move the listing — sentinels and `/model` do not. Without
+`--session-kind` nothing is written. The TUI passes `chat`; other launchers name
+their own kind (`eval`, `scheduled`), which the TUI hides by default.
+
 Over stdio the agent never sends `tool_result.render`,
 `needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
 other transports, and it sets `source` itself on an error it synthesizes.

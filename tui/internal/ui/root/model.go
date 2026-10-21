@@ -17,6 +17,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/gateway"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/providers"
+	"github.com/amd/gaia/tui/internal/ui/sessions"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -34,6 +35,8 @@ const (
 	viewChat
 	// viewGateway connects GAIA to the AMD LLM gateway (Lemonade cloud offload).
 	viewGateway
+	// viewSessions is the /sessions list.
+	viewSessions
 )
 
 // FlagshipModel is the whole TUI: splash, readiness, chat, for exactly one
@@ -141,6 +144,19 @@ type FlagshipModel struct {
 	// the replacement ChatModel launchAgent is about to build. Cleared once
 	// consumed there, or if the switch is cancelled from the gate.
 	pendingTranscript []chat.Message
+
+	// sessionID is the session the chat on screen writes to (sessions.go).
+	sessionID string
+	// resumeID is the session the next launch reopens instead of starting one.
+	resumeID string
+	// sessionsDir overrides where sessions are kept; tests only.
+	sessionsDir string
+	// sessionsPanel is the /sessions list, nil unless open.
+	sessionsPanel *sessions.Model
+	// pickSessionOnLaunch opens the list before the first chat (bare --resume).
+	pickSessionOnLaunch bool
+	// launchVerified carries the gate's setup answer across that list.
+	launchVerified bool
 }
 
 // clientBox owns the agent client across the copies Bubble Tea makes of the
@@ -389,6 +405,8 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case viewGateway:
 			return m.updateGateway(msg)
+		case viewSessions:
+			return m.updateSessions(msg)
 		}
 		return m, nil
 
@@ -402,6 +420,15 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chat.OpenGatewayMsg:
 		return m.openGateway()
+
+	case chat.OpenSessionsMsg:
+		return m.openSessions(msg.AllKinds)
+
+	case sessions.ClosedMsg:
+		return m.leaveSessions()
+
+	case sessions.SelectedMsg:
+		return m.resumeSession(msg.Session)
 
 	case gateway.CloseMsg:
 		m.gw = nil
@@ -519,6 +546,8 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// cannot name (probe, install, auth, model list, cursor blink), so it
 		// gets the whole default stream.
 		return m.updateGateway(msg)
+	case viewSessions:
+		return m.updateSessions(msg)
 	}
 
 	return m, nil
@@ -587,6 +616,10 @@ func (m FlagshipModel) View() string {
 		if m.gw != nil {
 			base = m.gw.View()
 		}
+	case viewSessions:
+		if m.sessionsPanel != nil {
+			base = m.sessionsPanel.View()
+		}
 	}
 
 	if m.help.Open {
@@ -614,16 +647,23 @@ func (m FlagshipModel) logf(format string, args ...any) {
 }
 
 func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea.Model, tea.Cmd) {
+	resuming := m.resumeID != ""
+	plan, err := m.sessionLaunch(agent)
 	// Interactive: this launch opens the chat view, which renders a mid-run
 	// question and answers it.
-	c, err := client.ForAgent(agent, client.ForAgentOptions{
-		Logf: m.logf, Interactive: true,
-		Model:       m.launchModel(agent),
-		Trace:       m.trace,
-		FullAccess:  m.fullAccess,
-		UseClaude:   m.useClaude,
-		ClaudeModel: m.claudeModel,
-	})
+	var c client.AgentClient
+	if err == nil {
+		c, err = client.ForAgent(agent, client.ForAgentOptions{
+			Logf: m.logf, Interactive: true,
+			Model:       m.launchModel(agent),
+			Trace:       m.trace,
+			FullAccess:  m.fullAccess,
+			UseClaude:   m.useClaude,
+			ClaudeModel: m.claudeModel,
+			HistoryFile: plan.file,
+			SessionKind: plan.kind,
+		})
+	}
 	if err != nil {
 		m.pendingTranscript = nil
 		// A non-nil m.chat means this launch was an /agents switch commit,
@@ -632,6 +672,11 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 		// yet), so there IS something to fall back to. Report it there and
 		// stay, rather than quitting a working session over a switch that
 		// didn't even get as far as the agent that failed.
+		if m.chat != nil && resuming {
+			m.chat.AppendStatus(fmt.Sprintf("Could not reopen that session: %v. Staying in this one.", err))
+			m.activeView = viewChat
+			return m, nil
+		}
 		if m.chat != nil {
 			m.chat.AppendStatus(fmt.Sprintf("Could not switch to %s: %v. Staying on %s.", agent.ID, err, m.agent.ID))
 			m.activeView = viewChat
@@ -652,6 +697,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 		m.chatClient.retire()
 	}
 	m.chatClient.set(c)
+	m.sessionID = plan.id
 
 	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, setupVerified).
 		WithHubClient(m.hub())
@@ -669,6 +715,9 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	if m.launchNotice != "" {
 		chatModel = chatModel.WithNotice(m.launchNotice)
 		m.launchNotice = ""
+	}
+	if plan.notice != "" {
+		chatModel = chatModel.WithNotice(plan.notice)
 	}
 	chatModel = m.withStartupModel(agent, chatModel, m.gateChatModel)
 	m.gateChatModel = ""

@@ -562,6 +562,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+| `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
+| `/sessions all` | The same list with eval and scheduled runs included |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
@@ -809,6 +811,35 @@ shell for the session.
 `--bypass-permissions` runs every tool without asking, and the TUI shows a
 persistent warning the whole time it is on. `/bypass off` turns it off
 mid-session.
+
+## Reopening a session
+
+Quitting doesn't lose a conversation. `/sessions`, or launching with
+`gaia tui --resume`, lists your recent sessions with their title, how long ago
+they were active, and where they stand:
+
+| Status | Means |
+|---|---|
+| `waiting on you` | Paused on a permission prompt in another window. Listed first |
+| `running` | A turn is in progress in another window |
+| `done` | The last turn finished |
+| `failed` | The last turn ended in an error |
+| `stopped mid-turn` | GAIA closed before the last turn finished |
+
+Pick one with `Enter` and its conversation is redrawn, the agent restarts on
+that session, and you carry on where you left off — the model remembers what
+was said, not just the screen. `gaia tui --resume=<id>` reopens one directly; a
+unique prefix of the id is enough. A session that is still open in another
+window can't be reopened until you close it there. If `GAIA_HISTORY_FILE` pins
+GAIA to one transcript, every launch keeps using that file and `--resume`
+refuses to run until you unset it.
+
+The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
+scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
+under `~/.gaia/tui/history/`. A GAIA installed from the Agent Hub or by the
+desktop installer runs through the background service instead, and doesn't
+keep them yet: `/sessions` and `--resume` say so rather than showing an empty
+list.
 
 ## Running another agent
 

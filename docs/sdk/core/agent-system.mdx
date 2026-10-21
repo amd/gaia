@@ -863,9 +863,15 @@ this does not claim they executed successfully.
 
 The flagship TUI persists these traces in private SQLite files under
 `~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
-starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
-explicitly resume the same transcript, or pass `--history-file` to the stdio
-agent. This archive contains tool output, including local file contents.
+starts a separate session, which the TUI's `/sessions` and `--resume` list and
+reopen. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to pin every launch to one
+transcript instead, or pass `--history-file` to the stdio agent. A pinned file
+is listed in `/sessions` only when it is a session file inside that folder
+(`<id>.sqlite3`, `<id>` in hex); any other path is kept but unlisted, and the
+chat says so. `--resume` refuses to run while the variable is set. With
+`--session-kind`, the agent keeps the title, status and a readable transcript
+beside the file — that is the listing. This archive contains tool output,
+including local file contents.
 Delete the file to remove it. A host calling `conversation_history.clear()`
 erases both the visible history and its archived turns.
 

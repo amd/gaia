@@ -33,7 +33,7 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 		if m.connect != nil {
 			snap.Overlay = "connect-mailbox"
 		}
-	case viewChat:
+	case viewChat, viewSessions:
 		snap.View = control.ViewChat
 		if m.chat != nil {
 			// Taken whole from the chat model rather than field by field: the
@@ -45,6 +45,9 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 			snap.Streaming = m.chat.IsStreaming()
 			snap.Overlay = inner.Overlay
 			snap.Chat = inner.Chat
+		}
+		if m.activeView == viewSessions {
+			snap.Overlay = "sessions"
 		}
 	}
 

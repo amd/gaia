@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -58,4 +59,26 @@ func (l *fileLock) release() {
 	unlock(l.f)
 	l.f.Close()
 	l.f = nil
+}
+
+// FileHeld reports whether another process holds an exclusive lock on path —
+// the first byte, as acquireLock and the flagship agent's session lock take it.
+// A missing file is not held. The probe takes and drops the lock when it is free.
+func FileHeld(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- caller-supplied lock path
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot open %s to see whether it is in use: %w", path, err)
+	}
+	defer f.Close()
+	ok, err := tryLock(f)
+	if err != nil {
+		return false, fmt.Errorf("cannot test the lock on %s: %w", path, err)
+	}
+	if ok {
+		unlock(f)
+	}
+	return !ok, nil
 }

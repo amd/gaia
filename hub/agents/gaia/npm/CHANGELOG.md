@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
+  (with `--history-file`) keeps a listing beside the session's transcript:
+  its title, whether it is running, waiting on a permission prompt, done or
+  failed, and each finished turn in readable form. `/sessions` and
+  `gaia tui --resume` list and reopen sessions from it. Nothing changes for the
+  HTTP surface, or for a launch without the flag.
 - **Finished work is no longer replaced by "I can't confirm this is done".** A
   redaction task that loaded the `document-extract` skill had its answer swapped
   for a coverage warning about its own `redaction_log.csv`, and a task with two

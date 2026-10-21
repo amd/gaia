@@ -488,6 +488,12 @@ original spelling), and `provider: "claude"`. What remains stdio-only is the
 already off, `--accept-edits` starts it in accept-edits mode, and `--use-claude` / `--claude-model` pin the backend for the life
 of the process (embeddings stay on Lemonade either way).
 
+Sessions a host can list and reopen are stdio-only too: `--history-file` plus
+`--session-kind` keeps the session's title, status (`running`, `waiting` on a
+permission prompt, `done`, `failed`) and a readable transcript beside the
+transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
+
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models,
 grouped by provider, with `(default)` beside the configured default model;
