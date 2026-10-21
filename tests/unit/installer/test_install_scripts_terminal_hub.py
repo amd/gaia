@@ -1235,7 +1235,7 @@ def test_a_duplicate_checksum_entry_is_refused(tmp_path, fake_hub):
 def test_an_uppercase_checksum_is_refused(tmp_path, fake_hub):
     """sha256sum writes lowercase; both scripts accept exactly that."""
     fake_hub.release(
-        raw_sums=lambda lines: "".join(l[:64].upper() + l[64:] for l in lines)
+        raw_sums=lambda lines: "".join(line[:64].upper() + line[64:] for line in lines)
     )
 
     result, installed = _run_install_tui(tmp_path, fake_hub.base)
@@ -1357,7 +1357,7 @@ def test_ps1_refuses_latest_redirecting_to_something_other_than_a_tag(
     [
         pytest.param(lambda lines: "".join(lines + lines), id="duplicate"),
         pytest.param(
-            lambda lines: "".join(l[:64].upper() + l[64:] for l in lines),
+            lambda lines: "".join(line[:64].upper() + line[64:] for line in lines),
             id="uppercase",
         ),
     ],
