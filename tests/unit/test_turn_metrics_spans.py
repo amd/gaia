@@ -262,7 +262,8 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
     tmp_path, monkeypatch
 ):
     """The real request path, not numbers fed to the recorder by hand."""
-    from gaia.llm.lemonade_client import LemonadeClient, _local_request_lock
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.slot_gate import gate_for
 
     client = LemonadeClient(base_url="http://127.0.0.1:9/api/v1", verbose=False)
     monkeypatch.setattr(client, "cloud_model_provider", lambda model: None)
@@ -276,7 +277,7 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
     held, release = threading.Event(), threading.Event()
 
     def other_request():
-        with _local_request_lock(model):
+        with gate_for(model).hold(0, 10, 65_536):
             held.set()
             release.wait(2)
 
@@ -296,7 +297,8 @@ def test_the_clients_lock_lease_and_probe_waits_land_on_the_open_call(
         holder.join(2)
 
     waits = rec.llm_calls[0]["client"]
-    assert waits["lock_wait_s"] >= 0.08  # queued behind the other request
+    # Exclusive (no slot named), so it queued behind the other request's slot.
+    assert waits["lock_wait_s"] >= 0.08
     assert "lease_wait_s" in waits
     assert waits["ensure_loaded_s"] >= 0.04
 
