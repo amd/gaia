@@ -69,7 +69,7 @@ HOW_TO_FIX = (
     f"pins is not on the hub yet, tag {TAG_PREFIX}<version> on the release "
     "commit, approve "
     "release_agent_gaia.yml, merge the 'pin flagship agent <version>'s published "
-    "hashes' PR it opens (branch release/flagship-lock-v<version>), and tag the "
+    "hashes' PR it opens (branch flagship-lock/v<version>), and tag the "
     "core release on that commit. See the gaia-release skill."
 )
 
