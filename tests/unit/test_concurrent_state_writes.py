@@ -269,17 +269,26 @@ def test_config_loads_from_a_directory_it_cannot_write(tmp_path, monkeypatch):
     real_open = os.open
 
     def read_only_dir(name, flags, *args):
-        if str(name).endswith(".lock"):
+        if flags & os.O_CREAT and Path(name).parent == tmp_path:
             raise PermissionError(errno.EACCES, "Permission denied", str(name))
         return real_open(name, flags, *args)
 
     monkeypatch.setattr(file_lock_mod.os, "open", read_only_dir)
-    monkeypatch.setattr(
-        file_lock_mod.os,
-        "access",
-        lambda p, mode: False if Path(p) == tmp_path else os.path.exists(p),
-    )
     assert GaiaConfig.load(path).profile == "npu"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACLs")
+def test_config_loads_from_an_acl_denied_directory(tmp_path):
+    """os.access ignores ACLs; a folder the user may not create files in still loads."""
+    from gaia.config import GaiaConfig
+    from tests.unit.denied_folder import cannot_create_files_in
+
+    config_dir = tmp_path / "denied"
+    config_dir.mkdir()
+    path = config_dir / "config.json"
+    path.write_text(json.dumps({"profile": "npu"}), encoding="utf-8")
+    with cannot_create_files_in(config_dir):
+        assert GaiaConfig.load(path).profile == "npu"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX directory permissions")

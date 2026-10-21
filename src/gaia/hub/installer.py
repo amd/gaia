@@ -56,7 +56,13 @@ from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
-from gaia.utils.file_lock import FileLockTimeout, file_lock, write_text_atomic
+from gaia.utils.file_lock import (
+    FileLockTimeout,
+    HeldFileLock,
+    acquire_file_lock,
+    file_lock,
+    write_text_atomic,
+)
 from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
@@ -331,36 +337,101 @@ _GUARD_LOCK = threading.Lock()
 _IN_PROGRESS: set = set()
 
 
-@contextmanager
-def _install_slot(agent_id: str, install_root: Optional[Path] = None):
+class InstallSlot:
+    """A claimed install slot for one agent id; :meth:`release` frees it.
+
+    Not tied to a thread, so a request can claim it and hand it to the
+    background worker that runs the install.
+    """
+
+    def __init__(self, agent_id: str, root: Path, held: HeldFileLock):
+        self.agent_id = agent_id
+        self.root = root
+        self._held = held
+
+    @property
+    def held(self) -> bool:
+        return self._held.held
+
+    def release(self) -> None:
+        """Free the slot here and in every other process; a second call does nothing."""
+        if not self._held.held:
+            return
+        try:
+            self._held.release()
+        finally:
+            with _GUARD_LOCK:
+                _IN_PROGRESS.discard(self.agent_id)
+
+    def __enter__(self) -> "InstallSlot":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.release()
+
+
+def claim_install_slot(
+    agent_id: str, install_root: Optional[Path] = None
+) -> InstallSlot:
     """Claim *agent_id* in this process and, through a file lock, in every other.
 
     The Agent UI, the daemon and ``gaia hub`` can each start an install; the
     file lock keeps two of them from writing one agent's directory at once.
+    The caller must :meth:`InstallSlot.release` it, or use it as a context manager.
+
+    Raises:
+        InstallInProgressError: this process or another one holds the slot.
     """
     busy = (
         f"An install for '{agent_id}' is already in progress. Wait for it "
         f"to finish (poll GET /api/agents/{agent_id}/install-status)."
     )
+    root = install_root or default_install_root()
+    lock_target = root / f".{_require_safe_agent_id(agent_id)}.install"
     with _GUARD_LOCK:
         if agent_id in _IN_PROGRESS:
             raise InstallInProgressError(busy)
         _IN_PROGRESS.add(agent_id)
     try:
-        root = install_root or default_install_root()
-        try:
-            # Not 0: a brief install_in_progress() probe must not reject a claim.
-            with file_lock(
-                root / f".{_require_safe_agent_id(agent_id)}.install", timeout=0.5
-            ):
-                yield
-        except FileLockTimeout as exc:
-            raise InstallInProgressError(
-                f"{busy} Another GAIA process holds {exc.lock_path}."
-            ) from exc
-    finally:
+        # Not 0: a brief install_in_progress() probe must not reject a claim.
+        held = acquire_file_lock(lock_target, timeout=0.5)
+    except FileLockTimeout as exc:
         with _GUARD_LOCK:
             _IN_PROGRESS.discard(agent_id)
+        raise InstallInProgressError(
+            f"{busy} Another GAIA process holds {exc.lock_path}."
+        ) from exc
+    except BaseException:
+        with _GUARD_LOCK:
+            _IN_PROGRESS.discard(agent_id)
+        raise
+    return InstallSlot(agent_id, root, held)
+
+
+@contextmanager
+def _install_slot(
+    agent_id: str,
+    install_root: Optional[Path] = None,
+    slot: Optional[InstallSlot] = None,
+):
+    """Hold *agent_id*'s slot for the block: *slot* if the caller claimed one."""
+    if slot is None:
+        with claim_install_slot(agent_id, install_root):
+            yield
+        return
+    root = install_root or default_install_root()
+    if slot.agent_id != agent_id or slot.root != root:
+        raise ValueError(
+            f"The install slot passed for '{agent_id}' under {root} belongs to "
+            f"'{slot.agent_id}' under {slot.root}; claim one for this agent "
+            "and root with claim_install_slot()."
+        )
+    if not slot.held:
+        raise ValueError(
+            f"The install slot passed for '{agent_id}' was already released; "
+            "claim a new one with claim_install_slot()."
+        )
+    yield
 
 
 def is_installing(agent_id: str) -> bool:
@@ -1543,6 +1614,7 @@ def install(
     trusted: bool = False,
     platform_key: Optional[str] = None,
     active_env_site_packages: Optional[Path] = None,
+    slot: Optional[InstallSlot] = None,
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
@@ -1569,6 +1641,8 @@ def install(
             interpreter/venv (not just the calling process); defaults to this
             interpreter's own site-packages (``sysconfig``'s ``purelib``).
             Injectable so tests don't write into the real active environment.
+        slot: A slot the caller already claimed with :func:`claim_install_slot`.
+            The install runs under it, and the caller still releases it.
 
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
@@ -1579,7 +1653,7 @@ def install(
     root = install_root or default_install_root()
     base_url = (base_url or catalog_mod.get_hub_base_url()).rstrip("/")
 
-    with _install_slot(agent_id, root):
+    with _install_slot(agent_id, root, slot):
         _set_progress(
             agent_id, status="running", phase="resolving", percent=5, version=version
         )
@@ -1855,6 +1929,7 @@ def uninstall(
     install_root: Optional[Path] = None,
     registry: Any = None,
     active_env_site_packages: Optional[Path] = None,
+    slot: Optional[InstallSlot] = None,
 ) -> None:
     """Remove a hub-installed agent.
 
@@ -1862,12 +1937,14 @@ def uninstall(
         active_env_site_packages: Where the ``.pth`` entry added at install
             time lives; defaults to this interpreter's own site-packages.
             Injectable so tests don't touch the real active environment.
+        slot: A slot the caller already claimed with :func:`claim_install_slot`;
+            the caller still releases it.
 
     Raises:
         NotInstalledError: If the agent is not installed.
     """
     root = install_root or default_install_root()
-    with _install_slot(agent_id, root):
+    with _install_slot(agent_id, root, slot):
         _uninstall_locked(agent_id, root, registry, active_env_site_packages)
 
 

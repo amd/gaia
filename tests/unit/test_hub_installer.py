@@ -252,6 +252,54 @@ def test_install_in_progress_probe_does_not_block_a_claim(tmp_path):
         pass
 
 
+def test_a_claimed_slot_is_freed_by_another_thread(tmp_path):
+    import threading
+
+    slot = installer.claim_install_slot("demo", tmp_path)
+    with pytest.raises(InstallInProgressError):
+        installer.claim_install_slot("demo", tmp_path)
+    worker = threading.Thread(target=slot.release)
+    worker.start()
+    worker.join()
+    slot.release()  # a second release does nothing
+    assert not installer.install_in_progress("demo", tmp_path)
+    with installer.claim_install_slot("demo", tmp_path):
+        pass
+
+
+def test_install_runs_under_a_slot_the_caller_claimed(tmp_path):
+    manifest = _manifest()
+    with installer.claim_install_slot("demo", tmp_path) as slot:
+        result = install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_make_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            slot=slot,
+        )
+        # The caller still owns it.
+        assert slot.held
+    assert result.id == "demo"
+    assert not installer.install_in_progress("demo", tmp_path)
+
+
+def test_install_refuses_a_slot_for_another_agent(tmp_path):
+    manifest = _manifest()
+    with installer.claim_install_slot("other", tmp_path) as slot:
+        with pytest.raises(ValueError, match="belongs to 'other'"):
+            install(
+                "demo",
+                manifest=manifest,
+                base_url=BASE,
+                fetcher=_make_fetcher(manifest),
+                run_pip=lambda args: None,
+                install_root=tmp_path,
+                slot=slot,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Update creates backup; rollback restores
 # ---------------------------------------------------------------------------

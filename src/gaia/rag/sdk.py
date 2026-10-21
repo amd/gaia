@@ -54,6 +54,7 @@ from gaia.utils.file_lock import (
     FileLockError,
     FileLockTimeout,
     file_lock,
+    lock_dir_unwritable,
     write_bytes_atomic,
     write_text_atomic,
 )
@@ -3178,8 +3179,9 @@ These positions indicate where to split the text."""
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
             except FileLockError as e:
-                # Busy, not corrupt: re-extracting would redo another process's work.
-                return self._cache_busy(stats, file_path, e)
+                # Not corrupt: re-extracting would redo another process's work,
+                # or fail the same way saving into an unwritable cache.
+                return self._cache_lock_failed(stats, file_path, e)
             except Exception as e:
                 # A miss, not a delete: re-indexing replaces the entry atomically,
                 # and deleting here could destroy a fresh cache another process
@@ -3382,6 +3384,8 @@ These positions indicate where to split the text."""
             raise
         except EmbeddingUnavailableError as e:
             return self._embedding_failed(stats, file_path, e)
+        except FileLockError as e:
+            return self._cache_lock_failed(stats, file_path, e)
         except Exception as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
@@ -3392,21 +3396,35 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             return stats
 
-    def _cache_busy(
+    def _cache_lock_failed(
         self, stats: Dict[str, Any], file_path: str, error: FileLockError
     ) -> Dict[str, Any]:
-        """Index stats for a document whose cache another process holds locked."""
-        message = f"Could not read the cached index for {Path(file_path).name}: {error}"
+        """Index stats for a document whose cache lock could not be taken.
+
+        ``error_type`` is ``cache_busy`` when another process held the lock,
+        ``cache_unwritable`` when this user cannot create files in the cache
+        folder, and ``cache_lock_error`` when the lock file itself is unusable.
+        """
+        folder = error.lock_path.parent
+        name = Path(file_path).name
         if isinstance(error, FileLockTimeout):
-            message += (
-                " Another GAIA process is probably indexing into the same cache; "
-                "index the document again once it finishes."
+            error_type = "cache_busy"
+            message = f"Could not use the cached index for {name} in {folder}: {error}"
+        elif lock_dir_unwritable(error):
+            error_type = "cache_unwritable"
+            message = (
+                f"Cannot use the RAG cache folder {folder} for {name}: {error} "
+                "The document itself is fine."
             )
+        else:
+            error_type = "cache_lock_error"
+            message = f"Cannot open the RAG cache lock in {folder} for {name}: {error}"
         if self.config.show_stats:
             print(f"❌ {message}")
         self.log.error(message)
         stats["error"] = message
-        stats["error_type"] = "cache_busy"
+        stats["error_type"] = error_type
+        stats["cache_dir"] = str(folder)
         return stats
 
     def _embedding_failed(
