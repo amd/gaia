@@ -29,6 +29,18 @@ from tests.unit.connectors.conftest import make_fake_agent_registry
 UI_HEADER = {"x-gaia-ui": "1"}
 
 
+@pytest.fixture
+def fresh_google_provider():
+    """Drop the cached Google provider; restore the whole cache on teardown."""
+    from gaia.connectors.providers import _registry
+
+    saved = dict(_registry)
+    _registry.pop("google", None)
+    yield
+    _registry.clear()
+    _registry.update(saved)
+
+
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch, tmp_path):
     """Each test gets a fresh REGISTRY and isolated grants/state dirs.
@@ -136,14 +148,9 @@ class TestConfigurableField:
     """
 
     def test_configurable_false_when_provider_missing_env(
-        self, ui_api_client, monkeypatch
+        self, ui_api_client, monkeypatch, fresh_google_provider
     ):
-        # Ensure the provider can't init: clear the env var AND the
-        # cached provider instance from any earlier test that primed it.
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
-        from gaia.connectors.providers import _registry
-
-        monkeypatch.delitem(_registry, "google", raising=False)
 
         resp = ui_api_client.get("/api/connectors/google")
         assert resp.status_code == 200
@@ -151,11 +158,10 @@ class TestConfigurableField:
         assert body["configurable"] is False
         assert "GAIA_GOOGLE_CLIENT_ID" in (body["config_error"] or "")
 
-    def test_configurable_true_when_provider_ok(self, ui_api_client, monkeypatch):
+    def test_configurable_true_when_provider_ok(
+        self, ui_api_client, monkeypatch, fresh_google_provider
+    ):
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
-        from gaia.connectors.providers import _registry
-
-        monkeypatch.delitem(_registry, "google", raising=False)
 
         resp = ui_api_client.get("/api/connectors/google")
         body = resp.json()
@@ -357,15 +363,12 @@ class TestAuthorizeGrantAgents:
 
     @pytest.mark.allow_network
     def test_authorize_explicit_scope_outside_catalog_is_rejected(
-        self, ui_api_client, monkeypatch
+        self, ui_api_client, monkeypatch, fresh_google_provider
     ):
         # A configured client, so the request reaches the scope check rather
         # than the "client not configured" 503 that comes first.
-        from gaia.connectors.providers import _registry
-
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "test-secret")
-        monkeypatch.delitem(_registry, "google", raising=False)
         bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
 
         resp = ui_api_client.post(
