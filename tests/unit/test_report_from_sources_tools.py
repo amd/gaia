@@ -9,6 +9,7 @@ works.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from unittest.mock import patch
@@ -117,10 +118,21 @@ def test_manifest_matches_tools_py_and_registers_namespaced():
 def test_skill_body_leads_with_the_tools():
     skill = parse_skill_file(SKILL_DIR)
     body = skill.body
-    first_section = body.split("## 2.")[0]
-    assert "Call `inventory_data_files(folder)` first" in first_section
+    rules = body.split("## Procedure")[0]
+    assert "Call `inventory_data_files(folder)` first" in rules
+    assert "key-facts ledger" in rules and "Every number is sourced" in rules
     assert "series_from_workbook" in body and "chart_into_workbook" in body
-    assert "Fallback when the tool can't parse" in first_section
+    assert len(body) // 4 <= 1200
+    refs = re.findall(r"`(references/[\w-]+\.md)`", body)
+    assert len(refs) >= 5
+    for ref in refs:
+        assert (SKILL_DIR / ref).is_file(), ref
+    inventory = (SKILL_DIR / "references" / "inventory.md").read_text(encoding="utf-8")
+    assert "Fallback when the tool can't parse" in inventory
+    checks = (SKILL_DIR / "references" / "coverage-checks.md").read_text(
+        encoding="utf-8"
+    )
+    assert "def deliverable_lines" in checks and "UNTRACED" in checks
 
 
 def _book(path: Path) -> Path:

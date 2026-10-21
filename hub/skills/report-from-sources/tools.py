@@ -90,11 +90,9 @@ def _labels(value: Any) -> List[str]:
 def inventory_data_files(folder: str, recursive: bool = False) -> dict:
     """List the data files in a folder and say which is the newest copy of each dataset. Call this first.
 
-    For every .xlsx/.xlsm/.csv/.tsv/.json file: each sheet's layout, header
-    rows (multi-row and merged headers), units, period coverage (first, last,
-    last with data) and series names. Groups files that hold the same dataset
-    and ranks them by vintage, naming older copies. PDFs, Word files and
-    other documents are listed as narrative sources to read with read_file.
+    Per spreadsheet, CSV and JSON file: sheets, header rows, units, periods
+    covered and series names. datasets[].note ranks copies of one dataset by
+    vintage; documents come back as narrative_sources to read with read_file.
 
     Args:
         folder: Absolute path of the folder.
@@ -126,12 +124,9 @@ def series_from_workbook(
 ) -> dict:
     """Read named series from a spreadsheet, CSV or JSON file for chosen periods, cited to their cells.
 
-    Matches each label to a row or column (case, footnote markers and units
-    ignored) and echoes the label it matched. Two close labels are reported
-    as ambiguous with the candidates; a missing one lists the nearest labels.
-    Values come back exactly as stored, aligned on one period axis, with each
-    value's cell, units, footnote flags and a provenance line. chart_input is
-    ready to chart.
+    Echoes matched_label; an ambiguous label lists candidates, a missing one
+    the nearest. Values come back as stored with their cells, units and a
+    provenance line; chart_input is ready to chart.
 
     Args:
         file_path: Absolute path of the .xlsx/.xlsm/.csv/.tsv/.json file.
@@ -181,10 +176,9 @@ def chart_into_workbook(
 ) -> dict:
     """Chart named series from a source file into an .xlsx as a native Excel chart, checked on reopen.
 
-    Reads the series exactly as series_from_workbook does (so no number is
-    retyped), writes them to a new sheet as a table with a native chart over
-    it, a source and period footnote, and axis title and number format; then
-    reopens the file and confirms the chart's values equal the source.
+    Reads the series as series_from_workbook does, writes a table and chart
+    with a source and period footnote to a new sheet, then reopens the file
+    and confirms the chart's values equal the source.
 
     Args:
         output_path: Absolute path of the .xlsx to create, or one to add a sheet to.
