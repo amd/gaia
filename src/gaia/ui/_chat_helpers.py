@@ -4580,7 +4580,7 @@ async def _index_document(filepath: Path) -> int:
         progress["at"] = _time.monotonic()
 
     def _do_index():
-        from gaia.daemon.broker_client import lease_wait_listener
+        from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
@@ -4589,12 +4589,16 @@ async def _index_document(filepath: Path) -> int:
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        with lease_wait_listener(_queue_update):
-            result = rag.index_document(
-                str(filepath),
-                progress_callback=lambda _done, _total: _step(),
-                heartbeat=_step,
-            )
+        # Cancel and the no-progress stop also end a wait for the model.
+        try:
+            with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
+                result = rag.index_document(
+                    str(filepath),
+                    progress_callback=lambda _done, _total: _step(),
+                    heartbeat=_step,
+                )
+        except LeaseWaitCancelled as e:
+            raise IndexingStopped(filepath.name) from e
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
