@@ -2,14 +2,111 @@
 name: report-from-sources
 description: Build a report, deck, brief, memo, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary, charts or a dashboard. Pins the newest file per dataset, keeps a key-facts ledger per source, puts source and period on every figure, and checks every requested item before handing over.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
+    requirements:
+      python: ">=3.10"
+      dependencies:
+        - openpyxl>=3.1
+        - python-pptx>=1.0
     tools_required:
       - list_files
       - read_file
       - run_python
+    tools:
+      - name: inventory_data_files
+        description: List a folder's data files with sheets, header rows, units and period coverage, and rank copies of one dataset by vintage.
+        parameters:
+          folder:
+            type: string
+            required: true
+          recursive:
+            type: boolean
+            required: false
+            default: false
+        returns:
+          type: object
+        atomic: true
+      - name: series_from_workbook
+        description: Read named series for chosen periods from a spreadsheet, CSV or JSON file, matched by label and cited to their cells.
+        parameters:
+          file_path:
+            type: string
+            required: true
+          labels:
+            type: array
+            required: true
+          sheet:
+            type: string
+            required: false
+            default: ""
+          periods:
+            type: string
+            required: false
+            default: last 12
+          orientation:
+            type: string
+            required: false
+            default: auto
+          filters:
+            type: string
+            required: false
+            default: ""
+        returns:
+          type: object
+        atomic: true
+      - name: chart_into_workbook
+        description: Chart named series from a source file into an .xlsx as a native Excel chart with a source footnote, verified on reopen.
+        parameters:
+          output_path:
+            type: string
+            required: true
+          file_path:
+            type: string
+            required: true
+          labels:
+            type: array
+            required: true
+          sheet:
+            type: string
+            required: false
+            default: ""
+          periods:
+            type: string
+            required: false
+            default: last 12
+          chart_type:
+            type: string
+            required: false
+            default: line
+          title:
+            type: string
+            required: false
+            default: ""
+          y_axis_title:
+            type: string
+            required: false
+            default: ""
+          number_format:
+            type: string
+            required: false
+            default: ""
+          secondary_labels:
+            type: array
+            required: false
+          source_note:
+            type: string
+            required: false
+            default: ""
+          filters:
+            type: string
+            required: false
+            default: ""
+        returns:
+          type: object
+        atomic: false
     pairs_with:
       - office-docs
       - data-explore
@@ -21,13 +118,23 @@ metadata:
 
 A deliverable can read well and still be wrong by omission: it skips the count
 of failures the source led with, drops the "down 8% from last year", or charts
-last year's file when this year's sat beside it. This skill is the order of
-work that prevents that. Use it together with whatever builds the file.
+last year's file when this year's sat beside it. It can also be wrong by
+addition: a figure no source contains. This skill is the order of work that
+prevents both. Use it together with whatever builds the file.
 
 ## 1. Inventory the inputs
 
-List the folder with `list_files(path)`, then record, for every file, what it
-covers and which period it is for:
+**Call `inventory_data_files(folder)` first, then interpret its result.** One
+call returns, for every spreadsheet, CSV and JSON file, each sheet's layout,
+header rows (multi-row and merged headers), units, the periods it covers
+(first, last, and last with data) and its series names. It groups files that
+hold the same dataset and ranks them by vintage: `datasets[].note` names the
+newest copy and the older ones ("two versions of the same series: X (through
+2026Q2, newest) and Y (through 2025Q2)"). Documents come back under
+`narrative_sources`; read those in step 2.
+
+From that result, record for every file what it covers and which period it is
+for, and show the table in your reply before you build anything:
 
 | File | Covers | Period / as-of | Found in | Use |
 |---|---|---|---|---|
@@ -35,16 +142,19 @@ covers and which period it is for:
 | sales_2024_q3.xlsx | Regional sales | Jan-Sep 2024 | sheet title | **primary** |
 | board_memo.docx | Quarter commentary | as of 30 Sep 2024 | first paragraph | facts ledger |
 
-- The date written in the content (a title, an "as of" line, a date column)
-  beats the file name, which beats the modified time.
-- When several files cover the same thing for different periods, use the most
-  recent one that matches the request; if the user named a period, use that
-  one. Older files are for comparison only, and are labelled as such.
-- Two files for the same period that disagree: say which one you used and why
-  (later revision, "final" over "draft").
-- Show this table in your reply before you build anything.
+- The tool ranks by the data the file holds (last period with data), then an
+  "as of" line in it, then the period or revision in the file name, then the
+  modified time. Use the newest unless the user named a period; then use the
+  file that covers it. Older files are for comparison only, and are labelled
+  as such.
+- When the note says two copies cover the same periods, say which one you used
+  and why (later revision, "final" over "draft"), and compare their values.
+- A file under `not_read`, or a sheet with layout `unknown`, the tool could
+  not parse. Open it with the fallback below.
 
-This lists every spreadsheet's sheets, row counts and date ranges in one call:
+**Fallback when the tool can't parse a file.** List the folder with
+`list_files(path)`; this lists every spreadsheet's sheets, row counts and date
+ranges:
 
 ```python
 import re
@@ -52,7 +162,7 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 
-FOLDER = Path(r"C:\Users\me\Documents\quarterly")
+FOLDER = Path(r"<sources folder>")  # the absolute path you inventoried
 DATEISH = re.compile(r"date|month|year|period|quarter|week|day|as.?of", re.I)
 for p in sorted(FOLDER.iterdir()):
     if not p.is_file():
@@ -90,26 +200,64 @@ matters. For each source, write down:
 - **What the source itself emphasises**: its summary or highlights, the first
   paragraph, bold text, "notably", "for the first time", "record".
 
-Each row gets the fact, the value, and where it is (file, plus page, sheet or
-section):
+Each row gets the fact, the value, whether the source **states** it or you
+**computed** it, and where it is (file, plus page, sheet, section or cell):
 
-| Fact | Value | Source |
-|---|---|---|
-| Sites closed this year | 3 (2 in Q3) | board_memo.docx, Operations section |
-| Q3 sales vs Q2 | +12% | sales_2024_q3.xlsx, Summary |
-| Supplier risk flagged | single source for part B | board_memo.docx, Risks |
+| Fact | Value | Kind | Source |
+|---|---|---|---|
+| Sites closed this year | 3 (2 in Q3) | stated | board_memo.docx, Operations section |
+| Q3 sales | 4.6 ($M) | stated | sales_2024_q3.xlsx, Summary!D7 (from `series_from_workbook`) |
+| Q3 sales vs Q2 | +12% | computed: 4.6 / 4.1 - 1 | sales_2024_q3.xlsx, Summary!C7:D7 |
+| Supplier risk flagged | single source for part B | stated | board_memo.docx, Risks |
+
+A computed row names its formula and the stated rows it uses. When two sources
+give different values for the same fact, keep both rows; they go in the
+"Conflicts and gaps" section (step 3), with which one you used and why.
 
 Keep the ledger in your working reply. Do not save it as an extra file in the
 user's folder unless they ask for one.
 
 ## 3. Build from the ledger
 
+Lay the deliverable out answer first:
+
+1. **Header line**: what it covers and its vintage, e.g. "As of 30 Sep 2024;
+   data through 2024Q3 (sales_2024_q3.xlsx)". Take it from the inventory's
+   `data_through` and any as-of date in the sources.
+2. **Summary first**: the conclusion and the three to five figures that carry
+   it, before any detail. A reader who stops here has the answer.
+3. **Evidence**: the sections, tables and charts that support the summary.
+4. **Conflicts and gaps**: sources that disagree (both values, which one you
+   used and why), older files you used only for comparison, periods or series
+   the request needed but the sources do not have, and anything the tools
+   reported as ambiguous or not found. Write "None found" if there are none;
+   never drop the section.
+
+Then:
+
 - Every headline number, stated change and notable event in the ledger goes
   in. Anything else you leave out, leave out on purpose.
+- Say which figures you computed. "Sales rose 12% (computed from Q2 and Q3
+  sales)" is different from "the report says sales rose 12%"; never present a
+  figure you calculated as one the source states.
 - Keep the source's framing. Write "Net income fell 8% to $4.2M", not just
   "Net income $4.2M".
-- Compute figures from the data with `run_python`. Never retype numbers you
-  read off a page.
+- **Get series with `series_from_workbook(file_path, labels, periods="last 8")`.**
+  It echoes the label it matched (`matched_label`) and returns the values
+  exactly as stored, with each value's cell, the units, footnote flags such as
+  "123.4(a)", and a `provenance` line for the chart footnote. If a label comes
+  back `ambiguous`, call again with the exact label (or "Section > Label")
+  from `candidates`, or ask the user; if `not_found`, pick from `nearest` or
+  tell the user the series is not in the file. Never chart a look-alike
+  series in its place.
+- **For a chart in a workbook, call `chart_into_workbook`** with the same
+  source arguments. It writes a table and a native Excel chart with an axis
+  title, number format and a source and period footnote, then rereads the
+  saved file and confirms the chart's values equal the source. For a slide,
+  hand `chart_input` from `series_from_workbook` (categories, series, source
+  note) to the deck-building code unchanged.
+- Compute other figures from the data with `run_python`. Never retype numbers
+  you read off a page.
 - **Every chart and table names its source and period**, e.g. "Source:
   sales_2024_q3.xlsx, Jan-Sep 2024", and its units. Every figure in the text
   carries its source in brackets.
@@ -174,6 +322,44 @@ A `MISSING` row means look, not necessarily absent: the value may be written
 as a word ("three") or rounded. Add whatever is truly missing and run the check
 again.
 
+**Then trace the other way: every number in the deliverable must come from the
+ledger or a computation you can name.** That catches figures that were made
+up or mistyped, which the check above cannot. Append this to the snippet above
+and run them together. `traced` holds every ledger value plus the values
+`series_from_workbook` returned (paste its `chart_input["series"]` lists) and
+your computed results:
+
+```python
+traced = [3, 2, 12, 4.6, 4.1]  # ledger values, series values, computed results
+traced += [v for values in {}.values() for v in values if v is not None]  # chart_input["series"]
+
+NUM = re.compile(r"(?<![\w.])[-+]?\$?\d[\d,]*(?:\.\d+)?%?")
+YEARISH = re.compile(r"^(?:19|20)\d\d$")
+
+def matches(text, value):
+    """A number as written ("4.6", "12%", "$1,200") matches a value at the shown precision."""
+    digits = text.lstrip("+$").rstrip("%").replace(",", "")
+    places = len(digits.split(".")[1]) if "." in digits else 0
+    return any(abs(float(digits) - round(v * s, places)) < 10 ** -places / 2 + 1e-9
+               for v in [value] for s in (1, 100))
+
+untraced = []
+for line in lines:
+    for text in NUM.findall(line):
+        bare = text.lstrip("+-$").rstrip("%").replace(",", "")
+        if YEARISH.match(bare) or not bare:
+            continue  # years and period labels are not figures
+        if not any(matches(text.lstrip("-"), abs(v)) for v in traced):
+            untraced.append((text, line[:80]))
+for text, line in untraced:
+    print("UNTRACED", text, "->", line)
+print(len(untraced), "untraced number(s)")
+```
+
+An `UNTRACED` number is either a ledger row you forgot to add (add it with its
+source), a computation (add it as a computed row), or an error: remove or fix
+it. List numbers, slide numbers and dates show up too; skip those.
+
 ## 5. Final requirements check
 
 Do this before saying any deliverable is done.
@@ -183,7 +369,8 @@ Do this before saying any deliverable is done.
    or reference ("cite every ticket mentioned" means each one, by ID); every
    structural ask (a labelled input cell, a toggle or dropdown, a sheet in a
    given place); every file name, file type and folder; any length, audience or
-   style limit.
+   style limit. Always add three lines of your own: the as-of line in the
+   header, the summary before the evidence, and the Conflicts and gaps section.
 2. **Check each line against the saved file.** Reopen it; your memory of what
    you wrote is not evidence.
 3. **Fix the gaps and check again.**
@@ -207,7 +394,7 @@ To check that every ID in the sources made it in, append this to the step 4
 snippet and run them together (each `run_python` call starts fresh):
 
 ```python
-source_text = Path(r"C:\Users\me\Documents\quarterly\board_memo.txt").read_text(encoding="utf-8")
+source_text = Path(r"<source text file>").read_text(encoding="utf-8")
 ID = re.compile(r"\b[A-Z]{2,}-\d+\b")  # fit the pattern to the IDs in front of you
 missing = sorted(set(ID.findall(source_text)) - set(ID.findall("\n".join(lines))))
 print("IDs missing from the deliverable:", missing or "none")
@@ -221,7 +408,7 @@ To check a workbook's inputs, dropdowns and charts:
 import re
 from openpyxl import load_workbook
 
-wb = load_workbook(r"C:\Users\me\Documents\surveys\survey_summary.xlsx")
+wb = load_workbook(r"<saved workbook>")  # absolute path of the file you built
 formulas = [c.value for s in wb for row in s.iter_rows() for c in row
             if isinstance(c.value, str) and c.value.startswith("=")]
 print("sheets:", wb.sheetnames, "| formulas:", len(formulas))
