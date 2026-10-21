@@ -25,21 +25,23 @@ export function InfoBubble({ label, warning, children }: { label: string; warnin
             setPos(null);
             return;
         }
+        // Beside the menu the icon sits in, so the bubble never covers the list it describes.
         const a = icon.current?.getBoundingClientRect();
         const b = bubble.current?.getBoundingClientRect();
-        if (!a || !b) return;
+        const side = icon.current?.closest('[role="dialog"]')?.getBoundingClientRect() ?? a;
+        if (!a || !b || !side) return;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
         let left: number;
         let top: number;
-        if (a.right + GAP + b.width <= vw - EDGE) {
-            left = a.right + GAP;
+        if (side.right + GAP + b.width <= vw - EDGE) {
+            left = side.right + GAP;
             top = a.top + a.height / 2 - b.height / 2;
-        } else if (a.left - GAP - b.width >= EDGE) {
-            left = a.left - GAP - b.width;
+        } else if (side.left - GAP - b.width >= EDGE) {
+            left = side.left - GAP - b.width;
             top = a.top + a.height / 2 - b.height / 2;
         } else {
-            // No room beside the icon (a narrow window): above it, or below when that fits better.
+            // No room beside the menu (a narrow window): above the icon, or below it.
             left = Math.min(Math.max(EDGE, a.right - b.width), vw - EDGE - b.width);
             top = a.top - GAP - b.height >= EDGE ? a.top - GAP - b.height : a.bottom + GAP;
         }

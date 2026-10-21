@@ -328,9 +328,11 @@ export function ModelChip() {
                                         )}
                                         <div className="info-bubble-id">{m.id}</div>
                                     </InfoBubble>
-                                    {!provider.remote && (
-                                        <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
-                                    )}
+                                    <span className="popover-row-state">
+                                        {!provider.remote && (
+                                            <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
+                                        )}
+                                    </span>
                                 </div>
                             );
                         })}
