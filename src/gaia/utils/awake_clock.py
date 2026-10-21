@@ -11,10 +11,12 @@ about to carry on. :func:`monotonic` stops while the PC sleeps:
   them out, in 100 ns units at timer-tick resolution (about 16 ms).
 * Windows, Modern Standby (S0 low-power idle, most current laptops): the
   unbiased interrupt time keeps counting, because the PC never leaves S0.
-  Windows freezes desktop processes for the standby, so a monitor thread
-  subscribed to the console display's power state takes a stretch in which
-  the process did not run for more than :data:`STANDBY_GAP` seconds, starting
-  with the display off and using next to no CPU, as standby, and leaves it
+  Windows may freeze a desktop process for the standby, or let it run on (a
+  process that keeps running through it is not paused, so its time counts).
+  A monitor thread subscribed to the console display's power state takes a
+  stretch in which the process did not run for more than :data:`STANDBY_GAP`
+  seconds, starting with the display off and using next to no CPU, as
+  standby, and leaves it
   out past the first ``STANDBY_GAP`` seconds. Each one is logged with its
   size, at WARNING. A freeze with the display on is a pause, and a busy process
   starved of its turn is not frozen; both count, and are logged. A process
