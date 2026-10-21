@@ -126,6 +126,19 @@ class StepTimer:
         """Whether the open step has made at least one model call."""
         return bool(self._current and self._current["llm_calls"])
 
+    def last_call_finished(self) -> bool:
+        """Whether the open step's latest model call returned a reply.
+
+        A call that raised reports no finish reason and no tokens, so the
+        server's "last request" stats would describe some earlier call.
+        """
+        if not self.has_llm_calls():
+            return False
+        last = self._current["llm_calls"][-1]
+        return (
+            last["finish_reason"] is not None or last["completion_tokens"] is not None
+        )
+
     # ── measurements ───────────────────────────────────────────────────────
 
     def record_llm_call(self, call: Dict[str, Any]) -> None:
