@@ -4,7 +4,7 @@
 #
 # One phase of one installer journey on macOS or Linux:
 #
-#   posix-journey.sh <download|install|launch|health|preflight|upgrade|uninstall|leftovers>
+#   posix-journey.sh <download|install|upgrade|launch|health|preflight|quit|uninstall|leftovers>
 #
 # It installs and uninstalls system packages, writes under /usr and /Applications,
 # and deletes the sandbox home it creates. It refuses to run anywhere but a
@@ -274,9 +274,6 @@ no_gaia_processes() {
   local left
   left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
-  if [ -s "${WORK}/quit-leftovers" ]; then
-    finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
-  fi
 }
 
 # ── install.sh ────────────────────────────────────────────────────────────────
@@ -410,18 +407,20 @@ launch)
 
 health)
   case "${KIND}" in
-    agent-ui-dmg|agent-ui-deb|appimage)
-      rc=0
-      wait_agent_ui_health || rc=$?
-      stop_agent_ui
-      exit "${rc}"
-      ;;
+    agent-ui-dmg|agent-ui-deb|appimage) wait_agent_ui_health ;;
     install-sh) PATH="${GAIA_HOME}/bin:${GAIA_HOME}/venv/bin:${PATH}" one_shot ;;
     *) one_shot ;;
   esac
   ;;
 
 preflight) preflight_no_lemonade ;;
+
+quit)
+  stop_agent_ui
+  if [ -s "${WORK}/quit-leftovers" ]; then
+    finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
+  fi
+  ;;
 
 uninstall)
   case "${KIND}" in

@@ -3,7 +3,7 @@
 #
 # One phase of one Windows installer journey:
 #
-#   pwsh installer/headless/windows-journey.ps1 -Step <download|install|launch|health|preflight|upgrade|uninstall|leftovers>
+#   pwsh installer/headless/windows-journey.ps1 -Step <download|install|upgrade|launch|health|preflight|quit|uninstall|leftovers>
 #
 # It installs and uninstalls GAIA for the current user: HKCU, the user PATH,
 # fonts, shortcuts and %LOCALAPPDATA%\Programs. It refuses to run anywhere but a
@@ -20,7 +20,7 @@
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('download', 'install', 'launch', 'health', 'preflight', 'upgrade', 'uninstall', 'leftovers')]
+    [ValidateSet('download', 'install', 'upgrade', 'launch', 'health', 'preflight', 'quit', 'uninstall', 'leftovers')]
     [string]$Step
 )
 
@@ -402,7 +402,7 @@ switch ($Step) {
 
     'health' {
         if (Wants 'ui') {
-            try { Wait-AgentUiHealth } finally { Stop-AgentUi }
+            Wait-AgentUiHealth
             if ($env:KIND -eq 'win-setup-upgrade' -and
                 (Get-Content "$gaiaHome\headless-upgrade-marker" -Raw) -ne (Get-Content "$work\marker.expected" -Raw)) {
                 Fail 'the upgraded app lost or changed ~\.gaia\headless-upgrade-marker on first launch'
@@ -419,6 +419,16 @@ switch ($Step) {
     'preflight' {
         if ($env:KIND -eq 'install-ps1') { $env:USERPROFILE = $userHome; $env:HOME = $userHome }
         Preflight-NoLemonade
+    }
+
+    # Closing the window only hides the app to the tray, and the tray's Quit
+    # needs a click, so the app and its backend are stopped as a process tree.
+    'quit' {
+        Stop-AgentUi
+        $left = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
+        }
+        if ($left) { Fail "still running after the app was stopped: $(($left | ForEach-Object { "$($_.Id) $($_.Path)" }) -join '; ')" }
     }
 
     'uninstall' {

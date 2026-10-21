@@ -255,7 +255,7 @@ jobs:
             title: One setup, desktop app only
             kind: win-setup
             components: ui
-            phases: download install launch health uninstall leftovers
+            phases: download install launch health quit uninstall leftovers
           - row: win-setup-tui
             title: One setup, terminal only
             kind: win-setup
@@ -265,17 +265,17 @@ jobs:
             title: One setup, desktop app and terminal
             kind: win-setup
             components: ui,tui
-            phases: download install launch health preflight uninstall leftovers
+            phases: download install launch health preflight quit uninstall leftovers
           - row: win-agent-ui-exe
             title: Desktop app's own setup
             kind: agent-ui-exe
             components: ''
-            phases: download install launch health uninstall leftovers
+            phases: download install launch health quit uninstall leftovers
           - row: win-setup-upgrade
             title: Upgrade from the previous stable release (installed and launched once) to the one setup
             kind: win-setup-upgrade
             components: ''
-            phases: download install upgrade launch health uninstall leftovers
+            phases: download install upgrade launch health quit uninstall leftovers
           - row: win-install-ps1
             title: install.ps1 in a sandbox profile
             kind: install-ps1
@@ -341,15 +341,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {row: mac-arm64-agent-ui-dmg, os: macos-latest, os_label: macOS arm64, kind: agent-ui-dmg, title: Desktop app .dmg, phases: download install launch health uninstall leftovers}
+          - {row: mac-arm64-agent-ui-dmg, os: macos-latest, os_label: macOS arm64, kind: agent-ui-dmg, title: Desktop app .dmg, phases: download install launch health quit uninstall leftovers}
           - {row: mac-arm64-tui-pkg, os: macos-latest, os_label: macOS arm64, kind: tui-pkg, tui_platform: darwin-arm64, packages: macos, title: Terminal .pkg, phases: download install launch health preflight uninstall leftovers}
           - {row: mac-x64-tui-pkg, os: macos-15-intel, os_label: macOS x64, kind: tui-pkg, tui_platform: darwin-x64, packages: macos, title: Terminal .pkg, phases: download install launch health preflight uninstall leftovers}
           - {row: mac-arm64-install-sh, os: macos-latest, os_label: macOS arm64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
           - {row: mac-x64-install-sh, os: macos-15-intel, os_label: macOS x64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
-          - {row: ubuntu22-agent-ui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health uninstall leftovers}
-          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health uninstall leftovers}
-          - {row: ubuntu22-appimage, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health uninstall leftovers}
-          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health uninstall leftovers}
+          - {row: ubuntu22-agent-ui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu22-appimage, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
+          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
           - {row: ubuntu22-tui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb-upgrade, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb-upgrade, packages: linux, title: Terminal .deb upgrade from the previous stable release, phases: download install upgrade launch health uninstall leftovers}

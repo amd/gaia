@@ -48,6 +48,7 @@ PHASES = [
     "launch",
     "health",
     "preflight",
+    "quit",
     "uninstall",
     "leftovers",
 ]
