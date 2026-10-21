@@ -15,7 +15,9 @@ import numpy as np
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
 
+from gaia.agents.base import skill_budget
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.skill_budget import SKILL_BUDGET_CEILING, skill_body_budget
 from gaia.agents.base.skill_suggester import (
     DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
@@ -28,9 +30,13 @@ def _never(_text):
     raise AssertionError("the embedder should not be called")
 
 
-def _agent(monkeypatch, *, catalog=True, **config):
+def _agent(monkeypatch, *, catalog=True, window=200_000, **config):
     monkeypatch.delenv("GAIA_SKILL_SUGGEST", raising=False)
     monkeypatch.delenv("GAIA_SKILL_AUTOLOAD", raising=False)
+    # The skill budget's window, pinned: the real one depends on this machine.
+    monkeypatch.setattr(
+        skill_budget, "resolve_skill_window", lambda _agent: (window, "test")
+    )
     agent = GaiaAgent.__new__(GaiaAgent)
     agent.config = GaiaAgentConfig(**config)
     agent._skill_catalog_enabled = catalog
@@ -90,8 +96,8 @@ class _Suggester:
         )
 
 
-def _wired(monkeypatch, names, *, memory_store=object(), auto=()):
-    agent = _agent(monkeypatch)
+def _wired(monkeypatch, names, *, memory_store=object(), auto=(), window=200_000):
+    agent = _agent(monkeypatch, window=window)
     agent.skill_suggester = _Suggester(names, auto)
     agent._memory_store = memory_store
     agent._loaded_skills = {"coding": SimpleNamespace(name="coding")}
@@ -242,9 +248,9 @@ def _full_skill(name, body="x" * 400, permissions=()):
     )
 
 
-def _loading(monkeypatch, auto, *, names=(), library=None, fail=None):
+def _loading(monkeypatch, auto, *, names=(), library=None, fail=None, window=200_000):
     """An agent whose suggester auto-loads *auto* and whose load_skill works."""
-    agent = _wired(monkeypatch, list(names), auto=auto)
+    agent = _wired(monkeypatch, list(names), auto=auto, window=window)
     agent._loaded_skills = {}
     library = library or {}
     for name in [*auto, *names]:
@@ -312,7 +318,7 @@ def test_a_skill_that_grants_a_cli_is_suggested_not_loaded(monkeypatch):
 
 
 def test_the_body_budget_stops_an_auto_load(monkeypatch):
-    budget = GaiaAgent.SKILL_AUTOLOAD_BODY_TOKENS
+    budget = SKILL_BUDGET_CEILING
     library = {
         "big": _full_skill("big", body="x" * (budget * 4 - 400)),
         "small": _full_skill("small", body="x" * 800),
@@ -325,7 +331,7 @@ def test_the_body_budget_stops_an_auto_load(monkeypatch):
 
 
 def test_bodies_already_loaded_count_against_the_budget(monkeypatch):
-    budget = GaiaAgent.SKILL_AUTOLOAD_BODY_TOKENS
+    budget = SKILL_BUDGET_CEILING
     agent = _loading(monkeypatch, ["summarize"])
     agent._loaded_skills["coding"] = _full_skill("coding", body="x" * budget * 4)
     _with_turn_context(monkeypatch, agent, "sum this up")
@@ -385,3 +391,52 @@ def test_a_real_suggester_auto_loads_at_most_two(monkeypatch):
     assert agent.loads == ["alpha", "beta"]
     assert "Loaded alpha and beta because they match" in context
     assert "not loaded yet: gamma —" in context
+
+
+def test_a_64k_window_auto_loads_one_skill_per_turn(monkeypatch):
+    library = {
+        "alpha": _full_skill("alpha", body="x" * 800),
+        "beta": _full_skill("beta", body="x" * 800),
+    }
+    agent = _loading(monkeypatch, ["alpha", "beta"], library=library, window=65_536)
+    context = _with_turn_context(monkeypatch, agent, "do both")
+    assert agent.loads == ["alpha"]
+    assert "Loaded alpha because it matches" in context
+    assert "not loaded yet: beta —" in context
+
+
+def test_a_200k_window_still_auto_loads_two(monkeypatch):
+    library = {
+        "alpha": _full_skill("alpha", body="x" * 800),
+        "beta": _full_skill("beta", body="x" * 800),
+    }
+    agent = _loading(monkeypatch, ["alpha", "beta"], library=library, window=200_000)
+    _with_turn_context(monkeypatch, agent, "do both")
+    assert agent.loads == ["alpha", "beta"]
+
+
+@pytest.mark.parametrize("window", [16_384, 65_536])
+def test_a_small_window_budget_stops_a_body_the_ceiling_allows(monkeypatch, window):
+    budget = skill_body_budget(window)
+    assert budget < SKILL_BUDGET_CEILING
+    library = {"big": _full_skill("big", body="x" * (budget + 200) * 4)}
+    agent = _loading(monkeypatch, ["big"], library=library, window=window)
+    context = _with_turn_context(monkeypatch, agent, "do the big thing")
+    assert agent.loads == []
+    assert "not loaded yet: big —" in context
+
+
+def test_the_flagship_scales_skills_to_its_context_window():
+    assert GaiaAgent.SKILL_CONTEXT_BUDGET is True
+    assert Agent.SKILL_CONTEXT_BUDGET is False
+
+
+def test_relevance_is_dropped_on_a_turn_selection_does_not_score(monkeypatch):
+    agent = _agent(monkeypatch)
+    agent.skill_loader = SimpleNamespace(
+        last_scores={"coding": 0.9}, session_disabled=False
+    )
+    assert agent._skill_relevance() == {"coding": 0.9}
+    agent._memory_store = None  # selection off this turn
+    assert agent._select_skills_for_turn("anything") is None
+    assert agent._skill_relevance() == {}

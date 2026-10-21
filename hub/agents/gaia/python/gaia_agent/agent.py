@@ -385,6 +385,12 @@ class GaiaAgent(
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
+    # Loaded skill bodies share ~5% of the model's window, and on a 64K-or-
+    # smaller window only fully shown skills send their own tools: on a 64K
+    # local model, two or three skills plus their tools took each request from
+    # ~23K to ~40K tokens and instruction following dropped.
+    SKILL_CONTEXT_BUDGET: ClassVar[bool] = True
+
     # Declared, not acquired: the user consents once via `gaia connectors`, and
     # nothing here reaches a mailbox until an email tool is actually called.
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = list(
@@ -599,13 +605,6 @@ class GaiaAgent(
             ),
         )
 
-    #: Most tokens (4 chars each) the bodies of all loaded skills may add up to
-    #: for an auto-load to go ahead. Two of the largest hub skills (~2.8K
-    #: each) fit; a local model's 32K window also holds the ~7.7K-token system
-    #: prompt and the conversation. Counts every loaded body, not only this
-    #: turn's active ones: with the embedder down, all of them render.
-    SKILL_AUTOLOAD_BODY_TOKENS: ClassVar[int] = 6000
-
     def _select_skill_matches_for_turn(self, user_input: str) -> SkillMatches:
         """Unloaded catalogue skills that clearly match *user_input*.
 
@@ -634,20 +633,27 @@ class GaiaAgent(
         never loaded, when it was auto-loaded earlier this session and has
         since been unloaded, when it would grant a command-line program (that
         grant lets the shell run it without a prompt, so the model has to ask
-        for it), when its body would push the loaded bodies past
-        :attr:`SKILL_AUTOLOAD_BODY_TOKENS`, or when loading it fails — logged
-        as a warning, and the model's own ``load_skill`` call then reports why.
+        for it), when its body would push the loaded bodies past the model's
+        skill body budget (every loaded body counts: with the embedder down,
+        all of them render), when a small window already auto-loaded its one
+        skill this turn (see :mod:`gaia.agents.base.skill_budget`), or when
+        loading it fails — logged as a warning, and the model's own
+        ``load_skill`` call then reports why.
         """
         if not names:
             return [], []
-        from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
+        from gaia.agents.base.skill_budget import (
+            SMALL_WINDOW_AUTOLOADS,
+            body_tokens,
+            is_small_window,
+            window_budget,
+        )
         from gaia.skills.binaries import binary_permissions
         from gaia.skills.errors import SkillError
 
-        used = sum(
-            estimate_prompt_tokens(skill.body or "")
-            for skill in self.loaded_skills.values()
-        )
+        window, _source, budget = window_budget(self)
+        most = SMALL_WINDOW_AUTOLOADS if is_small_window(window) else len(names)
+        used = sum(body_tokens(skill) for skill in self.loaded_skills.values())
         done = getattr(self, "_autoloaded_skills", None)
         if done is None:
             done = self._autoloaded_skills = set()
@@ -655,6 +661,16 @@ class GaiaAgent(
         left: List[str] = []
         for name in names:
             if name in self.loaded_skills:
+                continue
+            if len(loaded) >= most:
+                logger.debug(
+                    "[skills] suggesting '%s' instead of auto-loading it: a "
+                    "%d-token window auto-loads %d skill per turn",
+                    name,
+                    window,
+                    most,
+                )
+                left.append(name)
                 continue
             if name in done:
                 # Auto-loaded once and since unloaded: the model or user chose
@@ -678,15 +694,17 @@ class GaiaAgent(
                 )
                 left.append(name)
                 continue
-            cost = estimate_prompt_tokens(skill.body or "")
-            if used + cost > self.SKILL_AUTOLOAD_BODY_TOKENS:
+            cost = body_tokens(skill)
+            if used + cost > budget:
                 logger.info(
                     "[skills] suggesting '%s' instead of auto-loading it: its "
-                    "~%d-token body would bring loaded skills to ~%d of %d tokens",
+                    "~%d-token body would bring loaded skills to ~%d of %d tokens "
+                    "(window %s)",
                     name,
                     cost,
                     used + cost,
-                    self.SKILL_AUTOLOAD_BODY_TOKENS,
+                    budget,
+                    window,
                 )
                 left.append(name)
                 continue
@@ -821,11 +839,23 @@ class GaiaAgent(
         matches on the prior turn's context, not just its own few words.
         """
         if not self._dynamic_skills_active():
+            if self.skill_loader is not None:
+                # No scores this turn: an earlier turn's must not rank bodies.
+                self.skill_loader.last_scores = {}
             return None
         query = self._build_tool_selection_query(user_input)
         return self.skill_loader.select(
             query, self.loaded_skills, always_on=self._always_on_skill_names
         )
+
+    def _skill_relevance(self) -> dict:
+        """This turn's score per loaded skill, which ranks bodies over budget.
+
+        Empty when selection is off or did not score this turn; the budget
+        then ranks by explicit loads and load order alone.
+        """
+        loader = getattr(self, "skill_loader", None)
+        return dict(loader.last_scores) if loader is not None else {}
 
     def select_skill_set(self) -> Optional[str]:
         """Resolve which declared skill set to load at startup.

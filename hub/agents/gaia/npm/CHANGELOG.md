@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Skills fit the model's context window.** On a 64K local model, two or
+  three loaded skills and their tools took each request from ~23K to ~40K
+  tokens and the model followed its instructions less well. Loaded skill
+  bodies now share 5% of the window (1,000 to 6,000 tokens: ~3,300 at 64K,
+  6,000 at 120K and up). Over that, the skill loaded most recently or most
+  relevant to the request is shown in full and the rest as one line each,
+  with how to bring one back. On a 64K window or smaller, at most one skill
+  auto-loads per turn and only fully shown skills send their own tools.
+  Large windows keep two auto-loads and every tool.
 - **A skill that clearly fits the request loads before the turn.** Local models
   often ignored the "skills that match this request" line, so a deck built from
   documents loaded `office-docs` but not `report-from-sources`. A match scoring

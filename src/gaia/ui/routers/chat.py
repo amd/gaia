@@ -736,6 +736,8 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
                 else "Measured once GAIA has answered in this chat."
             ),
         }
+    from gaia.agents.base.skill_budget import skill_budget_report
+
     from ..turn_insights import (
         context_categories,
         context_state,
@@ -751,6 +753,7 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
         usage["tool_loading"] = tools_by_load(agent)
         usage["model"] = getattr(agent, "model_id", None)
         usage["context_state"] = context_state(agent)
+        usage["skill_budget"] = skill_budget_report(agent)
         return usage
 
     return {"available": True, **(await asyncio.to_thread(_measure))}

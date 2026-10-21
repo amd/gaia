@@ -192,6 +192,7 @@ class TurnRecorder:
         tool_schemas: Optional[List[Dict[str, Any]]],
         tool_names: Optional[List[str]] = None,
         skills_active: Optional[List[str]] = None,
+        skill_budget: Optional[Dict[str, Any]] = None,
         history_messages: int = 0,
         path: Optional[Path] = None,
         started: Optional[float] = None,
@@ -224,6 +225,9 @@ class TurnRecorder:
             "tools_sent": len(tool_schemas) if tool_schemas else 0,
             "tool_names": list(tool_names or []),
             "skills_active": list(skills_active or []),
+            # Which loaded skills showed in full, which were summarized to fit
+            # the model's window, and the budget that decided it.
+            "skill_budget": skill_budget,
             "history_messages": history_messages,
             "token_estimator": tok.name,
             # Which system prompt went out, and how big each mixin's part of it

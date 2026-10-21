@@ -275,7 +275,9 @@ When a skill is selected — by the model calling `load_skill`, or by the user
 asking for it — the `SKILL.md` Markdown body is
 injected and the skill's declared `tools` are registered into the agent's tool
 registry. A loaded body does not stay resident forever: it collapses to a
-one-line menu entry on turns that no longer relate to it.
+one-line menu entry on turns that no longer relate to it, and on a small model
+the bodies that do relate share a budget sized to its context window (see
+[Context budget](#context-budget)).
 </Step>
 <Step title="Resources (on demand)">
 Files the body references (scripts, reference docs, templates) load only when the
@@ -533,8 +535,9 @@ are in the system prompt.
 ```
 
 - **When.** A matched skill scoring at least **0.55**, when the best such skill
-  leads every other skill, loaded or not, by **0.03**. At most two per turn;
-  further matches stay suggestions.
+  leads every other skill, loaded or not, by **0.03**. At most two per turn,
+  and one on a model with a 64K window or smaller; further matches stay
+  suggestions.
 - **Calibration.** On the 71 requests: 11 skills auto-loaded on 10 requests,
   none outside a request's labels (precision 1.00) and none on any of the 26
   negatives, for recall 0.21. The highest negative scores 0.524 (*"how does RSS
@@ -544,7 +547,8 @@ are in the system prompt.
   earlier in the session and since unloaded; one that would grant a
   command-line program (`shell:execute:<binary>`), since that grant runs its
   allowed subcommands without a prompt; and one whose body would bring the
-  loaded skill bodies past ~6,000 tokens. These stay suggestions. A load that
+  loaded skill bodies past the model's [context budget](#context-budget)
+  (6,000 tokens at most, ~3,300 on a 64K model). These stay suggestions. A load that
   fails is logged as a warning and stays a suggestion too.
 - **No embedder, no auto-load.** It runs on the same scores as suggestions.
 
@@ -553,6 +557,59 @@ Turn it off with `GAIA_SKILL_AUTOLOAD=0` or
 `GaiaAgentConfig(skill_autoload=False)`, keeping suggestions;
 `skill_autoload_threshold` sets the floor. It is on by default because it
 loaded nothing wrong on the labelled set; turning suggestions off turns it off.
+
+### Context budget
+
+A skill body that helps a 200K-context cloud model can crowd a 64K local model
+out of its own instructions. On one such model, loading two or three skills
+with their tools took each request from about 23K to 40K tokens, and the
+model followed its instructions less well. So the flagship agent sizes what
+skills put in the prompt to the model's context window. Other agents opt in
+with `SKILL_CONTEXT_BUDGET = True`.
+
+| Window | Skill body budget | Auto-loads per turn | Tools of skills not shown in full |
+|---|---|---|---|
+| 16K | 1,000 tokens (the floor) | 1 | not sent |
+| 32K | ~1,600 tokens | 1 | not sent |
+| 64K | ~3,300 tokens | 1 | not sent |
+| 120K and up, or Claude (200K) | 6,000 tokens (the ceiling) | 2 | sent, as before |
+
+- **Budget.** 5% of the window, between 1,000 and 6,000 tokens. The window is
+  the one the conversation history is sized from. A Lemonade cloud model is
+  admitted at 64K by policy, not by its own window, so it uses the window
+  Lemonade's catalogue lists for it, or the 6,000-token ceiling when the
+  catalogue lists none. The window is read once per model, so the budget does
+  not move from turn to turn.
+- **Which bodies show in full.** When the bodies selected for a turn exceed
+  the budget, they are ranked: skills loaded since the last turn began (by
+  the model, the user, or auto-load), most recent first; then this turn's
+  relevance score; then the most recently loaded. The first is always shown
+  in full, whatever it costs. Each later one is shown in full if it still
+  fits, and otherwise as one line under its own heading:
+
+  ```
+  ==== LOADED SKILLS (summarized to fit this model's context — call
+  load_skill('<name>') again for one's full instructions, or read just the
+  references/<file> you need) ====
+  - data-explore: Explore a spreadsheet or CSV. References in
+    .../data-explore/references: charts.md, pivots.md
+  ```
+
+  Calling `load_skill` on a summarized skill shows it in full straight away,
+  summarizing another if it has to.
+- **Tools.** On a 64K window or smaller, the tools a loaded skill provides
+  (its `tools.py`, registered as `<skill>/<tool>`) are only sent while its
+  body is shown in full. They stay registered, so a call still runs, and
+  `load_skill` sends them again with the body. On any window, a summarized
+  skill's `tools_required` no longer pull their tools into the turn, as for a
+  skill hidden as irrelevant. This narrows the dynamic tool
+  list only: with `GAIA_DYNAMIC_TOOLS=0` every registered tool is sent, as
+  before.
+- **Diagnostics.** Each decision is logged at debug level under `[skills]`.
+  The turn's result and its `GAIA_TURN_LOG` record carry `skill_budget` —
+  the window and where it came from, the budget, the bodies shown in full and
+  summarized, the tokens they take, the withheld tools, and the auto-load
+  limit — and the Agent UI's context endpoint reports the same.
 
 ## Learned changes: the effective skill vs. the shipped one
 
