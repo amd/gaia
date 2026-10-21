@@ -56,6 +56,7 @@ DEFERRED: dict[str, str] = {
     "report-from-sources": "Needs a mixed-period source corpus and a rubric that opens the saved file.",
     "research-report": "Requires live web search; non-deterministic ground truth.",
     "rss-digest": "Requires live feeds; non-deterministic ground truth.",
+    "slide-decks": "Needs a rubric that opens the saved .pptx; tests/unit/slide_decks covers the engine end to end.",
     "source-watch": "Requires live web fetch and stored state across runs.",
     "transcribe-meeting": "Requires audio input; belongs with the audio tests.",
 }

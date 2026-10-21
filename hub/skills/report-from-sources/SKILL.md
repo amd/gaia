@@ -12,6 +12,7 @@ metadata:
       - run_python
     pairs_with:
       - office-docs
+      - slide-decks
       - data-explore
     provenance:
       source: starter-pack
@@ -22,7 +23,8 @@ metadata:
 A deliverable can read well and still be wrong by omission: it skips the count
 of failures the source led with, drops the "down 8% from last year", or charts
 last year's file when this year's sat beside it. This skill is the order of
-work that prevents that. Use it together with whatever builds the file.
+work that prevents that. Use it together with whatever builds the file: for a
+deck, `slide-decks` builds and checks the .pptx from the ledger.
 
 ## 1. Inventory the inputs
 

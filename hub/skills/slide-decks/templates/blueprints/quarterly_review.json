@@ -1,0 +1,145 @@
+{
+  "name": "quarterly_review",
+  "aliases": [
+    "qbr",
+    "business_review",
+    "monthly_review",
+    "performance_review"
+  ],
+  "title": "Quarterly / business review",
+  "description": "Periodic performance review (QBR, monthly or annual business review): results against plan and prior periods, drivers, risks, next steps.",
+  "default_slides": 12,
+  "min_slides": 1,
+  "max_slides": 24,
+  "one_slide": "exec_summary",
+  "storyline": "Answer first: the exec summary states the 3-5 takeaways; each later section proves one. Every chart compares against plan or the prior period and names its source and period.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Team or company> <period> review",
+      "guidance": "Title, subtitle with the period, presenter and date."
+    },
+    {
+      "id": "agenda",
+      "type": "agenda",
+      "priority": 4,
+      "title": "Agenda",
+      "guidance": "The section names, in order.",
+      "min_deck": 8
+    },
+    {
+      "id": "exec_summary",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<The period's headline result as a sentence>",
+      "guidance": "3-5 takeaways, one per later section, each with its number and change ('Revenue $12.4M, +12% vs Q2').",
+      "kind": "executive_summary"
+    },
+    {
+      "id": "kpis",
+      "type": "kpi",
+      "priority": 2,
+      "title": "<What the headline metrics say>",
+      "guidance": "1-4 headline metrics with the change vs the prior period; source and period on the slide."
+    },
+    {
+      "id": "section_results",
+      "type": "section",
+      "priority": 6,
+      "title": "Results",
+      "guidance": "Section divider.",
+      "min_deck": 11
+    },
+    {
+      "id": "trend",
+      "type": "chart",
+      "priority": 2,
+      "title": "<How the key metric moved over the periods>",
+      "guidance": "One metric over 4-8 periods (line for many periods, columns for few); the title states the change; highlight the series that carries the message.",
+      "repeat": 6,
+      "grow": 1.0,
+      "spec": {
+        "chart_type": "auto",
+        "intent": "trend"
+      }
+    },
+    {
+      "id": "breakdown",
+      "type": "chart",
+      "priority": 3,
+      "title": "<Which segment drove the change>",
+      "guidance": "The metric by region/product/segment, bars sorted largest first.",
+      "repeat": 3,
+      "grow": 2.0,
+      "spec": {
+        "chart_type": "bar",
+        "intent": "ranking"
+      }
+    },
+    {
+      "id": "variance",
+      "type": "table",
+      "priority": 3,
+      "title": "<Where results beat or missed plan>",
+      "guidance": "Plan vs actual vs variance per line item; at most ~7 rows x 5 columns; numbers right-aligned."
+    },
+    {
+      "id": "section_outlook",
+      "type": "section",
+      "priority": 6,
+      "title": "Outlook",
+      "guidance": "Section divider.",
+      "min_deck": 11
+    },
+    {
+      "id": "risks",
+      "type": "two_column",
+      "priority": 3,
+      "title": "<The risks that could change the outlook>",
+      "guidance": "Left: risks with likelihood/impact; right: mitigation and owner.",
+      "merge_into": "exec_summary"
+    },
+    {
+      "id": "outlook",
+      "type": "bullets",
+      "priority": 4,
+      "title": "<What we expect next period and why>",
+      "guidance": "Forecast or targets for the next period, with the assumption behind each.",
+      "merge_into": "exec_summary"
+    },
+    {
+      "id": "next_steps",
+      "type": "table",
+      "title": "Next steps: who does what by when",
+      "guidance": "Columns Action | Owner | Due. One row per commitment; a named owner and a date on every row.",
+      "spec": {
+        "columns": [
+          "Action",
+          "Owner",
+          "Due"
+        ]
+      },
+      "priority": 2
+    },
+    {
+      "id": "appendix",
+      "type": "section",
+      "priority": 7,
+      "title": "Appendix",
+      "guidance": "Section divider before the backup slides.",
+      "min_deck": 14
+    },
+    {
+      "id": "appendix_detail",
+      "type": "table",
+      "priority": 7,
+      "title": "<Supporting detail>",
+      "guidance": "Full tables the main slides summarised.",
+      "repeat": 4,
+      "grow": 1.0,
+      "min_deck": 14
+    }
+  ]
+}

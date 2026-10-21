@@ -30,8 +30,8 @@ metadata:
 
 # RSS Digest
 
-The pack's one **tool-providing** skill. Every other starter skill is a
-procedure over tools the agent already has; this one ships its own code in
+The pack's smallest **tool-providing** skill. Most starter skills are
+procedures over tools the agent already has; this one ships its own code in
 `tools.py` and registers it as `rss-digest/fetch_rss`.
 
 It exists to show the shape: a manifest entry per `@tool` function, matching the
