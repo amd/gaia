@@ -15,8 +15,8 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
