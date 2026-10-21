@@ -1056,13 +1056,8 @@ def _memory_view(
         )
     elif model_id:
         # Unknown KV cost: weights plus the shared margin, from Lemonade's size.
-        size = next(
-            (
-                m.get("size_gb")
-                for m in _list_models(LOCAL, offer_optional=False)
-                if m["id"] == model_id
-            ),
-            None,
+        size = (_listed(_list_models(LOCAL, offer_optional=False), model_id) or {}).get(
+            "size_gb"
         )
         if isinstance(size, (int, float)) and size > 0:
             model_gb = required_memory_gb(size)
