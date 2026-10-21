@@ -138,6 +138,7 @@ def test_the_jobs_run_in_order_and_only_on_a_packaged_bump(jobs):
     assert upload["id"] == "upload"
     assert upload["if"] == "steps.package.outputs.ready == 'true'"
     assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["include-hidden-files"] is False
     assert jobs["verify"]["needs"] == "bump"
     assert jobs["verify"]["if"] == f"success() && {READY}"
     assert sorted(jobs["proposals"]["needs"]) == ["bump", "verify"]
@@ -369,6 +370,23 @@ def test_a_finished_bump_is_packaged_as_a_diff(main_repo, tmp_path):
     patch = read(out / "bump.patch")
     assert f'+LEMONADE_VERSION = "{TARGET}"' in patch
     assert "pytest.ini" not in patch, "an untracked file must not travel"
+
+
+def test_a_symlinked_proposal_is_refused(main_repo, tmp_path):
+    base = _commit_bump(main_repo)
+    secret = tmp_path / "secret.txt"
+    write(secret, "not a proposal\n")
+    link = tmp_path / "proposals" / "1.md"
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(secret)
+    except OSError:
+        pytest.skip("this machine cannot create symlinks")
+    result, outputs, out = _package(main_repo, base, tmp_path, "summary")
+    assert result.returncode != 0
+    assert "may hold only 1.md and 2.md" in result.stdout
+    assert "ready=true" not in outputs
+    assert not (out / "proposals" / "1.md").exists()
 
 
 @pytest.mark.parametrize("extra", ["3.md", "notes.txt", ".hidden"])
@@ -699,6 +717,9 @@ def test_publish_pushes_only_to_the_bump_branch_of_the_verified_target(
     create = next(c for c in calls if c[:2] == ["pr", "create"])
     assert create[create.index("--head") + 1] == f"deps/lemonade-{TARGET}"
     assert create[create.index("--base") + 1] == "main"
+    labels = [create[i + 1] for i, arg in enumerate(create) if arg == "--label"]
+    assert labels == ["dependencies", "lemonade 🍋"]
+    assert create[create.index("--reviewer") + 1] == "kovtcharov-amd,itomek-amd"
     message = git(main_repo, "log", "-1", "--format=%s").strip()
     assert message == f"chore(deps): bump Lemonade Server to v{TARGET}"
 

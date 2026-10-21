@@ -14,8 +14,9 @@ The patch may only modify these files, and only like this:
   the target's four embeddable archives.
 - ``src/gaia/installer/lemonade_installer.py``: ``INSTALLER_SHA256``, pinning
   exactly the target's five installers, and ``LEGACY_MSI_SHA256``, which keeps
-  every existing pin, gains the outgoing version's two MSIs with the digests
-  main pinned for them, and gains nothing but MSIs of releases before the target.
+  every existing pin and gains exactly the two MSIs of the outgoing version
+  (with the digests main pinned for them) and of each release appended to the
+  tag list before the target, matched as text.
 - ``tests/fixtures/lemonade/release_tags.txt``: newer tags appended in order,
   ending at the target.
 - The target itself must be newer than main's ``LEMONADE_VERSION``.
@@ -75,9 +76,6 @@ DOC_RULES = "util/check_doc_versions.py"
 DOC_PATH = re.compile(r"(?:docs|cpp|tui|\.claude)/(?:[^/]+/)*[^/]+\.mdx?")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-LEGACY_KEY = re.compile(
-    r"v([0-9]+\.[0-9]+\.[0-9]+)/(?:lemonade|lemonade-server-minimal)\.msi"
-)
 ADDED_TAGS = re.compile(r"(?:v[0-9]+\.[0-9]+\.[0-9]+\n)+")
 CHANGEABLE_LINE = re.compile(
     r' {4}"[A-Za-z0-9._/-]+": "[0-9a-f]{64}",|LEMONADE_VERSION = "[0-9]+\.[0-9]+\.[0-9]+"'
@@ -223,7 +221,10 @@ def _changed_lines(old: list, new: list) -> list:
     return changed
 
 
-def check_python(path: str, old: bytes, new: bytes, current: str, target: str) -> None:
+def check_python(
+    path: str, old: bytes, new: bytes, current: str, target: str, skipped: list
+) -> None:
+    """*skipped*: the releases appended to the tag list before the target."""
     for line in _changed_lines(
         _text(old, path).split("\n"), _text(new, path).split("\n")
     ):
@@ -251,22 +252,24 @@ def check_python(path: str, old: bytes, new: bytes, current: str, target: str) -
             kept = _literal_pins(old_values[name], path, name)
             if list(pins.items())[: len(kept)] != list(kept.items()):
                 raise BumpRejected(f"{path}: {name} may only gain entries at its end")
-            for key in list(pins)[len(kept) :]:
-                match = LEGACY_KEY.fullmatch(key)
-                if not (
-                    match
-                    and _as_tuple(current) <= _as_tuple(match[1]) < _as_tuple(target)
-                ):
-                    raise BumpRejected(
-                        f"{path}: {name} may only gain the MSIs of releases from "
-                        f"{current} up to {target}, not {key}"
-                    )
+            # Exactly the MSIs of the outgoing release and of each skipped one, as text.
+            gained = set(list(pins)[len(kept) :])
+            expected = {
+                key.format(v=version)
+                for version in [current, *skipped]
+                for key in OUTGOING_LEGACY_PINS
+            }
+            if gained != expected:
+                raise BumpRejected(
+                    f"{path}: {name} must gain exactly {sorted(expected)}, "
+                    f"not {sorted(gained)}"
+                )
             # Moved, not re-pinned: the digests main already verified for the outgoing MSIs.
             was_installed = _literal_pins(
                 old_values["INSTALLER_SHA256"], path, "INSTALLER_SHA256"
             )
             for key in sorted(k.format(v=current) for k in OUTGOING_LEGACY_PINS):
-                if pins.get(key) is None or pins[key] != was_installed.get(key):
+                if pins[key] != was_installed.get(key):  # present: checked above
                     raise BumpRejected(
                         f"{path}: {name} must keep the outgoing {key} with the digest "
                         "INSTALLER_SHA256 pinned on main"
@@ -324,9 +327,16 @@ def check_doc(path: str, old: str, new: str, current: str, target: str, rules) -
 
 
 def _as_tuple(version: str) -> tuple:
+    """*version* as numbers; it must already be in canonical X.Y.Z form."""
     if not VERSION.fullmatch(version):
         raise BumpRejected(f"{version!r} is not a version")
-    return tuple(int(part) for part in version.split("."))
+    try:
+        parts = tuple(int(part) for part in version.split("."))
+    except ValueError as e:  # Past Python's int-from-string digit limit.
+        raise BumpRejected(f"{version[:40]!r}... is not a version") from e
+    if ".".join(str(part) for part in parts) != version:
+        raise BumpRejected(f"{version!r} is not a version: no leading zeros")
+    return parts
 
 
 def current_version(repo: Path) -> str:
@@ -360,13 +370,18 @@ def check_and_apply(repo: Path, patch: Path, target: str) -> list:
         raise BumpRejected(
             f"the applied patch touched {sorted(set(staged) ^ set(paths))}"
         )
+    # Tags first: the legacy pins may gain the MSIs of exactly the releases appended.
+    old_tags = _text(_git_bytes(repo, "show", f"HEAD:{RELEASE_TAGS}"), RELEASE_TAGS)
+    new_tags = _text(_git_bytes(repo, "show", f":{RELEASE_TAGS}"), RELEASE_TAGS)
+    check_release_tags(old_tags, new_tags, current, target)
+    skipped = [tag[1:] for tag in new_tags[len(old_tags) :].split()[:-1]]
     for path in paths:
         old = _git_bytes(repo, "show", f"HEAD:{path}")
         new = _git_bytes(repo, "show", f":{path}")
         if path in PIN_ASSIGNMENTS:
-            check_python(path, old, new, current, target)
+            check_python(path, old, new, current, target, skipped)
         elif path == RELEASE_TAGS:
-            check_release_tags(_text(old, path), _text(new, path), current, target)
+            continue
         else:
             check_doc(path, _text(old, path), _text(new, path), current, target, rules)
     return paths

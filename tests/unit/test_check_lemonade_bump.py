@@ -24,6 +24,7 @@ from tests.fixtures.lemonade_bump import (
     REPO_ROOT,
     TAGS,
     TARGET,
+    digest,
     edit,
     git,
     git_bytes,
@@ -81,6 +82,11 @@ def _without_outgoing_legacy(repo: Path) -> None:
 def _repinned_outgoing_legacy(repo: Path) -> None:
     key = f"v{CURRENT}/lemonade.msi"
     edit(repo, INSTALLER, f'"{key}": "{OUTGOING[key]}"', f'"{key}": "{"c" * 64}"')
+
+
+def _gain_legacy(repo: Path, *keys: str) -> None:
+    lines = "".join(f'    "{key}": "{"b" * 64}",\n' for key in keys)
+    edit(repo, INSTALLER, ADDED_LEGACY, ADDED_LEGACY + lines)
 
 
 ADDED_LEGACY = (
@@ -143,7 +149,7 @@ MALICIOUS = {
     ),
     "the outgoing MSIs left out of the legacy pins": (
         _without_outgoing_legacy,
-        "LEGACY_MSI_SHA256 must keep the outgoing",
+        "LEGACY_MSI_SHA256 must gain exactly",
     ),
     "a legacy pin for an unknown file": (
         lambda r: edit(
@@ -152,7 +158,7 @@ MALICIOUS = {
             ADDED_LEGACY,
             ADDED_LEGACY + f'    "zzz/evil.msi": "{"b" * 64}",\n',
         ),
-        "LEGACY_MSI_SHA256 may only gain the MSIs of releases from",
+        "LEGACY_MSI_SHA256 must gain exactly",
     ),
     "a legacy pin for the target itself": (
         lambda r: edit(
@@ -161,7 +167,41 @@ MALICIOUS = {
             ADDED_LEGACY,
             ADDED_LEGACY + f'    "v{TARGET}/lemonade.msi": "{"b" * 64}",\n',
         ),
-        "LEGACY_MSI_SHA256 may only gain the MSIs of releases from",
+        "LEGACY_MSI_SHA256 must gain exactly",
+    ),
+    "another asset of the outgoing release in the legacy pins": (
+        lambda r: _gain_legacy(r, f"v{CURRENT}/evil.exe"),
+        "LEGACY_MSI_SHA256 must gain exactly",
+    ),
+    "MSIs of a release that was never appended": (
+        lambda r: _gain_legacy(
+            r, "v2026.43.0/lemonade.msi", "v2026.43.0/lemonade-server-minimal.msi"
+        ),
+        "LEGACY_MSI_SHA256 must gain exactly",
+    ),
+    "MSIs of a release written with a leading zero": (
+        lambda r: _gain_legacy(r, "v2026.042.1/lemonade.msi"),
+        "LEGACY_MSI_SHA256 must gain exactly",
+    ),
+    "an MSI key with a suffix": (
+        lambda r: _gain_legacy(r, f"v{CURRENT}/lemonade.msi.bak"),
+        "LEGACY_MSI_SHA256 must gain exactly",
+    ),
+    "MSIs of a release older than the current one": (
+        lambda r: _gain_legacy(r, "v2026.30.0/lemonade.msi"),
+        "LEGACY_MSI_SHA256 must gain exactly",
+    ),
+    "a first appended tag equal to the current release": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v{CURRENT}\nv{TARGET}\n"),
+        "must gain releases newer than",
+    ),
+    "an appended tag older than the current release": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v2026.40.0\nv{TARGET}\n"),
+        "must gain releases newer than",
+    ),
+    "an appended tag with a leading zero": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v2026.042.5\nv{TARGET}\n"),
+        "'2026.042.5' is not a version: no leading zeros",
     ),
     "an older tag after the target": (
         lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v{TARGET}\nv1.0.0\n"),
@@ -203,6 +243,16 @@ MALICIOUS = {
             "src/gaia/version.py",
             "# Copyright",
             "# -*- coding: utf-7 -*-\n# Copyright",
+        ),
+        "changes a line that is not a pin",
+    ),
+    "a pin key written with an escape": (
+        # Decodes to the exact expected key, so only the line check can see it.
+        lambda r: edit(
+            r,
+            INSTALLER,
+            f'    "v{TARGET}/lemonade.msi": ',
+            f'    "\\u0076{TARGET}/lemonade.msi": ',
         ),
         "changes a line that is not a pin",
     ),
@@ -417,6 +467,49 @@ def test_a_target_in_non_ascii_digits_is_rejected(main_repo, tmp_path):
     assert "is not a version" in result.stderr
 
 
+SKIPPED = ("2026.42.5", "2026.43.0")
+
+
+def test_a_bump_past_skipped_releases_is_applied(main_repo, tmp_path):
+    """Releases GAIA never pinned get their tags and MSIs along with the target."""
+    honest_bump(main_repo, skipped=SKIPPED)
+    result = run_checker(main_repo, patch_from(main_repo, tmp_path))
+    assert result.returncode == 0, result.stderr
+    installer = read(main_repo / INSTALLER)
+    for version in SKIPPED:
+        assert f'"v{version}/lemonade.msi"' in installer
+    tags = git(main_repo, "show", f":{TAGS}")
+    assert tags.endswith(f"v{CURRENT}\nv2026.42.5\nv2026.43.0\nv{TARGET}\n")
+
+
+def test_a_skipped_release_without_its_msis_is_rejected(main_repo, tmp_path):
+    honest_bump(main_repo, skipped=SKIPPED)
+    key = "v2026.43.0/lemonade.msi"
+    edit(main_repo, INSTALLER, f'    "{key}": "{digest(key)}",\n', "")
+    result = run_checker(main_repo, patch_from(main_repo, tmp_path))
+    assert result.returncode == 1
+    assert "LEGACY_MSI_SHA256 must gain exactly" in result.stderr
+
+
+def test_a_target_with_a_leading_zero_is_rejected(main_repo, tmp_path):
+    honest_bump(main_repo)
+    edit(main_repo, "src/gaia/version.py", f'"{TARGET}"', '"2026.043.1"')
+    result = run_checker(
+        main_repo, patch_from(main_repo, tmp_path), target="2026.043.1"
+    )
+    assert result.returncode == 1
+    assert "'2026.043.1' is not a version: no leading zeros" in result.stderr
+
+
+def test_a_target_too_long_to_parse_is_rejected_not_crashed(main_repo, tmp_path):
+    honest_bump(main_repo)
+    target = "1." + "9" * 5000 + ".0"
+    result = run_checker(main_repo, patch_from(main_repo, tmp_path), target=target)
+    assert result.returncode == 1
+    assert "Rejected the Lemonade bump patch" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 @pytest.mark.parametrize("target", [CURRENT, "2026.40.0", "2026.9.9"])
 def test_a_target_that_is_not_newer_is_rejected(main_repo, tmp_path, target):
     """A forced downgrade or re-bump must stop here, not only in main's tests."""
@@ -469,8 +562,9 @@ def test_a_pin_assignment_that_disappears_is_refused(checker):
         checker._pin_values(b"OTHER = 1\n", "src/gaia/version.py")
 
 
-def test_a_digest_must_be_sha256_even_on_a_pin_line(checker):
-    node = __import__("ast").parse('{"k": "' + "z" * 64 + '"}', mode="eval").body
+@pytest.mark.parametrize("value", ["z" * 64, "A" * 64, "a" * 63])
+def test_a_digest_must_be_sha256_even_on_a_pin_line(checker, value):
+    node = __import__("ast").parse('{"k": "' + value + '"}', mode="eval").body
     with pytest.raises(checker.BumpRejected, match="SHA-256"):
         checker._literal_pins(node, INSTALLER, "INSTALLER_SHA256")
 

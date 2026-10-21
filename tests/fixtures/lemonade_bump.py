@@ -144,8 +144,12 @@ def outgoing_pins(installer_text: str) -> dict:
     return found
 
 
-def honest_bump(repo: Path) -> None:
-    """What a correct bump from CURRENT to TARGET changes, and nothing else."""
+def honest_bump(repo: Path, skipped: tuple = ()) -> None:
+    """What a correct bump from CURRENT to TARGET changes, and nothing else.
+
+    *skipped* are releases between the two that GAIA never pinned: their tags
+    are appended before TARGET's, and their MSIs join the legacy pins.
+    """
     edit(repo, "src/gaia/version.py", f'"{CURRENT}"', f'"{TARGET}"')
     outgoing = outgoing_pins(read(repo / INSTALLER))
     installer = replace_block(
@@ -158,6 +162,11 @@ def honest_bump(repo: Path) -> None:
     installer = (
         installer[:legacy_end]
         + "".join(f'    "{key}": "{value}",\n' for key, value in outgoing.items())
+        + "".join(
+            f'    "v{version}/{name}": "{digest(f"v{version}/{name}")}",\n'
+            for version in skipped
+            for name in ("lemonade-server-minimal.msi", "lemonade.msi")
+        )
         + installer[legacy_end:]
     )
     write(repo / INSTALLER, installer)
@@ -173,7 +182,8 @@ def honest_bump(repo: Path) -> None:
             ),
         ),
     )
-    edit(repo, TAGS, f"v{CURRENT}\n", f"v{CURRENT}\nv{TARGET}\n")
+    appended = "".join(f"v{version}\n" for version in skipped)
+    edit(repo, TAGS, f"v{CURRENT}\n", f"v{CURRENT}\n{appended}v{TARGET}\n")
     edit(
         repo,
         "docs/install.mdx",
