@@ -132,6 +132,22 @@ class IndexingStopped(Exception):
     """
 
 
+def _stop_behind(error: BaseException) -> Optional[Exception]:
+    """The stop *error* was raised from, if any.
+
+    A stop (:class:`IndexingStopped`, or :class:`LeaseWaitCancelled` from a
+    cancelled model-slot wait) can be wrapped by the client on the way out.
+    """
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
+            return current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
+
+
 # The running index_document's ``heartbeat`` on this thread, called once per
 # extracted page, so a long extraction shows progress and can be stopped.
 _HEARTBEAT = threading.local()
@@ -691,6 +707,9 @@ class RAGSDK:
             except EmbeddingUnavailableError:
                 raise
             except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
 
     def _start_embedder(self):
@@ -850,6 +869,9 @@ class RAGSDK:
             try:
                 response = self._request_embeddings(batch_texts, wait_callback)
             except Exception as e:  # noqa: BLE001 — classified, then re-raised
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 if "physical batch size" in str(e) and not reloaded:
                     self.log.warning(
                         f"   ⚠️  Batch {batch_num}: the embedder was reloaded with a "
