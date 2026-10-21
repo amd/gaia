@@ -345,7 +345,7 @@ class TestJourney:
 def server():
     fake._lemonade_version = "1.2.3"
     fake._loaded.clear()
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+    httpd = fake.LoopbackServer(("127.0.0.1", 0), fake.Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()

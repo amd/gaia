@@ -27,6 +27,7 @@ import hashlib
 import json
 import math
 import re
+import socketserver
 import sys
 import threading
 import time
@@ -86,6 +87,21 @@ def _embedding(text: str) -> List[float]:
     ]
     norm = math.sqrt(sum(v * v for v in raw)) or 1.0
     return [v / norm for v in raw]
+
+
+class LoopbackServer(ThreadingHTTPServer):
+    """HTTPServer without the reverse-DNS lookup in server_bind.
+
+    The stock server_bind calls socket.getfqdn(), which stalls for seconds on
+    hosted macOS runners -- long enough that the journey gave up waiting for
+    the port file. A loopback test server has no use for its own FQDN.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -348,7 +364,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for m_id in args.model:
         _remember(m_id)
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = LoopbackServer((args.host, args.port), Handler)
     port = server.server_address[1]
     if args.port_file:
         Path(args.port_file).write_text(str(port), encoding="utf-8")

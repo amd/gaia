@@ -136,11 +136,17 @@ function Tui-Exe {
     return "$tuiDir\gaia-tui.exe"
 }
 
-function Check-TuiVersion([string]$Expected) {
+# A release stamps gaia-tui in two spellings today: the raw binaries say the
+# tag (v0.25.1-rc2), the setup's copy the package version (0.25.1-rc.2).
+# Either names this release.
+function Check-TuiVersion([string[]]$Expected) {
     $out = & (Tui-Exe) version 2>&1 | Out-String
     Write-Host "gaia-tui version -> $out"
     if ($LASTEXITCODE -ne 0) { Fail "gaia-tui version exited $LASTEXITCODE" }
-    if ($Expected -and $out -notmatch [regex]::Escape($Expected)) { Fail "gaia-tui reports '$out', expected $Expected" }
+    $want = @($Expected | Where-Object { $_ })
+    if ($want.Count -and -not ($want | Where-Object { $out -match [regex]::Escape($_) })) {
+        Fail "gaia-tui reports '$out', expected $($want -join ' or ')"
+    }
 }
 
 # ── The Agent UI ──────────────────────────────────────────────────────────────
@@ -207,7 +213,7 @@ function Start-Fake {
     $p = Start-Process -FilePath $python -ArgumentList $fakeArgs `
         -PassThru -RedirectStandardOutput "$logs\fake-server.out" -RedirectStandardError "$logs\fake-server.err"
     Set-Content -Path "$work\fake.pid" -Value $p.Id
-    for ($i = 0; $i -lt 50 -and -not (Test-Path "$work\fake.port"); $i++) { Start-Sleep -Milliseconds 200 }
+    for ($i = 0; $i -lt 150 -and -not (Test-Path "$work\fake.port"); $i++) { Start-Sleep -Milliseconds 200 }
     if (-not (Test-Path "$work\fake.port")) { Get-Content "$logs\fake-server.err"; Fail 'the fake model server did not start' }
     return "http://127.0.0.1:$((Get-Content "$work\fake.port").Trim())/api/v1"
 }
@@ -382,11 +388,11 @@ switch ($Step) {
     'launch' {
         if (Wants 'ui') { Start-AgentUi }
         if (Wants 'tui') {
-            Check-TuiVersion $(if ($env:KIND -eq 'install-ps1') { '' } else { $tuiVersion })
+            if ($env:KIND -eq 'install-ps1') { Check-TuiVersion @() } else { Check-TuiVersion @($tuiVersion, $version) }
             if ($env:KIND -eq 'install-ps1') {
                 & "$gaiaHome\venv\Scripts\gaia.exe" --version
                 if (Select-String -Path "$repo\installer\scripts\install.ps1" -Pattern 'GAIA_RELEASE_TAG' -Quiet) {
-                    Check-TuiVersion $tuiVersion
+                    Check-TuiVersion @($tuiVersion, $version)
                     $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
                     if ($got -notmatch [regex]::Escape($pep440)) { Fail "install.ps1 was asked for $($rel.tag) but installed $got" }
                 }
@@ -418,8 +424,18 @@ switch ($Step) {
     'uninstall' {
         if ($env:KIND -eq 'install-ps1') {
             $env:USERPROFILE = $userHome; $env:HOME = $userHome
+            # Who holds files in the venv when the uninstall starts: a file a
+            # running process has loaded cannot be deleted on Windows.
+            $holders = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$gaiaHome\*" -or $_.CommandLine -like "*$gaiaHome*" }
+            Write-Host '--- processes using the GAIA home before uninstall ---'
+            $holders | ForEach-Object { "  $($_.ProcessId) $($_.CommandLine)" }
             & "$gaiaHome\venv\Scripts\gaia.exe" uninstall --purge --yes
-            if ($LASTEXITCODE -ne 0) { Fail "gaia uninstall --purge exited $LASTEXITCODE" }
+            $rc = $LASTEXITCODE
+            if ($rc -ne 0) {
+                Write-Host '--- and after it ---'
+                Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$gaiaHome\*" } | ForEach-Object { "  $($_.ProcessId) $($_.CommandLine)" }
+                Fail "gaia uninstall --purge exited $rc"
+            }
         } else {
             Uninstall-Tui
             Uninstall-Ui

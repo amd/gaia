@@ -63,6 +63,7 @@ rel() { json_get "${RELEASE_JSON}" "$1"; }
 asset_name() { rel "d['assets'].get('$1') or ''"; }
 asset_url() { local n; n="$(asset_name "$1")"; [ -n "$n" ] || die "the release carries no $1"; rel "d['urls']['$n']"; }
 PEP440="$(rel "d['pep440']")"
+VERSION="$(rel "d['version']")"
 TUI_VERSION="$(rel "d['tui_version']")"
 
 fetch() {  # fetch <url> <dest>
@@ -107,7 +108,7 @@ start_fake() {
     --model user.embeddinggemma-300m-GGUF --model Qwen3.6-35B-A3B-GGUF \
     >"${LOGS}/fake-server.log" 2>&1 &
   echo $! >"${WORK}/fake.pid"
-  for _ in $(seq 1 50); do [ -s "${WORK}/fake.port" ] && break; sleep 0.2; done
+  for _ in $(seq 1 150); do [ -s "${WORK}/fake.port" ] && break; sleep 0.2; done
   [ -s "${WORK}/fake.port" ] || { cat "${LOGS}/fake-server.log"; die "the fake model server did not start"; }
   FAKE_URL="http://127.0.0.1:$(cat "${WORK}/fake.port")/api/v1"
 }
@@ -131,11 +132,16 @@ tui_bin() {
   esac
 }
 
-check_tui_version() {  # check_tui_version <expected substring>
-  local out
+# A release stamps gaia-tui in two spellings today: the raw binaries say the
+# tag (v0.25.1-rc2), the installers' copies the package version (0.25.1-rc.2).
+check_tui_version() {  # check_tui_version <expected substring>...
+  local out want
   out="$(target "$(tui_bin)" version 2>&1)" || die "gaia-tui version exited non-zero: ${out}"
   echo "gaia-tui version -> ${out}"
-  case "${out}" in *"$1"*) ;; *) die "gaia-tui reports '${out}', expected $1" ;; esac
+  for want in "$@"; do
+    case "${out}" in *"${want}"*) return 0 ;; esac
+  done
+  die "gaia-tui reports '${out}', expected one of: $*"
 }
 
 # One real non-interactive turn: gaia-tui spawns the installed gaia-agent, which
@@ -343,7 +349,7 @@ install)
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deb}"
       for b in gaia-tui gaia-agent; do [ -x "/usr/bin/${b}" ] || die "${b} did not land in /usr/bin"; done
       if [ "${KIND}" = "tui-deb-upgrade" ]; then
-        check_tui_version "$(rel "d['prev_tui_version']")"
+        check_tui_version "$(rel "d['prev_tui_version']")" "$(rel "d['prev_version']")"
         mkdir -p "${GAIA_HOME}"
         date +%s%N >"${GAIA_HOME}/headless-upgrade-marker"
         cp "${GAIA_HOME}/headless-upgrade-marker" "${WORK}/marker.expected"
@@ -377,7 +383,7 @@ install)
 upgrade)
   [ "${KIND}" = "tui-deb-upgrade" ] || die "no upgrade for ${KIND}"
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$(package_file tui-deb)"
-  check_tui_version "${TUI_VERSION}"
+  check_tui_version "${TUI_VERSION}" "${VERSION}"
   cmp -s "${WORK}/marker.expected" "${GAIA_HOME}/headless-upgrade-marker" \
     || die "the upgrade lost or changed ${GAIA_HOME}/headless-upgrade-marker"
   echo "marker survived the upgrade"
@@ -390,12 +396,12 @@ launch)
       check_tui_version ""
       "${GAIA_HOME}/venv/bin/gaia" --version
       if script_pins_release; then
-        check_tui_version "${TUI_VERSION}"
+        check_tui_version "${TUI_VERSION}" "${VERSION}"
         "${GAIA_HOME}/venv/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
           || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/venv/bin/gaia" --version 2>&1)"
       fi
       ;;
-    *) check_tui_version "${TUI_VERSION}" ;;
+    *) check_tui_version "${TUI_VERSION}" "${VERSION}" ;;
   esac
   ;;
 

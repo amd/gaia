@@ -121,8 +121,8 @@ jobs:
         name: Pick the release and wait for its assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_INPUT: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || '' }}
-          WAIT: ${{ github.event_name == 'push' && '300' || '0' }}
+          TAG_INPUT: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || '' }}
+          WAIT: ${{ github.ref_type == 'tag' && '300' || '0' }}
         run: python installer/headless/resolve_release.py --tag "${TAG_INPUT}" --wait-minutes "${WAIT}" --out release.json
       - uses: actions/upload-artifact@v7
         with:
