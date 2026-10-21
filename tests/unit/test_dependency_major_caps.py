@@ -71,3 +71,37 @@ def test_every_declaration_excludes_the_breaking_major(
             f"{where} declares '{req}', which admits {package} {broken_major}. "
             f"That release removes APIs GAIA imports; add an upper bound below it."
         )
+
+
+_PLATFORM_ENVS = {
+    "darwin-x64": {"sys_platform": "darwin", "platform_machine": "x86_64"},
+    "darwin-arm64": {"sys_platform": "darwin", "platform_machine": "arm64"},
+    "linux-x64": {"sys_platform": "linux", "platform_machine": "x86_64"},
+    "linux-arm64": {"sys_platform": "linux", "platform_machine": "aarch64"},
+    "win-x64": {"sys_platform": "win32", "platform_machine": "AMD64"},
+}
+
+
+@pytest.mark.parametrize("platform", list(_PLATFORM_ENVS))
+@pytest.mark.parametrize("extra", ["[rag]", "[ui]"])
+def test_pymupdf_resolves_to_a_wheel_on_every_platform(
+    extra: str, platform: str
+) -> None:
+    """pymupdf 2.0 has no Intel-Mac wheel and its sdist fails to build there.
+
+    Each platform must get exactly one pymupdf requirement (RAG/PDF support is
+    never dropped), and only Intel Macs are held below 2.
+    """
+    env = _PLATFORM_ENVS[platform]
+    active = [
+        req
+        for where, req in _requirements("pymupdf")
+        if where == extra and (req.marker is None or req.marker.evaluate(env))
+    ]
+    assert len(active) == 1, f"{extra} on {platform}: active pymupdf reqs {active}"
+    admits_2 = active[0].specifier.contains(Version("2.0"))
+    assert admits_2 == (platform != "darwin-x64"), (
+        f"{extra} on {platform} declares '{active[0]}'; only darwin-x64 must "
+        "exclude pymupdf 2.x (no macOS x86_64 wheel)"
+    )
+    assert active[0].specifier.contains(Version("1.28.2"))
