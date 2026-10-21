@@ -50,7 +50,32 @@ import json
 import sys
 from pathlib import Path
 
-from gaia.eval.claude_usage import add_usage, empty_usage
+# Stdlib only: CI runs this file directly on a hosted runner with no gaia
+# install. Same fields as gaia.eval.claude_usage.USAGE_FIELDS (a test pins it).
+USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "calls",
+    "cost_usd",
+    "duration_api_ms",
+)
+
+
+def empty_usage() -> dict:
+    record: dict = {field: 0 for field in USAGE_FIELDS}
+    record["cost_usd"] = 0.0
+    return record
+
+
+def add_usage(total: dict, record) -> dict:
+    if not record:
+        return total
+    for field in USAGE_FIELDS:
+        total[field] = total.get(field, 0) + (record.get(field) or 0)
+    return total
+
 
 # A scenario counted here ran but produced no score, so it is an absence rather
 # than a result. Same list as the integrity gate's, and for the same reason:
