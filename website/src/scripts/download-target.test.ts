@@ -25,19 +25,19 @@ import {
   type PlatformKey,
 } from './download-target';
 
-// The version and the six filenames the hub is serving today, copied from
-// https://hub.amd-gaia.ai/agents/terminal-hub/manifest.json — that release
-// publishes NO installers, which is the "installer absent" case below.
+// The six raw terminal binaries as publish.yml attaches them to a release,
+// copied from the v0.25.0 GitHub release — which carries NO terminal
+// installers, the "installer absent" case below.
 const V = '0.23.0';
 const RAW_BINARIES = [
-  'gaia-linux-x64',
+  'gaia-linux-amd64',
   'gaia-linux-arm64',
-  'gaia-darwin-x64',
+  'gaia-darwin-amd64',
   'gaia-darwin-arm64',
-  'gaia-win-x64.exe',
-  'gaia-win-arm64.exe',
+  'gaia-windows-amd64.exe',
+  'gaia-windows-arm64.exe',
 ];
-// What release_components.yml publishes alongside them from this branch on.
+// What release_components.yml attaches alongside them.
 const INSTALLER_FILES = [
   'gaia-0.23.0-win-x64-setup.exe',
   'gaia-0.23.0-darwin-arm64.pkg',
@@ -48,8 +48,7 @@ const INSTALLER_FILES = [
 // The order Downloads.astro renders, shared by both surfaces.
 const ORDER = PLATFORM_ORDER;
 
-// The desktop app's version and its three artifacts, copied from
-// https://hub.amd-gaia.ai/agents/agent-ui/manifest.json. Three, not six.
+// The desktop app's version and its three builds the site offers. Three, not six.
 const DV = '0.24.1';
 const DESKTOP_FILES = [
   'gaia-agent-ui-0.24.1-x64-setup.exe',
@@ -171,18 +170,24 @@ describe('resolveTargets', () => {
 });
 
 describe('artifactFileName', () => {
-  // These are the exact filenames release_components.yml publishes; a wrong one
-  // is not a build failure anywhere, it is a 404 on the visitor's click.
-  it('matches the hub binary filenames, .exe on Windows only', () => {
-    expect(artifactFileName('win-x64', V)).toBe('gaia-win-x64.exe');
-    expect(artifactFileName('win-arm64', V)).toBe('gaia-win-arm64.exe');
+  // The exact asset names the release carries; a wrong one is not a build
+  // failure anywhere, it is a missing button.
+  it("matches the release's binary names, in Go's os/arch spelling", () => {
+    expect(artifactFileName('win-x64', V)).toBe('gaia-windows-amd64.exe');
+    expect(artifactFileName('win-arm64', V)).toBe('gaia-windows-arm64.exe');
+    expect(artifactFileName('darwin-x64', V)).toBe('gaia-darwin-amd64');
     expect(artifactFileName('darwin-arm64', V)).toBe('gaia-darwin-arm64');
-    expect(artifactFileName('linux-x64', V)).toBe('gaia-linux-x64');
+    expect(artifactFileName('linux-x64', V)).toBe('gaia-linux-amd64');
+    expect(artifactFileName('linux-arm64', V)).toBe('gaia-linux-arm64');
+  });
+
+  it('names a binary for every platform, and only those six', () => {
+    expect(ORDER.map((p) => artifactFileName(p, V)).sort()).toEqual([...RAW_BINARIES].sort());
   });
 
   // The raw binaries are published version-less; only the installers carry it.
   it('ignores the version for the raw binaries', () => {
-    expect(artifactFileName('linux-x64', '9.9.9')).toBe('gaia-linux-x64');
+    expect(artifactFileName('linux-x64', '9.9.9')).toBe('gaia-linux-amd64');
   });
 
   it('matches the installer filenames, each in its own packaging convention', () => {
@@ -211,7 +216,7 @@ describe('artifactFileName', () => {
     // Distinct names, so no installer can shadow the raw binary of its platform.
     expect(byFilename.size).toBe(keys.length);
     expect(byFilename.get('gaia-0.23.0-win-x64-setup.exe')).toBe('win-x64-setup');
-    expect(byFilename.get('gaia-win-x64.exe')).toBe('win-x64');
+    expect(byFilename.get('gaia-windows-amd64.exe')).toBe('win-x64');
   });
 });
 
@@ -247,9 +252,9 @@ describe('INSTALLERS_FOR', () => {
   });
 });
 
-// What Downloads.astro does with a manifest: resolve each key to its exact
-// filename and look that up in what the hub published. Nothing is constructed
-// from a guess, so an unpublished key is simply absent.
+// What Downloads.astro does with a release: resolve each key to its exact
+// asset name and look that up in what the release carries. Nothing is
+// constructed from a guess, so an unpublished key is simply absent.
 const resolveRows = (filenames: string[], version: string) => {
   const published = new Set(filenames);
   return ORDER.map((platform) => ({
@@ -261,7 +266,7 @@ const resolveRows = (filenames: string[], version: string) => {
   }));
 };
 
-describe('resolving a manifest into download rows', () => {
+describe('resolving a release into download rows', () => {
   it('promotes the installer and keeps the binary when both are published', () => {
     const rows = resolveRows([...RAW_BINARIES, ...INSTALLER_FILES], V);
     const win = rows.find((r) => r.platform === 'win-x64')!;
@@ -281,17 +286,17 @@ describe('resolving a manifest into download rows', () => {
     }
   });
 
-  // The live state today: 0.23.0 publishes only the six raw binaries. That is a
-  // legitimate release, not an error — the page renders as it did before.
+  // The v0.25.0 GitHub release carries only the six raw binaries. That is a
+  // legitimate release, not an error — the terminal card offers the binaries.
   it('renders every platform from binaries alone when no installer is published', () => {
     const rows = resolveRows(RAW_BINARIES, V);
     expect(rows.every((r) => r.binary)).toBe(true);
     expect(rows.every((r) => r.installers.length === 0)).toBe(true);
   });
 
-  // A release whose installer jobs partly failed still publishes the rest. The
+  // A release whose installer jobs partly failed still carries the rest. The
   // page shows what exists rather than a link to a file that was never uploaded.
-  it('drops only the installers the hub did not publish', () => {
+  it('drops only the installers the release does not carry', () => {
     const rows = resolveRows(
       [...RAW_BINARIES, artifactFileName('linux-x64-deb', V)],
       V
@@ -302,9 +307,9 @@ describe('resolving a manifest into download rows', () => {
     expect(rows.find((r) => r.platform === 'win-x64')!.installers).toEqual([]);
   });
 
-  // The version in an installer filename is the manifest's, never a hardcoded
-  // one — a stale version resolves to a name the hub never published.
-  it('finds nothing when the manifest version does not match the filenames', () => {
+  // The version in an installer filename is the release's, never a hardcoded
+  // one — a stale version resolves to a name the release does not carry.
+  it('finds nothing when the release version does not match the filenames', () => {
     const rows = resolveRows([...RAW_BINARIES, ...INSTALLER_FILES], '0.24.0');
     expect(rows.every((r) => r.installers.length === 0)).toBe(true);
     expect(rows.every((r) => r.binary)).toBe(true);
@@ -334,10 +339,10 @@ describe('PLATFORM_ORDER', () => {
 });
 
 describe('desktopArtifactFileName', () => {
-  // The exact three the hub serves at 0.24.1. Each follows its own platform's
+  // The exact three a release carries. Each follows its own platform's
   // packaging convention (NSIS, dmg, AppImage), not one house style, so a
   // "tidied up" name here is a 404 on the visitor's click.
-  it('matches the desktop app filenames the hub published', () => {
+  it('matches the desktop app asset names', () => {
     expect(desktopArtifactFileName('win-x64', DV)).toBe('gaia-agent-ui-0.24.1-x64-setup.exe');
     expect(desktopArtifactFileName('darwin-arm64', DV)).toBe('gaia-agent-ui-0.24.1-arm64.dmg');
     expect(desktopArtifactFileName('linux-x64', DV)).toBe(
@@ -345,14 +350,14 @@ describe('desktopArtifactFileName', () => {
     );
   });
 
-  it('resolves every name to an artifact the manifest actually lists', () => {
+  it('resolves every name to an asset the release actually carries', () => {
     const published = new Set(DESKTOP_FILES);
     for (const platform of DESKTOP_PLATFORMS) {
       expect(published.has(desktopArtifactFileName(platform, DV)!)).toBe(true);
     }
   });
 
-  // Not pending, absent: the app's manifest declares three platforms. Returning
+  // Not pending, absent: the app builds for three platforms. Returning
   // a name here would render a button pointing at a file that was never built.
   it('returns null for the three platforms with no desktop build', () => {
     expect(desktopArtifactFileName('win-arm64', DV)).toBeNull();
@@ -360,9 +365,9 @@ describe('desktopArtifactFileName', () => {
     expect(desktopArtifactFileName('linux-arm64', DV)).toBeNull();
   });
 
-  it('takes the version from the manifest rather than a hardcoded one', () => {
+  it('takes the version from the release rather than a hardcoded one', () => {
     expect(desktopArtifactFileName('win-x64', '9.9.9')).toBe('gaia-agent-ui-9.9.9-x64-setup.exe');
-    // A stale version resolves to a name the hub never published, so the row is
+    // A stale version resolves to a name the release does not carry, so the row is
     // dropped — the same fail-to-absent the terminal installers rely on.
     const published = new Set(DESKTOP_FILES);
     expect(published.has(desktopArtifactFileName('win-x64', '0.24.0')!)).toBe(false);
@@ -446,7 +451,7 @@ describe('offering the desktop app to a machine', () => {
 });
 
 // The Windows setup kept the terminal-only setup's filename, so only the version
-// says which one the hub is serving. 0.24.1 is the last terminal-only one.
+// says which one the release carries. 0.24.1 is the last terminal-only one.
 describe('windowsSetupOffersChoice', () => {
   it('starts at 0.25.0', () => {
     expect(WINDOWS_SETUP_SINCE).toBe('0.25.0');

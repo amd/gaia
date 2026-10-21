@@ -196,8 +196,11 @@ describe('the drift guard runs on every tree it reads', () => {
     // A scan that matches nothing would pass every case below vacuously.
     expect(reads, 'the cross-tree scan found nothing — did new URL(…) reads move?').not.toEqual([]);
     expect(reads, 'a new cross-tree read belongs here AND in website-ci.yml paths').toEqual([
+      '.github/workflows/build_tui.yml',
+      '.github/workflows/release_components.yml',
       '.github/workflows/website-ci.yml',
       'docs/spec/gaia-design-language.mdx',
+      'installer/tui/artifacts.py',
       'src/gaia/apps/webui/src/styles/index.css',
       'tui/internal/ui/theme/theme.go',
     ]);

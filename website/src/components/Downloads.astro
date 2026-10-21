@@ -27,14 +27,14 @@
 // so a Windows visitor gets that one setup instead of two cards to choose
 // between. Until a release publishes it, Windows renders as before.
 //
-// No link is invented here. A key resolves to an exact filename, that filename
-// has to match an artifact the hub published, and the href is that artifact's
-// `url` — the hub origin joined to the object `path` the manifest itself
-// declares (see getComponentRelease). A platform the hub has not published for
-// is therefore absent rather than a dead link.
+// Every link is an asset of the newest stable GitHub release, so GitHub's
+// per-asset download_count counts the site's downloads. No link is invented: a
+// key resolves to an exact asset name, that name has to be on the release, and
+// the href is that asset's own browser_download_url. A platform the release
+// carries no asset for is therefore absent rather than a dead link.
 
 import SurfacePreview from './SurfacePreview.astro';
-import { formatBytes, getComponentRelease, type PlatformBinary } from '../data/catalog';
+import { formatBytes, getStableRelease, type ReleaseAsset } from '../data/github';
 import {
   DESKTOP_DOWNLOAD_LABELS,
   DESKTOP_MISSING_PLATFORMS,
@@ -58,61 +58,63 @@ interface Props {
 
 const { class: className = '' } = Astro.props;
 
-const [desktop, tui] = await Promise.all([
-  getComponentRelease('agent-ui'),
-  getComponentRelease('terminal-hub'),
-]);
+const release = await getStableRelease();
+const { version } = release;
 
-// Key -> exact filename -> the artifact the hub actually published. The reverse
-// direction does not work: the manifest records no platform field, so deriving
-// one from a filename that carries a version silently drops artifacts.
-const publishedBy = (binaries: PlatformBinary[]) => {
-  const byFilename = new Map(binaries.map((b) => [b.filename, b]));
-  return (filename: string | null) => (filename ? byFilename.get(filename) : undefined);
-};
-
-const desktopPublished = publishedBy(desktop.binaries);
-const tuiPublished = publishedBy(tui.binaries);
+// Key -> exact asset name -> the asset the release actually carries. The reverse
+// direction does not work: a release also carries wheels, blockmaps and
+// checksum files, and deriving a platform from a name that carries a version
+// silently drops assets.
+const byName = new Map(release.assets.map((a) => [a.name, a]));
+const published = (name: string | null) => (name ? byName.get(name) : undefined);
 
 const desktopRows = DESKTOP_PLATFORMS.flatMap((platform) => {
-  const artifact = desktopPublished(desktopArtifactFileName(platform, desktop.version));
+  const artifact = published(desktopArtifactFileName(platform, version));
   return artifact ? [{ platform, artifact }] : [];
 });
 
-// A single platform missing is a coverage decision the page renders around.
-// ALL of them missing is not: the manifest has artifacts (getComponentRelease
-// throws otherwise), so the naming convention drifted and the desktop card
-// would quietly render with no download at all.
-if (!desktopRows.length) {
-  throw new Error(
-    `[downloads] The 'agent-ui' manifest publishes ${desktop.binaries.length} artifacts at ` +
-      `${desktop.version}, none of which match a known desktop filename ` +
-      `(${DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, desktop.version)).join(', ')}). ` +
-      `Update DESKTOP_FILENAMES in src/scripts/download-target.ts to what the hub now publishes.`,
-  );
-}
-
 interface TuiRow {
   platform: PlatformKey;
-  binary: PlatformBinary | undefined;
-  installers: { key: InstallerKey; artifact: PlatformBinary }[];
+  binary: ReleaseAsset | undefined;
+  installers: { key: InstallerKey; artifact: ReleaseAsset }[];
 }
 
 const tuiRow = (platform: PlatformKey): TuiRow => ({
   platform,
-  binary: tuiPublished(artifactFileName(platform, tui.version)),
+  binary: published(artifactFileName(platform, version)),
   installers: INSTALLERS_FOR[platform].flatMap((key) => {
-    const artifact = tuiPublished(artifactFileName(key as DownloadKey, tui.version));
+    const artifact = published(artifactFileName(key as DownloadKey, version));
     return artifact ? [{ key, artifact }] : [];
   }),
 });
 
 const tuiRows = PLATFORM_ORDER.map(tuiRow).filter((r) => r.binary || r.installers.length);
 
+// A single platform missing is a coverage decision the page renders around. A
+// whole card with nothing to offer is not: the asset names drifted (or this is
+// not the release it looks like), and the card would quietly render with no
+// download at all.
+if (!desktopRows.length) {
+  throw new Error(
+    `[downloads] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
+      `desktop app build (${DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, version)).join(', ')}). ` +
+      `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
+      `update DESKTOP_FILENAMES in src/scripts/download-target.ts.`,
+  );
+}
+if (!tuiRows.length) {
+  throw new Error(
+    `[downloads] ${release.tag} carries ${release.assets.length} assets, none of which is a ` +
+      `terminal build (${PLATFORM_ORDER.map((p) => artifactFileName(p, version)).join(', ')}). ` +
+      `Check https://github.com/amd/gaia/releases/tag/${release.tag}; if the names changed, ` +
+      `update BINARY_FILENAMES in src/scripts/download-target.ts.`,
+  );
+}
+
 // The setup that asks desktop app / terminal / both. Present only when the
 // published win-x64-setup is new enough to be that setup rather than the
 // terminal-only one earlier releases used the same filename for.
-const windowsSetup = windowsSetupOffersChoice(tui.version)
+const windowsSetup = windowsSetupOffersChoice(version)
   ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
   : undefined;
 
@@ -179,7 +181,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             <span>{INSTALLER_CTA_LABELS['win-x64-setup']}</span>
           </a>
           <p class="g-body mt-2.5 text-[13px]">
-            Installer (.exe) · v{tui.version} · {formatBytes(windowsSetup.size_bytes)}
+            Installer (.exe) · v{version} · {formatBytes(windowsSetup.sizeBytes)}
           </p>
         </div>
       </section>
@@ -215,8 +217,8 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
               <span>Download for {PLATFORM_LABELS[row.platform]}</span>
             </a>
             <p class="g-body mt-2.5 text-[13px]">
-              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{desktop.version} ·{' '}
-              {formatBytes(row.artifact.size_bytes)}
+              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{version} ·{' '}
+              {formatBytes(row.artifact.sizeBytes)}
             </p>
           </div>
         ))}
@@ -290,13 +292,13 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             once, a caption inside each would say the same thing twice. */}
         <p data-dl-note="installer" class="g-body mt-2.5 text-[13px]" hidden>
           Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
-          v{tui.version}.
+          v{version}.
         </p>
         <p data-dl-note="binary" class="g-body mt-2.5 text-[13px]" hidden>
           {anyInstaller
             ? 'No installer is published for this architecture, so this is the standalone binary — put it on your PATH yourself.'
             : 'The standalone binary — put it on your PATH and run gaia-tui.'}
-          {' '}v{tui.version}.
+          {' '}v{version}.
         </p>
       </div>
     </section>
@@ -312,7 +314,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     {windowsSetup && (
       <div class="mb-7">
         <div class="text-[13.5px] font-semibold text-g-text">
-          Windows · desktop app, terminal, or both · v{tui.version}
+          Windows · desktop app, terminal, or both · v{version}
         </div>
         <ul class="mt-1.5 space-y-1">
           <li>
@@ -323,7 +325,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             >
               <span class="text-g-accent-text" aria-hidden="true">↓</span>
               <span>
-                {PLATFORM_LABELS['win-x64']} — Installer (.exe) · {formatBytes(windowsSetup.size_bytes)}
+                {PLATFORM_LABELS['win-x64']} — Installer (.exe) · {formatBytes(windowsSetup.sizeBytes)}
               </span>
             </a>
           </li>
@@ -334,7 +336,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     <div class="grid gap-x-10 gap-y-7 sm:grid-cols-2">
       <div>
         <div class="text-[13.5px] font-semibold text-g-text">
-          Desktop app · v{desktop.version}
+          Desktop app · v{version}
         </div>
         <ul class="mt-1.5 space-y-1">
           {desktopRows.map((row) => (
@@ -346,7 +348,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
                 <span class="text-g-accent-text" aria-hidden="true">↓</span>
                 <span>
                   {PLATFORM_LABELS[row.platform]} — {desktopListLabel(row.platform)} ·{' '}
-                  {formatBytes(row.artifact.size_bytes)}
+                  {formatBytes(row.artifact.sizeBytes)}
                 </span>
               </a>
             </li>
@@ -358,7 +360,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       </div>
 
       <div>
-        <div class="text-[13.5px] font-semibold text-g-text">Terminal · v{tui.version}</div>
+        <div class="text-[13.5px] font-semibold text-g-text">Terminal · v{version}</div>
         <ul class="mt-1.5 space-y-1">
           {tuiListRows.map((row) => (
             <li>

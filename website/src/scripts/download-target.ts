@@ -1,9 +1,9 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Which published download this visitor's machine can run, and what the hub
-// calls the file. Two surfaces ship: the terminal hub and the Agent UI desktop
-// app, and their platform coverage is NOT the same — see DESKTOP_PLATFORMS.
+// Which published download this visitor's machine can run, and what the GitHub
+// release calls the file. Two surfaces ship: the terminal hub and the Agent UI
+// desktop app, and their platform coverage is NOT the same — see DESKTOP_PLATFORMS.
 //
 // The terminal hub publishes six: {win,darwin,linux} x {x64,arm64}, so unlike a
 // single-architecture installer this has to resolve the ARCHITECTURE too, and
@@ -16,13 +16,12 @@
 
 export type Os = 'win' | 'darwin' | 'linux';
 export type Arch = 'x64' | 'arm64';
-/** Matches the hub's platform keys, e.g. `win-x64`. */
+/** A platform the site offers a download for, e.g. `win-x64`. */
 export type PlatformKey = `${Os}-${Arch}`;
 
 /**
- * The native installers, published under platform keys deliberately distinct
- * from the six raw ones so a hub install — which downloads the key matching the
- * machine — can never be handed a setup file where it expects a bare binary.
+ * The native installers, keyed by the hub publish keys that
+ * installer/tui/artifacts.py assigns — deliberately distinct from the six raw ones.
  */
 export type InstallerKey =
   | 'win-x64-setup'
@@ -222,9 +221,22 @@ export async function resolveTargets(nav: NavigatorLike): Promise<PlatformKey[]>
   return os === 'darwin' ? ['darwin-arm64', 'darwin-x64'] : [];
 }
 
-// The installer filenames, as the packaging scripts name them — each carries
-// the version, and each follows its own platform's convention rather than one
-// house style (dpkg and rpm both parse the name to get the version out).
+// The raw terminal binaries as publish.yml attaches them to the GitHub release:
+// build_tui.yml names them `gaia-<goos>-<goarch>`, so Go's names (windows,
+// amd64), not the site's keys (win, x64). Spelled out per key rather than
+// translated, so a key with no published name cannot produce one.
+const BINARY_FILENAMES: Record<PlatformKey, string> = {
+  'win-x64': 'gaia-windows-amd64.exe',
+  'win-arm64': 'gaia-windows-arm64.exe',
+  'darwin-x64': 'gaia-darwin-amd64',
+  'darwin-arm64': 'gaia-darwin-arm64',
+  'linux-x64': 'gaia-linux-amd64',
+  'linux-arm64': 'gaia-linux-arm64',
+};
+
+// The installer filenames, as installer/tui/artifacts.py names them — each
+// carries the version, and each follows its own platform's convention rather
+// than one house style (dpkg and rpm both parse the name to get the version out).
 const INSTALLER_FILENAMES: Record<InstallerKey, (version: string) => string> = {
   'win-x64-setup': (v) => `gaia-${v}-win-x64-setup.exe`,
   'darwin-arm64-pkg': (v) => `gaia-${v}-darwin-arm64.pkg`,
@@ -234,26 +246,27 @@ const INSTALLER_FILENAMES: Record<InstallerKey, (version: string) => string> = {
 };
 
 /**
- * The hub's artifact filename for a download key, e.g. `win-x64` ->
- * `gaia-win-x64.exe`, `win-x64-setup` -> `gaia-0.23.0-win-x64-setup.exe`.
+ * The GitHub release asset name for a download key, e.g. `win-x64` ->
+ * `gaia-windows-amd64.exe`, `win-x64-setup` -> `gaia-0.23.0-win-x64-setup.exe`.
  *
- * The site resolves key -> filename and looks that up in what the hub actually
- * published, never filename -> key: the manifest records no platform field, and
- * parsing it back out of a name that carries a version silently drops
- * artifacts. A key with no matching artifact is simply not published — the
- * caller renders what exists and invents nothing.
+ * The site resolves key -> asset name and looks that up in the assets the
+ * release actually carries, never asset name -> key: a release also carries
+ * wheels, blockmaps and checksum files, and parsing a platform back out of a
+ * name that carries a version silently drops assets. A key with no matching
+ * asset is simply not published — the caller renders what exists and invents
+ * nothing.
  */
 export function artifactFileName(key: DownloadKey, version: string): string {
   const installer = INSTALLER_FILENAMES[key as InstallerKey];
   if (installer) return installer(version);
-  return key.startsWith('win-') ? `gaia-${key}.exe` : `gaia-${key}`;
+  return BINARY_FILENAMES[key as PlatformKey];
 }
 
-// ---- The Agent UI desktop app (hub id `agent-ui`) ----
+// ---- The Agent UI desktop app ----
 
-// One artifact per platform, each named by its own platform's packaging
+// One asset per platform, each named by its own platform's packaging
 // convention rather than a house style — these are what electron-builder emits
-// and what the hub publishes, not a scheme this file chose.
+// and what publish.yml attaches to the release, not a scheme this file chose.
 const DESKTOP_FILENAMES: Partial<Record<PlatformKey, (version: string) => string>> = {
   'win-x64': (v) => `gaia-agent-ui-${v}-x64-setup.exe`,
   'darwin-arm64': (v) => `gaia-agent-ui-${v}-arm64.dmg`,
@@ -263,8 +276,8 @@ const DESKTOP_FILENAMES: Partial<Record<PlatformKey, (version: string) => string
 /**
  * The three platforms the desktop app builds for.
  *
- * Deliberately NOT the six the terminal hub covers. The app's manifest
- * declares win-x64, linux-x64 and darwin-arm64 and nothing else, so an Intel
+ * Deliberately NOT the six the terminal covers. The app builds for win-x64,
+ * linux-x64 and darwin-arm64 and nothing else, so an Intel
  * Mac, a Windows ARM64 machine and an ARM64 Linux box have no desktop build at
  * all. The site says that plainly — see DESKTOP_MISSING_PLATFORMS — instead of
  * showing an option that 404s or wording it as one that is on the way.
@@ -286,7 +299,7 @@ export const DESKTOP_DOWNLOAD_LABELS: Partial<Record<PlatformKey, string>> = {
 };
 
 /**
- * The desktop app's artifact filename for a platform, or null where it
+ * The desktop app's release asset name for a platform, or null where it
  * publishes none. Same key -> filename -> published-artifact direction as
  * artifactFileName: null here means the caller renders no desktop option,
  * never a constructed URL.

@@ -9,13 +9,14 @@
 
 The public homepage only shows numbers with a real, public source of truth:
 GitHub stars/forks/release-asset download counts, and npm registry downloads
-(`website/src/data/github.ts`). Those are honest but incomplete — the
-website's own install button (`TuiDownload`) downloads platform binaries from
-a Cloudflare R2 bucket via `workers/agent-hub`'s `serveObject`
+(`website/src/data/github.ts`). The website's download buttons link GitHub
+release assets, so those clicks are in the release-asset count. What is still
+missing is every install that never touches GitHub: `install.sh` /
+`install.ps1`, `gaia init` and `gaia hub install` fetch from a Cloudflare R2
+bucket via `workers/agent-hub`'s `serveObject`
 (`workers/agent-hub/src/index.ts`), which has **zero request tracking today**:
-no counter, no Analytics Engine binding, no Logpush. Most visitors install
-through that button, not through the GitHub releases page, so the public
-stats row necessarily understates real usage. Getting the real number
+no counter, no Analytics Engine binding, no Logpush. The public stats row
+therefore still understates real usage. Getting the real number
 requires new backend instrumentation and a place to view it — not just new
 homepage UI — so it's scoped as its own project rather than folded into the
 stats-row PR.
