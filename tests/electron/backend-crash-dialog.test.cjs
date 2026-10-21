@@ -11,6 +11,7 @@ const {
   showBackendCrashDialog,
   crashDetail,
   stripAnsi,
+  relaunchOptions,
 } = require("../../src/gaia/apps/webui/services/backend-crash-dialog.cjs");
 
 function fakes(responses) {
@@ -72,4 +73,16 @@ test("the log tail has no colour codes and the detail says what to do", () => {
   expect(detail).toMatch(/exit code 1/);
   expect(detail).toMatch(/Restart GAIA/);
   expect(crashDetail(null, "SIGKILL", [])).toMatch(/signal SIGKILL[\s\S]*nothing was logged/);
+});
+
+test("an AppImage restarts from the AppImage file, not its temporary mount", async () => {
+  const { dialog, app } = fakes([0]);
+  await showBackendCrashDialog({
+    ...base, dialog, app, writeDiagnostics: jest.fn(),
+    env: { APPIMAGE: "/home/u/GAIA.AppImage" },
+  });
+  expect(app.relaunch).toHaveBeenCalledWith(
+    expect.objectContaining({ execPath: "/home/u/GAIA.AppImage" })
+  );
+  expect(relaunchOptions({}, ["electron", "."])).toBeUndefined();
 });

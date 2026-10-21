@@ -31,6 +31,14 @@ function crashDetail(code, signal, tailLines) {
 }
 
 /**
+ * An AppImage runs from a mount that goes away when the app exits, so a
+ * relaunch must start the AppImage file itself, not process.execPath.
+ */
+function relaunchOptions(env = process.env, argv = process.argv) {
+  return env.APPIMAGE ? { execPath: env.APPIMAGE, args: argv.slice(1) } : undefined;
+}
+
+/**
  * Show the crash dialog until the user restarts or quits.
  *
  * @param {object} deps
@@ -38,9 +46,10 @@ function crashDetail(code, signal, tailLines) {
  * @param {object} deps.app Electron's app module
  * @param {() => Promise<string>} deps.writeDiagnostics resolves to the bundle path
  * @param {() => void} deps.beforeQuit called before app.quit(), e.g. to skip the quit guard
+ * @param {object} [deps.env] where an AppImage's own path is read from
  * @returns {Promise<"restart"|"quit">}
  */
-async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, writeDiagnostics, beforeQuit }) {
+async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, writeDiagnostics, beforeQuit, env = process.env }) {
   const detail = crashDetail(code, signal, tailLines);
   for (;;) {
     const { response } = await dialog.showMessageBox({
@@ -74,11 +83,11 @@ async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, wr
     }
 
     const choice = response === RESTART ? "restart" : "quit";
-    if (choice === "restart") app.relaunch();
+    if (choice === "restart") app.relaunch(relaunchOptions(env));
     if (beforeQuit) beforeQuit();
     app.quit();
     return choice;
   }
 }
 
-module.exports = { showBackendCrashDialog, crashDetail, stripAnsi };
+module.exports = { showBackendCrashDialog, crashDetail, stripAnsi, relaunchOptions };

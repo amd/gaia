@@ -366,7 +366,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
 
   // Copy/Open log return to the same dialog. "Install uv" is offered only
   // when uv is what failed; for any other stage it would just repeat Retry.
-  const uvFailed = stage === "ensure-uv" || stage === "uv";
+  const uvFailed = stage === "ensure-uv";
   const actions = [
     ...(uvFailed ? [["install-uv", "Install uv (auto)"]] : []),
     ["retry", "Retry"],
