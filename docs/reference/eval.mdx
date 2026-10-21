@@ -141,6 +141,22 @@ To measure a branch before it is tagged:
 gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch>
 ```
 
+A dispatch can run part of the suite. `categories` and `scenarios` take
+comma-separated ids, and blank means all. Only lanes holding a selected category
+get a machine, and the outcomes lane runs only when `categories` names `outcomes`.
+An unknown id fails the dispatch before anything reaches the lab pool:
+
+```bash
+gh workflow run eval_flagship.yml --repo amd/gaia --ref <branch> \
+  -f scenarios=empty_file,large_document
+```
+
+A targeted run is labelled as one in its summary, its lane artifacts and every
+scorecard (`config.scenario_filter`). Its comparison judges only the selected
+scenarios and lists the rest as not run. A dispatch also fails, whatever
+`enforce` says, when scenarios errored before Claude spent a token: the quota ran
+out, so re-dispatch those scenarios once it resets.
+
 A release candidate can skip the evals. Put `[skip eval]` in an annotated tag's message:
 
 ```bash
