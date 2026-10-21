@@ -317,3 +317,27 @@ export function desktopArtifactFileName(
 ): string | null {
   return DESKTOP_FILENAMES[platform]?.(version) ?? null;
 }
+
+/**
+ * Other packagings of the desktop app, offered under a platform's "more
+ * options" rather than as its main download. Linux's AppImage runs on any
+ * distro, so it leads; the .deb is for a visitor who wants the package manager.
+ */
+const DESKTOP_EXTRA_FILENAMES: Partial<
+  Record<PlatformKey, { label: string; name: (version: string) => string }[]>
+> = {
+  'linux-x64': [
+    { label: 'Desktop app (.deb — Debian, Ubuntu)', name: (v) => `gaia-agent-ui-${v}-amd64.deb` },
+  ],
+};
+
+/** The extra desktop packagings for a platform, as [label, asset name] pairs. */
+export function desktopExtraFileNames(
+  platform: PlatformKey,
+  version: string,
+): { label: string; name: string }[] {
+  return (DESKTOP_EXTRA_FILENAMES[platform] ?? []).map((e) => ({
+    label: e.label,
+    name: e.name(version),
+  }));
+}

@@ -22,11 +22,13 @@
 // download" and "no Intel build" together there), and a machine it cannot
 // place at all keeps the full list rather than guessing.
 //
-// Windows is the one exception to "pick a card": from WINDOWS_SETUP_SINCE the
-// Windows setup asks for the desktop app, the terminal, or both while it runs,
-// so a Windows x64 visitor gets that one setup as the only button, with the
-// single-app files folded under it. A release missing the setup gets no Windows
-// button at all -- never the desktop-only setup promoted in its place.
+// A machine JS can place gets one primary download at the top instead of two
+// cards to choose between, with that platform's other files folded under it:
+// the desktop app wherever it builds, the terminal app where it does not, and
+// on Windows x64 (from WINDOWS_SETUP_SINCE) the setup that installs the desktop
+// app, the terminal app, or both. A release missing a platform's primary file
+// gives that platform no primary button -- never another file promoted in its
+// place.
 //
 // Every link is an asset of the newest stable GitHub release, so GitHub's
 // per-asset download_count counts the site's downloads. No link is invented: a
@@ -48,6 +50,7 @@ import {
   PLATFORM_ORDER,
   artifactFileName,
   desktopArtifactFileName,
+  desktopExtraFileNames,
   windowsSetupOffersChoice,
   type DownloadKey,
   type InstallerKey,
@@ -121,10 +124,107 @@ const windowsSetup = windowsCombined
   ? tuiRow('win-x64').installers.find((i) => i.key === 'win-x64-setup')?.artifact
   : undefined;
 
-// The single-app files, offered only under the setup's "more options". Each is
-// shown when the release carries it; a missing one is just absent.
-const windowsDesktopOnly = published(desktopArtifactFileName('win-x64', version));
-const windowsTerminalOnly = published(artifactFileName('win-x64', version));
+// ---- The primary download, one per platform ----
+//
+// Each row is the one button a placed visitor sees, plus the files folded under
+// it. Every file is looked up on the release; a missing primary file drops the
+// row, and a missing option drops just that option.
+
+interface Choice {
+  asset: ReleaseAsset;
+  label: string;
+  note?: string;
+  command?: string;
+}
+
+interface PrimaryRow {
+  platform: PlatformKey;
+  // What the button installs: the Windows setup, the desktop app, or the terminal.
+  kind: 'setup' | 'desktop' | 'terminal';
+  asset: ReleaseAsset;
+  cta: string;
+  caption: string;
+  lede: string;
+  options: Choice[];
+}
+
+const BINARY_NOTE = 'A single file with no installer: put it on your PATH yourself.';
+
+const terminalChoices = (row: TuiRow): Choice[] => [
+  ...row.installers.map((i) => ({ asset: i.artifact, label: `Terminal app — ${DOWNLOAD_LABELS[i.key]}` })),
+  ...(row.binary
+    ? [{ asset: row.binary, label: `Terminal app — ${DOWNLOAD_LABELS[row.platform]}`, note: BINARY_NOTE }]
+    : []),
+];
+
+function primaryRow(platform: PlatformKey): PrimaryRow | null {
+  const label = PLATFORM_LABELS[platform];
+  const tui = tuiRow(platform);
+
+  if (platform === 'win-x64' && windowsCombined) {
+    if (!windowsSetup) return null;
+    const desktopOnly = published(desktopArtifactFileName(platform, version));
+    const options: Choice[] = [];
+    if (desktopOnly) {
+      options.push({
+        asset: desktopOnly,
+        label: 'Desktop app only (.exe)',
+        note: 'Installs just the desktop app. It downloads the GAIA agent the first time it runs.',
+      });
+    }
+    if (tui.binary) {
+      options.push({
+        asset: tui.binary,
+        label: 'Terminal app only (.exe)',
+        note: 'The terminal app as a single file, with no installer: put it on your PATH yourself. Or let PowerShell install it for you:',
+        command: WINDOWS_INSTALL_COMMAND,
+      });
+    }
+    return {
+      platform,
+      kind: 'setup',
+      asset: windowsSetup,
+      cta: INSTALLER_CTA_LABELS['win-x64-setup'],
+      caption: 'Installer (.exe)',
+      lede: 'One installer: it installs the desktop app, the terminal app, or both, and asks which while it runs. Both share the same local models.',
+      options,
+    };
+  }
+
+  const desktopName = desktopArtifactFileName(platform, version);
+  if (desktopName) {
+    const desktop = published(desktopName);
+    if (!desktop) return null;
+    const extras = desktopExtraFileNames(platform, version).flatMap(({ label: l, name }) => {
+      const asset = published(name);
+      return asset ? [{ asset, label: l }] : [];
+    });
+    return {
+      platform,
+      kind: 'desktop',
+      asset: desktop,
+      cta: `Download for ${label}`,
+      caption: `Desktop app — ${DESKTOP_DOWNLOAD_LABELS[platform]}`,
+      lede: 'The GAIA desktop app: chat, your documents and your files, with every step shown as it runs. The terminal app is under more options.',
+      options: [...extras, ...terminalChoices(tui)],
+    };
+  }
+
+  // No desktop build here: the terminal app is the primary download.
+  const [first, ...rest] = terminalChoices(tui);
+  if (!first) return null;
+  return {
+    platform,
+    kind: 'terminal',
+    asset: first.asset,
+    cta: `Download for ${label}`,
+    caption: first.label,
+    lede: `There is no desktop app for ${label}, so this is the GAIA terminal app.${first.note ? ` ${first.note}` : ''}`,
+    options: rest,
+  };
+}
+
+const primaryRows = PLATFORM_ORDER.flatMap((p) => primaryRow(p) ?? []);
 
 // Neither card offers Windows x64 a button: the setup is where that choice is
 // made, and a release without the setup offers no Windows button rather than a
@@ -161,82 +261,74 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       the page's own headings. */}
   <h2 class="sr-only">Get GAIA</h2>
 
-  {/* One setup for Windows. Revealed for a Windows x64 visitor, and then the
-      two cards below are hidden: the choice between them is made in the setup.
-      space-y-3 for the same reason as the card stacks below. */}
-  {windowsSetup && (
-    <div class="mx-auto w-full max-w-[720px] space-y-3 text-left">
-      <section
-        data-dl-cta
-        data-surface="setup"
-        data-kind="setup"
-        data-platform="win-x64"
-        class="g-card p-[26px]"
-        hidden
-      >
-        <div class="mb-5 grid gap-3 sm:grid-cols-2">
-          <SurfacePreview surface="agent-ui" alt="The GAIA desktop app answering a question about an employee handbook." />
-          <SurfacePreview surface="tui" alt="The GAIA terminal app writing a short Python function." />
+  {/* The primary download. Revealed with the block for this machine, and then
+      the two cards below are hidden: they would offer the same files again.
+      A plain wrapper carries `hidden` for the same reason as the cards. A Mac
+      whose architecture cannot be read reveals both Mac blocks, Apple Silicon
+      first; space-y-6 keeps them apart. */}
+  {primaryRows.length > 0 && (
+    <div data-dl-primary hidden>
+      <section class="g-card mx-auto w-full max-w-[720px] p-[26px] text-left">
+        <div data-dl-previews class="mb-5 grid gap-3 sm:grid-cols-2">
+          <div data-dl-preview="agent-ui">
+            <SurfacePreview surface="agent-ui" alt="The GAIA desktop app answering a question about an employee handbook." />
+          </div>
+          <div data-dl-preview="tui">
+            <SurfacePreview surface="tui" alt="The GAIA terminal app writing a short Python function." />
+          </div>
         </div>
-        <h3 class="g-h-card">GAIA for Windows</h3>
-        <p class="g-body mt-2.5">
-          One installer for both ways to use GAIA: it installs the desktop app, the terminal
-          app, or both, and asks which while it runs. Choosing both installs the two side by
-          side, each with its own shortcut, and they use the same local models.
-        </p>
-        <div class="mt-5">
-          <a href={windowsSetup.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-            <Fragment set:html={DOWNLOAD_ICON} />
-            <span>{INSTALLER_CTA_LABELS['win-x64-setup']}</span>
-          </a>
-          <p class="g-body mt-2.5 text-[13px]">
-            Installer (.exe) · v{version} · {formatBytes(windowsSetup.sizeBytes)}
-          </p>
-        </div>
+        <div class="space-y-6">
+          {primaryRows.map((row) => (
+            <div
+              data-dl-cta
+              data-surface="primary"
+              data-kind={row.kind}
+              data-platform={row.platform}
+              hidden
+            >
+              <h3 class="g-h-card">GAIA for {PLATFORM_LABELS[row.platform]}</h3>
+              <p class="g-body mt-2.5">{row.lede}</p>
+              <div class="mt-5">
+                <a href={row.asset.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+                  <Fragment set:html={DOWNLOAD_ICON} />
+                  <span>{row.cta}</span>
+                </a>
+                <p class="g-body mt-2.5 text-[13px]">
+                  {row.caption} · v{version} · {formatBytes(row.asset.sizeBytes)}
+                </p>
+              </div>
 
-        {/* Folded away like the full list below: these are for a visitor who
-            already knows they want one app only. */}
-        {(windowsDesktopOnly || windowsTerminalOnly) && (
-          <details data-dl-win-options class="group mt-5">
-            <summary class="g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden">
-              <span aria-hidden="true" class="inline-block transition-transform group-open:rotate-90">›</span>
-              More options: just one app
-            </summary>
-            <ul class="mt-3 space-y-3">
-              {windowsDesktopOnly && (
-                <li data-dl-win-option="desktop">
-                  <a
-                    href={windowsDesktopOnly.url}
-                    class="inline-flex items-baseline gap-2 text-[13.5px] text-g-text transition-colors hover:text-g-accent-text"
-                  >
-                    <span class="text-g-accent-text" aria-hidden="true">↓</span>
-                    <span>Desktop app only (.exe) · {formatBytes(windowsDesktopOnly.sizeBytes)}</span>
-                  </a>
-                  <p class="g-body mt-1 text-[13px]">
-                    Installs just the desktop app. It downloads the GAIA agent the first time it
-                    runs.
-                  </p>
-                </li>
+              {/* Folded away like the full list below: for a visitor who
+                  already knows they want a different file. */}
+              {row.options.length > 0 && (
+                <details data-dl-options class="group mt-5">
+                  <summary class="g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden">
+                    <span aria-hidden="true" class="inline-block transition-transform group-open:rotate-90">›</span>
+                    {row.kind === 'setup' ? 'More options: just one app' : 'More options'}
+                  </summary>
+                  <ul class="mt-3 space-y-3">
+                    {row.options.map((o) => (
+                      <li data-dl-option>
+                        <a
+                          href={o.asset.url}
+                          aria-label={`${o.label} for ${PLATFORM_LABELS[row.platform]}`}
+                          class="inline-flex items-baseline gap-2 text-[13.5px] text-g-text transition-colors hover:text-g-accent-text"
+                        >
+                          <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                          <span>{o.label} · {formatBytes(o.asset.sizeBytes)}</span>
+                        </a>
+                        {o.note && <p class="g-body mt-1 text-[13px]">{o.note}</p>}
+                        {o.command && (
+                          <code class="mt-1.5 block overflow-x-auto whitespace-nowrap text-[12.5px] text-g-text">{o.command}</code>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               )}
-              {windowsTerminalOnly && (
-                <li data-dl-win-option="terminal">
-                  <a
-                    href={windowsTerminalOnly.url}
-                    class="inline-flex items-baseline gap-2 text-[13.5px] text-g-text transition-colors hover:text-g-accent-text"
-                  >
-                    <span class="text-g-accent-text" aria-hidden="true">↓</span>
-                    <span>Terminal app only (.exe) · {formatBytes(windowsTerminalOnly.sizeBytes)}</span>
-                  </a>
-                  <p class="g-body mt-1 text-[13px]">
-                    The terminal app as a single file, with no installer: put it on your PATH
-                    yourself. Or let PowerShell install it for you:
-                  </p>
-                  <code class="mt-1.5 block overflow-x-auto whitespace-nowrap text-[12.5px] text-g-text">{WINDOWS_INSTALL_COMMAND}</code>
-                </li>
-              )}
-            </ul>
-          </details>
-        )}
+            </div>
+          ))}
+        </div>
       </section>
     </div>
   )}
@@ -463,15 +555,24 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     const targets = await resolveTargets(navigator).catch(() => []);
     // An unplaceable machine — an iPad sending the Mac UA, an unreadable arch —
     // keeps the full list open rather than being shown a guess.
-    const matched = blocks.filter((b) => targets.includes(b.dataset.platform as never));
+    const forMachine = blocks.filter((b) => targets.includes(b.dataset.platform as never));
+    const primary = forMachine.filter((b) => b.dataset.surface === 'primary');
+    // The primary download when this machine has one, the cards otherwise.
+    const matched = primary.length ? primary : forMachine;
     if (!matched.length) return;
 
     for (const block of matched) block.hidden = false;
 
-    // A Windows visitor who has the one setup does not also choose a card.
-    if (matched.some((b) => b.dataset.surface === 'setup')) {
+    if (primary.length) {
+      const wrapper = root.querySelector<HTMLElement>('[data-dl-primary]');
+      if (wrapper) wrapper.hidden = false;
       const cards = root.querySelector<HTMLElement>('[data-dl-cards]');
       if (cards) cards.hidden = true;
+      // Only the terminal app on offer: no desktop screenshot beside it.
+      if (primary.every((b) => b.dataset.kind === 'terminal')) {
+        root.querySelector<HTMLElement>('[data-dl-preview="agent-ui"]')?.setAttribute('hidden', '');
+        root.querySelector('[data-dl-previews]')?.classList.remove('sm:grid-cols-2');
+      }
     }
 
     // The captions live at card level, so reveal the ones whose kind is now on
