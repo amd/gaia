@@ -81,6 +81,7 @@ on:
       - 'tests/fixtures/gaia/**'
       - 'tests/unit/conftest.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
+      - '.github/workflows/eval_flagship.yml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -150,6 +151,7 @@ on:
       - 'tests/fixtures/gaia/**'
       - 'tests/unit/conftest.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
+      - '.github/workflows/eval_flagship.yml'
   merge_group:
   workflow_dispatch:
 
