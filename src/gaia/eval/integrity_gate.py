@@ -116,7 +116,8 @@ def _spent_no_tokens(result: dict) -> bool:
         return False
     usage = result.get("driver_usage")
     if isinstance(usage, dict):
-        return all(not usage.get(key) for key in _TOKEN_KEYS)
+        keys = _TOKEN_KEYS + ("duration_api_ms",)
+        return all(not usage.get(key) for key in keys)
     text = str(result.get("error") or "")
     return bool(_ZERO_API_TEXT.search(text)) and all(
         pattern.search(text) for pattern in _ZERO_TOKENS_TEXT
@@ -289,12 +290,14 @@ def main(argv=None) -> int:
     if no_tokens:
         message = (
             f"{len(no_tokens)} scenario(s) ERRORED before Claude spent a single "
-            f"token: {', '.join(no_tokens)}. The Claude quota ran out, so these "
-            "are not results. Wait for the quota window to reset (or switch "
-            "CLAUDE_ACCOUNT), then re-dispatch just these with the `scenarios` input."
+            f"token: {', '.join(no_tokens)}. Claude was never reached, so these are "
+            "not results. Usually the quota ran out: wait for the window to reset "
+            "(or switch CLAUDE_ACCOUNT), then re-dispatch just these with the "
+            "`scenarios` input. If the quota is fine, the driver failed before its "
+            "first call (credential or CLI flags): read the error in each trace."
         )
         print(f"::error::Integrity: {message}")
-        _write_summary(["", "### Eval integrity: CLAUDE QUOTA EXHAUSTED", "", message])
+        _write_summary(["", "### Eval integrity: CLAUDE NEVER REACHED", "", message])
 
     # A category the environment made impossible is still an unmeasured category.
     # Named with its cause rather than silently dropped.
@@ -336,7 +339,7 @@ def main(argv=None) -> int:
     summary += [""]
 
     if args.enforce or no_tokens:
-        reason = "enforce=true" if args.enforce else "Claude quota exhausted"
+        reason = "enforce=true" if args.enforce else "Claude was never reached"
         print(f"{reason} - failing the build.")
         summary.append(f"**{reason} — this failed the build.**")
         _write_summary(summary)

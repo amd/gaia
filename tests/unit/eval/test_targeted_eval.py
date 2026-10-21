@@ -282,6 +282,16 @@ def test_zero_token_errors_from_recorded_usage_and_from_rc2_text():
                 None,
                 driver_usage={"input_tokens": 40000, "output_tokens": 12},
             ),
+            _result(
+                "reached_claude",
+                "ERRORED",
+                None,
+                driver_usage={
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "duration_api_ms": 812,
+                },
+            ),
             _result("crash", "ERRORED", None, error="Traceback: boom"),
             _result("fine", "PASS"),
         ],
