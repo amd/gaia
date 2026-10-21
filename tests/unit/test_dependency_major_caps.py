@@ -87,18 +87,35 @@ def test_pymupdf_is_capped_below_2() -> None:
         assert not req.specifier.contains(Version("2.0")), f"{where}: '{req}'"
 
 
-def test_cryptography_is_capped_below_49() -> None:
-    """cryptography 49+ ships no macOS x86_64 wheel; its sdist needs Rust.
+_PLATFORMS = {
+    "darwin-x64": {"sys_platform": "darwin", "platform_machine": "x86_64"},
+    "darwin-arm64": {"sys_platform": "darwin", "platform_machine": "arm64"},
+    "linux-x64": {"sys_platform": "linux", "platform_machine": "x86_64"},
+    "win-x64": {"sys_platform": "win32", "platform_machine": "AMD64"},
+}
 
-    48.0.1 is the last release with a universal2 wheel. One global cap, like
-    pymupdf's, keeps every platform on the same version the frozen builds use.
+
+@pytest.mark.parametrize("platform", sorted(_PLATFORMS))
+def test_cryptography_is_capped_below_49_on_intel_mac_only(platform: str) -> None:
+    """cryptography 49+ ships no macOS x86_64 wheel and its sdist needs Rust.
+
+    48.0.1 is the last release with a universal2 wheel, so Intel Macs are
+    capped there. Every other platform stays uncapped: 49 and 50 fix published
+    advisories. The marker is allowed because this is a core requirement;
+    ``gaia init`` only parses the extras' markers.
     """
-    declared = _requirements("cryptography")
-    assert {where for where, _ in declared} == {"install_requires"}
-    for where, req in declared:
-        assert req.marker is None, f"{where} declares '{req}' with a marker"
-        assert req.specifier.contains(Version("48.0.1")), f"{where}: '{req}'"
-        assert not req.specifier.contains(Version("49.0.0")), f"{where}: '{req}'"
+    env = _PLATFORMS[platform]
+    applies = [
+        (where, req)
+        for where, req in _requirements("cryptography")
+        if req.marker is None or req.marker.evaluate(env)
+    ]
+    assert len(applies) == 1, f"{platform}: {applies}"
+    where, req = applies[0]
+    assert where == "install_requires", f"{platform}: '{req}' is in {where}"
+    assert req.specifier.contains(Version("48.0.1")), f"{platform}: '{req}'"
+    capped = req.specifier.contains(Version("50.0.2")) is False
+    assert capped == (platform == "darwin-x64"), f"{platform}: '{req}'"
 
 
 def test_extras_carry_no_platform_markers() -> None:

@@ -164,8 +164,10 @@ setup(
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
         # skill or skip the check — neither is acceptable for a base install.
-        # <49: 49+ ships no Intel macOS wheel, and its source build needs Rust.
-        "cryptography>=42.0.0,<49",
+        # Intel Macs stay <49: 49+ has no x86_64 macOS wheel and its sdist needs
+        # Rust. Elsewhere it is uncapped, so they keep 49/50's security fixes.
+        "cryptography>=42.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+        "cryptography>=42.0.0,<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
         # gaia.daemon locks the sidecar launch-secret file down with an
         # owner-only NTFS DACL (#2250) — chmod 0600 is inert on Windows. Core,
         # not an extra: without win32security the daemon cannot spawn ANY
