@@ -31,6 +31,7 @@ const SOURCE_LABEL: Record<ScopeSource, string> = {
     document: 'Document in this chat',
     working_folder: 'Folder GAIA started in',
     approved: 'Approved during this chat',
+    allowed_paths: 'Set by GAIA_ALLOWED_PATHS',
 };
 
 const FILES_SHOWN = 3;
@@ -191,7 +192,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so GAIA can't hold it to these folder and internet settings.
+                            This chat's agent runs as its own process, so its folders and internet access can't be changed from here.
                         </span>
                     )}
                     {env.removed.length > 0 && (

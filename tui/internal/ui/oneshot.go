@@ -45,6 +45,12 @@ type OneShotResult struct {
 	// WithheldActions are confirmation-gated actions the run stopped at and
 	// could not perform. Not failures — refusals held open on purpose.
 	WithheldActions []string
+	// Interrupted is set when a signal stopped the turn; ExitCode is then
+	// ExitInterrupted.
+	Interrupted bool
+	// StillRunning is set when the stop could not be confirmed, so the turn
+	// may still be running where this process cannot reach it.
+	StillRunning bool
 }
 
 // toolLedger records what each tool call proved, in first-seen order.
@@ -173,6 +179,10 @@ func RunOneShot(
 	debugf("one-shot: query=%q", query)
 
 	ch, err := c.Send(ctx, query)
+	if errors.Is(err, errInterruptedBeforeSend) {
+		// The stop handler reports this one; saying it twice reads as two failures.
+		return OneShotResult{ExitCode: 1, ErrorDetail: err.Error()}
+	}
 	if err != nil {
 		// Our own deadline is not a broken dependency: the transport error sent
 		// the user to the daemon log over a --timeout they chose.
@@ -357,7 +367,7 @@ func RunOneShot(
 		case evt, open := <-ch:
 			if !open {
 				// The stream closed; the terminal-event check decides.
-				return finishOneShot(res, tools, query, errW)
+				return finishOneShot(res, tools, query, errW, stopped(c))
 			}
 			handle(evt)
 
@@ -377,14 +387,14 @@ func RunOneShot(
 				select {
 				case evt, open := <-ch:
 					if !open {
-						return finishOneShot(res, tools, query, errW)
+						return finishOneShot(res, tools, query, errW, stopped(c))
 					}
 					handle(evt)
 				default:
 				}
 			}
 			if res.TerminalType != "" {
-				return finishOneShot(res, tools, query, errW)
+				return finishOneShot(res, tools, query, errW, stopped(c))
 			}
 
 			if sawTokens {
@@ -434,19 +444,23 @@ func rawOrDash(raw json.RawMessage) string {
 // turn whose only tool call came back `{"ok": false, …}` and which then wrote an
 // apology is not a success — exiting 0 there fired the caller's `&& next-step`
 // over work that never happened.
-func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer) OneShotResult {
+func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer, interrupted bool) OneShotResult {
 	res.FailedTools = tools.failed()
 	res.UndeterminedTools = tools.undetermined()
 	res.WithheldActions = tools.withheld()
 
-	if res.TerminalType == "" {
+	if interrupted {
+		// Set first, so the notices below name the code the process exits with.
+		// A stream cut short by the stop is not a contract violation.
+		res.ExitCode = ExitInterrupted
+	} else if res.TerminalType == "" {
 		// Exactly one terminal event is mandatory; a stream that ends without one
 		// is a failure, reported loudly rather than as an empty success.
 		res.ErrorDetail = fmt.Sprintf(
 			"the %q query stream ended without a terminal final/error event", query)
 		fmt.Fprintf(errW, "❌ %s\n", res.ErrorDetail)
 	}
-	if res.TerminalType != event.CanonicalTypeFinal {
+	if res.TerminalType != event.CanonicalTypeFinal && !interrupted {
 		res.ExitCode = 1
 	}
 
