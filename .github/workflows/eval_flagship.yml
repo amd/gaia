@@ -145,7 +145,8 @@
 #
 # WHAT TRIGGERS IT. Release and RC tags, and manual dispatch — see `on:` below.
 # To measure a branch before it is tagged, `gh workflow run eval_flagship.yml
-# --ref <branch>`.
+# --ref <branch>`. A dispatch can target part of the suite with the
+# `categories` and `scenarios` inputs; a tag run always sweeps everything.
 #
 # FORKS AND DRAFTS. The job-level `if` guards below still skip fork and draft
 # PRs, in case a `pull_request` trigger is ever added back: a fork PR could not
@@ -189,6 +190,16 @@ on:
         description: 'Space-separated suites from eval/tasks/tasks.json (a tag run uses everyday therock; adversarial is the traps; full is everything)'
         required: false
         default: 'core'
+      # Targeted runs. Blank both for the full sweep. Validated by
+      # util/eval_lane_matrix.py before any lane takes a lab machine.
+      categories:
+        description: 'Comma-separated categories to run (blank = all). Add "outcomes" to also run the outcomes job, which a targeted run otherwise skips.'
+        required: false
+        default: ''
+      scenarios:
+        description: 'Comma-separated scenario ids to run (blank = every scenario in the selected categories). Only lanes holding them get a machine.'
+        required: false
+        default: ''
 
 # NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
 # the whole run, so every lane would wait on the one the first lane took and the
@@ -334,6 +345,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
+      has_lanes: ${{ steps.build.outputs.has_lanes }}
+      targeted: ${{ steps.build.outputs.targeted }}
+      outcomes: ${{ steps.build.outputs.outcomes }}
+      selection: ${{ steps.build.outputs.selection }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -341,9 +356,29 @@ jobs:
       - name: Validate the lane map and emit the matrix
         id: build
         # The rules (which lane gets memory, which gets the gaia_* fixtures,
-        # what may never be in a lane) live in util/eval_lane_matrix.py, where
-        # tests/unit/eval/test_eval_lane_matrix.py covers them.
+        # what may never be in a lane, what a dispatch may select) live in
+        # util/eval_lane_matrix.py, where tests/unit/eval/test_eval_lane_matrix.py
+        # covers them. Inputs arrive through env, never inline in the script.
+        env:
+          EVAL_SELECT_CATEGORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.categories || '' }}
+          EVAL_SELECT_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || '' }}
         run: python util/eval_lane_matrix.py >> "$GITHUB_OUTPUT"
+
+      - name: Label a targeted run in the summary
+        if: steps.build.outputs.targeted == 'true'
+        env:
+          SELECTION: ${{ steps.build.outputs.selection }}
+          CATEGORIES: ${{ inputs.categories }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          {
+            echo "## ${SELECTION}"
+            echo ""
+            echo "This is NOT a full sweep. Only the selection below ran; every other scenario has no result in this run."
+            echo ""
+            echo "- categories input: \`${CATEGORIES:-<blank>}\`"
+            echo "- scenarios input: \`${SCENARIOS:-<blank>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
@@ -369,14 +404,19 @@ jobs:
   # A lane in everything but the matrix. It stays its own job because its
   # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
   # because it is ordered against the others; it runs alongside them.
+  #
+  # A targeted dispatch skips it unless its `categories` input names
+  # `outcomes`. Every other event ignores the `lanes` result here, so a tag
+  # run's outcomes job does not depend on the lane map.
   flagship-tasks:
     name: Scenario eval - outcomes
-    needs: eval-gate
+    needs: [eval-gate, lanes]
     outputs:
       failed_suites: ${{ steps.gate.outputs.failed }}
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
       needs.eval-gate.outputs.run == 'true' &&
+      (github.event_name != 'workflow_dispatch' || needs.lanes.outputs.outcomes == 'true') &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
@@ -622,6 +662,7 @@ jobs:
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
       needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
+      needs.lanes.outputs.has_lanes == 'true' &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
@@ -726,6 +767,14 @@ jobs:
       # disagree about what this lane was supposed to measure.
       EVAL_CATEGORIES: ${{ matrix.categories }}
       EVAL_LANE: ${{ matrix.lane }}
+      # Targeted dispatch only: "category=id,id category=id". Blank runs every
+      # scenario in each category, which is what a tag run always does.
+      EVAL_SCENARIOS: ${{ matrix.scenarios }}
+      EVAL_SELECTION: ${{ needs.lanes.outputs.selection }}
+      EVAL_TARGETED: ${{ needs.lanes.outputs.targeted }}
+      # A dispatch fails on scenarios that errored before Claude spent a token
+      # (an exhausted quota, as on v0.25.1-rc2). A tag run still only reports.
+      FAIL_ON_ZERO_TOKENS: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
       # Memory ON for the memory lane, OFF everywhere else. Job scope beats the
       # workflow defaults, and everything that reads these is started from here:
       # the backend inherits the job environment through Start-Process, and the
@@ -1517,6 +1566,18 @@ jobs:
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
             Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE`` on $env:COMPUTERNAME"
             Add-Summary ""
+            # category -> "id,id", from a targeted dispatch. Empty on a tag run.
+            $selected = @{}
+            foreach ($pair in (($env:EVAL_SCENARIOS -split '\s+') | Where-Object { $_ })) {
+              $kv = $pair -split '=', 2
+              $selected[$kv[0]] = $kv[1]
+            }
+            if ($env:EVAL_TARGETED -eq 'true') {
+              Add-Summary "**$env:EVAL_SELECTION**"
+              Add-Summary ""
+              foreach ($c in $selected.Keys) { Add-Summary "- ``$c``: $($selected[$c] -replace ',', ', ')" }
+              Add-Summary ""
+            }
             Add-Summary "| category | minutes |"
             Add-Summary "| --- | ---: |"
 
@@ -1707,10 +1768,14 @@ jobs:
               # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE
               # at its previous value, so an unset/stale 0 would read as success.
               $global:LASTEXITCODE = 0
+              # A targeted run names its scenarios; the CLI refuses any that
+              # would not run, so a typo cannot shrink the run silently.
+              $pick = @()
+              if ($selected.ContainsKey($category)) { $pick = @('--scenario', $selected[$category]) }
               # Not Tee-Object: on Windows PowerShell 5.1 it has no -Encoding and
               # writes UTF-16, which the `Output:` parse in the next step then has
               # to guess at. Echo + Out-File keeps the log UTF-8 and greppable.
-              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" @extraArgs 2>&1 |
+              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" @extraArgs @pick 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               # Capture BEFORE anything else can clobber it. .NET calls and
@@ -1928,6 +1993,7 @@ jobs:
             foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
           if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          if ($env:FAIL_ON_ZERO_TOKENS -eq 'true') { $gateArgs += "--fail-on-zero-token-errors" }
 
           # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE at its
           # previous value, so a stale 0 would read as a complete run.
@@ -2007,6 +2073,10 @@ jobs:
           Write-Host "=================================================================="
           Write-Host "  SUMMARY - enforce=$env:ENFORCE"
           Write-Host "=================================================================="
+          if ($env:EVAL_TARGETED -eq 'true') {
+            Write-Host "$env:EVAL_SELECTION"
+            Write-Host "Each comparison above judged only the selected scenarios; its NOT RUN list names the rest."
+          }
           if ($regressed.Count -gt 0) {
             Write-Host "Regressed categories: $($regressed -join ' ')"
           } else {
@@ -2107,7 +2177,13 @@ jobs:
             # Whether the agent under test could remember anything, recorded next
             # to the scores so a memory result is never read without it.
             memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
-          } | ConvertTo-Json -Compress
+          }
+          if ($env:EVAL_TARGETED -eq 'true') {
+            $status.targeted = $true
+            $status.selection = $env:EVAL_SELECTION
+            $status.scenarios = $env:EVAL_SCENARIOS
+          }
+          $status = $status | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
 
       # Scores AND evidence, because this pool is ephemeral: the machine that
@@ -2155,14 +2231,23 @@ jobs:
         env:
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
+          TARGETED: ${{ needs.lanes.outputs.targeted }}
+          MATRIX: ${{ needs.lanes.outputs.matrix }}
+          SELECTION: ${{ needs.lanes.outputs.selection }}
         run: |
           set -euo pipefail
+          # A targeted run reports only the lanes it selected, under a banner.
+          targeted=()
+          if [ "${TARGETED}" = "true" ]; then
+            targeted=(--matrix-json "${MATRIX}" --selection "${SELECTION}")
+          fi
           # Run as a file, not `-m gaia.eval.lane_summary`: this is a hosted runner
           # with no gaia install, and the module is stdlib-only by design.
           python src/gaia/eval/lane_summary.py \
             --lanes-file eval/ci_lanes.json \
             --artifacts-dir lane-artifacts \
             --baseline-dir tests/fixtures/eval_baselines/gaia-flagship \
+            "${targeted[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           {
             echo ""

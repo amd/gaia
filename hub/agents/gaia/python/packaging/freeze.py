@@ -104,7 +104,7 @@ COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 # What a ``run_python`` script may import. The frozen binary is the only Python
 # a user of the release has, and nothing in GAIA imports most of these, so the
 # import analyzer would leave them out. Office output (.xlsx, .docx, .pptx,
-# .pdf), tables and charts are what knowledge-work tasks ask for.
+# .pdf), tables and charts are what users' document and analysis tasks ask for.
 SCRIPT_LIBRARIES = [
     "openpyxl",
     "xlsxwriter",
