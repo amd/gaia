@@ -262,11 +262,13 @@ are no implicit grants — a skill declares every domain it touches.
 | `database` | `read`, `write`, `none` | Local-capability domain (new). | **Refused at load** |
 | `desktop` | `control`, `none` | Local-capability domain (new). | **Refused at load** |
 | `env` | `read`, `none` | Environment beyond declared `env_vars`. | **Refused at load** |
+| `program` | `run`, `none` | One named program the skill's own code starts: `program:run:soffice`. | **Bridged** — through `gaia.skills.context.run_program` only; no shell, scrubbed environment |
+| `scratch` | `write`, `none` | A fresh temporary folder per tool call. Takes no scope. | **Bridged** — through `gaia.skills.context.temp_dir` and friends; deleted when the call returns |
 
 Scopes narrow a grant: `filesystem:read:~/.gaia/data/**`,
 `network:read:*.brave.com`, `shell:execute:gh`. An unscoped grant covers the
-whole domain — except `mcp:connect` and `shell:execute`, where a scope is
-mandatory (below). Grammar violations — an empty entry, a missing level, an
+whole domain — except `mcp:connect`, `shell:execute` and `program:run`, where a
+scope is mandatory (below). Grammar violations — an empty entry, a missing level, an
 unknown domain, or a level the domain does not define — fail loudly at parse
 time.
 

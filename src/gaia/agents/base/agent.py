@@ -9,6 +9,7 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextlib
 import contextvars
 import datetime
 import inspect
@@ -126,7 +127,11 @@ from gaia.agents.base.tool_outcome import (
     tool_result_error_fields,
     tool_result_failed,
 )
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool_call_progress_message
+from gaia.agents.base.tools import (
+    _TOOL_REGISTRY,
+    bare_tool_name,
+    tool_call_progress_message,
+)
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -6280,8 +6285,14 @@ Do NOT wrap conversational replies in JSON.
                 )
                 return True
 
-        if tool_name in self.confirmation_required_tools():
+        gated = self.confirmation_required_tools()
+        if tool_name in gated:
             return not self._call_is_pre_authorized(tool_name, tool_args)
+        if bare_tool_name(tool_name) in gated:
+            # A skill tool named like a gated core tool (``x/run_python``) is
+            # gated like it. No grant pre-authorizes it: grants describe what
+            # the core tool does with its arguments, not what skill code does.
+            return True
         entry = self._tools_registry.get(tool_name) or {}
         flag = entry.get("requires_confirmation")
         if flag is not None:
@@ -6710,8 +6721,28 @@ Do NOT wrap conversational replies in JSON.
         if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
             self._turn_saw_external_content = True
 
+        # A skill's own tool runs bound to this agent, so gaia.skills.context
+        # can check its paths and declared capabilities against this agent's
+        # scope; a path-named argument outside that scope never reaches it.
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        skill_scope: Any = contextlib.nullcontext()
+        skill_refusals: tuple = ()
+        if skill is not None:
+            from gaia.skills.context import bind, path_argument_refusal
+            from gaia.skills.errors import SkillPermissionError
+
+            skill_refusals = (SkillPermissionError,)
+
+            refusal = path_argument_refusal(self, tool_args)
+            if refusal is not None:
+                logger.info("Skill tool %s refused: %s", tool_name, refusal["error"])
+                return refusal
+            skill_scope = bind(self, skill)
+
         try:
-            result = self._call_tool_bounded(tool, tool_args, tool_name)
+            with skill_scope:
+                result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result
@@ -6747,6 +6778,11 @@ Do NOT wrap conversational replies in JSON.
                 "timeout": True,
                 "tool_name": tool_name,
             }
+        except skill_refusals as e:
+            # A skill tool asked gaia.skills.context for something outside its
+            # declaration or this agent's scope. The message says what to do.
+            logger.warning("Skill tool %s refused: %s", tool_name, e)
+            return {"status": "error", "error": str(e), "tool_name": tool_name}
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
