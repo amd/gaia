@@ -310,6 +310,11 @@ def main(argv=None) -> int:
         problems.append(f"{category}: NOT MEASURED - {args.not_measured_reason}")
 
     if not problems:
+        if no_tokens:
+            # Counted from the scenarios themselves, so a stale summary block
+            # cannot turn an outage green.
+            print("Claude was unavailable - failing the build.")
+            return 1
         print("")
         print("Integrity OK - every expected scenario ran and produced a measurement.")
         _write_summary(

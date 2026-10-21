@@ -8,6 +8,10 @@ what a sweep cost or where the tokens went.
 """
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -258,7 +262,14 @@ def test_aggregate_is_empty_for_no_results():
     assert usage["total"]["calls"] == 0 and usage["by_category"] == {}
 
 
-def test_run_summary_adds_usage_across_lanes(tmp_path, capsys):
+def test_the_lane_summary_copy_of_the_fields_matches():
+    from gaia.eval import claude_usage, lane_summary
+
+    assert lane_summary.USAGE_FIELDS == claude_usage.USAGE_FIELDS
+    assert lane_summary.empty_usage() == claude_usage.empty_usage()
+
+
+def _lane_artifacts(tmp_path):
     lanes = {
         "lanes": [
             {"lane": "one", "categories": ["x"]},
@@ -282,18 +293,45 @@ def test_run_summary_adds_usage_across_lanes(tmp_path, capsys):
         target = tmp_path / "art" / f"eval-{lane}" / cat
         target.mkdir(parents=True)
         (target / "scorecard.json").write_text(json.dumps(card), encoding="utf-8")
+    return [
+        "--lanes-file",
+        str(tmp_path / "lanes.json"),
+        "--artifacts-dir",
+        str(tmp_path / "art"),
+    ]
 
-    assert (
-        summary_main(
-            [
-                "--lanes-file",
-                str(tmp_path / "lanes.json"),
-                "--artifacts-dir",
-                str(tmp_path / "art"),
-            ]
-        )
-        == 0
+
+TOTAL_ROW = "| **total** | 2 | 28 | 18 | 70,186 | 658,410 | 4,856 | $0.69 |"
+
+
+def test_the_lane_summary_runs_as_ci_runs_it(tmp_path):
+    """eval_flagship.yml runs the file directly on a runner without gaia."""
+    from gaia.eval import lane_summary
+
+    # No gaia on the path, and the workflow's own PYTHONIOENCODING.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(Path(lane_summary.__file__)),
+            *_lane_artifacts(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(tmp_path),
+        timeout=60,
+        check=False,
     )
+    assert proc.returncode == 0, proc.stderr
+    assert TOTAL_ROW in proc.stdout
+
+
+def test_run_summary_adds_usage_across_lanes(tmp_path, capsys):
+    assert summary_main(_lane_artifacts(tmp_path)) == 0
     out = capsys.readouterr().out
     assert "### Claude usage" in out
-    assert "| **total** | 2 | 28 | 18 | 70,186 | 658,410 | 4,856 | $0.69 |" in out
+    assert TOTAL_ROW in out

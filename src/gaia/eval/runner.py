@@ -207,6 +207,10 @@ _NO_MEASUREMENT_STATUSES = frozenset(
 #: Exit code of a run stopped because Claude was unavailable: resume it later.
 EXIT_CLAUDE_OUTAGE = 3
 
+#: Zero-token failures with no quota or credential wording, in a row, that
+#: stop a run. One alone may be the scenario's own failure.
+UNREACHABLE_STOP_AFTER = 2
+
 _OUTAGE_ACTIONS = {
     QUOTA: "Resume once the limit resets",
     CREDENTIAL: (
@@ -3097,6 +3101,7 @@ class AgentEvalRunner:
         kept = kept or {}
         results = []
         infra_streak = []
+        unexplained = 0
         aborted = None
         outage = None
         for index, (scenario_path, scenario_data) in enumerate(scenarios):
@@ -3177,7 +3182,11 @@ class AgentEvalRunner:
             _write_trace(run_dir, result)
             results.append(result)
 
-            if tripped is not None:
+            kind = tripped["claude_outage"]["kind"] if tripped is not None else None
+            unexplained = unexplained + 1 if kind == UNREACHABLE else 0
+            if kind is not None and (
+                kind != UNREACHABLE or unexplained >= UNREACHABLE_STOP_AFTER
+            ):
                 outage = {
                     **result["claude_outage"],
                     "after_scenario": sid,
@@ -3189,6 +3198,15 @@ class AgentEvalRunner:
                         kept.get(later_id) or self._not_run(later, outage, run_dir)
                     )
                 break
+            if kind == UNREACHABLE:
+                # A zero-token failure with no quota or credential wording may
+                # be this scenario's own; it stays resumable, and a second one
+                # in a row stops the run.
+                print(
+                    f"[WARN] {sid}: Claude never answered "
+                    f"({result['claude_outage']['detail']}). The run stops if "
+                    "the next scenario fails the same way."
+                )
 
             not_idle = next(
                 (a["backend_not_idle"] for a in attempts if a.get("backend_not_idle")),

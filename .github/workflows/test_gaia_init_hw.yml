@@ -23,22 +23,36 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/test_gaia_init_hw.yml'
+      - '.github/actions/setup-venv/**'
+      - 'setup.py'
+      - 'pyproject.toml'
       - 'src/gaia/installer/**'
       - 'src/gaia/llm/lemonade_embedded.py'
       - 'src/gaia/llm/lemonade_launcher.py'
       - 'src/gaia/llm/lemonade_manager.py'
+      # `gaia init --force-models` pulls models and `gaia llm` answers through
+      # these; a fresh-machine pull is the path #1655 broke.
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'src/gaia/llm/lemonade_choice.py'
       - 'src/gaia/version.py'
-      - '.github/workflows/test_gaia_init_hw.yml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - '.github/workflows/test_gaia_init_hw.yml'
+      - '.github/actions/setup-venv/**'
+      - 'setup.py'
+      - 'pyproject.toml'
       - 'src/gaia/installer/**'
       - 'src/gaia/llm/lemonade_embedded.py'
       - 'src/gaia/llm/lemonade_launcher.py'
       - 'src/gaia/llm/lemonade_manager.py'
+      # `gaia init --force-models` pulls models and `gaia llm` answers through
+      # these; a fresh-machine pull is the path #1655 broke.
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'src/gaia/llm/lemonade_choice.py'
       - 'src/gaia/version.py'
-      - '.github/workflows/test_gaia_init_hw.yml'
 
 # The pool hands out one machine per job; a superseded run would hold hardware.
 concurrency:
