@@ -212,8 +212,17 @@ def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(tmp_path):
     db.close_db()
 
     clock = _clock(path, {KIND_ONE_SHOT: lambda job, _db: None})
-    upgraded = time.time()
-    assert clock.fire_due(now=upgraded) == {"fired": [], "failed": []}
+    before = time.time()
+    assert clock.fire_due(now=before) == {"fired": [], "failed": []}
+    # The upgrade stamps the row with the real time it ran, which on a slow
+    # runner can be well after `before`; measure the window from that stamp.
+    check = _ClockDB()
+    check.init_db(str(path))
+    upgraded = check.query("SELECT claimed_at FROM daemon_jobs WHERE job_id = 'old'")[
+        0
+    ]["claimed_at"]
+    check.close_db()
+    assert upgraded >= before
     assert clock.fire_due(now=upgraded + CONFIRM) == {"fired": [], "failed": []}
     later = upgraded + STALE + 1
     assert clock.fire_due(now=later) == {"fired": [], "failed": []}
