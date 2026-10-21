@@ -351,3 +351,5 @@ New colours are added to `internal/ui/theme` and addressed by role
 `lipgloss.Style` values and call `.Render()` where the string is actually
 used; a `.Render()` called at package-init time bakes in a string before
 `theme.Init()` has picked light or dark, so it never changes again.
+
+<!-- ci path-filter probe, do not merge -->
