@@ -8,8 +8,9 @@ A Hub-installed flagship runs as a daemon sidecar. Its ``/query`` parks on a
 "Nothing was executed" card with no way to answer. These pin the path from
 the UI's own permission prompt to the sidecar's decision route, and that it
 stays fail-closed: the answer is bound to the prompt shown, a stale or
-duplicate answer is refused, "always" is not offered, and a sidecar-side
-timeout denies.
+duplicate answer is refused, "always" is not offered by a sidecar that can't
+list its grants (see test_relay_always_allow.py), and a sidecar-side timeout
+denies.
 """
 
 from __future__ import annotations
@@ -109,8 +110,8 @@ class TestRelayMapsAnswerableConfirmation:
             "summary": _CONFIRM["summary"],
             "risk": "write",
         }
-        # An "always" grant would live in the sidecar where this chat can't
-        # list or revoke it, so the choice is never offered.
+        # Below contract 2.19 the chat could neither list nor revoke an
+        # "always" grant the sidecar holds, so the choice is not offered.
         assert "always_scope" not in event
         assert handler.relay_confirmation_pending()
 

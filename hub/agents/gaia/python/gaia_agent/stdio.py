@@ -212,6 +212,8 @@ class PermissionState:
         self._edit_roots = tuple(edit_roots) if edit_roots else (os.getcwd(),)
         self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
+        #: What each "always" granted, so it can be listed and revoked whole.
+        self._scopes: Dict[str, Any] = {}
         self._handler: Any = None
         if full_access:
             # Starting unattended is the same security event as toggling it on
@@ -284,6 +286,7 @@ class PermissionState:
         with self._lock:
             self._apply(handler, self._full_access)
             handler.session_grants().update(self._grants)
+            handler.session_grant_scopes().update(self._scopes)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
             # TUI answers its own prompt long before this fires (its bound is
@@ -297,8 +300,58 @@ class PermissionState:
         """Take the turn's grants back into the session and drop the handler."""
         with self._lock:
             self._grants.update(handler.session_grants())
+            self._scopes.update(handler.session_grant_scopes())
             if self._handler is handler:
                 self._handler = None
+
+    def grants(self) -> List[Dict[str, str]]:
+        """Every "always" answer in this session, including the running turn's."""
+        with self._lock:
+            return [
+                {"key": key, "label": scope.label}
+                for key, scope in self._live_scopes().items()
+            ]
+
+    def revoke(self, key: Optional[str] = None) -> int:
+        """Revoke one "always" answer, or all of them when *key* is None.
+
+        Takes effect on the very next gated call, including one in a turn
+        already running. A family another remaining answer also granted stays
+        granted. Returns how many answers were revoked.
+        """
+        with self._lock:
+            scopes = self._live_scopes()
+            targets = list(scopes) if key is None else [key]
+            removed = [scopes.pop(k) for k in targets if k in scopes]
+            if not removed:
+                return 0
+            kept = {family for scope in scopes.values() for family in scope.keys}
+            dropped = {f for scope in removed for f in scope.keys} - kept
+            holders = [(self._grants, self._scopes)]
+            if self._handler is not None:
+                holders.append(
+                    (
+                        self._handler.session_grants(),
+                        self._handler.session_grant_scopes(),
+                    )
+                )
+            for families, by_key in holders:
+                families.difference_update(dropped)
+                for scope in removed:
+                    by_key.pop(scope.key, None)
+        audit.warning(
+            "Revoked %d always-allow grant(s): %s",
+            len(removed),
+            ", ".join(scope.label for scope in removed),
+        )
+        return len(removed)
+
+    def _live_scopes(self) -> Dict[str, Any]:
+        """The session's answers plus the running turn's. Caller holds the lock."""
+        scopes = dict(self._scopes)
+        if self._handler is not None:
+            scopes.update(self._handler.session_grant_scopes())
+        return scopes
 
     def resolve(self, decision: str, confirm_id: Optional[str]) -> None:
         """Answer the confirmation the agent thread is parked on.

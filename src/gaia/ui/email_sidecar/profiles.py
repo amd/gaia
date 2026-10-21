@@ -124,6 +124,10 @@ class RelayProfile:
     #: Contract version from which ``/query/{run_id}/followup`` hands a running
     #: turn a message sent mid-turn. ``None`` means it never does.
     min_followup_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/sessions/{id}/grants`` lists and revokes
+    #: the session's "always allow" grants, so the chat may offer "always".
+    #: ``None`` means it never does, and only allow once / deny are offered.
+    min_grants_api_version: Optional[Tuple[int, int]] = None
 
 
 # --- email ------------------------------------------------------------------
@@ -449,6 +453,8 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.15 added /query/{run_id}/followup.
     min_followup_api_version=(2, 15),
+    # 2.19 added /sessions/{id}/grants.
+    min_grants_api_version=(2, 19),
 )
 
 
@@ -554,6 +560,15 @@ def followups_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def grants_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* lists and revokes "always allow" grants.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_grants_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -581,4 +596,5 @@ __all__ = [
     "scope_supported",
     "memory_supported",
     "followups_supported",
+    "grants_supported",
 ]

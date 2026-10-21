@@ -215,9 +215,13 @@ class _Handler:
         self.full_access = False
         self.confirm_timeout_seconds = 0
         self._grants = set()
+        self._scopes = {}
 
     def session_grants(self):
         return self._grants
+
+    def session_grant_scopes(self):
+        return self._scopes
 
 
 def test_attach_hands_the_turn_both_halves_of_full_access():

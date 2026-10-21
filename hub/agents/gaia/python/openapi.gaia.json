@@ -35,6 +35,50 @@
         "title": "BypassResponse",
         "type": "object"
       },
+      "GrantView": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "description": "The grant's handle, for revoking it.",
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it allows, as the prompt worded it.",
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "GrantView",
+        "type": "object"
+      },
+      "GrantsResponse": {
+        "additionalProperties": false,
+        "description": "A session's \"always\" answers (contract >= 2.19).",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantView"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "grants"
+        ],
+        "title": "GrantsResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -429,7 +473,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.18"
+    "version": "2.19"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -842,6 +886,118 @@
           {}
         ],
         "summary": "Set Bypass",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/grants": {
+      "delete": {
+        "description": "Revoke one \"always\" answer (``?key=``), or all of them.\n\nApplies from the very next gated call, including one in a running turn.\nAn unknown key is a 404 rather than a quiet success: a caller that thinks\nit revoked something must not be left believing it.",
+        "operationId": "revoke_grants_v1_gaia_sessions__session_id__grants_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Revoke Grants",
+        "tags": [
+          "gaia-query"
+        ]
+      },
+      "get": {
+        "description": "The calls the user answered \"always\" to in this session, so far.\n\nIncludes answers given in a turn still running, which is where a caller\nshows the user what it may now do without asking.",
+        "operationId": "list_grants_v1_gaia_sessions__session_id__grants_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "List Grants",
         "tags": [
           "gaia-query"
         ]

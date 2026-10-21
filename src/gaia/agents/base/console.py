@@ -13,7 +13,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
+from gaia.agents.base.tool_grants import (
+    PATH_TOOLS,
+    GrantScope,
+    grant_scope,
+    path_argument,
+)
 from gaia.agents.base.tools import get_tool_display_name
 from gaia.llm.surface_hints import surface_wording
 
@@ -626,6 +631,19 @@ class OutputHandler(ABC):
         """Grant keys the user has answered "always" to on this console."""
         return self._lazy_tool_set("_session_grants")
 
+    def session_grant_scopes(self) -> Dict[str, GrantScope]:
+        """Each "always" answer on this console, by :attr:`GrantScope.key`.
+
+        :meth:`session_grants` holds only the family keys a call is checked
+        against; this keeps what each answer granted, so it can be listed by
+        its label and revoked as a whole.
+        """
+        scopes = getattr(self, "_session_grant_scopes", None)
+        if scopes is None:
+            scopes = {}
+            self._session_grant_scopes = scopes
+        return scopes
+
     def call_is_granted(self, tool_name: str, tool_args: Any) -> bool:
         """True when an earlier "always" already covers THIS exact call."""
         scope = grant_scope(tool_name, tool_args)
@@ -648,6 +666,7 @@ class OutputHandler(ABC):
             )
             return None
         self.session_grants().update(scope.keys)
+        self.session_grant_scopes()[scope.key] = scope
         self._last_denial = None
         logger.info("User granted '%s' for the remainder of this session", scope.label)
         return scope.label
@@ -659,6 +678,7 @@ class OutputHandler(ABC):
         new user) so consent does not outlive its context.
         """
         self.session_grants().clear()
+        self.session_grant_scopes().clear()
 
     def _lazy_tool_set(self, attribute: str) -> Set[str]:
         """Per-instance string set, created on first use.

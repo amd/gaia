@@ -62,6 +62,7 @@ from gaia.ui.email_sidecar.profiles import (
     confirmations_supported,
     documents_supported,
     followups_supported,
+    grants_supported,
     memory_supported,
     profile_for,
     scope_supported,
@@ -2065,7 +2066,31 @@ def _dispatch_sidecar_query(
                 ),
             }
         )
+    from gaia.ui.email_sidecar import grants as relayed_grants
     from gaia.ui.email_sidecar.profiles import full_access_supported
+
+    answers_confirmations = confirmations_supported(profile, handle.api_version)
+    offers_always = bool(
+        session_id
+        and answers_confirmations
+        and grants_supported(profile, handle.api_version)
+    )
+    if offers_always:
+        try:
+            relayed_grants.reconcile(proxy, session_id)
+        except SidecarError as exc:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Couldn't check what the {profile.display_name} agent "
+                        f"may do without asking in this chat, so this turn was "
+                        f"stopped: {exc}. Send the message again; if it keeps "
+                        "failing, restart the agent from its card."
+                    ),
+                }
+            )
+            return
 
     run_id = str(uuid.uuid4())
     inbox = None
@@ -2104,7 +2129,8 @@ def _dispatch_sidecar_query(
             ),
             profile=profile,
             session_id=session_id,
-            answers_confirmations=confirmations_supported(profile, handle.api_version),
+            answers_confirmations=answers_confirmations,
+            offers_always=offers_always,
             documents=relayed_documents,
             allowed_paths=relayed_scope,
             memory=relayed_memory,

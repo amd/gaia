@@ -214,6 +214,40 @@ class SidecarProxy:
                 f"message to its reply: {exc}"
             ) from exc
 
+    def list_grants(self, session_id: str) -> dict:
+        """The sidecar session's "always allow" grants (contract >= 2.19).
+
+        A 404 (no such session) raises; the caller decides what it means.
+        """
+        import requests
+
+        try:
+            return self._get(f"{self.prefix}/sessions/{session_id}/grants")
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to list its "
+                f"permissions: {exc}"
+            ) from exc
+
+    def revoke_grant(self, session_id: str, key: Optional[str] = None) -> dict:
+        """Revoke one "always allow" grant, or all with *key* None (>= 2.19)."""
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}/grants"
+        try:
+            resp = self._session.delete(
+                f"{self.base_url}{path}",
+                params={"key": key} if key is not None else None,
+                timeout=self.timeout,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to revoke a "
+                f"permission: {exc}"
+            ) from exc
+        self._raise_for_status(resp, path)
+        return resp.json()
+
     def skills(self) -> dict:
         """The skills the agent can load (flagship, contract >= 2.17)."""
         import requests

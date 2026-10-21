@@ -15,7 +15,8 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/grants``
+(contract >= 2.19). ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -80,7 +81,9 @@ AGENT_ID = "gaia"
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
-API_VERSION = "2.18"
+#: 2.19 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
+#: session's "always" answers.
+API_VERSION = "2.19"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -365,6 +368,18 @@ class BypassRequest(_Strict):
 class BypassResponse(_Strict):
     session_id: str
     enabled: bool
+
+
+class GrantView(_Strict):
+    key: str = Field(description="The grant's handle, for revoking it.")
+    label: str = Field(description="What it allows, as the prompt worded it.")
+
+
+class GrantsResponse(_Strict):
+    """A session's "always" answers (contract >= 2.19)."""
+
+    session_id: str
+    grants: List[GrantView]
 
 
 class _QueryRun:
@@ -1529,6 +1544,49 @@ async def set_bypass(session_id: str, body: BypassRequest):
         )
     session.permissions.set_full_access(body.enabled)
     return BypassResponse(session_id=session_id, enabled=body.enabled)
+
+
+def _existing_session(session_id: str) -> Any:
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it holds no grants. It "
+                "may have ended or been evicted; its grants went with it."
+            ),
+        )
+    return session
+
+
+@router.get("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def list_grants(session_id: str) -> GrantsResponse:
+    """The calls the user answered "always" to in this session, so far.
+
+    Includes answers given in a turn still running, which is where a caller
+    shows the user what it may now do without asking.
+    """
+    session = _existing_session(session_id)
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
+@router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsResponse:
+    """Revoke one "always" answer (``?key=``), or all of them.
+
+    Applies from the very next gated call, including one in a running turn.
+    An unknown key is a 404 rather than a quiet success: a caller that thinks
+    it revoked something must not be left believing it.
+    """
+    session = _existing_session(session_id)
+    removed = session.permissions.revoke(key)
+    if key is not None and removed == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_id!r} has no grant {key!r}.",
+        )
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:

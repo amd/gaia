@@ -513,6 +513,9 @@ class SSEOutputHandler(OutputHandler):
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
+    #: What "always" would grant on that prompt; ``None`` when not offered.
+    _relay_always_scope: Optional[str] = None
+
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
 
@@ -594,6 +597,7 @@ class SSEOutputHandler(OutputHandler):
         self.active_relay_run_id: Optional[str] = None
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        self._relay_always_scope = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -2210,21 +2214,40 @@ class SSEOutputHandler(OutputHandler):
         proxy.respond_query(run_id, request_id, value)
         return True
 
-    def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
-        """Record (or clear, with ``None``) the sidecar prompt now pending."""
+    def set_relay_confirmation(
+        self, confirm_id: Optional[str], always_scope: Optional[str] = None
+    ) -> None:
+        """Record (or clear, with ``None``) the sidecar prompt now pending.
+
+        *always_scope* is what an "always" answer grants, when one is offered.
+        """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
+            self._relay_always_scope = always_scope if confirm_id else None
 
-    def relay_confirmation_pending(self) -> bool:
+    def relay_confirmation_pending(self, confirm_id: Optional[str] = None) -> bool:
+        """Whether a sidecar prompt is pending; *confirm_id* must be that one."""
         with self._confirm_lock:
+            if confirm_id is not None:
+                return confirm_id == self._relay_confirm_id
             return self._relay_confirm_id is not None
 
-    def resolve_relay_confirmation(self, approved: bool, confirm_id: str) -> bool:
-        """Hand the user's allow-once/deny to the sidecar run parked on it.
+    def relay_always_scope(self, confirm_id: Optional[str]) -> Optional[str]:
+        """What "always" grants on the pending prompt *confirm_id*, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_always_scope
+
+    def resolve_relay_confirmation(
+        self, approved: bool, confirm_id: str, always: bool = False
+    ) -> bool:
+        """Hand the user's answer to the sidecar run parked on it.
 
         Returns ``False`` when *confirm_id* is not the prompt pending on a live
-        relayed run. Claimed under the lock before the POST, so a double click
-        cannot send two answers; a sidecar rejection raises ``SidecarError``.
+        relayed run, or when *always* was not offered on it. Claimed under the
+        lock before the POST, so a double click cannot send two answers; a
+        sidecar rejection raises ``SidecarError``.
         """
         with self._confirm_lock:
             proxy = self.active_relay_proxy
@@ -2234,10 +2257,16 @@ class SSEOutputHandler(OutputHandler):
                 or confirm_id != self._relay_confirm_id
                 or proxy is None
                 or run_id is None
+                or (always and self._relay_always_scope is None)
             ):
                 return False
             self._relay_confirm_id = None
-        proxy.tool_decision(run_id, "allow" if approved else "deny", confirm_id)
+            self._relay_always_scope = None
+        if always:
+            decision = "always"
+        else:
+            decision = "allow" if approved else "deny"
+        proxy.tool_decision(run_id, decision, confirm_id)
         return True
 
     def signal_done(self):
