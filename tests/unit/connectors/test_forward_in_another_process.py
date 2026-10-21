@@ -619,7 +619,7 @@ def test_a_failed_undo_of_a_halfway_forward_says_so(
     assert "keyring gone" in str(exc.value)
 
 
-def test_the_startup_sweep_clears_a_connection_whose_client_is_gone(
+def test_the_startup_sweep_clears_a_dead_connection_on_a_cold_start(
     connected_under_old_client,
 ):
     from gaia.connectors.api import tripwire_check

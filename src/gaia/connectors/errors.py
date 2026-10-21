@@ -241,8 +241,9 @@ class ConnectionBusyError(ConnectorsError):
         self.connection = connection
         super().__init__(
             f"The {provider} connection is being saved by another GAIA operation "
-            "(in this process or another) right now, so it was left as is. Retry in a moment; if this keeps "
-            "happening, look for a stuck `gaia daemon` or Agent UI process."
+            "(in this process or another) right now, so it was left as is. "
+            "Retry in a moment; if this keeps happening, look for a stuck "
+            "`gaia daemon` or Agent UI process."
         )
 
 
