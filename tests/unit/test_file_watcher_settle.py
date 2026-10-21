@@ -254,7 +254,78 @@ def test_a_file_locked_for_good_is_given_up_on_loudly(tmp_path, caplog):
         handler.on_created(_event(target))
         assert handler.wait_idle(10)
         assert len(attempts) == 4  # the first try and three retries
-        assert "still locked" in caplog.text
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1
+        assert "still locked" in errors[0].getMessage()
+        assert "Close the program using locked.txt" in errors[0].getMessage()
+        assert errors[0].exc_info is not None
+    finally:
+        handler.close()
+
+
+def test_a_new_change_to_a_locked_file_restarts_its_retries(tmp_path):
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    attempts = []
+
+    def read(path):
+        attempts.append(path)
+        raise PermissionError(13, "being used by another process", path)
+
+    def wait_for_a_retry():
+        deadline = time.monotonic() + 10
+        while not handler._locked_retries and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert handler._locked_retries
+
+    handler = FileChangeHandler(
+        on_created=read,
+        on_modified=read,
+        on_deleted=lambda path: None,
+        extensions=[".txt"],
+        debounce_seconds=0.05,
+    )
+    try:
+        handler.on_created(_event(target))
+        wait_for_a_retry()
+        handler.on_modified(_event(target))
+        assert handler.wait_idle(30)
+        assert len(attempts) == 5  # the first try, then a fresh try and 3 retries
+        handler.on_created(_event(target))
+        wait_for_a_retry()
+        handler.on_deleted(_event(target))
+        assert handler.wait_idle(30)
+        assert handler._locked_retries == {}
+    finally:
+        handler.close()
+
+
+def test_a_locked_move_destination_is_retried_as_a_modification(tmp_path):
+    target = tmp_path / "locked.txt"
+    target.write_text("final")
+    moved, modified = [], []
+
+    def on_moved(src, dest):
+        moved.append(dest)
+        raise PermissionError(13, "being used by another process", dest)
+
+    handler = FileChangeHandler(
+        on_moved=on_moved,
+        on_modified=modified.append,
+        extensions=[".txt"],
+        debounce_seconds=0.05,
+    )
+    try:
+        handler.on_moved(
+            MagicMock(
+                is_directory=False,
+                src_path=str(tmp_path / "~WRD0001.tmp"),
+                dest_path=str(target),
+            )
+        )
+        assert handler.wait_idle(10)
+        assert moved == [str(target)]
+        assert modified == [str(target)]
     finally:
         handler.close()
 

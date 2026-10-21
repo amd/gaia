@@ -167,7 +167,12 @@ class ChatAgent(
         pass
 
     def reindex_file(self, file_path: str) -> None:
-        """Reindex modified/created file (auto-called by file watcher)."""
+        """Reindex modified/created file (auto-called by file watcher).
+
+        Raises PermissionError when another program holds the file open (a
+        Windows lock), so the watcher retries it; any other failure is logged
+        with its traceback.
+        """
         pass
 
     def stop_watching(self) -> None:
