@@ -10,7 +10,8 @@
 # plus the hardcoded Lemonade version strings in docs that util/check_doc_versions.py
 # enforces). The agent job can only read the repo. The verify job applies that diff to a
 # fresh main only if util/check_lemonade_bump.py accepts it and checks the pins with main's
-# tests, read-only; only then does the publish job open the PR. The cheap shell gate runs
+# tests, read-only; only then do jobs without the agent file its proposals and open the
+# PR. The cheap shell gate runs
 # weekly; the (paid) Claude
 # step only fires when there is genuinely something to bump, and never twice for the
 # same version (it skips when a bump PR for that version is already open).
@@ -29,8 +30,8 @@ on:
         required: false
         default: ""
 
-# Each job sets its own. The agent job can read the repo and file issues; only the
-# publish job, which runs no agent and no code from the bump, can push and open the PR.
+# Each job sets its own. The agent job can only read the repo; only the publish job,
+# which runs no agent and no code from the bump, can push and open the PR.
 permissions: {}
 
 concurrency:
@@ -41,15 +42,16 @@ jobs:
   bump:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read         # the agent commits locally; it never pushes
       pull-requests: read    # Guard 3 looks for an existing bump PR
-      issues: write          # feature proposals, and the tracking issue on failure
     outputs:
       ready: ${{ steps.package.outputs.ready }}
-      branch: ${{ steps.detect.outputs.branch }}
+      stopped: ${{ steps.package.outputs.stopped }}
+      should_bump: ${{ steps.detect.outputs.should_bump }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
       target_version: ${{ steps.detect.outputs.target_version }}
-      current_version: ${{ steps.detect.outputs.current_version }}
     steps:
       - name: Show which Claude account this job uses
         run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
@@ -86,6 +88,15 @@ jobs:
           target="$latest"
           if [ -n "${FORCE_VERSION:-}" ]; then
             target=$(echo "$FORCE_VERSION" | sed 's/^v//')
+          fi
+          # Every later step builds names and paths from these, so only X.Y.Z gets through.
+          for version in "$current" "$target"; do
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$version' is not an X.Y.Z Lemonade version."
+              exit 1
+            fi
+          done
+          if [ -n "${FORCE_VERSION:-}" ]; then
             echo "Manual override: targeting Lemonade $target"
             release_json=$(gh api "repos/lemonade-sdk/lemonade/releases/tags/v${target}")
             assets=$(echo "$release_json" | jq -r '.assets[].name')
@@ -210,9 +221,9 @@ jobs:
                  yourself: once you finish, the job checks the pins on your commit and
                  opens the pull request only if they pass.
               2. Scout the release notes for genuinely high-impact GAIA features the new
-                 Lemonade capabilities unlock, and file issues for them — but ONLY when the
-                 bar below is clearly met (usually it is NOT; zero issues is the common,
-                 correct outcome).
+                 Lemonade capabilities unlock, and write proposals for them — but ONLY when
+                 the bar below is clearly met (usually it is NOT; zero proposals is the
+                 common, correct outcome).
 
             ## Read first
             Read CLAUDE.md and follow these sections exactly: "PR Descriptions — Tight and
@@ -379,7 +390,7 @@ jobs:
                release: a new model family, a new API/endpoint, multimodal/vision/audio
                support, structured output, an embeddings/RAG feature, an NPU/GPU performance
                capability, etc.
-            3. File an issue for a candidate ONLY when ALL of these hold:
+            3. Propose a candidate ONLY when ALL of these hold:
                - It is genuinely new in THIS release (not a pre-existing capability).
                - It maps to a CONCRETE, HIGH-IMPACT, user-observable GAIA feature — not a vague
                  "we could explore X". You can name the GAIA component it would touch
@@ -390,28 +401,20 @@ jobs:
                  `docs/plans/`.
                - A competent maintainer would plausibly say "yes, we should do this." If you
                  are unsure, that is a NO.
-            4. Hard cap: at most TWO issues per run. If more than two candidates pass the bar,
-               file only the two highest-impact ones.
-            5. Dedup before filing — never open a duplicate:
-               `gh issue list --repo ${{ github.repository }} --state open --search "<feature keywords> in:title"`
-               If a matching open issue (or a `docs/plans/` doc) already covers it, skip.
-            6. Issue format — follow CLAUDE.md "How You Communicate" and the feature-request
-               shape (lead with the finding; value-focused; ≤200 words). Write the body to
-               /tmp/feature-N.md, then:
-               ```
-               gh issue create \
-                 --title "feat: <concrete feature> (unlocked by Lemonade v${{ steps.detect.outputs.target_version }})" \
-                 --body-file /tmp/feature-N.md \
-                 --label enhancement
-               ```
-               Body must include: the new Lemonade capability (1 sentence, with the release as
-               source), the concrete GAIA feature it enables and which component it touches, why
-               it's high-impact, and how it aligns with the roadmap. End with a provenance line:
-               `_Auto-proposed by the Lemonade release scan (v${{ steps.detect.outputs.target_version }}); maintainer triage decides scope. cc @kovtcharov-amd_`
-            7. If (and only if) you filed any issues, append a line
-               `Proposed follow-ups: #<number>, #<number>` to /tmp/pr-body.md, so there's a
-               trail between the bump and the proposals. If you filed no issues, leave the
-               summary as-is.
+            4. Hard cap: at most TWO proposals per run. If more than two candidates pass the
+               bar, propose only the two highest-impact ones. More than two fails the run.
+            5. You do not file issues. Write each proposal to /tmp/proposals/1.md (and
+               /tmp/proposals/2.md for a second), and nothing else in that folder. After the
+               bump passes its checks, a separate job files them as issues titled
+               `feat: <your title> (unlocked by Lemonade v${{ steps.detect.outputs.target_version }})`,
+               skips any whose title is already an open issue, and links them from the PR.
+            6. Proposal format: the first line is the concrete feature in a few words (the
+               issue title; letters, digits and basic punctuation only). The rest is the body,
+               following CLAUDE.md "How You Communicate" and the feature-request shape (lead
+               with the finding; value-focused; ≤200 words): the new Lemonade capability (1
+               sentence, with the release as source), the concrete GAIA feature it enables and
+               which component it touches, why it's high-impact, and how it aligns with the
+               roadmap. The job quotes the body as plain text and adds the provenance line.
 
             ## Hard constraints
             - The only repo FILES you may change are src/gaia/version.py,
@@ -422,18 +425,19 @@ jobs:
               version update — and in those docs, only the version numbers. If it flags any other
               kind of file (e.g. a .go file under tui/), leave it: the job files an issue for a
               maintainer. No other files, no new or deleted files, no drive-by edits. (Feature
-              scouting creates GitHub issues only — it never edits files.)
+              scouting writes /tmp/proposals/ only — it never edits repo files.)
             - No Claude attribution anywhere (commit, PR body, issues) — including Co-Authored-By.
             - Never push a branch or open, edit or comment on a pull request; the job does that.
             - Never run the Lemonade server or any installer in this job.
-            - Filing zero feature issues is the expected default — only file when the high bar
+            - Writing zero proposals is the expected default — only propose when the high bar
               is clearly met, capped at two.
           claude_args: |
             --max-turns 100
             --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
-      # Later jobs apply only this diff, never the agent's branch or work tree.
+      # Later jobs use only this diff, the summary and the proposals, never the agent's
+      # branch or work tree.
       - name: Package the bump
         id: package
         if: steps.detect.outputs.should_bump == 'true'
@@ -441,13 +445,15 @@ jobs:
           BRANCH: ${{ steps.detect.outputs.branch }}
           BASE: ${{ steps.base.outputs.sha }}
           PR_BODY: /tmp/pr-body.md
+          PROPOSALS: /tmp/proposals
           OUT: ${{ runner.temp }}/lemonade-bump
         run: |
           set -euo pipefail
           if ! git rev-parse --verify --quiet "refs/heads/$BRANCH" > /dev/null; then
             echo "::warning::The bump agent stopped without a commit on $BRANCH; no PR opened."
-            echo "⚠️ No bump PR: the agent stopped before committing (a missing asset or digest). See its log above." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ No bump PR: the agent stopped before committing. See its log above." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "stopped=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$(git rev-list --count "$BASE..$BRANCH")" -lt 1 ]; then
@@ -458,70 +464,49 @@ jobs:
             echo "::error::$BRANCH has a commit but the agent wrote no $PR_BODY."
             exit 1
           fi
-          mkdir -p "$OUT"
+          mkdir -p "$OUT/proposals"
+          if [ -d "$PROPOSALS" ]; then
+            for entry in "$PROPOSALS"/* "$PROPOSALS"/.[!.]*; do
+              [ -e "$entry" ] || continue
+              case "$(basename "$entry")" in
+                1.md|2.md) [ -f "$entry" ] && [ ! -L "$entry" ] && cp "$entry" "$OUT/proposals/" && continue ;;
+              esac
+              echo "::error::$PROPOSALS may hold only 1.md and 2.md, not $(basename "$entry")."
+              exit 1
+            done
+          fi
           git diff --binary "$BASE" "$BRANCH" > "$OUT/bump.patch"
           cp "$PR_BODY" "$OUT/pr-body.md"
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload the bump
+        id: upload
         if: steps.package.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: lemonade-bump
           path: ${{ runner.temp }}/lemonade-bump
           if-no-files-found: error
+          include-hidden-files: false
           retention-days: 7
 
-      # Fail loudly: a silent failure here means the pin quietly goes stale. Fires on ANY
-      # step failure (detection included), and tailors the message to which phase broke so
-      # the issue never claims the PR failed when detection was the thing that died.
-      - name: File a tracking issue on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET: ${{ steps.detect.outputs.target_version }}
-          SHOULD_BUMP: ${{ steps.detect.outputs.should_bump }}
-        run: |
-          RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          if [ "$SHOULD_BUMP" = "true" ]; then
-            TITLE="⚠️ Lemonade version-bump run failed (target v${TARGET})"
-            BODY="The Lemonade version-bump workflow detected a new release (v${TARGET}) and started the bump, but it failed before handing a finished bump to the verify job, so **no PR was opened**. Feature-proposal issues may be partially filed.
-
-          - Failing run: $RUN_URL
-
-          You can re-run via the workflow's *Run workflow* button (force_version=${TARGET}) or bump \`LEMONADE_VERSION\` in \`src/gaia/version.py\` by hand.
-
-          cc @kovtcharov-amd"
-          else
-            TITLE="⚠️ Lemonade version-bump check failed (versions undetermined)"
-            BODY="The Lemonade version-bump workflow failed during the detection step, before deciding whether a bump was needed — e.g. the GitHub API was unreachable, or \`LEMONADE_VERSION\` could not be parsed from \`src/gaia/version.py\`. The pin may silently fall behind until a later run succeeds.
-
-          - Failing run: $RUN_URL
-
-          cc @kovtcharov-amd"
-          fi
-
-          # One rolling issue for either failure type — match the shared title prefix.
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search 'in:title "Lemonade version-bump"' --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
-          else
-            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label bug --label devops
-          fi
-
   # GitHub runs no CI on a PR opened with GITHUB_TOKEN, so these jobs are the check.
-  # verify runs the bump's code with a read-only token; publish holds the write token
-  # and runs only main's standard-library checker, never code from the bump.
+  # verify runs the bump's code with a read-only token; proposals and publish run only
+  # main's standard-library scripts, never code from the bump.
   verify:
     needs: bump
     # Runs only when the agent job succeeded and packaged a bump.
     if: success() && needs.bump.outputs.ready == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
+      pull-requests: read    # the agent job's open-PR guard, checked again
     outputs:
       main_sha: ${{ steps.main.outputs.sha }}
+      bump_sha256: ${{ steps.digest.outputs.sha256 }}
+      target_version: ${{ steps.target.outputs.target_version }}
+      current_version: ${{ steps.target.outputs.current_version }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v7
@@ -535,11 +520,70 @@ jobs:
           set -euo pipefail
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # The agent job's runner is the agent's, so its outputs are claims. Work the target
+      # out again from trusted inputs and refuse a bump that claims a different one.
+      - name: Work out the target independently of the agent job
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_VERSION: ${{ github.event.inputs.force_version }}
+          CLAIMED: ${{ needs.bump.outputs.target_version }}
+        run: |
+          set -euo pipefail
+          current=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
+          if [ -n "${FORCE_VERSION:-}" ]; then
+            target="${FORCE_VERSION#v}"
+          else
+            target=$(gh api repos/lemonade-sdk/lemonade/releases/latest | jq -r '.tag_name')
+            target="${target#v}"
+          fi
+          for version in "$current" "$target"; do
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$version' is not an X.Y.Z Lemonade version."
+              exit 1
+            fi
+          done
+          if [ -z "${FORCE_VERSION:-}" ]; then
+            newest=$(printf '%s\n%s\n' "$current" "$target" | sort -V | tail -1)
+            if [ "$target" = "$current" ]; then
+              echo "::error::Lemonade $target is already pinned; there is nothing to bump."
+              exit 1
+            fi
+            if [ "$newest" != "$target" ]; then
+              echo "::error::Lemonade $target is older than the pinned $current."
+              exit 1
+            fi
+          fi
+          if [ "$target" != "$CLAIMED" ]; then
+            echo "::error::The bump job claims Lemonade $CLAIMED, but the target is $target."
+            exit 1
+          fi
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all \
+            --head "deps/lemonade-$target" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "::error::PR #$existing already exists for Lemonade $target."
+            exit 1
+          fi
+          echo "current_version=$current" >> "$GITHUB_OUTPUT"
+          echo "target_version=$target" >> "$GITHUB_OUTPUT"
+
       - name: Download the bump
         uses: actions/download-artifact@v8
         with:
-          name: lemonade-bump
+          artifact-ids: ${{ needs.bump.outputs.artifact_id }}
+          merge-multiple: true
+          digest-mismatch: error
           path: ${{ runner.temp }}/lemonade-bump
+
+      # publish and proposals refuse any bump whose files differ from what this job checked.
+      - name: Record the digest of the bump being checked
+        id: digest
+        env:
+          BUMP: ${{ runner.temp }}/lemonade-bump
+        run: |
+          set -euo pipefail
+          cd "$BUMP"
+          echo "sha256=$(find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -550,7 +594,7 @@ jobs:
       - name: Check and apply the bump
         env:
           BUMP: ${{ runner.temp }}/lemonade-bump
-          TARGET: ${{ needs.bump.outputs.target_version }}
+          TARGET: ${{ steps.target.outputs.target_version }}
         run: |
           set -euo pipefail
           python -I util/check_lemonade_bump.py --repo . --patch "$BUMP/bump.patch" --target "$TARGET"
@@ -573,13 +617,91 @@ jobs:
           set -euo pipefail
           python -m pytest -v --tb=short \
             tests/unit/test_lemonade_download_urls.py::TestEveryReleaseIsPinned \
+            tests/unit/test_lemonade_download_urls.py::TestDownloadIntegrity \
             tests/integration/test_lemonade_embeddable_assets.py
           python util/check_doc_versions.py
 
-  publish:
+  proposals:
     needs: [bump, verify]
     if: success() && needs.bump.outputs.ready == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    outputs:
+      numbers: ${{ steps.file.outputs.numbers }}
+    steps:
+      - name: Checkout the main commit verify checked
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.main_sha }}
+          persist-credentials: false
+
+      - name: Download the bump
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.bump.outputs.artifact_id }}
+          merge-multiple: true
+          digest-mismatch: error
+          path: ${{ runner.temp }}/lemonade-bump
+
+      - name: Confirm this is the bump verify checked
+        env:
+          BUMP: ${{ runner.temp }}/lemonade-bump
+          EXPECTED: ${{ needs.verify.outputs.bump_sha256 }}
+        run: |
+          set -euo pipefail
+          cd "$BUMP"
+          actual=$(find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::verify recorded no digest, so this bump is not the one verify checked."
+            exit 1
+          fi
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::The downloaded bump ($actual) is not the one verify checked ($EXPECTED)."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: File the feature proposals
+        id: file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUMP: ${{ runner.temp }}/lemonade-bump
+          TARGET: ${{ needs.verify.outputs.target_version }}
+        run: |
+          set -euo pipefail
+          numbers=""
+          for proposal in "$BUMP"/proposals/1.md "$BUMP"/proposals/2.md; do
+            if [ ! -f "$proposal" ]; then
+              continue
+            fi
+            python -I util/render_lemonade_bump_pr.py proposal --proposal "$proposal" \
+              --target "$TARGET" --title-out "$RUNNER_TEMP/title.txt" --body-out "$RUNNER_TEMP/body.md"
+            title=$(cat "$RUNNER_TEMP/title.txt")
+            export TITLE="$title"
+            existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+              --search "\"$title\" in:title" --json number,title \
+              --jq 'map(select(.title == $ENV.TITLE)) | .[0].number // empty')
+            if [ -n "$existing" ]; then
+              echo "Proposal already open as #$existing: $title"
+              continue
+            fi
+            url=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body-file "$RUNNER_TEMP/body.md" --label enhancement)
+            numbers="$numbers ${url##*/}"
+          done
+          echo "numbers=${numbers# }" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [bump, verify, proposals]
+    if: success() && needs.bump.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write        # push the bump branch
       pull-requests: write   # open the bump PR
@@ -593,8 +715,27 @@ jobs:
       - name: Download the bump
         uses: actions/download-artifact@v8
         with:
-          name: lemonade-bump
+          artifact-ids: ${{ needs.bump.outputs.artifact_id }}
+          merge-multiple: true
+          digest-mismatch: error
           path: ${{ runner.temp }}/lemonade-bump
+
+      - name: Confirm this is the bump verify checked
+        env:
+          BUMP: ${{ runner.temp }}/lemonade-bump
+          EXPECTED: ${{ needs.verify.outputs.bump_sha256 }}
+        run: |
+          set -euo pipefail
+          cd "$BUMP"
+          actual=$(find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::verify recorded no digest, so this bump is not the one verify checked."
+            exit 1
+          fi
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::The downloaded bump ($actual) is not the one verify checked ($EXPECTED)."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -604,7 +745,7 @@ jobs:
       - name: Check and apply the bump
         env:
           BUMP: ${{ runner.temp }}/lemonade-bump
-          TARGET: ${{ needs.bump.outputs.target_version }}
+          TARGET: ${{ needs.verify.outputs.target_version }}
         run: |
           set -euo pipefail
           python -I util/check_lemonade_bump.py --repo . --patch "$BUMP/bump.patch" --target "$TARGET"
@@ -612,20 +753,26 @@ jobs:
       - name: Write the PR body
         env:
           BUMP: ${{ runner.temp }}/lemonade-bump
-          CURRENT: ${{ needs.bump.outputs.current_version }}
-          TARGET: ${{ needs.bump.outputs.target_version }}
+          CURRENT: ${{ needs.verify.outputs.current_version }}
+          TARGET: ${{ needs.verify.outputs.target_version }}
+          FOLLOW_UPS: ${{ needs.proposals.outputs.numbers }}
         run: |
           set -euo pipefail
-          python -I util/render_lemonade_bump_pr.py --summary "$BUMP/pr-body.md" \
-            --current "$CURRENT" --target "$TARGET" --out "$RUNNER_TEMP/pr-body.md"
+          python -I util/render_lemonade_bump_pr.py pr --summary "$BUMP/pr-body.md" \
+            --current "$CURRENT" --target "$TARGET" --follow-ups "$FOLLOW_UPS" \
+            --out "$RUNNER_TEMP/pr-body.md"
 
       - name: Open the bump PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ needs.bump.outputs.branch }}
-          TARGET: ${{ needs.bump.outputs.target_version }}
+          TARGET: ${{ needs.verify.outputs.target_version }}
         run: |
           set -euo pipefail
+          if ! [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TARGET' is not an X.Y.Z Lemonade version."
+            exit 1
+          fi
+          BRANCH="deps/lemonade-${TARGET}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore(deps): bump Lemonade Server to v${TARGET}"
@@ -640,30 +787,55 @@ jobs:
             --label "lemonade 🍋" \
             --reviewer kovtcharov-amd,itomek-amd
 
+  # Fail loudly: a silent failure here means the pin quietly goes stale.
   report:
-    needs: [bump, verify, publish]
-    if: always() && (needs.verify.result == 'failure' || needs.publish.result == 'failure')
+    needs: [bump, verify, proposals, publish]
+    if: >-
+      always() && (needs.bump.result == 'failure' || needs.bump.outputs.stopped == 'true'
+      || needs.verify.result == 'failure' || needs.proposals.result == 'failure'
+      || needs.publish.result == 'failure' || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       issues: write
     steps:
       - name: File a tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET: ${{ needs.bump.outputs.target_version }}
-          BRANCH: ${{ needs.bump.outputs.branch }}
+          TARGET: ${{ needs.verify.outputs.target_version }}
+          SHOULD_BUMP: ${{ needs.bump.outputs.should_bump }}
+          STOPPED: ${{ needs.bump.outputs.stopped }}
+          BUMP_RESULT: ${{ needs.bump.result }}
         run: |
+          set -euo pipefail
+          # Only verify's target is trusted; without it, or if it is not X.Y.Z, say so.
+          if ! [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TARGET="unknown"
+          fi
+          BRANCH="deps/lemonade-${TARGET}"
           RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           TITLE="⚠️ Lemonade version-bump run failed (target v${TARGET})"
-          BODY="The Lemonade version-bump to v${TARGET} did not pass the checks run before a PR is opened (its changes went beyond what a bump may touch, or the pin or docs-version checks failed, or opening the PR failed), so **no PR was opened**.
+          if [ "$BUMP_RESULT" = "failure" ] && [ "$SHOULD_BUMP" != "true" ]; then
+            TITLE="⚠️ Lemonade version-bump check failed (versions undetermined)"
+            WHAT="failed during the detection step, before deciding whether a bump was needed — e.g. the GitHub API was unreachable, or \`LEMONADE_VERSION\` could not be parsed from \`src/gaia/version.py\`. The pin may silently fall behind until a later run succeeds"
+          elif [ "$BUMP_RESULT" = "failure" ]; then
+            WHAT="started the bump to v${TARGET}, but the agent job failed before handing over a finished bump, so **no PR was opened**"
+          elif [ "$STOPPED" = "true" ]; then
+            WHAT="found v${TARGET} with every installer, archive and digest published, but the agent stopped without committing a bump, so **no PR was opened**"
+          else
+            WHAT="prepared the bump to v${TARGET}, but it did not pass the checks run before a PR is opened (its changes went beyond what a bump may touch, the pin or docs-version checks failed, or filing proposals or opening the PR failed), so **no PR was opened**. If *publish* got as far as pushing \`${BRANCH}\`, delete that branch before re-running. Feature-proposal issues may already be filed"
+          fi
+          BODY="The Lemonade version-bump workflow $WHAT.
 
-          - Failing run: $RUN_URL (see the *verify* and *publish* jobs)
+          - Failing run: $RUN_URL
 
-          If *publish* got as far as pushing \`${BRANCH}\`, delete that branch first. Then fix the bump by hand, or re-run via the workflow's *Run workflow* button (force_version=${TARGET}).
+          Re-run via the workflow's *Run workflow* button (force_version=${TARGET}) or bump \`LEMONADE_VERSION\` in \`src/gaia/version.py\` by hand.
 
           cc @kovtcharov-amd"
 
+          # One rolling issue, found only among the ones this workflow filed.
           EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --author "app/github-actions" --label devops \
             --search 'in:title "Lemonade version-bump"' --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"

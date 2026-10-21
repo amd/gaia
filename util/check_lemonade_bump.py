@@ -10,12 +10,15 @@ of main, before anything in the patch is applied or run:
 The patch may only modify these files, and only like this:
 
 - ``src/gaia/version.py``: ``LEMONADE_VERSION``, set to ``--target``.
-- ``src/gaia/llm/lemonade_embedded.py``: ``EMBEDDABLE_SHA256``.
-- ``src/gaia/installer/lemonade_installer.py``: ``INSTALLER_SHA256`` and
-  ``LEGACY_MSI_SHA256``. Existing legacy pins stay as they are.
+- ``src/gaia/llm/lemonade_embedded.py``: ``EMBEDDABLE_SHA256``, pinning exactly
+  the target's four embeddable archives.
+- ``src/gaia/installer/lemonade_installer.py``: ``INSTALLER_SHA256``, pinning
+  exactly the target's five installers, and ``LEGACY_MSI_SHA256``, which keeps
+  every existing pin and gains the outgoing version's two MSIs.
 - ``tests/fixtures/lemonade/release_tags.txt``: new tags appended.
-- ``.md``/``.mdx`` files under docs/, cpp/, tui/ and .claude/: main's
-  ``LEMONADE_VERSION`` replaced by ``--target``, and nothing else.
+- ``.md``/``.mdx`` files that main's util/check_doc_versions.py scans: only
+  the Lemonade pins it finds for main's ``LEMONADE_VERSION``, set to
+  ``--target``. Its own patterns decide, so version floors stay put.
 
 In the Python files every added or removed line must be a one-line pin
 (``"key": "<sha256>",``) or the ``LEMONADE_VERSION`` line, so they gain no code
@@ -29,6 +32,7 @@ from __future__ import annotations
 import argparse
 import ast
 import difflib
+import importlib.util
 import re
 import subprocess
 import sys
@@ -43,14 +47,34 @@ PIN_ASSIGNMENTS = {
     ),
 }
 APPEND_ONLY_PINS = ("LEGACY_MSI_SHA256",)
+# The assets a bump to {v} must pin, no more and no fewer. A drift test holds these
+# to the URLs LemonadeInstaller and EmbeddedLemonade actually download.
+EXACT_PINS = {
+    "INSTALLER_SHA256": (
+        "v{v}/lemonade.msi",
+        "v{v}/lemonade-server-minimal.msi",
+        "v{v}/lemonade-server_{v}-debian13_amd64.deb",
+        "v{v}/lemonade-server_{v}-debian13_arm64.deb",
+        "v{v}/Lemonade-{v}-Darwin.pkg",
+    ),
+    "EMBEDDABLE_SHA256": (
+        "lemonade-embeddable-{v}-windows-x64.zip",
+        "lemonade-embeddable-{v}-ubuntu-x64.tar.gz",
+        "lemonade-embeddable-{v}-ubuntu-arm64.tar.gz",
+        "lemonade-embeddable-{v}-macos-arm64.tar.gz",
+    ),
+}
+# The outgoing version's installers, which uninstalling it still downloads.
+OUTGOING_LEGACY_PINS = ("v{v}/lemonade.msi", "v{v}/lemonade-server-minimal.msi")
 VERSION_FILE = "src/gaia/version.py"
 RELEASE_TAGS = "tests/fixtures/lemonade/release_tags.txt"
+DOC_RULES = "util/check_doc_versions.py"
 DOC_PATH = re.compile(r"(?:docs|cpp|tui|\.claude)/(?:[^/]+/)*[^/]+\.mdx?")
 SHA256 = re.compile(r"[0-9a-f]{64}")
-VERSION = re.compile(r"\d+\.\d+\.\d+")
-ADDED_TAGS = re.compile(r"(?:v\d+\.\d+\.\d+\n)+")
+VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+ADDED_TAGS = re.compile(r"(?:v[0-9]+\.[0-9]+\.[0-9]+\n)+")
 CHANGEABLE_LINE = re.compile(
-    r' {4}"[A-Za-z0-9._/-]+": "[0-9a-f]{64}",|LEMONADE_VERSION = "\d+\.\d+\.\d+"'
+    r' {4}"[A-Za-z0-9._/-]+": "[0-9a-f]{64}",|LEMONADE_VERSION = "[0-9]+\.[0-9]+\.[0-9]+"'
 )
 
 
@@ -98,12 +122,36 @@ def changed_paths(repo: Path, patch: Path) -> list:
     return paths
 
 
-def check_allowed(repo: Path, paths: list) -> None:
+def _load_doc_rules(repo: Path):
+    """Main's check_doc_versions.py, the source of which docs and phrasings may change."""
+    spec = importlib.util.spec_from_file_location(
+        "lemonade_bump_doc_rules", repo.resolve() / DOC_RULES
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _scanned_doc(rules, path: str) -> bool:
+    """Whether check_doc_versions scans *path*. Its .go files are left to people."""
+    if path.endswith(".go"):
+        return False
+    for root, pattern in rules.SCAN_PATHS:
+        prefix = root.relative_to(rules.PROJECT_ROOT).as_posix() + "/"
+        if path.startswith(prefix) and path.endswith(pattern.rsplit("*", 1)[1]):
+            return not rules.should_exclude(rules.PROJECT_ROOT / path)
+    return False
+
+
+def check_allowed(repo: Path, paths: list, rules) -> None:
     for path in paths:
-        allowed = (
+        segments = path.split("/")
+        clean = "\\" not in path and not {"", ".", ".."} & set(segments)
+        allowed = clean and (
             path in PIN_ASSIGNMENTS
             or path == RELEASE_TAGS
-            or (DOC_PATH.fullmatch(path) and ".." not in path.split("/"))
+            or (DOC_PATH.fullmatch(path) and _scanned_doc(rules, path))
         )
         if not allowed:
             raise BumpRejected(f"a Lemonade bump never edits {path}")
@@ -169,7 +217,7 @@ def _changed_lines(old: list, new: list) -> list:
     return changed
 
 
-def check_python(path: str, old: bytes, new: bytes, target: str) -> None:
+def check_python(path: str, old: bytes, new: bytes, current: str, target: str) -> None:
     for line in _changed_lines(
         _text(old, path).split("\n"), _text(new, path).split("\n")
     ):
@@ -186,10 +234,22 @@ def check_python(path: str, old: bytes, new: bytes, target: str) -> None:
                 raise BumpRejected(f"{path}: LEMONADE_VERSION must be {target!r}")
             continue
         pins = _literal_pins(node, path, name)
+        if name in EXACT_PINS:
+            expected = {key.format(v=target) for key in EXACT_PINS[name]}
+            if set(pins) != expected:
+                raise BumpRejected(
+                    f"{path}: {name} must pin exactly {sorted(expected)}, "
+                    f"not {sorted(pins)}"
+                )
         if name in APPEND_ONLY_PINS:
             kept = _literal_pins(old_values[name], path, name)
             if list(pins.items())[: len(kept)] != list(kept.items()):
                 raise BumpRejected(f"{path}: {name} may only gain entries at its end")
+            outgoing = {key.format(v=current) for key in OUTGOING_LEGACY_PINS}
+            if current != target and not outgoing <= set(pins):
+                raise BumpRejected(
+                    f"{path}: {name} must keep the outgoing {sorted(outgoing)}"
+                )
 
 
 def check_release_tags(old: str, new: str) -> None:
@@ -199,21 +259,33 @@ def check_release_tags(old: str, new: str) -> None:
         raise BumpRejected(f"{RELEASE_TAGS} must gain one or more vX.Y.Z tags")
 
 
-def _swap_version(line: str, current: str, target: str) -> str:
-    """*line* with each standalone *current* replaced by *target*.
-
-    A minimum version ("10.2.0+", "10.2.0 or later") and a longer number that
-    merely contains *current* are left alone.
-    """
-    pattern = rf"(?<![\d.]){re.escape(current)}(?!\d|\.\d|\+|\s+or later)"
-    return re.sub(pattern, target, line)
+def _doc_patterns(rules, path: str, current: str) -> list:
+    """The patterns check_doc_versions applies to *path*, floors already excluded."""
+    patterns = [pattern for pattern, _ in rules.build_lemonade_patterns(current)]
+    if path in rules.BARE_VERSION_PIN_FILES:
+        patterns.append(rules.build_bare_pin_pattern()[0])
+    return [re.compile(pattern) for pattern in patterns]
 
 
-def check_doc(path: str, old: str, new: str, current: str, target: str) -> None:
+def _swap_version(line: str, patterns: list, current: str, target: str) -> str:
+    """*line* with each pin check_doc_versions finds for *current* set to *target*."""
+    spans = {
+        match.span("version")
+        for pattern in patterns
+        for match in pattern.finditer(line)
+        if match.group("version") == current
+    }
+    for start, end in sorted(spans, reverse=True):
+        line = line[:start] + target + line[end:]
+    return line
+
+
+def check_doc(path: str, old: str, new: str, current: str, target: str, rules) -> None:
+    patterns = _doc_patterns(rules, path, current)
     # Split on "\n" only: other line separators must not change unnoticed.
     old_lines, new_lines = old.split("\n"), new.split("\n")
     same = len(old_lines) == len(new_lines) and all(
-        a == b or _swap_version(a, current, target) == b
+        a == b or _swap_version(a, patterns, current, target) == b
         for a, b in zip(old_lines, new_lines)
     )
     if not same:
@@ -237,8 +309,13 @@ def check_and_apply(repo: Path, patch: Path, target: str) -> list:
     if not VERSION.fullmatch(target):
         raise BumpRejected(f"--target {target!r} is not a version")
     current = current_version(repo)
+    rules = _load_doc_rules(repo)
     paths = changed_paths(repo, patch)
-    check_allowed(repo, paths)
+    check_allowed(repo, paths, rules)
+    # A bump moves every pin, so a file it leaves alone keeps the old version's pins.
+    unchanged = sorted((set(PIN_ASSIGNMENTS) | {RELEASE_TAGS}) - set(paths))
+    if unchanged:
+        raise BumpRejected(f"a bump to {target} must also change {unchanged}")
     _git(repo, "apply", "--check", "--index", str(patch))
     _git(repo, "apply", "--index", str(patch))
     staged = _git(repo, "diff", "--cached", "--name-only", "-z").split("\0")
@@ -250,11 +327,11 @@ def check_and_apply(repo: Path, patch: Path, target: str) -> list:
         old = _git_bytes(repo, "show", f"HEAD:{path}")
         new = _git_bytes(repo, "show", f":{path}")
         if path in PIN_ASSIGNMENTS:
-            check_python(path, old, new, target)
+            check_python(path, old, new, current, target)
         elif path == RELEASE_TAGS:
             check_release_tags(_text(old, path), _text(new, path))
         else:
-            check_doc(path, _text(old, path), _text(new, path), current, target)
+            check_doc(path, _text(old, path), _text(new, path), current, target, rules)
     return paths
 
 
