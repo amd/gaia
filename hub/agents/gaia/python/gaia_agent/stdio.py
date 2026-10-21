@@ -1793,10 +1793,13 @@ def main(argv: Optional[list] = None) -> int:
         )
         agent.conversation_history = SessionHistory(history_path)
         logger.info("Session transcript: %s", history_path)
-        agent.bind_task_list_store(
-            agent.conversation_history.load_task_list,
-            agent.conversation_history.save_task_list,
-        )
+        # Fast mode has no task list; the mixin's bind is then a no-op.
+        bind = getattr(agent, "bind_task_list_store", None)
+        if bind is not None:
+            bind(
+                agent.conversation_history.load_task_list,
+                agent.conversation_history.save_task_list,
+            )
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
         _write_if_wire_alive(_terminal_error(exc), out)

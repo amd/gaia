@@ -42,11 +42,9 @@ TOOL_NAME = "update_tasks"
 
 #: The whole prompt cost of the feature; local models pay for every token.
 PROMPT_RULES = (
-    "\n**TASK LIST:** For a request that takes three or more steps, first call "
-    "`update_tasks(items=[...])` with short imperative steps, call "
-    "`update_tasks(advance=true)` as each one finishes, and finish them all "
-    "before you answer. Skip it for questions and one-step requests. The user "
-    "sees the list, so never repeat it in your reply.\n"
+    "\n**TASK LIST:** For work of three or more steps, list them first with "
+    "`update_tasks` and advance it as each finishes. Never repeat the list in "
+    "your reply.\n"
 )
 
 #: Most items a single ``items`` argument may carry before it is refused

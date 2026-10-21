@@ -306,6 +306,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "get_shell_state": "Checking the shell session",
     "reset_shell_session": "Resetting the shell session",
     "sleep": "Waiting",
+    "update_tasks": "Updating the task list",
     "get_file_info": "Inspecting file",
     "list_recent_files": "Listing recent files",
     "search_file": "Searching files",
