@@ -243,11 +243,30 @@ describe('Downloads.astro', () => {
       .filter((href) => !rendered.publishedUrls.has(href));
     expect(invented).toEqual([]);
 
-    // 3 desktop CTAs + 7 terminal CTAs + 3 + 11 in the all-downloads list.
-    expect(links).toHaveLength(24);
+    // 2 desktop CTAs + 6 terminal CTAs + 2 + 9 in the all-downloads list.
+    expect(links).toHaveLength(19);
     expect(rendered.publishedUrls.size).toBe(17);
     // Never the pre-release, though it is newer and carries the same names.
     expect(links.filter((a) => String(a.attrs.href).includes('-rc'))).toEqual([]);
+  });
+
+  // 0.24.1 predates the one Windows setup (its win-x64-setup is terminal-only),
+  // so Windows x64 gets no download at all: never the desktop app's own setup
+  // or the raw binary standing in for the setup.
+  it('offers Windows x64 nothing when the release has no one-setup', () => {
+    const hrefs = descendants(rendered.root)
+      .filter((e) => e.tag === 'a')
+      .map((a) => a.attrs.href as string);
+    expect(hrefs).not.toContain(desktopUrl('win-x64'));
+    expect(hrefs).not.toContain(tuiUrl('win-x64'));
+    expect(hrefs).not.toContain(tuiUrl('win-x64-setup'));
+
+    const windows = ctas().filter((b) => b.attrs['data-platform'] === 'win-x64');
+    expect(windows.map((b) => [b.attrs['data-surface'], b.attrs['data-kind']])).toEqual([
+      ['setup', 'none'],
+    ]);
+    expect(hrefsIn(windows[0])).toEqual([]);
+    expect(textOf(windows[0])).toContain(`not published for v${VERSION}`);
   });
 
   it('keeps every reveal block hidden until the script places the machine', () => {
@@ -264,8 +283,9 @@ describe('Downloads.astro', () => {
       .filter((e) => 'data-dl-cta' in e.attrs || 'data-dl-note' in e.attrs)
       .map(name);
 
-    // 6 desktop blocks (3 builds, 3 "no build"), 6 terminal rows, 2 captions.
-    expect(reveals.length).toBe(14);
+    // 5 desktop blocks (2 builds, 3 "no build"), 5 terminal rows, the Windows
+    // "no setup" line, 2 captions.
+    expect(reveals.length).toBe(13);
     expect(hidden.sort()).toEqual([...reveals].sort());
 
     // The full list is the no-JS offer, so it must render open.
@@ -276,14 +296,14 @@ describe('Downloads.astro', () => {
 
   it('offers each block only its own platform, and no build where there is none', () => {
     const expected: Record<string, string[]> = {
-      'desktop:win-x64': [desktopUrl('win-x64')],
+      // Windows x64's only offer is the one setup, which 0.24.1 does not have.
+      'setup:win-x64': [],
       'desktop:darwin-arm64': [desktopUrl('darwin-arm64')],
       'desktop:linux-x64': [desktopUrl('linux-x64')],
       // The three the app publishes no build for: copy, never a link.
       'desktop:win-arm64': [],
       'desktop:darwin-x64': [],
       'desktop:linux-arm64': [],
-      'tui:win-x64': [tuiUrl('win-x64-setup')],
       'tui:darwin-arm64': [tuiUrl('darwin-arm64-pkg')],
       'tui:linux-x64': [tuiUrl('linux-x64-deb'), tuiUrl('linux-x64-rpm')],
       'tui:win-arm64': [tuiUrl('win-arm64')],
@@ -307,8 +327,7 @@ describe('Downloads.astro', () => {
         .flatMap((b) => descendants(b).filter((e) => e.tag === 'a'))
         .map(textOf);
 
-    expect(label('tui', 'win-x64')).toEqual(['Download for Windows (x64)']);
-    expect(label('desktop', 'win-x64')).toEqual(['Download for Windows (x64)']);
+    expect(label('desktop', 'darwin-arm64')).toEqual(['Download for macOS (Apple Silicon)']);
     expect(label('tui', 'darwin-arm64')).toEqual(['Download for macOS (Apple Silicon)']);
     expect(label('tui', 'linux-x64')).toEqual([
       'Debian / Ubuntu (.deb)',
@@ -322,7 +341,7 @@ describe('Downloads.astro', () => {
       .filter((e) => e.tag === 'a')
       .map((a) => (typeof a.attrs['aria-label'] === 'string' ? a.attrs['aria-label'] : textOf(a)));
 
-    expect(names).toHaveLength(14);
+    expect(names).toHaveLength(11);
     // Six "Standalone binary" entries in a screen reader's links list are
     // indistinguishable; the platform is what tells them apart.
     expect(new Set(names).size).toBe(names.length);
@@ -425,39 +444,50 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect(invented).toEqual([]);
   });
 
-  it('lists the setup once, and keeps the desktop-only setup and the raw binary', async () => {
+  // The desktop app's own setup and the raw binary stay on the release (the
+  // auto-updater and install.ps1 fetch them) but are not offered on the page.
+  it('lists the setup once, and nothing else for Windows x64', async () => {
     RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
     rendered = await render();
+    const hrefs = descendants(rendered.root)
+      .filter((e) => e.tag === 'a')
+      .map((a) => a.attrs.href as string);
     const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
-    const links = descendants(list).filter((e) => e.tag === 'a');
-    const hrefs = links.map((a) => a.attrs.href as string);
+    const listLinks = descendants(list).filter((e) => e.tag === 'a');
 
-    expect(hrefs.filter((h) => h === setupUrl('win-x64-setup'))).toHaveLength(1);
-    expect(hrefs).toContain(setupDesktopUrl('win-x64'));
-    expect(hrefs).toContain(setupUrl('win-x64'));
+    expect(listLinks.filter((a) => a.attrs.href === setupUrl('win-x64-setup'))).toHaveLength(1);
+    expect(hrefs).not.toContain(setupDesktopUrl('win-x64'));
+    expect(hrefs).not.toContain(setupUrl('win-x64'));
 
-    const names = links.map((a) =>
+    const names = listLinks.map((a) =>
       typeof a.attrs['aria-label'] === 'string' ? a.attrs['aria-label'] : textOf(a),
     );
     expect(new Set(names).size).toBe(names.length);
-    expect(names.find((n) => n.includes('Desktop app only'))).toContain('Windows (x64)');
+    expect(names.filter((n) => n.includes('Windows (x64)'))).toEqual([
+      'GAIA setup for Windows (x64): desktop app, terminal, or both',
+    ]);
   });
 
-  it('keeps the two cards when the release carries no Windows setup', async () => {
+  // v0.25.0 as GitHub has it: no one-setup. Until a release carries it, Windows
+  // x64 gets a plain line and no button -- not the desktop app's setup or the
+  // raw binary in its place.
+  it('offers no Windows x64 download when the release carries no setup', async () => {
     const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
     RELEASES = releaseAt(Object.values(rest));
     rendered = await render();
 
-    expect(ctas().filter((b) => b.attrs['data-surface'] === 'setup')).toEqual([]);
-    const windows = Object.fromEntries(
-      ctas()
-        .filter((b) => b.attrs['data-platform'] === 'win-x64')
-        .map((b) => [b.attrs['data-surface'], hrefsIn(b)]),
-    );
-    expect(windows).toEqual({
-      desktop: [setupDesktopUrl('win-x64')],
-      tui: [setupUrl('win-x64')],
-    });
+    const windows = ctas().filter((b) => b.attrs['data-platform'] === 'win-x64');
+    expect(windows.map((b) => [b.attrs['data-surface'], b.attrs['data-kind']])).toEqual([
+      ['setup', 'none'],
+    ]);
+    expect(textOf(windows[0])).toContain(`not published for v${SETUP_VERSION}`);
+
+    const hrefs = descendants(rendered.root)
+      .filter((e) => e.tag === 'a')
+      .map((a) => a.attrs.href as string);
+    expect(hrefs).not.toContain(setupDesktopUrl('win-x64'));
+    expect(hrefs).not.toContain(setupUrl('win-x64'));
+    expect(hrefs.filter((h) => !rendered.publishedUrls.has(h))).toEqual([]);
   });
 });
 
@@ -484,7 +514,6 @@ describe('Downloads.astro against an incomplete release', () => {
         .map((b) => [b.attrs['data-platform'], [b.attrs['data-kind'], ...hrefsIn(b)]]),
     );
     expect(tui).toEqual({
-      'win-x64': ['binary', setupUrl('win-x64')],
       'darwin-arm64': ['binary', setupUrl('darwin-arm64')],
       'linux-x64': ['binary', setupUrl('linux-x64')],
       'win-arm64': ['binary', setupUrl('win-arm64')],
@@ -514,6 +543,22 @@ describe('Downloads.astro against an incomplete release', () => {
 
   it('fails the build when the stable release carries no desktop build', async () => {
     stubReleases(() => Response.json([stable(SETUP_VERSION, Object.values(SETUP_RELEASE_FILES))]));
+    await expect(renderHtml()).rejects.toThrow(
+      /v0\.25\.0 carries \d+ assets, none of which is a desktop app build/,
+    );
+  });
+
+  // The Windows desktop setup is on the release but not offered, so on its own
+  // it does not count: the desktop card would render with nothing in it.
+  it('fails the build when the only desktop build is the one the page does not offer', async () => {
+    stubReleases(() =>
+      Response.json([
+        stable(SETUP_VERSION, [
+          SETUP_DESKTOP_FILES['win-x64'],
+          ...Object.values(SETUP_RELEASE_FILES),
+        ]),
+      ]),
+    );
     await expect(renderHtml()).rejects.toThrow(
       /v0\.25\.0 carries \d+ assets, none of which is a desktop app build/,
     );

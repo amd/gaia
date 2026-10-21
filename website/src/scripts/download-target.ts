@@ -106,6 +106,18 @@ export const INSTALLERS_FOR: Record<PlatformKey, InstallerKey[]> = {
  */
 export const WINDOWS_SETUP_SINCE = '0.25.0';
 
+/**
+ * Platforms where the site offers exactly one download: the setup that installs
+ * the desktop app, the terminal, or both. Only Windows x64 has one; macOS and
+ * Linux keep a download per surface.
+ *
+ * The desktop app's own setup and the raw terminal binary stay on the release,
+ * because the desktop app's auto-updater and install.ps1 fetch them, but the
+ * site does not offer them here. A release without the setup gets no Windows
+ * x64 button at all rather than one of those two in its place.
+ */
+export const SETUP_ONLY_PLATFORMS: readonly PlatformKey[] = ['win-x64'];
+
 /** True when `version` is at or past WINDOWS_SETUP_SINCE; false if unparseable. */
 export function windowsSetupOffersChoice(version: string): boolean {
   const core = (v: string) => v.split('-')[0].split('.').map(Number);
