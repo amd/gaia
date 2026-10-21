@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A turn the model gave up on ends as failed, not done.** When the model
+  stopped responding or refused mid-turn (a stall, a 404, every retry spent),
+  the turn ended on the model's opening sentence and the Agent UI listed the
+  chat as done. The final answer now names the step, the provider and the
+  cause, what already ran, and what is unfinished, and the `final` event
+  carries `failed: true`.
 - **Full access in the Agent UI grants the folders you name.** Turning it on
   over `/sessions/{id}/bypass` refused every path outside the chat's scope with
   nobody asked. On a run the caller can answer for, Full access now grants the

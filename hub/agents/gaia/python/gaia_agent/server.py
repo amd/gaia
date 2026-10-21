@@ -522,7 +522,10 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
-                return {"type": "final", "answer": value}
+                final: Dict[str, Any] = {"type": "final", "answer": value}
+                if result.get("model_failed"):
+                    final["failed"] = True
+                return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
             return {"type": "error", "detail": error, "status": 500}

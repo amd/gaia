@@ -24,12 +24,11 @@ from gaia.llm.lemonade_client import (
     _cloud_request_error,
 )
 from gaia.llm.providers.lemonade import (
-    AGENT_UI_MODEL_SWITCH_HINT,
-    TUI_MODEL_SWITCH_HINT,
     LemonadeCloudAccountError,
     LemonadeCloudModelUnavailableError,
     classify_lemonade_exception,
 )
+from gaia.llm.surface_hints import AGENT_UI_MODEL_SWITCH_HINT, TUI_MODEL_SWITCH_HINT
 from gaia.ui._chat_helpers import _agent_ui_wording, _classify_chat_exception
 from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest

@@ -12,7 +12,8 @@ changed the file since.
 
 What a turn cannot account for — a shell command or a Python snippet that may
 have written files on its own — is recorded with :func:`note_untracked`, and
-the turn is reported as "undo may be incomplete".
+the turn is reported as "undo may be incomplete". Work noted as read-only is
+kept in the record but does not mark the turn.
 
 A restore is all or nothing: every file is checked before any is touched, and
 a write that fails part-way puts back the files already restored.
@@ -157,7 +158,7 @@ class TurnRecorder:
 
     @property
     def has_changes(self) -> bool:
-        return bool(self._manifest["files"] or self._manifest["untracked"])
+        return bool(self._manifest["files"] or _may_have_written(self._manifest))
 
     def _save(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -216,17 +217,32 @@ class TurnRecorder:
                 ) from e
 
     def note_untracked(
-        self, kind: str, detail: str, paths: Optional[List[str]] = None
+        self,
+        kind: str,
+        detail: str,
+        paths: Optional[List[str]] = None,
+        may_write: bool = True,
     ) -> None:
-        """Record work that may have changed files without a copy being saved."""
+        """Record work done without a copy being saved.
+
+        *may_write* False records work known not to have written files; it is
+        saved with the turn but does not make undo incomplete.
+        """
         with self._lock:
             if self._closed:
-                self._note_late(kind, detail)
+                if may_write:
+                    self._note_late(kind, detail)
                 return
             self._manifest["untracked"].append(
-                {"kind": kind, "detail": detail[:500], "paths": list(paths or [])}
+                {
+                    "kind": kind,
+                    "detail": detail[:500],
+                    "paths": list(paths or []),
+                    "may_write": may_write,
+                }
             )
-            self._save()
+            if may_write:
+                self._save()
 
     def _note_late(self, kind: str, detail: str) -> None:
         """A tool abandoned at its time limit wrote after the turn ended.
@@ -243,6 +259,7 @@ class TurnRecorder:
                 "kind": kind,
                 "detail": f"after the turn ended: {detail[:480]}",
                 "paths": [],
+                "may_write": True,
             }
         )
         _write_json_atomic(path, manifest)
@@ -341,11 +358,28 @@ def before_change(path: os.PathLike | str, tool: Optional[str] = None) -> None:
         recorder.capture(path, tool)
 
 
-def note_untracked(kind: str, detail: str, paths: Optional[List[str]] = None) -> None:
-    """Mark the current turn's undo as possibly incomplete."""
+def note_untracked(
+    kind: str,
+    detail: str,
+    paths: Optional[List[str]] = None,
+    may_write: bool = True,
+) -> None:
+    """Record work in the current turn that GAIA kept no copy for.
+
+    Unless *may_write* is False, the turn's undo is marked as possibly
+    incomplete.
+    """
     recorder = _ACTIVE.get()
     if recorder is not None:
-        recorder.note_untracked(kind, detail, paths)
+        recorder.note_untracked(kind, detail, paths, may_write)
+
+
+def _may_have_written(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The turn's untracked work that may have changed files.
+
+    Entries saved before ``may_write`` existed count as writes.
+    """
+    return [u for u in manifest.get("untracked", []) if u.get("may_write", True)]
 
 
 # ---------------------------------------------------------------------------
@@ -415,8 +449,8 @@ def _summary(turn: _Turn) -> Dict[str, Any]:
         "finished_at": m.get("finished_at"),
         "restored_at": m.get("restored_at"),
         "files": changed,
-        "untracked": m.get("untracked", []),
-        "incomplete": bool(m.get("untracked")),
+        "untracked": _may_have_written(m),
+        "incomplete": bool(_may_have_written(m)),
     }
 
 
@@ -694,8 +728,8 @@ def restore_turn(
         "restored": [e["path"] for e in entries if e["existed"]],
         "removed": [e["path"] for e in entries if not e["existed"]],
         "kept_folders": sorted(set(kept_dirs)),
-        "untracked": m.get("untracked", []),
-        "incomplete": bool(m.get("untracked")),
+        "untracked": _may_have_written(m),
+        "incomplete": bool(_may_have_written(m)),
     }
 
 
@@ -818,7 +852,7 @@ def session_changes(session_id: str, root: Optional[Path] = None) -> Dict[str, A
     turns = _live_turns(session_id, root)
     finished = [t for t in turns if t.manifest.get("finished_at")]
     files = [_span_diff(span) for span in _spans(finished)]
-    untracked = [u for t in finished for u in t.manifest.get("untracked", [])]
+    untracked = [u for t in finished for u in _may_have_written(t.manifest)]
     counted = [f for f in files if f["additions"] is not None]
     return {
         "files": files,
@@ -872,7 +906,7 @@ def restore_session(
     for turn in turns:
         turn.manifest["restored_at"] = restored_at
         _write_json_atomic(turn.dir / MANIFEST, turn.manifest)
-    untracked = [u for t in turns for u in t.manifest.get("untracked", [])]
+    untracked = [u for t in turns for u in _may_have_written(t.manifest)]
     return {
         "turn_ids": [t.manifest["turn_id"] for t in turns],
         "restored": [s.first["path"] for s in spans if s.first["existed"]],

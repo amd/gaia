@@ -17,6 +17,7 @@ import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { refreshTurnChanges } from '../../hooks/useTurnChanges';
 import { announceUndo, useUndoEvents } from '../../utils/undoEvents';
+import { untrackedWarning } from '../../utils/untrackedWork';
 import { DiffCard } from '../render/DiffCard';
 import { PanelSection } from './PanelSection';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
@@ -181,7 +182,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             </ul>
             {changes.incomplete && (
                 <p className="sp-warn-text" role="note">
-                    <AlertTriangle size={11} aria-hidden="true" /> Commands in this chat may have changed files GAIA can't see or undo.
+                    <AlertTriangle size={11} aria-hidden="true" /> {untrackedWarning(changes.untracked, { inChat: true, undo: 'Undo all' })}
                 </p>
             )}
             <div className="sp-actions-row">
