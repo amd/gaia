@@ -70,10 +70,13 @@ describe('TaskListCard never shows a false picture', () => {
     });
 
     it('says "still working" rather than "done" while the turn runs on', () => {
-        const state = ok({ items: [item(1, 'completed'), item(2, 'completed')] });
+        const state = ok({ items: [item(1, 'completed'), item(2, 'completed')], current_action: 'Writing file: notes.txt' });
         const { rerender } = render(<TaskListCard taskList={state} running />);
         expect(screen.getByText('2 of 2 · still working')).toBeTruthy();
         rerender(<TaskListCard taskList={state} running={false} />);
+        expect(screen.getByText('2 of 2 done')).toBeTruthy();
+        // An earlier turn's finished list has no live action: it stays "done".
+        rerender(<TaskListCard taskList={{ ...state, current_action: null }} running />);
         expect(screen.getByText('2 of 2 done')).toBeTruthy();
     });
 

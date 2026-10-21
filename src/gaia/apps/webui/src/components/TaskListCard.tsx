@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, Circle, Loader2 } from 'lucide-react';
 import type { TaskListItem, TaskListState } from '../types';
+import { log } from '../utils/logger';
 import './TaskListCard.css';
 
 /** "12s", "2m 05s", "1h 04m" — the timer and per-step durations. */
@@ -76,7 +77,11 @@ export function pickTaskList(
     let saved: TaskListState | null = null;
     if (savedRaw) {
         const parsed = parseTaskListEvent(savedRaw);
-        saved = 'state' in parsed ? parsed.state : null;
+        if ('state' in parsed) {
+            saved = parsed.state;
+        } else {
+            log.chat.warn(`Ignored this chat's saved task list: ${parsed.error}`);
+        }
     }
     const newest = (live?.updated_at ?? 0) >= (saved?.updated_at ?? 0) ? live ?? saved : saved;
     return newest && newest.items.length > 0 ? newest : null;
@@ -131,8 +136,9 @@ export function TaskListCard({ taskList, running }: TaskListCardProps) {
         : null;
     const total = items.length + (taskList.hidden ?? 0);
     // Never claim "done" while the agent is still working.
+    // A list finished in an earlier turn carries no live action and stays "done".
     const progress = allDone
-        ? (running ? `${done} of ${total} · still working` : `${done} of ${total} done`)
+        ? (running && taskList.current_action ? `${done} of ${total} · still working` : `${done} of ${total} done`)
         : `${done} of ${total}`;
     const staleSteps = running ? taskList.steps_since_update ?? 0 : 0;
     const stale = staleSteps >= STALE_AFTER_STEPS;

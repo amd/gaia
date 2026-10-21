@@ -57,7 +57,7 @@ func (m *ChatModel) setTaskList(e *event.CanonicalTaskListEvent) {
 		e = &clean
 	}
 	m.taskList = e
-	m.resize()
+	// Callers redraw through updateViewport, which re-measures the card.
 }
 
 // oneLine strips escape sequences and control characters and folds whitespace.
@@ -105,8 +105,9 @@ func (m ChatModel) renderTaskList(maxRows int) string {
 	count := fmt.Sprintf("%d of %d", done, total)
 	allDone := done == len(tl.Items) && m.taskHidden == 0
 	switch {
-	case allDone && m.streaming:
-		// Never claim "done" while the agent is still working.
+	case allDone && m.streaming && tl.CurrentAction != "":
+		// Never claim "done" while the agent is still working on this list; a
+		// list finished in an earlier turn carries no live action.
 		count += " · still working"
 	case allDone:
 		count += " done"

@@ -425,14 +425,16 @@ def test_a_corrupt_session_row_is_cleared_with_a_warning(clean_registry):
 # -- reminders ------------------------------------------------------------------
 
 
-def test_the_reminder_fires_once_after_two_calls_without_a_list():
+def test_the_reminder_fires_once_after_three_calls_without_a_list():
+    """Not after two: a two-call lookup is usually about to answer."""
     from gaia.agents.tools.task_list_tools import NUDGE_START, TaskList
 
     tl = TaskList()
     tl.begin_turn()
     assert tl.nudge() is None
-    tl.action_started("read_file", {})
-    assert tl.nudge() is None
+    for _ in range(2):
+        tl.action_started("read_file", {})
+        assert tl.nudge() is None
     tl.action_started("read_file", {})
     assert tl.nudge() == NUDGE_START
     tl.action_started("read_file", {})
@@ -464,9 +466,26 @@ def test_a_finished_list_from_an_earlier_turn_does_not_count_as_kept():
     tl.update(items=["a"])
     tl.update(advance=True)
     tl.begin_turn()
-    tl.action_started("x", {})
-    tl.action_started("x", {})
+    events = []
+    tl._on_change = events.append
+    for _ in range(3):
+        tl.action_started("x", {})
     assert tl.nudge() == NUDGE_START
+    # Nor is it this turn's work: no live action, nothing re-sent.
+    assert events == []
+    assert tl.state()["current_action"] is None
+
+
+def test_an_earlier_requests_unfinished_list_gets_no_advance_reminder():
+    from gaia.agents.tools.task_list_tools import TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.update(items=STEPS)
+    tl.begin_turn()
+    for _ in range(5):
+        tl.action_started("read_file", {})
+    assert tl.nudge() is None
 
 
 def test_the_agent_sends_the_reminder_to_the_model_but_not_into_history(clean_registry):
@@ -479,6 +498,7 @@ def test_the_agent_sends_the_reminder_to_the_model_but_not_into_history(clean_re
     replies = [
         _calls(("read_tli", {"path": "a"})),
         _calls(("read_tli", {"path": "b"})),
+        _calls(("read_tli", {"path": "c"})),
         _calls(("update_tasks", {"items": STEPS, "done": [1]})),
         "done",
     ]
@@ -492,7 +512,7 @@ def test_the_agent_sends_the_reminder_to_the_model_but_not_into_history(clean_re
     )
     result = agent.process_query("go")
     reminded = [i for i, users in enumerate(seen) if NUDGE_START in users]
-    assert reminded and reminded[0] == 2, seen
+    assert reminded and reminded[0] == 3, seen
     assert [i["status"] for i in agent.task_list.items] == [
         COMPLETED,
         IN_PROGRESS,
@@ -500,3 +520,38 @@ def test_the_agent_sends_the_reminder_to_the_model_but_not_into_history(clean_re
     ]
     saved = json.dumps(result.get("model_messages") or [])
     assert NUDGE_START not in saved
+
+
+# -- other readers of the wire ----------------------------------------------------
+
+
+def test_gaia_agent_query_prints_one_line_per_step_started():
+    import io
+
+    from gaia.agents.tools.task_list_tools import TaskList
+    from gaia.daemon.agent_query import ConsoleRenderer
+
+    err = io.StringIO()
+    renderer = ConsoleRenderer(out=io.StringIO(), err=err)
+    tl = TaskList(on_change=lambda s: renderer.render({"type": "task_list", **s}))
+    tl.begin_turn()
+    tl.update(items=STEPS)
+    for _ in range(3):
+        tl.action_started("read_file", {})
+    tl.update(advance=True)
+    lines = err.getvalue().splitlines()
+    assert lines == ["  [>] 1/3 Read the file", "  [>] 2/3 Write the summary"]
+    assert "unknown event" not in err.getvalue()
+
+
+def test_an_unreadable_task_list_never_breaks_the_session_list():
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.utils import session_to_response
+
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="t")["id"]
+    db._conn.execute(
+        "UPDATE sessions SET task_list = ? WHERE id = ?", ("{not json", sid)
+    )
+    [row] = [s for s in db.list_sessions() if s["id"] == sid]
+    assert session_to_response(row).task_list is None

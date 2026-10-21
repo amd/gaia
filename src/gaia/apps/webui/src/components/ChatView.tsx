@@ -249,7 +249,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const session = sessions.find((s) => s.id === sessionId);
     const liveTaskList = useChatStore((s) => s.liveTaskLists[sessionId]);
-    const taskList = pickTaskList(session?.task_list, liveTaskList);
+    const savedTaskList = session?.task_list;
+    const taskList = useMemo(() => pickTaskList(savedTaskList, liveTaskList), [savedTaskList, liveTaskList]);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');

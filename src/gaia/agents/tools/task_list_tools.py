@@ -54,7 +54,7 @@ PROMPT_RULES = (
 _MAX_RAW_ITEMS = 1000
 
 #: Tool calls into a request, with no list, before the model is reminded.
-NUDGE_AFTER_CALLS = 2
+NUDGE_AFTER_CALLS = 3
 #: Tool calls since the last list change before the model is reminded.
 NUDGE_STALE_STEPS = 3
 NUDGE_START = (
@@ -218,7 +218,13 @@ class TaskList:
                     return None
                 self._nudged = True
                 return NUDGE_START
-            if self.is_active() and self._steps_since_update >= NUDGE_STALE_STEPS:
+            # Only a list this turn is working on; an earlier request's
+            # unfinished list may have nothing to do with this one.
+            if (
+                self._kept_this_turn
+                and self.is_active()
+                and self._steps_since_update >= NUDGE_STALE_STEPS
+            ):
                 self._nudged = True
                 return NUDGE_ADVANCE
             return None
@@ -382,7 +388,8 @@ class TaskList:
         label = self._narrate(tool, args or {}) if self._narrate else tool
         with self._lock:
             self._calls_this_turn += 1
-            if not self._items:
+            # A list finished in an earlier turn is history, not this turn's work.
+            if not self._items or not (self.is_active() or self._kept_this_turn):
                 return
             self._current_action = label
             self._action_started_at = _now()

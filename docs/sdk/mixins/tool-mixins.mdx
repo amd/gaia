@@ -305,9 +305,10 @@ apps title the card "Plan" instead of "Tasks", so you can tell which one you
 are looking at.
 
 **Reminders.** Models often skip the prompt rule, so the agent reminds them,
-at most once per turn: after two tool calls with no list (start one, marking
-what is already done), or after three tool calls since the last change to an
-unfinished list (advance it). A reminder goes to the model for that turn only
+at most once per turn: after three tool calls with no list (start one, marking
+what is already done), or after three tool calls since the last change to the
+unfinished list this turn is keeping (advance it). An earlier request's list
+gets no reminder. A reminder goes to the model for that turn only
 and is never saved in the conversation.
 
 ---

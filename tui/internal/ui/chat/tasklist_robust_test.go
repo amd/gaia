@@ -50,9 +50,16 @@ func TestUnknownStatusesReadAsPending(t *testing.T) {
 }
 
 func TestADoneListSaysStillWorkingWhileTheTurnRuns(t *testing.T) {
-	m := feed(t, newTestChat(t), listOf(event.TaskCompleted, event.TaskCompleted))
+	finished := listOf(event.TaskCompleted, event.TaskCompleted)
+	finished.CurrentAction = "Writing file: notes.txt"
+	m := feed(t, newTestChat(t), finished)
 	if out := plain(m); !strings.Contains(out, "2 of 2 · still working") || strings.Contains(out, "done") {
 		t.Errorf("a running turn claims to be done:\n%s", out)
+	}
+	// A list an earlier turn finished has no live action: it is simply done.
+	m = feed(t, m, listOf(event.TaskCompleted, event.TaskCompleted))
+	if out := plain(m); !strings.Contains(out, "2 of 2 done") {
+		t.Errorf("an earlier turn's finished list reads as in progress:\n%s", out)
 	}
 	m.streaming = false
 	m.resize()
@@ -149,6 +156,7 @@ func BenchmarkTaskListRender(b *testing.B) {
 	e := listOf(event.TaskCompleted, event.TaskCompleted, event.TaskInProgress, event.TaskPending, event.TaskPending,
 		event.TaskPending, event.TaskPending, event.TaskPending, event.TaskPending, event.TaskPending, event.TaskPending, event.TaskPending)
 	m.setTaskList(&e)
+	m.updateViewport()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.renderTaskList(m.taskRows)
@@ -162,6 +170,7 @@ func BenchmarkFrameWithTaskList(b *testing.B) {
 	m.streaming = true
 	e := listOf(event.TaskCompleted, event.TaskInProgress, event.TaskPending, event.TaskPending)
 	m.setTaskList(&e)
+	m.updateViewport()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.View()
