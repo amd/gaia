@@ -259,6 +259,7 @@ python util/lint.py --workflow-ancestor-skip # reject job if: conditions an upst
 python util/lint.py --test-lanes  # reject test files that no CI lane runs
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
+python util/lint.py --release-versions # every version field matches its source
 ```
 
 <Note>
@@ -374,6 +375,34 @@ It reads `.env` (gitignored) or the environment, writes probes under
 `agents/_credential-probe/` and deletes them, and prints no secret value. It
 still cannot prove the credential works **from GitHub's runners** — a token with
 Client IP Address Filtering passes locally and fails in CI.
+
+### Version fields
+
+`src/gaia/version.py` is the only version you edit for a core release. One
+command writes every field that follows it, and lint fails when one drifts,
+naming the file, the value it found, and the value it expected:
+
+```bash
+python util/release_versions.py --stamp   # write every field from its source
+python util/release_versions.py --check   # what lint runs; changes nothing
+```
+
+| Source | Fields that follow it |
+|---|---|
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version` |
+| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
+| `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
+
+`--stamp` does the work of `installer/version/bump-ui-version.mjs`, the flagship's
+`stamp_version.py`, and the hand edits to the component manifests and the navbar.
+Those scripts still work, and release workflows still call them.
+`--stamp vX.Y.Z-rcN` writes a release candidate's versions into the same files
+as `util/release_tag.py stamp`, with the same result.
+
+The flagship and chat agents keep their own versions until they join core's
+([#5172](https://github.com/amd/gaia/issues/5172)). Until then, two fields print as
+`HELD` and don't fail: the chat agent's `__init__.py` version and the flagship npm
+lockfile's root version.
 
 ### The flagship agent in a core release
 

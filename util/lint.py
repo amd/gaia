@@ -815,6 +815,32 @@ def check_doc_versions() -> CheckResult:
     return CheckResult("Doc Version Consistency", True, False, 0, "")
 
 
+def check_release_versions() -> CheckResult:
+    """Fail when a version field drifts from src/gaia/version.py or its agent's."""
+    print("\nChecking release version fields...")
+    print("-" * 40)
+
+    util_dir = str(Path(__file__).parent)
+    if util_dir not in sys.path:
+        sys.path.insert(0, util_dir)
+    try:
+        from release_versions import run_check
+    except ImportError as exc:
+        print(f"[!] Could not import release_versions.py: {exc}")
+        return CheckResult("Release Versions", False, False, 1, str(exc))
+
+    if run_check() != 0:
+        return CheckResult(
+            "Release Versions",
+            False,
+            False,
+            1,
+            "See output above; run: python util/release_versions.py --stamp",
+        )
+
+    return CheckResult("Release Versions", True, False, 0, "")
+
+
 def count_python_files() -> tuple[int, int]:
     """Count Python files and lines of code."""
     total_files = 0
@@ -986,6 +1012,11 @@ def main():
         action="store_true",
         help="Check doc version consistency",
     )
+    parser.add_argument(
+        "--release-versions",
+        action="store_true",
+        help="Check every version field matches its source (util/release_versions.py)",
+    )
     parser.add_argument("--all", action="store_true", help="Run all checks")
     parser.add_argument(
         "--fix", action="store_true", help="Auto-fix issues where possible"
@@ -1010,6 +1041,7 @@ def main():
             args.test_lanes,
             args.tool_descriptions,
             args.doc_versions,
+            args.release_versions,
             args.all,
         ]
     )
@@ -1079,6 +1111,9 @@ def main():
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())
+
+    if args.release_versions or run_all:
+        results.append(check_release_versions())
 
     exit_code = print_summary(results)
     sys.exit(exit_code)

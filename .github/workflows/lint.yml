@@ -20,6 +20,10 @@ on:
       - 'pyproject.toml'
       - 'util/lint.py'
       - 'util/check_*.py'
+      # util/release_versions.py --check reads docs.json's navbar and imports release_tag.py.
+      - 'util/release_versions.py'
+      - 'util/release_tag.py'
+      - 'docs/docs.json'
       - 'util/test_lane_allowlist.yml'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
@@ -37,6 +41,10 @@ on:
       - 'pyproject.toml'
       - 'util/lint.py'
       - 'util/check_*.py'
+      # util/release_versions.py --check reads docs.json's navbar and imports release_tag.py.
+      - 'util/release_versions.py'
+      - 'util/release_tag.py'
+      - 'docs/docs.json'
       - 'util/test_lane_allowlist.yml'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'

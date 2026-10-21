@@ -19,6 +19,7 @@ on:
       # filename table.
       - 'util/check_pe_resources.py'
       - 'util/check_component_core_api.py'
+      - 'util/release_versions.py'
       # The wholesale-skip guard and the allowlist it reads.
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
@@ -51,6 +52,7 @@ on:
       # filename table.
       - 'util/check_pe_resources.py'
       - 'util/check_component_core_api.py'
+      - 'util/release_versions.py'
       # The wholesale-skip guard and the allowlist it reads.
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
