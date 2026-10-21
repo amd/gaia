@@ -7,6 +7,8 @@ Scorecard generator — builds scorecard.json + summary.md from scenario results
 
 from datetime import datetime, timezone
 
+from gaia.eval.claude_usage import aggregate_usage
+
 # Statuses where the scenario was actually judged by the eval agent.
 # Infrastructure failures (TIMEOUT, BUDGET_EXCEEDED, ERRORED) are excluded
 # from avg_score to avoid diluting quality metrics with infra noise.
@@ -183,6 +185,7 @@ def build_scorecard(run_id, results, config):
         "cost": {
             "estimated_total_usd": round(total_cost, 4),
         },
+        "claude_usage": aggregate_usage(results),
         "performance": {
             "avg_tokens_per_second": (
                 round(sum(perf_tps) / len(perf_tps), 1) if perf_tps else None
@@ -298,12 +301,51 @@ def write_summary_md(scorecard):
         if perf_flags:
             lines.append(f"- **Flags:** {', '.join(perf_flags)}")
 
+    lines += _claude_usage_md(scorecard.get("claude_usage") or {})
+
     lines += [
         "",
         f"**Cost:** ${scorecard.get('cost', {}).get('estimated_total_usd', 0):.4f}",
     ]
 
     return "\n".join(lines) + "\n"
+
+
+def _claude_usage_md(usage):
+    """The "Claude usage" section, or nothing when no scenario recorded any."""
+    if not usage.get("scenarios_with_usage"):
+        return []
+
+    def row(label, r, scenarios):
+        return (
+            f"| {label} | {scenarios} | {r.get('calls', 0):,} | "
+            f"{r.get('input_tokens', 0):,} | {r.get('cache_creation_input_tokens', 0):,} | "
+            f"{r.get('cache_read_input_tokens', 0):,} | {r.get('output_tokens', 0):,} | "
+            f"${float(r.get('cost_usd') or 0):.2f} |"
+        )
+
+    lines = [
+        "",
+        "## Claude usage",
+        "As reported by `claude -p`. The driver session plays the user and judges "
+        "every turn, so its tokens cover both. Cost is at list price.",
+        "",
+        "| Category | Scenarios | API calls | Input | Cache write | Cache read | Output | Cost |",
+        "|----------|-----------|-----------|-------|-------------|------------|--------|------|",
+    ]
+    for cat, data in (usage.get("by_category") or {}).items():
+        lines.append(row(cat, data, data.get("scenarios", 0)))
+    lines.append(
+        row("**total**", usage.get("total") or {}, usage["scenarios_with_usage"])
+    )
+    missing = usage.get("scenarios_without_usage") or 0
+    if missing:
+        lines += [
+            "",
+            f"{missing} scenario(s) recorded no usage (killed on timeout or never "
+            "started), so these totals are a lower bound.",
+        ]
+    return lines
 
 
 def write_junit_xml(scorecard):

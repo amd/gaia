@@ -34,6 +34,7 @@ from typing import Optional
 import requests
 import yaml
 
+from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
@@ -195,6 +196,15 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
 _NO_MEASUREMENT_STATUSES = frozenset(
     {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
 )
+
+
+def _cli_payload(stdout):
+    """The ``claude -p --output-format json`` object on stdout, or ``None``."""
+    try:
+        raw = json.loads(stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return raw if isinstance(raw, dict) else None
 
 
 def _driver_usage(stdout):
@@ -1034,6 +1044,11 @@ def summarize_attempts(attempts: list) -> dict:
         key=lambda a: (a.get("status") == "PASS", a.get("overall_score") or 0.0),
     )
     result = dict(representative)
+    usage = merge_scenario_usage(a.get("claude_usage") for a in attempts)
+    if usage is None:
+        result.pop("claude_usage", None)
+    else:
+        result["claude_usage"] = usage
 
     scores = [
         a["overall_score"]
@@ -1902,6 +1917,7 @@ def run_scenario_subprocess(
 
     print(f"\n[RUN] {scenario_id} — invoking claude -p ...", flush=True)
     start = time.time()
+    cli_raw = None
 
     try:
         proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
@@ -1934,6 +1950,7 @@ def run_scenario_subprocess(
             usage = _driver_usage(proc.stdout)
             if usage is not None:
                 result["driver_usage"] = usage
+            cli_raw = _cli_payload(proc.stdout)
         else:
             # Parse JSON from stdout
             try:
@@ -1941,6 +1958,7 @@ def run_scenario_subprocess(
                     raise json.JSONDecodeError("Empty stdout", "", 0)
                 # claude --output-format json wraps result; extract the content
                 raw = json.loads(proc.stdout)
+                cli_raw = raw if isinstance(raw, dict) else None
                 # With --json-schema, structured result is in raw["structured_output"]
                 # Without --json-schema, result is in raw["result"] (string or dict)
                 if (
@@ -2039,6 +2057,12 @@ def run_scenario_subprocess(
         if scenario_backend is not None:
             scenario_backend.abort()
         raise
+
+    # Runner-owned: never trust a usage block inside the driver's own JSON.
+    result.pop("claude_usage", None)
+    driver_usage = usage_from_cli(cli_raw)
+    if driver_usage is not None:
+        result["claude_usage"] = {"roles": {"driver": driver_usage}}
 
     if scenario_backend is not None:
         scenario_backend.finish(result)
@@ -2770,6 +2794,9 @@ class AgentEvalRunner:
             f"{summary.get('judged_pass_rate', 0)*100:.0f}% judged)"
         )
         print(f"Avg score: {summary.get('avg_score', 0):.1f}/10")
+        usage = scorecard.get("claude_usage") or {}
+        if usage.get("scenarios_with_usage"):
+            print(f"Claude: {describe(usage['total'])}")
         print(f"Output: {run_dir}")
         print(f"{'='*60}")
 

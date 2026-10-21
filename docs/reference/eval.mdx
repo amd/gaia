@@ -167,6 +167,16 @@ The run then skips its lanes and says so in a notice and in the job summary. A
 lightweight tag, or one without the marker, runs the evals. A final release
 (`v0.25.0`) always runs them and ignores the marker.
 
+### What Claude spent
+
+Every scenario records the tokens `claude -p` reported for it in `claude_usage`:
+input, output, cache reads, cache writes, API calls and the list-price cost. The
+scorecard adds them up per category and for the run, `summary.md` shows them as a
+table, and the all-lanes CI summary adds the lanes together. The usage is filed
+under the `driver` role: one Claude session plays the user and judges every turn,
+so its tokens cover both jobs. A scenario killed on timeout records none, and the
+totals then say how many scenarios they are missing.
+
 ### Require a complete comparison
 
 Use `gaia eval agent --compare BASELINE CURRENT --require-complete` for a local
