@@ -157,67 +157,47 @@ async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
     assert counts == [6] * 4
 
 
-class _QueuedForEmbedderRag(_SlowRag):
-    """Waits for the embedder's model-slot lease first, hearing the broker's
-    queue updates the way model_lease delivers them, then indexes."""
+async def test_waiting_in_line_for_the_embedder_counts_as_progress(slow_rag):
+    from gaia.daemon import broker_client
 
-    queued_seconds = 1.5
-    steps = 2
+    rag, doc = slow_rag
+    rag.steps = 1
+    real_index = rag.index_document
 
-    def index_document(self, path, progress_callback=None, heartbeat=None):
-        from gaia.daemon import broker_client
+    def index_after_a_long_queue(self, path, progress_callback=None, heartbeat=None):
+        # Queued behind a long chat for the embedder: the broker reports the
+        # wait every so often, but no page or batch moves for 1.5 s.
+        for _ in range(15):
+            broker_client.notify_wait({"event": "queued", "scope": "daemon"})
+            time.sleep(0.1)
+        return real_index(self, path, progress_callback, heartbeat)
 
-        cls = type(self)
-        deadline = time.monotonic() + cls.queued_seconds
-        try:
-            while time.monotonic() < deadline:
-                broker_client.notify_wait(
-                    {"event": "queued", "scope": "daemon", "position": 1}
-                )
-                time.sleep(0.1)
-        except BaseException:
-            cls.stopped_early += 1
-            raise
-        return super().index_document(path, progress_callback, heartbeat)
-
-
-@pytest.fixture
-def queued_rag(slow_rag):
-    _rag, doc = slow_rag
-    queued = type(
-        "QueuedRag",
-        (_QueuedForEmbedderRag,),
-        {
-            "running": 0,
-            "peak": 0,
-            "stopped_early": 0,
-            "threads": [],
-            "lock": threading.Lock(),
-        },
-    )
-    with patch("gaia.rag.sdk.RAGSDK", queued):
-        yield queued, doc
-
-
-async def test_waiting_for_the_embedder_behind_a_chat_is_not_stopped(queued_rag):
-    """A wait for the model slot is not a stall: the broker reports it every
-    few seconds, and each report counts as progress."""
-    rag, doc = queued_rag
+    rag.index_document = index_after_a_long_queue
     with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4):
-        assert await asyncio.wait_for(helpers._index_document(doc), 10) == 2
-    assert rag.stopped_early == 0
+        assert await asyncio.wait_for(helpers._index_document(doc), 10) == 1
 
 
-async def test_cancel_stops_an_index_still_waiting_for_the_embedder(queued_rag):
-    rag, doc = queued_rag
-    rag.queued_seconds = 5
+async def test_cancel_reaches_an_index_waiting_in_line_for_the_model(slow_rag):
+    from gaia.daemon import broker_client
+
+    rag, doc = slow_rag
+    left_the_queue = threading.Event()
+
+    def queued_until_cancelled(self, path, progress_callback=None, heartbeat=None):
+        # A broker wait: it reports and checks its cancel scope as it waits.
+        try:
+            for _ in range(100):
+                broker_client.notify_wait({"event": "queued", "scope": "daemon"})
+                broker_client.check_cancelled("the model slot")
+                time.sleep(0.05)
+        finally:
+            left_the_queue.set()
+        return {"success": True, "num_chunks": 1}
+
+    rag.index_document = queued_until_cancelled
     task = asyncio.create_task(helpers._index_document(doc))
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.3)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-
-    deadline = time.monotonic() + 3
-    while rag.stopped_early == 0 and time.monotonic() < deadline:
-        await asyncio.sleep(0.05)
-    assert rag.stopped_early == 1, "the queued wait kept going after Cancel"
+    assert await asyncio.to_thread(left_the_queue.wait, 1), "still waiting after Cancel"

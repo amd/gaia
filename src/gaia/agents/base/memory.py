@@ -3550,6 +3550,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         "temporarily unavailable",
         "service unavailable",
         "rate limit",
+        "rate-limit",
+        "too many requests",
         "cancelled",
         "canceled",
         "intermittent",
@@ -3989,7 +3991,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     error_msg[:80],
                 )
                 return
-            if self._is_transient_error(error_msg):
+            throttled = isinstance(result, dict) and result.get("rate_limited") is True
+            if throttled or self._is_transient_error(error_msg):
                 logger.debug(
                     "[MemoryMixin] not persisting a transient error for '%s': %s",
                     tool_name,

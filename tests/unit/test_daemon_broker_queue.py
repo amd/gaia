@@ -942,3 +942,105 @@ def test_only_a_failed_connection_counts_as_an_unreachable_daemon(
     with pytest.raises(broker_client.BrokerUnavailableError) as err:
         broker_client.acquire_lease("m")
     assert err.value.unreachable is unreachable
+
+
+# ── An Agent UI upload queued for the embedder behind a chat ────────────────
+
+
+def _rag_that_leases(model):
+    """A RAGSDK stand-in whose index_document takes a real lease, like the embedder load."""
+
+    class _Rag:
+        def __init__(self, _config):
+            pass
+
+        def index_document(self, path, progress_callback=None, heartbeat=None):
+            with broker_client.model_lease(model):
+                return {"success": True, "num_chunks": 1}
+
+    return _Rag
+
+
+@pytest.mark.allow_network
+def test_an_upload_queued_behind_a_chat_is_not_stopped_as_stalled(
+    daemon_factory, monkeypatch, tmp_path
+):
+    """The broker's queue updates keep a waiting upload alive past the timeout."""
+    import asyncio
+
+    from gaia.ui import _chat_helpers as helpers
+
+    daemon = daemon_factory()
+    monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
+    monkeypatch.setattr(helpers, "_INDEX_TIMEOUT_S", 0.8)
+    monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content", encoding="utf-8")
+
+    holder, released = _hold_in_thread("chat-model", 2.5)
+    assert asyncio.run(asyncio.wait_for(helpers._index_document(doc), 15)) == 1
+    assert "at" in released, "indexed before the chat let go of the slot"
+    holder.join(10)
+    assert daemon.waiting() == 0
+
+
+@pytest.mark.allow_network
+def test_cancelling_an_upload_queued_behind_a_chat_leaves_the_queue(
+    daemon_factory, monkeypatch, tmp_path
+):
+    import asyncio
+
+    from gaia.ui import _chat_helpers as helpers
+
+    daemon = daemon_factory()
+    monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
+    monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content", encoding="utf-8")
+    holder, _ = _hold_in_thread("chat-model", 6.0)
+    posts = []
+    real_post = requests.post
+
+    def _counting_post(url, *a, **k):
+        if url.endswith("/models/lease"):
+            posts.append(url)
+        return real_post(url, *a, **k)
+
+    monkeypatch.setattr(requests, "post", _counting_post)
+
+    async def _run():
+        task = asyncio.create_task(helpers._index_document(doc))
+        await asyncio.to_thread(
+            daemon.wait_until, lambda: daemon.waiting() == 1, "the upload to queue"
+        )
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+    daemon.wait_until(lambda: daemon.waiting() == 0, "the upload to leave the queue")
+    assert len(posts) == 1, "Cancel was retried as a fresh lease request"
+    holder.join(10)
+
+
+@pytest.mark.allow_network
+def test_an_upload_queued_behind_a_dead_holder_still_indexes(
+    daemon_factory, monkeypatch, tmp_path
+):
+    """Queue updates may keep an upload waiting, but not forever: a holder that
+    stops renewing is reclaimed and the upload gets the slot."""
+    import asyncio
+
+    from gaia.ui import _chat_helpers as helpers
+
+    daemon = daemon_factory(ModelSlotBroker(heartbeat_ttl_s=1.5))
+    monkeypatch.setattr(broker_routes, "QUEUE_UPDATE_EVERY_S", 0.1)
+    monkeypatch.setattr(helpers, "_INDEX_TIMEOUT_S", 0.8)
+    monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _rag_that_leases("embed-model"))
+    doc = tmp_path / "doc.txt"
+    doc.write_text("content", encoding="utf-8")
+
+    # Granted, then never renewed or released: its process died holding it.
+    dead = daemon.raw_lease("chat-model", renewable=True)
+    assert dead.status_code == 200, dead.text
+    assert asyncio.run(asyncio.wait_for(helpers._index_document(doc), 15)) == 1

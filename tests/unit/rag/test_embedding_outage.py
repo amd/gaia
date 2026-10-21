@@ -15,8 +15,15 @@ import requests
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools import rag_tools
 from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import LemonadeClientError
-from gaia.rag.sdk import RAGSDK, EmbeddingUnavailableError, RAGConfig
+from gaia.rag.sdk import RAGSDK, EmbeddingUnavailableError, IndexingStopped, RAGConfig
+
+# A stop is Cancel reaching the indexer, or a cancelled model-slot wait.
+_STOPS = [
+    lambda: IndexingStopped("report.pdf"),
+    lambda: LeaseWaitCancelled("stopped while waiting for the model slot"),
+]
 
 MODEL = "nomic-embed-text-v2-moe-GGUF"
 
@@ -133,33 +140,34 @@ class TestSdk:
                 sdk._load_embedder()
         assert exc.value.unreachable
 
-    def test_a_stop_during_the_embedder_load_is_a_stop_not_a_failure(self, sdk):
+    @pytest.mark.parametrize("make_stop", _STOPS)
+    def test_a_stop_during_the_embedder_load_is_a_stop_not_a_failure(
+        self, sdk, make_stop
+    ):
         """Cancel can reach a wait for the embedder's model slot. Wrapped as an
         embedder failure, it was logged as one."""
-        from gaia.rag.sdk import IndexingStopped
-
-        stopped = IndexingStopped("report.pdf")
+        stopped = make_stop()
         sdk.llm_client = MagicMock()
         sdk.llm_client.load_model.side_effect = LemonadeClientError("wrapped")
         sdk.llm_client.load_model.side_effect.__cause__ = stopped
         with patch("gaia.daemon.broker_client.model_lease"):
-            with pytest.raises(IndexingStopped) as exc:
+            with pytest.raises(type(stopped)) as exc:
                 sdk._load_embedder()
         assert exc.value is stopped
 
+    @pytest.mark.parametrize("make_stop", _STOPS)
     def test_a_stop_during_an_embedding_request_is_a_stop_not_a_failure(
-        self, sdk, caplog
+        self, sdk, caplog, make_stop
     ):
-        from gaia.rag.sdk import IndexingStopped
-
-        stopped = IndexingStopped("report.pdf")
+        stopped = make_stop()
         wrapped = LemonadeClientError("Error generating embeddings: wrapped")
         wrapped.__cause__ = stopped
         sdk.embedder = MagicMock()
         sdk.embedder.embeddings.side_effect = wrapped
 
-        with pytest.raises(IndexingStopped):
+        with pytest.raises(type(stopped)) as exc:
             sdk._encode_texts(["hello"])
+        assert exc.value is stopped
         assert "failed" not in caplog.text
 
     def test_index_document_reports_the_embedding_cause(self, sdk, tmp_path):

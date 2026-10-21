@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +62,8 @@ INSTALLER_SHA256 = {
 # The Windows installers of every older release GAIA supports (back to
 # LEMONADE_MIN_VERSION). Uninstalling an older Lemonade can fall back to
 # downloading its MSI, which is verified like any other download. Append-only:
-# a version bump moves the outgoing version's two MSI pins here.
+# a version bump moves the outgoing version's two MSI pins here, and pins any
+# release it skips. tests/fixtures/lemonade/release_tags.txt lists them all.
 LEGACY_MSI_SHA256 = {
     "v10.2.0/lemonade-server-minimal.msi": "d4c368d02c124df406c25c4e477cf6c4da7d5d635b8e5e7ba1a9acf80eba3899",
     "v10.2.0/lemonade.msi": "333d8b11efd3c023fe7c526c41f07bcf2100a94f89078e95f24ed710a9bcb5c7",
@@ -107,6 +109,8 @@ LEGACY_MSI_SHA256 = {
     "v2026.39.1/lemonade.msi": "8e778d01b6e5fe10dbee6bc017e58b1b9b35758b7507c1b188d99ba77906d838",
     "v2026.40.0/lemonade-server-minimal.msi": "95ad5b18eba1c1b42228ebceefcdd2eb949d2dde6bb5405141e2cbc169260d66",
     "v2026.40.0/lemonade.msi": "e10bc07d69e668338bf01e1a599b4f6e684bf7d217f14cb3744668291bd8bbf0",
+    "v2026.41.1/lemonade-server-minimal.msi": "b545bb3fe0dcffc91f9635bbdbac7dff049c9bbeae1616da6321382a486782f4",
+    "v2026.41.1/lemonade.msi": "cb8753fef41937baedd24dc949ab332d914f537dd597cb62efe54f5448825314",
 }
 
 # platform.machine() varies by OS/libc for the same hardware.
@@ -222,12 +226,75 @@ class UnpinnedInstallerError(RuntimeError):
     """No SHA-256 is pinned for this installer, so GAIA will not fetch it."""
 
 
+class _SaveFailed(Exception):
+    """Carries an OSError from writing a download past the network handlers."""
+
+    def __init__(self, error: OSError):
+        super().__init__(str(error))
+        self.error = error
+
+
 def discard_download(path: Path) -> None:
     """Delete an installer :meth:`LemonadeInstaller.download_installer` returned."""
     try:
         path.unlink(missing_ok=True)
     except OSError as e:
         log.warning("Could not delete the downloaded installer %s: %s", path, e)
+
+
+# download_installer()'s tempfile names: an installer asset stem, "-", the eight
+# characters mkstemp adds, and the asset's suffix.
+_KEPT_INSTALLER_NAME = re.compile(
+    r"(?:lemonade|lemonade-server-minimal|Lemonade-[0-9.]+-Darwin"
+    r"|lemonade-server_[0-9.]+-debian13_(?:amd64|arm64))"
+    r"-[a-z0-9_]{8}\.(?:msi|pkg|deb)"
+)
+
+
+# Long enough for another install to finish its download and sit at a password prompt.
+KEPT_INSTALLER_MIN_AGE_S = 3600
+
+
+def discard_kept_installers(directory: Path, older_than: float) -> None:
+    """Delete installers that failed installs left in *directory*.
+
+    A file goes only if it was last written before *older_than* (a
+    ``time.time()`` value) and more than :data:`KEPT_INSTALLER_MIN_AGE_S` ago,
+    so a download another install wrote within the last hour, whether still
+    being written or waiting for its installer to run, is left alone.
+    """
+    cutoff = min(older_than, time.time() - KEPT_INSTALLER_MIN_AGE_S)
+    try:
+        entries = list(directory.iterdir())
+    except OSError as e:
+        log.warning("Could not list %s for old Lemonade installers: %s", directory, e)
+        return
+    for path in entries:
+        if not _KEPT_INSTALLER_NAME.fullmatch(path.name):
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            log.warning("Could not check the old installer %s: %s", path, e)
+            continue
+        discard_download(path)
+
+
+def _remove_by_hand(version: Optional[str]) -> str:
+    """How to remove a Windows Lemonade Server when GAIA cannot."""
+    page = (
+        f"{GITHUB_RELEASE_TAG_BASE}/v{version}"
+        if version
+        else GITHUB_RELEASE_TAG_BASE.rsplit("/", 1)[0]
+    )
+    named = f"Lemonade v{version}" if version else "Lemonade"
+    return (
+        "Remove Lemonade Server from Windows Settings > Apps, or remove it "
+        f"with the {named} installer from {page}."
+    )
 
 
 class LemonadeInstaller:
@@ -549,6 +616,7 @@ class LemonadeInstaller:
             InstallerIntegrityError: The download is truncated or fails its
                 checksum.
             RuntimeError: The download fails.
+            OSError: The file cannot be written, e.g. the disk is full.
         """
         url = self.get_download_url()
         release_key = url[len(GITHUB_RELEASE_BASE) + 1 :]
@@ -608,17 +676,32 @@ class LemonadeInstaller:
                 chunk_size = 8192
                 digest = hashlib.sha256()
 
-                with open(dest_path, "wb") as f:
+                try:
+                    f = open(dest_path, "wb")
+                except OSError as e:
+                    raise _SaveFailed(e) from e
+                try:
                     while True:
                         chunk = response.read(chunk_size)
                         if not chunk:
                             break
-                        f.write(chunk)
+                        try:
+                            f.write(chunk)
+                        except OSError as e:
+                            raise _SaveFailed(e) from e
                         digest.update(chunk)
                         downloaded += len(chunk)
 
                         if self.progress_callback:
                             self.progress_callback(downloaded, total_size)
+                finally:
+                    try:
+                        f.close()  # Flushes, so a full disk can surface here too.
+                    except OSError as e:
+                        raise _SaveFailed(e) from e
+        except _SaveFailed as e:
+            # A full disk is not a network failure; let the caller name the folder.
+            raise e.error from None
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise LemonadeAssetError(
@@ -690,8 +773,6 @@ class LemonadeInstaller:
         """
         if self.system != "windows":
             return True
-
-        import time
 
         waited = 0
         while waited < timeout:
@@ -1314,85 +1395,116 @@ class LemonadeInstaller:
                 )
 
             installed_version = info.version.lstrip("v")
-            failures = []
+            failed = f"Could not uninstall Lemonade Server v{installed_version}:"
+            by_hand = _remove_by_hand(installed_version)
+            rejected = []
+            not_published = []
+            not_downloaded = []
 
             # Try both minimal and full MSI variants
             for use_minimal in [True, False]:
                 variant = "minimal" if use_minimal else "full"
+                uninstall_installer = LemonadeInstaller(
+                    target_version=installed_version,
+                    minimal=use_minimal,
+                    console=self.console,
+                )
+                url = uninstall_installer.get_download_url()
+                self._print_status(
+                    f"Downloading {variant} MSI v{installed_version} for uninstall..."
+                )
                 try:
-                    uninstall_installer = LemonadeInstaller(
-                        target_version=installed_version,
-                        minimal=use_minimal,
-                        console=self.console,
-                    )
-                    self._print_status(
-                        f"Downloading {variant} MSI v{installed_version} for uninstall..."
-                    )
                     msi_path = uninstall_installer.download_installer()
-
-                    cmd = ["msiexec", "/x", str(msi_path)]
-                    if silent:
-                        cmd.extend(["/qn", "/norestart"])
-
-                    log.debug(f"Running: {' '.join(cmd)}")
-                    try:
-                        result = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=300,
-                            check=False,
-                        )
-                    finally:
-                        discard_download(msi_path)
-
-                    if result.returncode == 0:
-                        return InstallResult(
-                            success=True,
-                            message="Lemonade Server uninstalled successfully",
-                        )
-                    elif result.returncode == 1605:
-                        # Wrong MSI variant — try the other one
-                        log.debug(
-                            f"{variant} MSI didn't match installed product, "
-                            "trying other variant"
-                        )
-                        continue
-                    elif result.returncode == 1618:
-                        return InstallResult(
-                            success=False,
-                            error="Another installation is in progress (error 1618). "
-                            "Wait a moment and try again.",
-                        )
-                    else:
-                        return InstallResult(
-                            success=False,
-                            error=f"msiexec failed with code {result.returncode}: {result.stderr}",
-                        )
                 except (UnpinnedInstallerError, InstallerIntegrityError) as e:
-                    # GAIA will not run an installer it cannot verify.
                     return InstallResult(
                         success=False,
-                        error=f"Could not uninstall Lemonade Server v{installed_version}: "
-                        f"{e} Uninstall it from Windows Settings > Apps, or upgrade "
-                        f"to v{LEMONADE_VERSION} first with `gaia init` and retry.",
+                        error=f"{failed} GAIA did not run the {variant} MSI because "
+                        f"it could not verify it. {e} {by_hand}",
                     )
-                except Exception as e:
-                    log.warning(f"Uninstall with the {variant} MSI failed: {e}")
-                    failures.append(f"{variant} MSI: {e}")
+                except LemonadeAssetError as e:
+                    log.warning("Upstream does not publish %s: %s", url, e)
+                    not_published.append(url)
                     continue
+                except RuntimeError as e:
+                    log.warning("Could not download %s: %s", url, e)
+                    not_downloaded.append(f"{url}: {e}")
+                    continue
+                except OSError as e:
+                    return InstallResult(
+                        success=False,
+                        error=f"{failed} GAIA could not save the {variant} MSI in "
+                        f"{tempfile.gettempdir()}: {e}. Free disk space or fix that "
+                        f"folder's permissions and retry. {by_hand}",
+                    )
 
-            # Both strategies failed
-            detail = f" ({'; '.join(failures)})" if failures else ""
+                cmd = ["msiexec", "/x", str(msi_path)]
+                if silent:
+                    cmd.extend(["/qn", "/norestart"])
+
+                log.debug(f"Running: {' '.join(cmd)}")
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                    )
+                finally:
+                    discard_download(msi_path)
+
+                if result.returncode == 0:
+                    return InstallResult(
+                        success=True,
+                        message="Lemonade Server uninstalled successfully",
+                    )
+                elif result.returncode == 1605:
+                    # Wrong MSI variant — try the other one
+                    log.debug(
+                        f"{variant} MSI didn't match installed product, "
+                        "trying other variant"
+                    )
+                    rejected.append(variant)
+                    continue
+                elif result.returncode == 1618:
+                    return InstallResult(
+                        success=False,
+                        error="Another installation is in progress (error 1618). "
+                        "Wait a moment and try again.",
+                    )
+                else:
+                    return InstallResult(
+                        success=False,
+                        error=f"msiexec failed with code {result.returncode}: {result.stderr}",
+                    )
+
+            reasons = []
+            if rejected:
+                which = "either" if len(rejected) == 2 else f"the {rejected[0]}"
+                reasons.append(f"Windows Installer did not accept {which} MSI.")
+            if not_published:
+                reasons.append(
+                    f"The release no longer publishes {' or '.join(not_published)}."
+                )
+            if not_downloaded:
+                reasons.append(
+                    "GAIA could not download the MSI needed to uninstall it "
+                    f"({'; '.join(not_downloaded)}). Check your network "
+                    "connection or proxy settings and retry."
+                )
             return InstallResult(
-                success=False,
-                error=f"Could not uninstall Lemonade Server v{installed_version}: "
-                f"Windows Installer did not accept either MSI{detail}. Uninstall it "
-                "from Windows Settings > Apps.",
+                success=False, error=f"{failed} {' '.join(reasons)} {by_hand}"
             )
 
-        except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Uninstall timed out")
+        except subprocess.TimeoutExpired as e:
+            # Not retried with the other MSI: this one may still be running.
+            return InstallResult(
+                success=False,
+                error=f"Uninstall timed out: msiexec did not finish within "
+                f"{e.timeout:.0f} seconds. Windows Installer may still be "
+                "finishing, so wait a minute before retrying (retrying sooner "
+                f"fails with error 1618). {_remove_by_hand(None)}",
+            )
         except FileNotFoundError:
             return InstallResult(success=False, error="msiexec not found")
         except Exception as e:

@@ -93,6 +93,18 @@ def get(provider_id: str) -> OAuthProvider:
     )
 
 
+def reload(provider_id: str) -> OAuthProvider:
+    """Drop the cached provider and build it again from the stored client config.
+
+    Another GAIA process can replace the client (a forwarded connection, a new
+    configure); the cached instance keeps the old ``client_id_hash`` until this.
+    A provider registered by hand under an id ``get`` cannot build is dropped,
+    and ``get`` raises ``KeyError``.
+    """
+    _registry.pop(provider_id, None)
+    return get(provider_id)
+
+
 def list_provider_ids() -> list[str]:
     """Return the ids of currently registered providers (no lazy init)."""
     return sorted(_registry)

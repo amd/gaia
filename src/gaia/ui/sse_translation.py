@@ -445,6 +445,9 @@ class CanonicalTranslator:
         }
         if usage:
             final["usage"] = usage
+        if event.get("failed"):
+            # The answer explains a turn a model failure ended; not a result.
+            final["failed"] = True
         return [final]
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
