@@ -1,17 +1,22 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Coverage for terminal-hub installation in installer/scripts/install.{sh,ps1}.
+"""Coverage for the binaries installer/scripts/install.{sh,ps1} download.
 
-Two layers, because a static check alone is what let the previous version ship
-pointing at a channel nothing published to:
+The terminal hub (`gaia-tui`) comes from the GitHub release, verified against
+the release's ``gaia-tui-SHA256SUMS.txt``; the flagship agent comes from the
+Agent Hub, verified against its manifest. Two layers, because a static check
+alone is what once let these scripts ship pointing at a channel nothing
+published to:
 
-* static — the Agent Hub URL shape, the platform keys, the binary name, and the
-  absence of bash-only syntax (the documented one-liner pipes into ``sh``);
-* functional — ``install_tui`` and ``install_flagship_agent`` run for real
-  against a throwaway HTTP server serving manifests in the Worker's shape. The
-  hub is mandatory and the agent is optional, and only running them can tell a
-  survivable failure (no build, download blip) from a fatal one (bad digest).
+* static — the URL shapes, the asset and platform names (checked against what
+  publish.yml actually builds and attaches), the binary names, and the absence
+  of bash-only syntax (the documented one-liner pipes into ``sh``);
+* functional — ``install_tui`` / ``install_flagship_agent`` and their
+  PowerShell twins run for real against a throwaway HTTP server shaped like
+  GitHub releases plus the Agent Hub. The hub is mandatory and the agent is
+  optional, and only running them can tell a survivable failure (no build,
+  download blip) from a fatal one (bad digest).
 """
 
 from __future__ import annotations
@@ -34,16 +39,16 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS_DIR = REPO_ROOT / "installer" / "scripts"
 INSTALL_SH = SCRIPTS_DIR / "install.sh"
 INSTALL_PS1 = SCRIPTS_DIR / "install.ps1"
-COMPONENT_MANIFEST = (
-    REPO_ROOT / "hub" / "components" / "terminal-hub" / "gaia-agent.yaml"
-)
+PUBLISH_YML = REPO_ROOT / ".github" / "workflows" / "publish.yml"
+FLAGSHIP_LOCK = REPO_ROOT / "hub" / "agents" / "gaia" / "npm" / "binaries.lock.json"
+SUMS_FILE = "gaia-tui-SHA256SUMS.txt"
 
-# uname -m value -> Agent Hub platform-key architecture segment.
-UNAME_TO_HUB_ARCH = {
-    "x86_64": "x64",
-    "amd64": "x64",
-    "arm64": "arm64",
-    "aarch64": "arm64",
+# uname -m value -> (Agent Hub arch segment, GOARCH segment of the release asset).
+UNAME_ARCH = {
+    "x86_64": ("x64", "amd64"),
+    "amd64": ("x64", "amd64"),
+    "arm64": ("arm64", "arm64"),
+    "aarch64": ("arm64", "arm64"),
 }
 
 
@@ -57,64 +62,121 @@ def ps1_text() -> str:
     return INSTALL_PS1.read_text(encoding="utf-8")
 
 
-# ── the channel: Agent Hub R2, not GitHub release assets ────────────────────
+def _shell_function_body(sh_text: str, name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{$(.*?)^\}}$", sh_text, re.DOTALL | re.MULTILINE)
+    assert match, f"{name}() not found in install.sh"
+    return match.group(1)
 
 
-def test_sh_reads_the_agent_hub_not_release_assets(sh_text):
-    assert "releases/latest/download" not in sh_text
-    assert "gaia-tui-SHA256SUMS.txt" not in sh_text
-    assert "hub.amd-gaia.ai" in sh_text
-    assert 'TERMINAL_HUB_ID="terminal-hub"' in sh_text
-    assert "/agents/$TERMINAL_HUB_ID/manifest.json" in sh_text
-    assert "/agents/$TERMINAL_HUB_ID/$version/$filename" in sh_text
+def _ps1_function_body(ps1_text: str, name: str) -> str:
+    match = re.search(
+        rf"^function {name} \{{\r?$(.*?)^\}}\r?$", ps1_text, re.DOTALL | re.MULTILINE
+    )
+    assert match, f"function {name} not found in install.ps1"
+    return match.group(1)
 
 
-def test_ps1_reads_the_agent_hub(ps1_text):
-    assert "releases/latest/download" not in ps1_text
-    assert "hub.amd-gaia.ai" in ps1_text
-    assert '$TERMINAL_HUB_ID = "terminal-hub"' in ps1_text
-    # The hub id is a parameter now — one resolver serves the terminal hub and
-    # the agent — so the URL is built from $AgentId rather than a literal.
+# ── the channels: GitHub release for the hub, Agent Hub for the agent ───────
+
+
+def test_sh_takes_the_terminal_hub_from_the_github_release(sh_text):
+    assert "GAIA_RELEASES_URL:-https://github.com/amd/gaia/releases" in sh_text
+    assert f'TUI_SUMS_FILE="{SUMS_FILE}"' in sh_text
+    body = _shell_function_body(sh_text, "install_tui")
+    assert 'release_url="$GAIA_RELEASES_URL/download/$RELEASE_TAG"' in body
+    # No second channel to fall back to.
+    assert "hub.amd-gaia.ai" not in body and "GAIA_HUB_BASE_URL" not in body
+    assert "terminal-hub" not in sh_text
+
+
+def test_ps1_takes_the_terminal_hub_from_the_github_release(ps1_text):
+    assert '"https://github.com/amd/gaia/releases"' in ps1_text
+    assert f'$TUI_SUMS_FILE = "{SUMS_FILE}"' in ps1_text
+    body = _ps1_function_body(ps1_text, "Resolve-TuiAsset")
+    assert '$releaseUrl = "$GAIA_RELEASES_URL/download/$tag"' in body
+    assert "GAIA_HUB_BASE_URL" not in _ps1_function_body(ps1_text, "Install-Tui")
+    assert "terminal-hub" not in ps1_text
+
+
+def test_both_scripts_take_the_agent_from_the_agent_hub(sh_text, ps1_text):
+    assert "GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai" in sh_text
+    assert '"https://hub.amd-gaia.ai"' in ps1_text
+    assert "/agents/$FLAGSHIP_AGENT_ID/manifest.json" in sh_text
     assert "/agents/$AgentId/manifest.json" in ps1_text
-    assert "/agents/$AgentId/$version/$Filename" in ps1_text
-    assert "-AgentId $TERMINAL_HUB_ID" in ps1_text
 
 
-def test_component_id_matches_the_published_manifest():
-    manifest = yaml.safe_load(COMPONENT_MANIFEST.read_text(encoding="utf-8"))
-    assert manifest["id"] == "terminal-hub"
+def test_latest_is_read_from_the_redirect_not_the_rate_limited_api(sh_text, ps1_text):
+    assert "api.github.com" not in sh_text + ps1_text
+    body = _shell_function_body(sh_text, "resolve_release_tag")
+    assert '"$GAIA_RELEASES_URL/latest"' in body
+    assert "%{redirect_url}" in body and "--max-redirect=0" in body
+    ps_body = _ps1_function_body(ps1_text, "Resolve-ReleaseTag")
+    assert "AllowAutoRedirect = $false" in ps_body
 
 
-# ── platform keys: the hub's keys, not GOARCH ───────────────────────────────
+# ── asset names: exactly what publish.yml builds and attaches ──────────────
 
 
-def test_platform_keys_match_the_component_manifest(sh_text, ps1_text):
-    """The scripts must build keys the component actually declares."""
-    manifest = yaml.safe_load(COMPONENT_MANIFEST.read_text(encoding="utf-8"))
-    declared = set(manifest["requirements"]["platforms"])
-
-    both = sh_text + ps1_text
-    for key in declared:
-        os_part, _, arch_part = key.partition("-")
-        assert f'"{os_part}"' in both or f'"{key}"' in both, key
-        assert f'"{arch_part}"' in both, key
-
-    # `amd64` is GOARCH, not a hub platform key. It may appear only as a
-    # `uname -m` input value, never as the arch half of a constructed key.
-    assert not any(k.endswith("-amd64") for k in declared)
-    assert "gaia-${os}-amd64" not in sh_text
-    assert '_arch="amd64"' not in sh_text
+def _publish_tui_assets() -> set[str]:
+    wf = yaml.safe_load(PUBLISH_YML.read_text(encoding="utf-8"))
+    job = wf["jobs"]["build-tui"]
+    build = "\n".join(s.get("run", "") for s in job["steps"])
+    assert (
+        "-o ../release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
+        in build
+    )
+    names = set()
+    for leg in job["strategy"]["matrix"]["include"]:
+        ext = ".exe" if leg["goos"] == "windows" else ""
+        names.add(f"gaia-{leg['goos']}-{leg['goarch']}{ext}")
+    return names
 
 
-@pytest.mark.parametrize("uname_m,expected", sorted(UNAME_TO_HUB_ARCH.items()))
-def test_sh_maps_uname_arch_to_hub_arch(sh_text, uname_m, expected):
-    assert f"{uname_m}" in sh_text
-    assert f'_arch="{expected}"' in sh_text
+def test_publish_checksums_every_terminal_binary_it_attaches():
+    text = PUBLISH_YML.read_text(encoding="utf-8")
+    assert f"sha256sum gaia-* > {SUMS_FILE}" in text
+    # The final and the RC release steps both attach release-assets/*.
+    assert text.count("release-assets/*") >= 2
 
 
-def test_ps1_maps_processor_architecture_to_hub_keys(ps1_text):
-    assert '"AMD64" { return "win-x64" }' in ps1_text
-    assert '"ARM64" { return "win-arm64" }' in ps1_text
+def test_sh_asks_for_assets_publish_builds(sh_text):
+    built = _publish_tui_assets()
+    body = _shell_function_body(sh_text, "tui_asset_name")
+    assert "printf 'gaia-%s-%s\\n'" in body
+    for os_name in ("linux", "darwin"):
+        assert f'_os="{os_name}"' in body
+        for _, goarch in UNAME_ARCH.values():
+            assert f"gaia-{os_name}-{goarch}" in built
+
+
+def test_ps1_asks_for_assets_publish_builds(ps1_text):
+    built = _publish_tui_assets()
+    body = _ps1_function_body(ps1_text, "Get-TuiAssetName")
+    asked = set(re.findall(r'return "(gaia-[a-z0-9-]+\.exe)"', body))
+    assert asked == {"gaia-windows-amd64.exe", "gaia-windows-arm64.exe"}
+    assert asked <= built
+
+
+@pytest.mark.parametrize("uname_m,expected", sorted(UNAME_ARCH.items()))
+def test_sh_maps_uname_arch_for_each_channel(sh_text, uname_m, expected):
+    hub_arch, goarch = expected
+    hub = _shell_function_body(sh_text, "hub_platform")
+    tui = _shell_function_body(sh_text, "tui_asset_name")
+    assert uname_m in hub and uname_m in tui
+    assert f'_arch="{hub_arch}"' in hub
+    assert f'_arch="{goarch}"' in tui
+
+
+def test_agent_keys_are_the_ones_the_flagship_lock_publishes(ps1_text):
+    lock = json.loads(FLAGSHIP_LOCK.read_text(encoding="utf-8"))
+    published = set(lock["components"]["sidecar"]["platforms"])
+    for key in ("linux-x64", "darwin-x64", "darwin-arm64", "win32-x64"):
+        assert key in published
+    # PowerShell renames win-x64 to the sidecar's win32-x64.
+    assert "-replace '^win-', 'win32-'" in ps1_text
+    assert '"AMD64" { return "win-x64" }' in _ps1_function_body(
+        ps1_text, "Get-HubPlatform"
+    )
 
 
 # ── the binary keeps the name `gaia-tui` ───────────────────────────────────
@@ -214,12 +276,6 @@ def test_sh_names_windows_as_the_ps1_path(sh_text):
 # ── fail loudly ────────────────────────────────────────────────────────────
 
 
-def _shell_function_body(sh_text: str, name: str) -> str:
-    match = re.search(rf"^{name}\(\) \{{$(.*?)^\}}$", sh_text, re.DOTALL | re.MULTILINE)
-    assert match, f"{name}() not found in install.sh"
-    return match.group(1)
-
-
 def test_install_tui_never_soft_skips(sh_text):
     body = _shell_function_body(sh_text, "install_tui")
     assert "return 0" not in body
@@ -233,14 +289,20 @@ def test_install_tui_never_soft_skips(sh_text):
 
 
 def test_install_tui_refuses_an_unverified_binary(sh_text, ps1_text):
-    # Both live in the shared helpers now — one copy of the rule for the
-    # terminal hub and the agent, rather than a copy per caller.
+    # No digest from the release's checksum file, no install.
+    assert "publishes no SHA-256 for $filename" in _shell_function_body(
+        sh_text, "install_tui"
+    )
+    assert "publishes no SHA-256 for $Filename" in _ps1_function_body(
+        ps1_text, "Resolve-TuiAsset"
+    )
+    # The agent's digest comes from its hub manifest instead.
     assert "publishes %s with no SHA-256" in _shell_function_body(
         sh_text, "read_hub_manifest"
     )
+    # One verify step shared by both binaries, rather than a copy per caller.
     assert "Checksum mismatch" in _shell_function_body(sh_text, "download_and_verify")
-    assert "no SHA-256" in ps1_text
-    assert "Checksum mismatch" in ps1_text
+    assert "Checksum mismatch" in _ps1_function_body(ps1_text, "Install-VerifiedBinary")
 
 
 # ── the flagship agent sidecar ─────────────────────────────────────────────
@@ -446,33 +508,96 @@ def test_ps1_never_calls_exit(ps1_text):
     assert not code, code
 
 
-# ── functional: run install_tui against a fake Agent Hub ───────────────────
+# ── functional: a fake GitHub release + Agent Hub ──────────────────────────
 
 
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *args):  # noqa: D102 - silence the test log
-        pass
-
-
+RELEASE_TAG = "v0.99.0"
+OLDER_TAG = "v0.98.0"
+TUI_ASSETS = (
+    "gaia-linux-amd64",
+    "gaia-linux-arm64",
+    "gaia-darwin-amd64",
+    "gaia-darwin-arm64",
+    "gaia-windows-amd64.exe",
+    "gaia-windows-arm64.exe",
+)
 HUB_PLATFORMS = ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64")
+WIN_HUB_PLATFORMS = ("win32-x64", "win32-arm64")
 HUB_VERSION = "0.99.0"
+
+
+def _make_handler(root: Path, state: dict):
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(root), **kwargs)
+
+        def log_message(self, *args):  # noqa: D102 - silence the test log
+            pass
+
+        def _redirect_latest(self) -> bool:
+            if self.path.rstrip("/") != "/releases/latest":
+                return False
+            self.send_response(302)
+            self.send_header(
+                "Location", f"{state['base']}/releases/tag/{state['latest']}"
+            )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return True
+
+        def do_GET(self):  # noqa: N802 - http.server API
+            if not self._redirect_latest():
+                super().do_GET()
+
+        def do_HEAD(self):  # noqa: N802 - http.server API
+            if not self._redirect_latest():
+                super().do_HEAD()
+
+    return Handler
 
 
 @pytest.fixture
 def fake_hub(tmp_path):
-    """Serve Agent-Hub-shaped manifests plus their binaries over loopback.
+    """Serve GitHub-release-shaped terminal binaries and Agent-Hub-shaped
+    agent manifests over loopback.
 
-    Yields ``(base_url, publish)``. ``publish`` (re)writes one agent's manifest
-    and artifacts, so a test can stage exactly the failure it is about:
-    a tampered digest, a manifest that resolves but whose binary 404s, or a
-    manifest that publishes nothing for this machine's platform.
+    Yields an object with ``base`` and two stagers, so a test can stage exactly
+    the failure it is about: ``release`` (re)writes one tag's binaries and
+    checksum file, ``publish`` one hub agent's manifest and artifacts.
     """
-    root = tmp_path / "hub"
+    root = tmp_path / "srv"
+    state = {"latest": RELEASE_TAG}
+
+    def release(
+        tag=RELEASE_TAG,
+        digest_overrides=None,
+        omit_sums_for=(),
+        sums_style="text",
+        omit_sums_file=False,
+    ):
+        tag_dir = root / "releases" / "download" / tag
+        tag_dir.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for name in TUI_ASSETS:
+            blob = f"#!/bin/sh\necho gaia {tag} {name}\n".encode()
+            (tag_dir / name).write_bytes(blob)
+            if name in omit_sums_for:
+                continue
+            digest = (digest_overrides or {}).get(
+                name, hashlib.sha256(blob).hexdigest()
+            )
+            sep = " *" if sums_style == "binary" else "  "
+            lines.append(f"{digest}{sep}{name}\n")
+        sums = tag_dir / SUMS_FILE
+        if omit_sums_file:
+            sums.unlink(missing_ok=True)
+        else:
+            sums.write_text("".join(lines), encoding="utf-8")
 
     def publish(
         agent_id,
         prefix,
-        platforms=HUB_PLATFORMS,
+        platforms=HUB_PLATFORMS + WIN_HUB_PLATFORMS,
         digest_overrides=None,
         omit_binaries=False,
     ):
@@ -481,7 +606,7 @@ def fake_hub(tmp_path):
         artifacts = []
         for key in platforms:
             blob = f"#!/bin/sh\necho {prefix} {HUB_VERSION} {key}\n".encode()
-            filename = f"{prefix}-{key}"
+            filename = f"{prefix}-{key}" + (".exe" if key.startswith("win") else "")
             if omit_binaries:
                 # Published in the manifest, absent from the bucket: the
                 # transient-download-failure case, which must not be fatal.
@@ -514,26 +639,35 @@ def fake_hub(tmp_path):
             json.dumps(manifest), encoding="utf-8"
         )
 
-    publish("terminal-hub", "gaia")
+    release()
+    release(tag=OLDER_TAG)
     publish("gaia", "gaia-agent")
 
-    handler = type(
-        "Handler",
-        (_QuietHandler,),
-        {
-            "__init__": lambda s, *a, **k: _QuietHandler.__init__(
-                s, *a, directory=str(root), **k
-            )
-        },
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), _make_handler(root, state)
     )
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    state["base"] = f"http://127.0.0.1:{server.server_port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    class Fake:
+        base = state["base"]
+
+    fake = Fake()
+    fake.release = release
+    fake.publish = publish
     try:
-        yield f"http://127.0.0.1:{server.server_port}", publish
+        yield fake
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _channel_env(base_url):
+    return {
+        "GAIA_RELEASES_URL": f"{base_url}/releases",
+        "GAIA_HUB_BASE_URL": base_url,
+    }
 
 
 def _run_sh_function(tmp_path, snippet, env_overrides=None, shell="sh"):
@@ -546,6 +680,7 @@ def _run_sh_function(tmp_path, snippet, env_overrides=None, shell="sh"):
     home.mkdir(exist_ok=True)
 
     env = dict(os.environ)
+    env.pop("GAIA_RELEASE_TAG", None)
     env["HOME"] = str(home)
     env.update(env_overrides or {})
 
@@ -559,66 +694,124 @@ def _run_sh_function(tmp_path, snippet, env_overrides=None, shell="sh"):
     return result, home
 
 
-def _run_install_tui(tmp_path, base_url, downloader="curl", shell="sh"):
+def _run_install_tui(tmp_path, base_url, downloader="curl", shell="sh", tag=None):
+    env = _channel_env(base_url)
+    if tag is not None:
+        env["GAIA_RELEASE_TAG"] = tag
     result, home = _run_sh_function(
-        tmp_path,
-        f"DOWNLOAD_CMD={downloader}; install_tui",
-        {"GAIA_HUB_BASE_URL": base_url},
-        shell=shell,
+        tmp_path, f"DOWNLOAD_CMD={downloader}; install_tui", env, shell=shell
     )
     return result, home / ".gaia" / "bin" / "gaia-tui"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+needs_curl = pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+
+
+@posix_only
 @pytest.mark.parametrize("downloader", ["curl", "wget"])
-def test_install_tui_installs_a_verified_binary(tmp_path, fake_hub, downloader):
+def test_install_tui_installs_the_latest_release(tmp_path, fake_hub, downloader):
     if shutil.which(downloader) is None:
         pytest.skip(f"{downloader} not installed")
-    base_url, _ = fake_hub
-    result, installed = _run_install_tui(tmp_path, base_url, downloader=downloader)
+    result, installed = _run_install_tui(tmp_path, fake_hub.base, downloader=downloader)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert installed.is_file()
     assert os.access(installed, os.X_OK)
-    assert "0.99.0" in result.stdout
+    # The latest redirect, not the other tag the release server also carries.
+    assert RELEASE_TAG in installed.read_text(encoding="utf-8")
+    assert f"GAIA Terminal UI {RELEASE_TAG} installed" in result.stdout
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@posix_only
 @pytest.mark.skipif(shutil.which("dash") is None, reason="dash not installed")
 def test_install_tui_works_under_dash(tmp_path, fake_hub):
     """`curl … | sh` is dash on Debian/Ubuntu; macOS `sh` is bash, so a
     curl-only, sh-only run would never exercise the real Linux shell."""
-    base_url, _ = fake_hub
-    result, installed = _run_install_tui(tmp_path, base_url, shell="dash")
+    result, installed = _run_install_tui(tmp_path, fake_hub.base, shell="dash")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert installed.is_file()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
-def test_install_tui_installs_nothing_on_a_checksum_mismatch(tmp_path, fake_hub):
-    base_url, publish = fake_hub
-    publish(
-        "terminal-hub", "gaia", digest_overrides={k: "d" * 64 for k in HUB_PLATFORMS}
-    )
+@posix_only
+@needs_curl
+def test_a_pinned_tag_installs_that_release(tmp_path, fake_hub):
+    result, installed = _run_install_tui(tmp_path, fake_hub.base, tag=OLDER_TAG)
 
-    result, installed = _run_install_tui(tmp_path, base_url)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert OLDER_TAG in installed.read_text(encoding="utf-8")
+
+
+@posix_only
+@needs_curl
+def test_binary_mode_checksum_lines_are_accepted(tmp_path, fake_hub):
+    """`sha256sum -b` writes `<digest> *<name>`; the digest is the same."""
+    fake_hub.release(sums_style="binary")
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert installed.is_file()
+
+
+@posix_only
+@needs_curl
+def test_install_tui_installs_nothing_on_a_checksum_mismatch(tmp_path, fake_hub):
+    fake_hub.release(digest_overrides={n: "d" * 64 for n in TUI_ASSETS})
+
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
 
     assert result.returncode != 0
     assert "Checksum mismatch" in result.stdout + result.stderr
     assert not installed.exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
-def test_install_tui_fails_when_the_hub_is_unreachable(tmp_path):
+@posix_only
+@needs_curl
+def test_a_binary_missing_from_the_checksums_is_refused(tmp_path, fake_hub):
+    fake_hub.release(omit_sums_for=TUI_ASSETS)
+
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "publishes no SHA-256 for" in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_a_release_without_its_checksum_file_is_refused(tmp_path, fake_hub):
+    """The window while a release is still uploading its assets."""
+    fake_hub.release(omit_sums_file=True)
+
+    result, installed = _run_install_tui(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Could not fetch the GAIA Terminal UI checksums" in result.stdout
+    assert "still be uploading" in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+@pytest.mark.parametrize(
+    "tag", ["v0.25.0;id", "v0.25.0/../x", "0.25.0", "latest", "v0.25.0 x"]
+)
+def test_a_malformed_tag_is_refused_before_any_download(tmp_path, fake_hub, tag):
+    result, installed = _run_install_tui(tmp_path, fake_hub.base, tag=tag)
+
+    assert result.returncode != 0
+    assert "is not a release tag" in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_install_tui_fails_when_github_is_unreachable(tmp_path):
     result, installed = _run_install_tui(tmp_path, "http://127.0.0.1:1")
 
     assert result.returncode != 0
-    assert (
-        "Could not fetch the GAIA Terminal UI manifest" in result.stdout + result.stderr
-    )
+    assert "Could not find the GAIA release" in result.stdout + result.stderr
     assert not installed.exists()
 
 
@@ -635,17 +828,16 @@ def _run_bootstrap(tmp_path, base_url):
         tmp_path,
         "DOWNLOAD_CMD=curl; install_tui; install_flagship_agent; "
         'echo "FLAGSHIP_INSTALLED=${FLAGSHIP_INSTALLED:-0}"',
-        {"GAIA_HUB_BASE_URL": base_url},
+        _channel_env(base_url),
     )
     bin_dir = home / ".gaia" / "bin"
     return result, bin_dir / "gaia-tui", bin_dir / "gaia-agent"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+@posix_only
+@needs_curl
 def test_a_verified_agent_installs_and_arms_the_banner(tmp_path, fake_hub):
-    base_url, _ = fake_hub
-    result, tui, agent = _run_bootstrap(tmp_path, base_url)
+    result, tui, agent = _run_bootstrap(tmp_path, fake_hub.base)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert tui.is_file() and agent.is_file()
@@ -653,14 +845,13 @@ def test_a_verified_agent_installs_and_arms_the_banner(tmp_path, fake_hub):
     assert "FLAGSHIP_INSTALLED=1" in result.stdout
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+@posix_only
+@needs_curl
 def test_an_unpublished_agent_platform_leaves_the_hub_installed(tmp_path, fake_hub):
     """No build for this machine is a warning, not a failed install."""
-    base_url, publish = fake_hub
-    publish("gaia", "gaia-agent", platforms=("aix-ppc64",))
+    fake_hub.publish("gaia", "gaia-agent", platforms=("aix-ppc64",))
 
-    result, tui, agent = _run_bootstrap(tmp_path, base_url)
+    result, tui, agent = _run_bootstrap(tmp_path, fake_hub.base)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert tui.is_file()
@@ -669,15 +860,14 @@ def test_an_unpublished_agent_platform_leaves_the_hub_installed(tmp_path, fake_h
     assert "FLAGSHIP_INSTALLED=0" in result.stdout
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+@posix_only
+@needs_curl
 def test_a_failed_agent_download_leaves_the_hub_installed(tmp_path, fake_hub):
     """A network blip after uv, the package, the hub and PATH are all in place
     must not throw that away — the sidecar is the only thing missing."""
-    base_url, publish = fake_hub
-    publish("gaia", "gaia-agent", omit_binaries=True)
+    fake_hub.publish("gaia", "gaia-agent", omit_binaries=True)
 
-    result, tui, agent = _run_bootstrap(tmp_path, base_url)
+    result, tui, agent = _run_bootstrap(tmp_path, fake_hub.base)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert tui.is_file()
@@ -686,14 +876,15 @@ def test_a_failed_agent_download_leaves_the_hub_installed(tmp_path, fake_hub):
     assert "FLAGSHIP_INSTALLED=0" in result.stdout
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-@pytest.mark.skipif(shutil.which("curl") is None, reason="needs curl")
+@posix_only
+@needs_curl
 def test_a_tampered_agent_aborts_and_writes_nothing(tmp_path, fake_hub):
     """Integrity is the one agent failure that is never downgraded."""
-    base_url, publish = fake_hub
-    publish("gaia", "gaia-agent", digest_overrides={k: "d" * 64 for k in HUB_PLATFORMS})
+    fake_hub.publish(
+        "gaia", "gaia-agent", digest_overrides={k: "d" * 64 for k in HUB_PLATFORMS}
+    )
 
-    result, tui, agent = _run_bootstrap(tmp_path, base_url)
+    result, tui, agent = _run_bootstrap(tmp_path, fake_hub.base)
 
     assert result.returncode != 0
     assert "Checksum mismatch" in result.stdout + result.stderr
@@ -701,6 +892,133 @@ def test_a_tampered_agent_aborts_and_writes_nothing(tmp_path, fake_hub):
     # The hub landed before the agent step ran; only the agent is refused.
     assert tui.is_file()
     assert "FLAGSHIP_INSTALLED=1" not in result.stdout
+
+
+# ── functional: the same two installs in install.ps1 ───────────────────────
+#
+# Main is cut off, so nothing touches PATH, uv or the package. $GAIA_BIN and
+# TEMP are pointed into tmp_path so the run is the same on Windows and on the
+# Linux pwsh CI uses.
+
+_PS_EXE = shutil.which("pwsh") or (
+    shutil.which("powershell") if sys.platform == "win32" else None
+)
+needs_powershell = pytest.mark.skipif(_PS_EXE is None, reason="no PowerShell")
+
+
+def _run_ps1(tmp_path, base_url, snippet, tag=None):
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    cut = text.rindex("\nMain\n") if "\nMain\n" in text else text.rindex("\r\nMain\r\n")
+    bin_dir = tmp_path / "ps-bin"
+    script = tmp_path / "run.ps1"
+    script.write_text(
+        text[:cut] + "\n$GAIA_BIN = $env:GAIA_TEST_BIN\n" + snippet + "\n}\n",
+        encoding="utf-8-sig",
+    )
+    env = dict(os.environ)
+    env.pop("GAIA_RELEASE_TAG", None)
+    env.pop("PROCESSOR_ARCHITEW6432", None)
+    env.update(_channel_env(base_url))
+    env.update(
+        {
+            "GAIA_TEST_BIN": str(bin_dir),
+            "PROCESSOR_ARCHITECTURE": "AMD64",
+            "TEMP": str(tmp_path),
+            "USERPROFILE": str(tmp_path / "profile"),
+            "PSModuleAnalysisCachePath": str(tmp_path / "ps-module-cache"),
+        }
+    )
+    if tag is not None:
+        env["GAIA_RELEASE_TAG"] = tag
+    result = subprocess.run(
+        [
+            _PS_EXE,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        check=False,
+        timeout=120,
+    )
+    return result, bin_dir
+
+
+@needs_powershell
+def test_ps1_installs_the_latest_release_and_the_agent(tmp_path, fake_hub):
+    result, bin_dir = _run_ps1(
+        tmp_path,
+        fake_hub.base,
+        'Install-Tui; $ok = Install-FlagshipAgent; Write-Host "FLAGSHIP=$ok"',
+    )
+    out = result.stdout + result.stderr
+
+    assert result.returncode == 0, out
+    tui = bin_dir / "gaia-tui.exe"
+    assert RELEASE_TAG in tui.read_text(encoding="utf-8")
+    assert "gaia-windows-amd64.exe" in tui.read_text(encoding="utf-8")
+    assert "win32-x64" in (bin_dir / "gaia-agent.exe").read_text(encoding="utf-8")
+    assert "FLAGSHIP=True" in result.stdout
+
+
+@needs_powershell
+def test_ps1_a_pinned_tag_installs_that_release(tmp_path, fake_hub):
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui", tag=OLDER_TAG)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert OLDER_TAG in (bin_dir / "gaia-tui.exe").read_text(encoding="utf-8")
+
+
+@needs_powershell
+def test_ps1_installs_nothing_on_a_checksum_mismatch(tmp_path, fake_hub):
+    fake_hub.release(digest_overrides={n: "d" * 64 for n in TUI_ASSETS})
+
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout
+    assert not (bin_dir / "gaia-tui.exe").exists()
+
+
+@needs_powershell
+def test_ps1_refuses_a_binary_missing_from_the_checksums(tmp_path, fake_hub):
+    fake_hub.release(omit_sums_for=("gaia-windows-amd64.exe",))
+
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+
+    assert result.returncode != 0
+    assert "publishes no SHA-256 for gaia-windows-amd64.exe" in result.stdout
+    assert not (bin_dir / "gaia-tui.exe").exists()
+
+
+@needs_powershell
+@pytest.mark.parametrize("tag", ["v0.25.0;id", "0.25.0", "v0.25.0/../x"])
+def test_ps1_refuses_a_malformed_tag(tmp_path, fake_hub, tag):
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui", tag=tag)
+
+    assert result.returncode != 0
+    assert "is not a GAIA release tag" in result.stdout
+    assert not bin_dir.exists()
+
+
+@needs_powershell
+def test_ps1_a_tampered_agent_fails_the_install(tmp_path, fake_hub):
+    """-Optional softens a missing agent, never a bad digest."""
+    fake_hub.publish(
+        "gaia", "gaia-agent", digest_overrides={k: "d" * 64 for k in WIN_HUB_PLATFORMS}
+    )
+
+    result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-FlagshipAgent")
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout
+    assert not (bin_dir / "gaia-agent.exe").exists()
 
 
 # ── functional: add_to_path ────────────────────────────────────────────────
