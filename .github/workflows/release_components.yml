@@ -600,7 +600,8 @@ jobs:
   #
   # No environment and no R2 credentials: it only touches the GitHub release,
   # which publish.yml creates after its own approval gate. --clobber makes a
-  # re-run replace rather than fail.
+  # re-run replace rather than fail. It requests its own website redeploy, so
+  # the installers show up however late the release appears or the job re-runs.
   github-release-installers:
     name: Attach installers to the GitHub release
     needs: [version, tui, windows-setup]
@@ -612,6 +613,7 @@ jobs:
     timeout-minutes: 200
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
 
@@ -643,7 +645,7 @@ jobs:
           deadline=$(( SECONDS + 3 * 3600 ))
           until gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; do
             if [ "${SECONDS}" -ge "${deadline}" ]; then
-              echo "::error::timed out after 3h waiting for the GitHub release ${TAG}. publish.yml creates it; check that run, then re-run this job. Nothing was attached, so the website offers no terminal installer for ${TAG}."
+              echo "::error::timed out after 3h waiting for the GitHub release ${TAG}. publish.yml creates it; check that run, then re-run this job (it redeploys the website itself). Nothing was attached, so the website offers no terminal installer for ${TAG}."
               exit 1
             fi
             echo "waiting for release ${TAG}"
@@ -686,6 +688,14 @@ jobs:
           gh release upload "${TAG}" "${files[@]}" "${sums}" \
             --repo "${GITHUB_REPOSITORY}" --clobber
           echo "✓ attached ${#files[@]} installers to ${TAG}"
+
+      - name: Redeploy the website to show them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"
 
   # ── agent-ui: republish the installers build-installers.yml already made ────
   agent-ui:
@@ -833,10 +843,9 @@ jobs:
   # auto-triggers on website/** only, and a release touches no such file.
   redeploy-website:
     name: Redeploy website
-    # publish-windows-setup and github-release-installers are waited for, not
-    # required: the site renders each installer the release carries and no
-    # button for one it does not.
-    needs: [version, terminal-hub, agent-ui, publish-windows-setup, github-release-installers]
+    # publish-windows-setup is waited for, not required. github-release-installers
+    # is not waited for at all: it redeploys the site itself once it has attached.
+    needs: [version, terminal-hub, agent-ui, publish-windows-setup]
     # No status-check function in `needs.version.outputs...` means GitHub
     # implicitly ANDs this with success() -- so a 'skipped' terminal-hub or
     # agent-ui (e.g. worker-check failed, or tui's binaries were not ok) would

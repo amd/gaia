@@ -62,9 +62,10 @@ describe('the terminal installers', () => {
     expect(attach).toMatch(/gh release upload "\$\{TAG\}"[^\n]*\n[^\n]*--clobber/);
     expect(attach).toContain('name: windows-setup');
     expect(attach).toContain('pattern: tui-installers-*');
-    // The website redeploy has to wait for the attach, or it renders without them.
-    expect(job(RELEASE_COMPONENTS, 'redeploy-website')).toMatch(
-      /needs:[^\n]*github-release-installers/,
+    // The site only shows them after a rebuild, and the attach can land after
+    // redeploy-website has run, so the attach job requests its own.
+    expect(attach.indexOf('gh workflow run deploy_website.yml')).toBeGreaterThan(
+      attach.indexOf('gh release upload'),
     );
   });
 });
