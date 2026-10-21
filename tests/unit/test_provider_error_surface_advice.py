@@ -234,10 +234,13 @@ def test_finished_work_is_reported_saved_not_unconfirmed(
     answer = result["result"]
 
     assert Path(target).read_text(encoding="utf-8") == "one"
+    # Headed as a failed turn; the saved file is not called unconfirmed.
     assert answer.startswith(
+        "The model call failed at step 2, so this request is unfinished. "
         f"Cloud authentication or access was denied (HTTP {status})"
     ), answer
-    assert "can't confirm" not in answer and "unfinished" not in answer, answer
+    assert "can't confirm" not in answer, answer
+    assert "Treat it as unfinished" not in answer, answer
     assert f"Saved before the error: `{target}`" in answer
     assert "temporary" not in answer
     assert result["status"] == "failed", "the turn still ended on an error"
@@ -282,7 +285,10 @@ def test_an_error_before_any_tool_ran_adds_no_saved_note(agent):
     agent.chat = MagicMock()
     agent.chat.send_messages.side_effect = _wrapped(_cloud_request_error(403, "amd"))
     answer = agent.process_query(QUERY)["result"]
-    assert answer.startswith("Cloud authentication or access was denied (HTTP 403)")
+    assert answer.startswith(
+        "The model call failed at step 1, so this request is unfinished. "
+        "Cloud authentication or access was denied (HTTP 403)"
+    )
     assert "Saved before the error" not in answer
     assert agent.chat.send_messages.call_count == 1, "a 403 must not be retried"
 

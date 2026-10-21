@@ -1105,6 +1105,10 @@ class ChatAgent(
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
 
+    def _model_service_label(self) -> Optional[str]:
+        """Names the provider in a failed turn's message: "Fireworks AI: …"."""
+        return self._inference_location().display
+
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
         profile = getattr(self.config, "prompt_profile", "full")
