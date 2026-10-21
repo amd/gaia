@@ -82,6 +82,10 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - '.github/workflows/eval_flagship.yml'
+      - '.github/workflows/eval_flagship_gemma_stx.yml'
+      - '.github/workflows/eval_scenario_lane.yml'
+      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
+      - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -152,6 +156,10 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - '.github/workflows/eval_flagship.yml'
+      - '.github/workflows/eval_flagship_gemma_stx.yml'
+      - '.github/workflows/eval_scenario_lane.yml'
+      - 'tests/fixtures/eval_baselines/gaia-flagship/**'
+      - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   merge_group:
   workflow_dispatch:
 
