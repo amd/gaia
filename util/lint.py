@@ -739,6 +739,38 @@ def check_test_lanes() -> CheckResult:
     return CheckResult("Test Lane Coverage", True, False, 0, "")
 
 
+def check_ci_paths() -> CheckResult:
+    """Reject CI lanes whose path filter misses a file they run, import or read."""
+    print("\nChecking every CI lane triggers on what it depends on...")
+    print("-" * 40)
+
+    try:
+        from check_ci_path_coverage import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_ci_path_coverage import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_ci_path_coverage.py: {exc}")
+            return CheckResult("CI Path Coverage", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "CI Path Coverage",
+            False,
+            False,
+            1,
+            "See output above; add the path to the lane's `paths:` filter, or "
+            "list it in util/ci_path_allowlist.yml with a reason.",
+        )
+
+    return CheckResult("CI Path Coverage", True, False, 0, "")
+
+
 def check_tool_descriptions() -> CheckResult:
     """Hold every flagship tool description to the per-call token budget."""
     print("\nChecking tool description budget...")
@@ -977,6 +1009,11 @@ def main():
         help="Reject test files that no CI lane runs (see util/test_lane_allowlist.yml)",
     )
     parser.add_argument(
+        "--ci-paths",
+        action="store_true",
+        help="Reject CI lanes whose path filter misses a file they depend on",
+    )
+    parser.add_argument(
         "--tool-descriptions",
         action="store_true",
         help="Check flagship tool descriptions against the per-call token budget",
@@ -1008,6 +1045,7 @@ def main():
             args.workflow_triggers,
             args.workflow_ancestor_skip,
             args.test_lanes,
+            args.ci_paths,
             args.tool_descriptions,
             args.doc_versions,
             args.all,
@@ -1073,6 +1111,9 @@ def main():
 
     if args.test_lanes or run_all:
         results.append(check_test_lanes())
+
+    if args.ci_paths or run_all:
+        results.append(check_ci_paths())
 
     if args.tool_descriptions or run_all:
         results.append(check_tool_descriptions())

@@ -113,6 +113,18 @@ on:
       - 'tests/electron/*-smoke.test.mjs'
       - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'util/release_tag.py'
+      # custom-agent-mcp-harness runs these against the built wheel.
+      - 'src/gaia/agents/base/console.py'
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/mcp/**'
+      - 'tests/fixtures/mcp/dummy_server/**'
+      - 'tests/installer/test_custom_agent_mcp_harness.py'
 
 # Least-privilege default. Only the release-upload step needs `contents:
 # write`, and it's gated behind `inputs.publish_to_release` — which is

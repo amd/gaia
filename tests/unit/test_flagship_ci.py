@@ -2,24 +2,27 @@
 # SPDX-License-Identifier: MIT
 """Keep the flagship regression lane active for its shared dependencies."""
 
-import re
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "util"))
+
+# GitHub's filter semantics, negation included, shared with the CI path guard.
+from check_ci_path_coverage import PathFilter, glob_to_regex  # noqa: E402
 
 
 def matches_path(path, pattern):
-    """Match the literal, * and ** filters used by this workflow."""
-    assert not any(char in pattern for char in "?![]+"), pattern
-    tokens = re.split(r"(\*\*|\*)", pattern)
-    expression = "".join(
-        ".*" if token == "**" else "[^/]*" if token == "*" else re.escape(token)
-        for token in tokens
-    )
-    return re.fullmatch(expression, path) is not None
+    """True when one filter glob matches `path`."""
+    return glob_to_regex(pattern).fullmatch(path) is not None
+
+
+def fires_on(path, patterns):
+    """True when a PR changing only `path` triggers a `paths:` list."""
+    return PathFilter("paths", tuple(patterns)).fires_on(path)
 
 
 @pytest.fixture
@@ -48,17 +51,14 @@ def triggers():
     ],
 )
 def test_dependency_changes_run_flagship_tests(triggers, event, changed_path):
-    assert any(
-        matches_path(changed_path, pattern) for pattern in triggers[event]["paths"]
+    assert fires_on(
+        changed_path, triggers[event]["paths"]
     ), f"{event} does not run flagship tests for {changed_path}"
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
 def test_unrelated_docs_do_not_run_flagship_tests(triggers, event):
-    assert not any(
-        matches_path("docs/guides/talk.mdx", pattern)
-        for pattern in triggers[event]["paths"]
-    )
+    assert not fires_on("docs/guides/talk.mdx", triggers[event]["paths"])
 
 
 def test_single_star_cannot_hide_narrowed_dependency_coverage():
