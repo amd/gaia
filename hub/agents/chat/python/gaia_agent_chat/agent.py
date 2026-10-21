@@ -1807,23 +1807,30 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     # The script's own output folders first: the search is bounded.
                     watch = watch_folders(*folders_named_in(source), run_dir, project)
                     started = time.time()
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        watch=watch,
-                        ignore=[p.resolve()],
-                    )
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[p.resolve()],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("execute_python_file", str(p))
+                        raise
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
-                        written = files_written_by(job, watch, started, [p.resolve()])
+                        written, complete = files_written_by(
+                            job, watch, started, [p.resolve()]
+                        )
                         note_untracked(
                             "execute_python_file",
                             str(p),
                             written,
-                            may_write=bool(written),
+                            may_write=bool(written) or not complete,
                         )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
@@ -1962,20 +1969,30 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 started = time.time()
                 start = time.monotonic()
                 try:
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        watch=watch,
-                        ignore=[snippet],
-                    )
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[snippet],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("run_python", detail)
+                        raise
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
-                        written = files_written_by(job, watch, started, [snippet])
+                        written, complete = files_written_by(
+                            job, watch, started, [snippet]
+                        )
                         note_untracked(
-                            "run_python", detail, written, may_write=bool(written)
+                            "run_python",
+                            detail,
+                            written,
+                            may_write=bool(written) or not complete,
                         )
                     if job.stopped:
                         return stopped_job_result(job, timeout)

@@ -4,7 +4,9 @@
 
 - A `run_python` snippet or `execute_python_file` script whose code only reads
   files no longer marks the turn's undo as incomplete, unless files changed in
-  the folders it ran in. A snippet is recorded by its docstring or first
+  the folders it ran in. The check fails closed: an import it doesn't know,
+  dynamic code, a mode it can't read, a folder scan cut short or a run that
+  fails part-way all still count as a write. A snippet is recorded by its docstring or first
   comment line instead of its first line of code. Uses `may_write` on
   `note_untracked`, new in core 0.25.1.
 - gpt-oss 20B and 120B get `set_reasoning_effort` (low, medium or high), so the

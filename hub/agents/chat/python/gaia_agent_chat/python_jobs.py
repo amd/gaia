@@ -352,39 +352,199 @@ def files_written_by(
     watch: Iterable[os.PathLike | str],
     started: float,
     ignore: Iterable[os.PathLike | str] = (),
-) -> List[str]:
+) -> Tuple[List[str], bool]:
     """Files under *watch* changed since *started* while *job* ran.
 
-    A killed job was already searched; a bounded search that stops early
-    reports what it found.
+    Returns ``(paths, complete)`` like :func:`files_written_since`. A killed
+    job was already searched.
     """
     if job.stopped:
-        return list(job.written)
-    return files_written_since(watch, started, ignore)[0]
+        return list(job.written), job.written_complete
+    return files_written_since(watch, started, ignore)
 
 
 # ── does a script write files? ──────────────────────────────────────────────
+#
+# Fails closed: a script counts as read-only only when every module it imports,
+# every name it reaches and every call it makes is known not to write.
 
-#: Methods that write wherever they are called from.
-_WRITE_METHODS = frozenset(
+#: Modules that do not write files on their own; their functions and methods
+#: that can are caught by name below. An entry covers its submodules.
+_READ_SAFE_MODULES = frozenset(
     {
+        "abc",
+        "array",
+        "base64",
+        "binascii",
+        "bisect",
+        "bz2",
+        "calendar",
+        "cmath",
+        "codecs",
+        "collections",
+        "contextlib",
+        "copy",
+        "csv",
+        "dataclasses",
+        "datetime",
+        "decimal",
+        "difflib",
+        "enum",
+        "fnmatch",
+        "fractions",
+        "functools",
+        "glob",
+        "gzip",
+        "hashlib",
+        "heapq",
+        "hmac",
+        "html",
+        "io",
+        "ipaddress",
+        "itertools",
+        "json",
+        "lzma",
+        "math",
+        "mimetypes",
+        "numbers",
+        "os",
+        "pathlib",
+        "pprint",
+        "random",
+        "re",
+        "secrets",
+        "shutil",
+        "statistics",
+        "string",
+        "struct",
+        "sys",
+        "tarfile",
+        "textwrap",
+        "time",
+        "tomllib",
+        "typing",
+        "unicodedata",
+        "urllib.parse",
+        "uuid",
+        "xml.etree",
+        "zipfile",
+        "zoneinfo",
+        "docx",
+        "matplotlib",
+        "numpy",
+        "openpyxl",
+        "pandas",
+        "PIL",
+        "pptx",
+        "pdfplumber",
+        "pypdf",
+        "PyPDF2",
+        "xlrd",
+    }
+)
+
+#: Modules where only the names listed may be used.
+_MODULE_READS = {
+    "os": frozenset(
+        {
+            "path",
+            "listdir",
+            "scandir",
+            "walk",
+            "stat",
+            "lstat",
+            "fstat",
+            "getcwd",
+            "getcwdb",
+            "environ",
+            "getenv",
+            "sep",
+            "altsep",
+            "extsep",
+            "pathsep",
+            "linesep",
+            "devnull",
+            "curdir",
+            "pardir",
+            "name",
+            "cpu_count",
+            "getpid",
+            "getppid",
+            "getlogin",
+            "fspath",
+            "fsencode",
+            "fsdecode",
+            "access",
+            "get_terminal_size",
+            "uname",
+            "urandom",
+            "readlink",
+            "strerror",
+            "stat_result",
+            "DirEntry",
+            "PathLike",
+            "F_OK",
+            "R_OK",
+            "W_OK",
+            "X_OK",
+        }
+    ),
+    "shutil": frozenset(
+        {
+            "which",
+            "disk_usage",
+            "get_terminal_size",
+            "get_archive_formats",
+            "get_unpack_formats",
+        }
+    ),
+    "sys": frozenset(
+        {
+            "argv",
+            "stdout",
+            "stderr",
+            "stdin",
+            "version",
+            "version_info",
+            "hexversion",
+            "platform",
+            "implementation",
+            "executable",
+            "exit",
+            "maxsize",
+            "maxunicode",
+            "float_info",
+            "int_info",
+            "byteorder",
+            "getsizeof",
+            "getdefaultencoding",
+            "getfilesystemencoding",
+            "getrecursionlimit",
+            "setrecursionlimit",
+            "exc_info",
+            "exception",
+        }
+    ),
+}
+
+#: Functions, methods and classes that write wherever they are reached from.
+_WRITE_NAMES = frozenset(
+    {
+        "write",
+        "writelines",
+        "writestr",
         "write_text",
         "write_bytes",
         "save",
+        "save_workbook",
+        "ez_save",
         "savefig",
         "savez",
         "savez_compressed",
         "savetxt",
+        "imsave",
         "tofile",
-        "to_excel",
-        "to_parquet",
-        "to_pickle",
-        "to_feather",
-        "to_hdf",
-        "to_sql",
-        "to_stata",
-        "to_orc",
-        "to_file",
+        "dump",
         "touch",
         "mkdir",
         "makedirs",
@@ -392,142 +552,437 @@ _WRITE_METHODS = frozenset(
         "removedirs",
         "unlink",
         "rmtree",
-        "copy2",
-        "copyfile",
-        "copytree",
-        "chmod",
-        "chown",
-        "utime",
-        "truncate",
         "symlink_to",
         "hardlink_to",
-        "extractall",
-        "urlretrieve",
+        "link_to",
+        "chmod",
+        "lchmod",
+        "chown",
+        "lchown",
+        "utime",
+        "truncate",
+        "copyfile",
+        "copy2",
+        "copytree",
+        "copymode",
+        "copystat",
+        "move",
+        "move_into",
+        "copy_into",
         "make_archive",
         "unpack_archive",
+        "extractall",
+        "urlretrieve",
+        "memmap",
+        "open_memmap",
+        "read_pickle",
+        "read_sql",
+        "read_sql_query",
+        "read_sql_table",
+        "system",
+        "popen",
+        "exec",
+        "eval",
+        "DataSource",
+        "ExcelWriter",
+        "HDFStore",
+        "PdfPages",
+        "PdfWriter",
+        "PdfMerger",
+        "PdfFileWriter",
+        "PdfFileMerger",
     }
 )
 
-#: Methods that write only when given a destination (``df.to_csv()`` returns text).
+#: ``to_*`` methods that only convert in memory.
+_PURE_TO = frozenset(
+    {
+        "to_numpy",
+        "to_dict",
+        "to_list",
+        "to_frame",
+        "to_datetime",
+        "to_numeric",
+        "to_timedelta",
+        "to_records",
+        "to_period",
+        "to_timestamp",
+        "to_series",
+        "to_pydatetime",
+        "to_flat_index",
+        "to_offset",
+        "to_dense",
+        "to_tuples",
+        "to_julian_date",
+        "to_bytes",
+    }
+)
+#: ``to_*`` methods that write only when given a destination (``df.to_csv()`` returns text).
 _WRITE_WITH_TARGET = frozenset(
     {"to_csv", "to_json", "to_html", "to_latex", "to_markdown", "to_xml", "to_string"}
 )
-_TARGET_KEYWORDS = frozenset({"path_or_buf", "buf", "path", "path_or_buffer"})
-
-#: ``os`` functions that change files or start a process.
-_OS_WRITES = frozenset(
+_TARGET_KEYWORDS = frozenset(
     {
-        "remove",
-        "unlink",
-        "rename",
-        "renames",
-        "replace",
-        "mkdir",
-        "makedirs",
-        "rmdir",
-        "removedirs",
-        "chmod",
-        "chown",
-        "lchown",
-        "link",
-        "symlink",
-        "truncate",
-        "utime",
-        "system",
-        "popen",
-        "startfile",
-        "write",
-        "open",
-        "mkfifo",
+        "path_or_buf",
+        "path_or_buffer",
+        "buf",
+        "path",
+        "excel_writer",
+        "fname",
+        "file",
+        "filename",
+        "target",
+        "dst",
+        "dest",
+        "destination",
     }
 )
-_SHUTIL_READS = frozenset({"which", "disk_usage", "get_terminal_size"})
 
-#: Constructors that create their output file.
-_WRITER_CLASSES = frozenset({"ExcelWriter", "SimpleDocTemplate"})
+#: Calls that open a file, writing only in a mode that writes.
+_OPENERS = frozenset(
+    {
+        "open",
+        "taropen",
+        "gzopen",
+        "bz2open",
+        "xzopen",
+        "ZipFile",
+        "PyZipFile",
+        "TarFile",
+        "GzipFile",
+        "BZ2File",
+        "LZMAFile",
+        "FileIO",
+    }
+)
 
-_MODE = re.compile(r"^[rwaxbtU+]{1,4}$")
+#: Methods that write only for some arguments: ``Path.rename(target)`` but not
+#: ``df.rename(columns=...)``, ``Path.replace(target)`` but not ``str.replace(a, b)``.
+_WRITE_BY_ARGS = frozenset({"rename", "replace", "copy", "extract"})
+#: Modules whose ``rename``/``replace``/``copy`` work in memory.
+_PURE_BY_ARGS_MODULES = frozenset({"copy", "numpy"})
+
+#: Builtins that run other code or reach any object.
+_UNSAFE_BUILTINS = frozenset(
+    {
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        "__builtins__",
+        "__loader__",
+        "__spec__",
+        "globals",
+        "locals",
+        "vars",
+        "setattr",
+        "delattr",
+        "breakpoint",
+        "help",
+    }
+)
+#: Attributes that hand back a module not imported by name (``pathlib.os``).
+_MODULE_ATTRS = frozenset(
+    {
+        "os",
+        "sys",
+        "shutil",
+        "subprocess",
+        "builtins",
+        "importlib",
+        "ctypes",
+        "tempfile",
+        "pickle",
+        "sqlite3",
+        "socket",
+        "runpy",
+        "multiprocessing",
+        "pty",
+        "shelve",
+        "dbm",
+        "marshal",
+    }
+)
+_SAFE_DUNDERS = frozenset(
+    {"__name__", "__doc__", "__version__", "__file__", "__qualname__", "__module__"}
+)
+
+#: A string that is an ``open()`` mode, e.g. ``"rb"``, ``"w:gz"``, ``"r|*"``.
+_MODE = re.compile(r"^[rwaxbtU+]{1,4}(?:[:|][\w*]*)?$")
 
 
-def _dotted(node: ast.AST) -> str:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        inner = _dotted(node.value)
-        return f"{inner}.{node.attr}" if inner else ""
-    return ""
-
-
-def _opens_for_writing(call: ast.Call, method: bool) -> bool:
-    """``open``-style call: True unless its mode is a constant that only reads."""
-    modes = [kw.value for kw in call.keywords if kw.arg == "mode"]
-    # open(path, mode) and module.open(path, mode); Path(p).open(mode).
-    if not modes and len(call.args) > 1:
-        modes.append(call.args[1])
-    if not modes and method and call.args:
-        first = call.args[0]
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            if _MODE.match(first.value):
-                modes.append(first)
-    for mode in modes:
-        if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
-            return True
-        if _MODE.match(mode.value) and set(mode.value) & set("wax+"):
-            return True
-    return False
-
-
-def _call_may_write(call: ast.Call) -> bool:
-    func = call.func
-    if isinstance(func, ast.Name):
-        name, owner = func.id, ""
-    elif isinstance(func, ast.Attribute):
-        name, owner = func.attr, _dotted(func.value)
-    else:
+def _read_mode(node: ast.AST) -> bool:
+    """A literal mode that only reads."""
+    if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
         return False
-    root = owner.split(".")[0]
-    if isinstance(func, ast.Name) and name in ("exec", "eval", "__import__"):
-        return True
-    if root == "subprocess" or name == "Popen":
-        return True
-    if root == "shutil":
-        return name not in _SHUTIL_READS
-    if owner == "os":
-        return name in _OS_WRITES or name.startswith("spawn") or name.startswith("exec")
-    if owner == "sqlite3" and name == "connect":
-        return True
-    if name in ("open", "ZipFile", "TarFile"):
-        return _opens_for_writing(call, method=isinstance(func, ast.Attribute))
-    if name in _WRITE_METHODS or name in _WRITER_CLASSES:
-        return True
-    if name in _WRITE_WITH_TARGET:
-        return bool(call.args) or any(
-            kw.arg in _TARGET_KEYWORDS for kw in call.keywords
+    head = re.split(r"[:|]", node.value, maxsplit=1)[0]
+    return bool(head) and set(head) <= set("rbtU")
+
+
+def _dunder(name: str) -> bool:
+    return name.startswith("__") and name.endswith("__") and name not in _SAFE_DUNDERS
+
+
+def _unpacks(call: ast.Call) -> bool:
+    """Arguments that cannot be read off the call: ``*args`` or ``**kwargs``."""
+    return any(isinstance(a, ast.Starred) for a in call.args) or any(
+        kw.arg is None for kw in call.keywords
+    )
+
+
+def _has_target(call: ast.Call) -> bool:
+    return (
+        _unpacks(call)
+        or bool(call.args)
+        or any(
+            kw.arg in _TARGET_KEYWORDS
+            and not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
+            for kw in call.keywords
         )
-    if name == "Workbook":  # xlsxwriter.Workbook(path); openpyxl's takes none
-        return bool(call.args)
-    if name in ("rename", "replace") and isinstance(func, ast.Attribute):
-        # Path(...).rename(...), not df.rename(columns=...) or str.replace.
-        receiver = func.value
-        return isinstance(receiver, ast.Call) and _dotted(receiver.func).endswith(
-            "Path"
-        )
+    )
+
+
+def _name_may_write(name: str) -> bool:
+    """An attribute or imported name that writes whatever it is called with."""
+    return (
+        _dunder(name)
+        or name in _WRITE_NAMES
+        or name in _MODULE_ATTRS
+        or name.startswith("print_")  # matplotlib's canvas.print_png(path)
+        or (name.startswith("to_") and name not in _PURE_TO)
+    )
+
+
+def _read_safe(module: str) -> bool:
+    return any(module == m or module.startswith(m + ".") for m in _READ_SAFE_MODULES)
+
+
+def _opens_for_writing(call: ast.Call, module: bool) -> bool:
+    """An ``open``-style call that is not plainly read-only.
+
+    *module* is an ``open(path, mode)`` function or class; otherwise a method
+    such as ``Path.open(mode)`` or ``ZipFile.open(name, mode)``.
+    """
+    if _unpacks(call):
+        return True
+    for kw in call.keywords:
+        if kw.arg == "mode" and not _read_mode(kw.value):
+            return True
+    args = call.args
+    if not module and args:
+        first = args[0]
+        if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+            return True  # a mode or a name we cannot read
+        if _MODE.match(first.value):
+            return not _read_mode(first)
+    return len(args) > 1 and not _read_mode(args[1])
+
+
+def _writes_by_args(name: str, call: ast.Call, receiver: ast.AST) -> bool:
+    if _unpacks(call) or any(kw.arg in _TARGET_KEYWORDS for kw in call.keywords):
+        return True
+    if name == "extract":  # ZipFile.extract, not Series.str.extract
+        return not (isinstance(receiver, ast.Attribute) and receiver.attr == "str")
+    if name == "replace":
+        return len(call.args) == 1
+    return bool(call.args)
+
+
+def _numpy_load_may_write(call: ast.Call) -> bool:
+    """``np.load`` unpickles, or maps a file writable, unless told not to."""
+    if _unpacks(call) or len(call.args) > 1:
+        return True
+    for kw in call.keywords:
+        if not isinstance(kw.value, ast.Constant):
+            if kw.arg in ("allow_pickle", "mmap_mode"):
+                return True
+            continue
+        if kw.arg == "allow_pickle" and kw.value.value is not False:
+            return True
+        if kw.arg == "mmap_mode" and kw.value.value not in (None, "r", "c"):
+            return True
     return False
+
+
+class _WriteScan:
+    """One script's syntax tree, checked for anything that may write."""
+
+    def __init__(self, tree: ast.AST):
+        self.nodes = list(ast.walk(tree))
+        #: Local name -> dotted module path it was imported as.
+        self.imports: Dict[str, str] = {}
+        #: Names also bound some other way, so not trusted to be the module.
+        self.rebound: set = set()
+        self.calls: Dict[int, ast.Call] = {}
+        self.owners: set = set()
+        for n in self.nodes:
+            if isinstance(n, ast.Call):
+                self.calls[id(n.func)] = n
+            elif isinstance(n, ast.Attribute):
+                self.owners.add(id(n.value))
+            elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+                self.rebound.add(n.id)
+            elif isinstance(n, ast.arg):
+                self.rebound.add(n.arg)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                self.rebound.add(n.name)
+            elif isinstance(n, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+                if n.name:
+                    self.rebound.add(n.name)
+            elif isinstance(n, ast.MatchMapping) and n.rest:
+                self.rebound.add(n.rest)
+
+    def may_write(self) -> bool:
+        for n in self.nodes:
+            if isinstance(n, (ast.Import, ast.ImportFrom)) and self._import_may_write(
+                n
+            ):
+                return True
+        for n in self.nodes:
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+                if self._load_may_write(n):
+                    return True
+            elif isinstance(n, ast.Attribute):
+                if self._attribute_may_write(n):
+                    return True
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                if self._name_call_may_write(n):
+                    return True
+        return False
+
+    def _bind(self, local: str, module: str) -> None:
+        if self.imports.get(local, module) != module:
+            self.rebound.add(local)
+        self.imports[local] = module
+
+    def _import_may_write(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if not _read_safe(alias.name):
+                    return True
+                if alias.asname:
+                    self._bind(alias.asname, alias.name)
+                else:
+                    top = alias.name.split(".")[0]
+                    self._bind(top, top)
+            return False
+        if node.level or not node.module or not _read_safe(node.module):
+            return True
+        reads = _MODULE_READS.get(node.module)
+        for alias in node.names:
+            if alias.name == "*" or _name_may_write(alias.name):
+                return True
+            if reads is not None and alias.name not in reads:
+                return True
+            self._bind(alias.asname or alias.name, f"{node.module}.{alias.name}")
+        return False
+
+    def _opener(self, name: str) -> bool:
+        """``open`` or the like, under its own name or one it was imported as."""
+        imported = self.imports.get(name)
+        return (
+            name in _OPENERS or bool(imported) and imported.split(".")[-1] in _OPENERS
+        )
+
+    def _resolve(self, node: ast.AST) -> Optional[str]:
+        """The dotted module path *node* names, if it starts at an import."""
+        if isinstance(node, ast.Name):
+            return self.imports.get(node.id)
+        if isinstance(node, ast.Attribute):
+            inner = self._resolve(node.value)
+            return f"{inner}.{node.attr}" if inner else None
+        return None
+
+    def _trusted(self, node: ast.AST) -> Optional[str]:
+        """Like :meth:`_resolve`, but only when the name is bound by imports alone."""
+        root = node
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Name) and root.id in self.rebound:
+            return None
+        return self._resolve(node)
+
+    def _load_may_write(self, node: ast.Name) -> bool:
+        name = node.id
+        if name in _UNSAFE_BUILTINS:
+            return True
+        if name == "getattr" or self._opener(name):
+            # Handed on uncalled, there is no telling what it is used for.
+            return id(node) not in self.calls
+        # A module limited to some of its names, itself handed on.
+        return self.imports.get(name) in _MODULE_READS and id(node) not in self.owners
+
+    def _attribute_may_write(self, node: ast.Attribute) -> bool:
+        name = node.attr
+        if _dunder(name) or name in _MODULE_ATTRS or name.startswith("print_"):
+            return True
+        resolved = self._resolve(node)
+        if resolved:
+            parts = resolved.split(".")
+            reads = _MODULE_READS.get(parts[0])
+            if reads is not None and parts[1] not in reads:
+                return True
+            if parts[0] == "sys" and parts[1] in ("stdout", "stderr"):
+                # sys.stdout.write prints, unless "sys" was rebound to something else.
+                return not self._trusted(node)
+        call = self.calls.get(id(node))
+        if name in _WRITE_NAMES:
+            # json.dump needs a file object, and opening one to write is caught.
+            return not (name == "dump" and self._trusted(node) == "json.dump")
+        if name.startswith("to_") and name not in _PURE_TO:
+            return name not in _WRITE_WITH_TARGET or call is None or _has_target(call)
+        if name in _OPENERS:
+            if call is None:
+                return True
+            owner = self._trusted(node.value)
+            return _opens_for_writing(
+                call, module=bool(owner) and not owner.startswith("pathlib")
+            )
+        if name in _WRITE_BY_ARGS:
+            if call is None:
+                return True
+            owner = self._trusted(node.value)
+            if owner and owner.split(".")[0] in _PURE_BY_ARGS_MODULES:
+                return False
+            return _writes_by_args(name, call, node.value)
+        if name == "load" and (resolved or "").startswith("numpy"):
+            return call is None or _numpy_load_may_write(call)
+        return False
+
+    def _name_call_may_write(self, call: ast.Call) -> bool:
+        name = call.func.id
+        if name == "getattr":
+            return self._getattr_may_write(call)
+        if self._opener(name):
+            return _opens_for_writing(call, module=True)
+        if self.imports.get(name) == "numpy.load":
+            return _numpy_load_may_write(call)
+        return False
+
+    def _getattr_may_write(self, call: ast.Call) -> bool:
+        if _unpacks(call) or len(call.args) < 2:
+            return True
+        owner, attr = call.args[0], call.args[1]
+        if not (isinstance(attr, ast.Constant) and isinstance(attr.value, str)):
+            return True
+        if self._resolve(owner):
+            return True
+        name = attr.value
+        return _name_may_write(name) or name in _OPENERS or name in _WRITE_BY_ARGS
 
 
 def may_write_files(source: str) -> bool:
     """Whether a script could create, change or delete files.
 
-    A static check of the calls it makes, leaning towards yes: code that does
-    not parse, runs other code, or starts a process counts as writing.
+    A static check that fails closed: only code whose every import, name and
+    call is known not to write counts as read-only. Code that does not parse,
+    runs other code, starts a process or imports a module not known to be
+    read-only counts as writing.
     """
     try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError):
+        return _WriteScan(ast.parse(source)).may_write()
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return True
-    return any(
-        isinstance(node, ast.Call) and _call_may_write(node) for node in ast.walk(tree)
-    )
 
 
 _DESCRIBE_MAX = 120
