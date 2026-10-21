@@ -31,6 +31,11 @@ Usage::
         --artifacts-dir lane-artifacts \\
         --baseline-dir tests/fixtures/eval_baselines/gaia-flagship
 
+A targeted dispatch passes ``--matrix-json`` (the lanes job's matrix) and
+``--selection``. The report then covers only the lanes and categories that were
+asked for, under a banner saying the run was not a full sweep, so unselected
+lanes are neither reported as dead nor mistaken for measured.
+
 Exit codes:
     0 — a report was produced (whatever it says).
     1 — the inputs are unreadable, so no report could be produced at all.
@@ -122,9 +127,17 @@ def _lane_state(row: dict) -> str:
     return "measured"
 
 
-def render(rows: list[dict], has_baseline: bool) -> str:
+def render(rows: list[dict], has_baseline: bool, selection: str | None = None) -> str:
     """Render the whole run as markdown for the job summary."""
     out: list[str] = ["## Scenario eval — all lanes", ""]
+
+    if selection:
+        out += [
+            f"> **{selection}.** This is not a full sweep: only the lanes, "
+            "categories and scenarios below ran. Totals cover the selection, and "
+            "nothing here says anything about the scenarios left out.",
+            "",
+        ]
 
     if not has_baseline:
         out += [
@@ -205,6 +218,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Committed flagship baselines. Absent or empty means no verdict.",
     )
+    parser.add_argument(
+        "--matrix-json",
+        help="A targeted run's lane matrix; report only these lanes and categories.",
+    )
+    parser.add_argument(
+        "--selection",
+        help="One line describing a targeted run, shown as the report's banner.",
+    )
     args = parser.parse_args(argv)
 
     lanes_doc = _read_json(args.lanes_file)
@@ -222,11 +243,25 @@ def main(argv: list[str] | None = None) -> int:
         and args.baseline_dir.is_dir()
         and any(args.baseline_dir.glob("scorecard_*.json"))
     )
+    lanes = lanes_doc["lanes"]
+    if args.matrix_json:
+        try:
+            include = json.loads(args.matrix_json)["include"]
+        except (ValueError, KeyError, TypeError) as exc:
+            print(
+                f"::error::--matrix-json is not the lanes job's matrix ({exc}), so "
+                "this targeted run's lanes are unknown and no summary can be produced.",
+                file=sys.stderr,
+            )
+            return 1
+        lanes = [
+            {"lane": entry["lane"], "categories": entry["categories"].split()}
+            for entry in include
+        ]
     rows = [
-        collect_lane(lane, args.artifacts_dir, args.artifact_prefix)
-        for lane in lanes_doc["lanes"]
+        collect_lane(lane, args.artifacts_dir, args.artifact_prefix) for lane in lanes
     ]
-    print(render(rows, has_baseline))
+    print(render(rows, has_baseline, args.selection))
 
     for row in rows:
         if not row["present"]:

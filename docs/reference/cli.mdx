@@ -2039,7 +2039,7 @@ gaia eval agent [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--scenario` | string | all | Run a specific scenario by ID |
+| `--scenario` | string | all | Run only these scenario IDs; repeat the flag or comma-separate them. An ID that would not run (wrong `--category`, excluded tag) is an error |
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
 | `--agent-type` | string | `gaia` | Agent registration ID to score. Every scenario runs against this one agent, so a scorecard names a single agent and two scorecards are comparable. Override only to measure a different agent — and never compare the result to a scorecard captured under another one |
