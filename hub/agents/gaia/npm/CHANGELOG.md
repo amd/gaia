@@ -554,13 +554,6 @@ shipped in it.
   split the way the shell would, such a line that also deletes or discards work
   (`git push --force`, `git reset --hard`, `rm` outside the project), and
   folders no approval can open.
-- **`run_python` and `execute_python_file` work in the released binary.** The
-  binary has no Python interpreter, so it handed every script to its own
-  argument parser, which rejected it, and no calculation, chart or `.xlsx`
-  could be produced. It now runs scripts itself, with openpyxl, python-docx,
-  python-pptx, reportlab, pypdf, pandas, numpy, matplotlib and the full
-  standard library bundled for them. The Windows binary grows from 147 MB to
-  168 MB.
 - **Long Python data jobs can finish.** `run_python` gave up after 60 s and
   the agent abandoned `execute_python_file` at 180 s even when it had asked
   for 15 minutes, while the script kept running and left a corrupt workbook
