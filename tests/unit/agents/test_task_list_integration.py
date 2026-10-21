@@ -555,3 +555,56 @@ def test_an_unreadable_task_list_never_breaks_the_session_list():
     )
     [row] = [s for s in db.list_sessions() if s["id"] == sid]
     assert session_to_response(row).task_list is None
+
+
+def test_an_earlier_requests_unfinished_list_is_left_alone_by_new_work():
+    from gaia.agents.tools.task_list_tools import TaskList
+
+    tl = TaskList()
+    tl.begin_turn()
+    tl.update(items=STEPS)
+    tl.action_started("read_file", {})
+    events = []
+    tl._on_change = events.append
+    tl.begin_turn()
+    assert tl.state()["steps_since_update"] == 0
+    for _ in range(4):
+        tl.action_started("read_file", {})
+    assert events == []
+    # Once the model picks it up again, it is this turn's list.
+    tl.update(advance=True)
+    tl.action_started("read_file", {"file_path": "x"})
+    assert events[-1]["current_action"]
+
+
+def test_a_failed_save_never_fails_the_tool_call_or_the_turn(clean_registry):
+    # pylint: disable=unused-argument
+    import sqlite3
+
+    agent = _agent()
+    _wire(agent)
+    agent.console = MagicMock()
+
+    def broken(_state):
+        raise sqlite3.OperationalError("database is locked")
+
+    agent.bind_task_list_store(lambda: None, broken)
+    _script(
+        agent,
+        [
+            _calls(("update_tasks", {"items": STEPS})),
+            _calls(("read_tli", {"path": "a"})),
+            "It says hello world.",
+        ],
+    )
+    result = agent.process_query("go")
+    assert "hello world" in str(result.get("result"))
+    assert agent.console.print_warning.call_count == 1
+    assert "could not be saved" in agent.console.print_warning.call_args.args[0]
+
+
+def test_a_saved_list_that_is_not_an_object_is_refused_loudly():
+    from gaia.ui.database import ChatDatabase
+
+    with pytest.raises(ValueError, match="not an object"):
+        ChatDatabase.decode_task_list({"id": "s", "task_list": "[]"})

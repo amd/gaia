@@ -679,12 +679,19 @@ class ChatDatabase:
         if isinstance(raw, dict):
             return raw
         try:
-            return json.loads(raw)
+            state = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ValueError(
                 f"session {session.get('id')} has an unreadable task_list column "
                 f"({exc.msg}); clear it with set_session_task_list(id, None)"
             ) from exc
+        if not isinstance(state, dict):
+            raise ValueError(
+                f"session {session.get('id')} has a task_list column holding "
+                f"{type(state).__name__}, not an object; clear it with "
+                "set_session_task_list(id, None)"
+            )
+        return state
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""

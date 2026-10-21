@@ -386,7 +386,13 @@ turn: it is saved with the session and carried into later turns.
 
 `current_action` is meaningful only while a turn runs. The agent clears it
 after its terminal event, which a stream reader never sees, so a receiver drops
-it itself at `final` or `error`, and a list read back from storage has none.
+it itself at `final` or `error`. A stored copy may still carry the last action
+(a relayed or killed turn saves before that clear); a reader ignores it when no
+turn is running, and the agent drops it on restore.
+
+`steps_since_update` and the live action cover only a list the current turn is
+working on. An earlier request's list, finished or not, is left as it was
+until the model touches it again.
 
 ---
 

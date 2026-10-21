@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import threading
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
@@ -370,6 +371,7 @@ class TaskList:
             self._kept_this_turn = False
             self._calls_this_turn = 0
             self._nudged = False
+            self._steps_since_update = 0
 
     def end_turn(self) -> None:
         """The turn ended; nothing is running any more."""
@@ -388,8 +390,12 @@ class TaskList:
         label = self._narrate(tool, args or {}) if self._narrate else tool
         with self._lock:
             self._calls_this_turn += 1
-            # A list finished in an earlier turn is history, not this turn's work.
-            if not self._items or not (self.is_active() or self._kept_this_turn):
+            # An earlier request's list, finished or not, is not this turn's
+            # work until the model touches it (or the plan fallback rebuilds it).
+            this_turns = self._kept_this_turn or (
+                self._source == SOURCE_PLAN and self.is_active()
+            )
+            if not self._items or not this_turns:
                 return
             self._current_action = label
             self._action_started_at = _now()
@@ -613,6 +619,7 @@ class TaskListMixin:
 
     task_list: Optional[TaskList] = None
     _task_list_save: Optional[Callable[[Dict[str, Any]], None]] = None
+    _task_list_save_warned = False
 
     def register_task_list_tools(self) -> None:
         """Create the list and register ``update_tasks`` into _TOOL_REGISTRY."""
@@ -667,8 +674,20 @@ class TaskListMixin:
         console = getattr(self, "console", None)
         if console is not None:
             console.print_task_list(state)
-        if self._task_list_save is not None:
+        if self._task_list_save is None:
+            return
+        try:
             self._task_list_save(state)
+        except (sqlite3.Error, OSError) as exc:
+            # The list is display state: a failed save must not fail the tool
+            # call or the turn it rides on. Said once per session, logged always.
+            logger.error("Could not save the task list: %s", exc)
+            if not self._task_list_save_warned and console is not None:
+                self._task_list_save_warned = True
+                console.print_warning(
+                    f"The task list could not be saved ({exc}); it will not "
+                    "survive a restart of this chat."
+                )
 
     def bind_task_list_store(
         self,
