@@ -295,6 +295,52 @@ def test_a_tool_that_overruns_while_awake_is_still_timed_out(pc):
         release.set()
 
 
+def test_a_sleep_during_a_prompt_does_not_hide_a_hung_tool(pc):
+    """The prompt's wait is timed on the awake clock too.
+
+    Timed on a clock that counts sleep, an S3 sleep while the question is on
+    screen would come off the limit twice, and the tool would hang unnoticed
+    for that long after the answer.
+    """
+    from gaia.agents.base.agent import _TOOL_USER_WAIT, Agent, ToolExecutionTimeout
+
+    class _Host:
+        def _bounded_tool_timeout(self, _name, _args):
+            return 5.0
+
+    asked, answered, release = threading.Event(), threading.Event(), threading.Event()
+
+    def asks_then_hangs():
+        wait = _TOOL_USER_WAIT.get()
+        wait.begin()
+        asked.set()
+        assert answered.wait(10)
+        wait.end()
+        release.wait(10)  # hangs after the answer
+
+    def user_and_pc():
+        assert asked.wait(5)
+        time.sleep(0.2)
+        pc.run(1.0)  # the user reads the question
+        pc.sleep(EIGHT_HOURS)  # the PC sleeps with it on screen
+        pc.run(1.0)
+        answered.set()
+        time.sleep(0.3)  # the tool has the answer and hangs
+        pc.run(6.0)  # past 5 s of tool time, beyond the 2 s spent answering
+
+    helper = threading.Thread(target=user_and_pc)
+    helper.start()
+    began = time.perf_counter()
+    try:
+        with pytest.raises(ToolExecutionTimeout):
+            Agent._call_tool_bounded(_Host(), asks_then_hangs, {}, "asks_then_hangs")
+        assert time.perf_counter() - began < 5.0
+    finally:
+        release.set()
+        answered.set()
+        helper.join()
+
+
 def test_a_tool_whose_clock_fails_is_cancelled_not_left_running(monkeypatch):
     """A broken awake clock fails the call; the tool body must be told to stop."""
     from gaia.agents.base.agent import Agent

@@ -46,6 +46,7 @@ def test_on_windows_it_reads_the_unbiased_interrupt_time_and_nothing_else(
         ticks._obj.value = 123_456_789_000  # 100 ns units
         return 1
 
+    assert awake_clock._query.__name__ == "QueryUnbiasedInterruptTime"
     monkeypatch.setattr(awake_clock, "_query", known_ticks)
     assert awake_clock.monotonic() == pytest.approx(12_345.6789)
 
