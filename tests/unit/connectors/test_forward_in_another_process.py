@@ -615,3 +615,38 @@ def test_a_failed_undo_of_a_halfway_forward_says_so(
 
     assert "keyring locked" in str(exc.value)
     assert "keyring gone" in str(exc.value)
+
+
+def test_the_startup_sweep_clears_a_connection_whose_client_is_gone(
+    connected_under_old_client,
+):
+    from gaia.connectors.api import tripwire_check
+
+    save_provider_credentials("google", client_id="third.apps.example")
+    _registry.clear()  # the sweep runs at startup, before anything is cached
+
+    tripwire_check()
+
+    assert _stored_refresh_token() is None
+
+
+def test_the_startup_sweep_keeps_a_connection_another_process_forwarded(
+    connected_under_old_client,
+):
+    from gaia.connectors.api import tripwire_check
+
+    _written_by_another_process()
+
+    tripwire_check()
+
+    assert _stored_refresh_token() == "forwarded-refresh"
+
+
+def test_the_startup_sweep_leaves_a_busy_connection_in_place(busy_mismatch, caplog):
+    from gaia.connectors.api import tripwire_check
+
+    with caplog.at_level("INFO", logger="gaia.connectors.api"):
+        tripwire_check()
+
+    assert _stored_refresh_token() == "forwarded-refresh"
+    assert "left in place" in caplog.text
