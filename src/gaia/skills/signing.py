@@ -95,7 +95,7 @@ def _ed25519():
         raise SkillSignatureError(
             "Skill signature verification needs the 'cryptography' package, which "
             "is not installed, so a signed skill cannot be verified. Install it "
-            "with: uv pip install 'cryptography>=42.0.0' (or reinstall GAIA: "
+            "with: uv pip install 'cryptography>=42.0.0,<49' (or reinstall GAIA: "
             "uv pip install -e '.'). GAIA refuses to install a signed skill "
             f"without checking its signature. See {_DOCS}"
         ) from exc

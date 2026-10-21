@@ -87,6 +87,20 @@ def test_pymupdf_is_capped_below_2() -> None:
         assert not req.specifier.contains(Version("2.0")), f"{where}: '{req}'"
 
 
+def test_cryptography_is_capped_below_49() -> None:
+    """cryptography 49+ ships no macOS x86_64 wheel; its sdist needs Rust.
+
+    48.0.1 is the last release with a universal2 wheel. One global cap, like
+    pymupdf's, keeps every platform on the same version the frozen builds use.
+    """
+    declared = _requirements("cryptography")
+    assert {where for where, _ in declared} == {"install_requires"}
+    for where, req in declared:
+        assert req.marker is None, f"{where} declares '{req}' with a marker"
+        assert req.specifier.contains(Version("48.0.1")), f"{where}: '{req}'"
+        assert not req.specifier.contains(Version("49.0.0")), f"{where}: '{req}'"
+
+
 def test_extras_carry_no_platform_markers() -> None:
     """``gaia init`` adds extras by reading these requirements back from the
     installed metadata and refuses any condition beyond ``extra == ...``."""
