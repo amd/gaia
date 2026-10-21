@@ -29,6 +29,7 @@ const path = require("path");
 const { BrowserWindow, dialog, ipcMain, shell, clipboard } = require("electron");
 
 const installer = require("./backend-installer.cjs");
+const { appIconPath } = require("./app-icon.cjs");
 
 // IPC channels. Keep these in sync with preload.cjs.
 const IPC_PROGRESS_EVENT = "install:progress";
@@ -270,6 +271,7 @@ function createProgressWindow() {
     show: false,
     backgroundColor: "#1A1917", // --bg-primary, dark theme (see the :root block above)
     title: "Installing GAIA",
+    icon: appIconPath(),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

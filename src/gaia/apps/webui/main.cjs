@@ -69,6 +69,7 @@ try {
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
   confirmQuit,
@@ -597,7 +598,7 @@ function createWindow() {
     minWidth: windowConfig.minWidth,
     minHeight: windowConfig.minHeight,
     title: APP_NAME,
-    icon: path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
+    icon: appIconPath(),
     show: false, // Don't show until ready (prevents flash)
     webPreferences: {
       nodeIntegration: false,
@@ -1163,6 +1164,11 @@ if (!gotTheSingleInstanceLock) {
   // app.quit() alone is async and the rest of this file would still
   // execute, racing with the first instance.
   process.exit(0);
+}
+
+// Before any window: the taskbar reads the ID when a window first appears.
+if (process.platform === "win32") {
+  app.setAppUserModelId(appUserModelId(app.isPackaged));
 }
 
 app.on("second-instance", (_event, argv, _cwd) => {
