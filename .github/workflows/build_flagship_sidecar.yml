@@ -105,6 +105,9 @@ jobs:
             python3.12 python3.12-devel git binutils gcc gcc-c++ tar gzip findutils
           ln -sf /usr/bin/python3.12 /usr/local/bin/python
           echo "UV_PYTHON_PREFERENCE=only-system" >> "$GITHUB_ENV"
+          # The image declares no PATH, so once setup-uv adds to GITHUB_PATH the
+          # runner's PATH would hold only uv's directory and lose bash.
+          echo "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "$GITHUB_PATH"
           ldd --version | sed -n 1p
 
       - uses: actions/checkout@v7
