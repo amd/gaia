@@ -164,6 +164,9 @@ def test_first_run_commits_the_lock_and_opens_one_pr(workdir):
     create = next(c for c in repo.calls if c[:3] == ["gh", "pr", "create"])
     assert create[create.index("--head") + 1] == BRANCH
     assert create[create.index("--base") + 1] == "main"
+    # A bot PR notifies nobody on its own; it must land in a maintainer's queue.
+    assert create[create.index("--reviewer") + 1] == "kovtcharov-amd,itomek-amd"
+    assert create[create.index("--label") + 1] == "release"
     commit = next(c for c in repo.calls if "commit" in c)
     assert f"user.email={pin.BOT_EMAIL}" in commit
     assert not any("claude" in part.lower() for part in commit)

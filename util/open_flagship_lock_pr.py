@@ -46,6 +46,9 @@ LOCK = "hub/agents/gaia/npm/binaries.lock.json"
 BRANCH_PREFIX = "release/flagship-lock-v"
 BOT_NAME = "github-actions[bot]"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+# A GITHUB_TOKEN PR notifies nobody; the next core release waits on this one.
+LABEL = "release"
+REVIEWERS = "kovtcharov-amd,itomek-amd"
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 # darwin-x64 is best-effort in the release, so it may be absent.
 REQUIRED_SIDECAR = ("win32-x64", "darwin-arm64", "linux-x64")
@@ -273,6 +276,10 @@ def open_lock_pr(
                 f"chore(release): pin flagship agent {version}'s published hashes",
                 "--body-file",
                 body.name,
+                "--label",
+                LABEL,
+                "--reviewer",
+                REVIEWERS,
             ]
         )
     finally:
