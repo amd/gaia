@@ -11,6 +11,19 @@ on:
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/dependency-review.yml'
+      # Only dependency manifests and Actions references change what this reviews.
+      - '**/package.json'
+      - '**/package-lock.json'
+      - 'setup.py'
+      - '**/pyproject.toml'
+      - '**/requirements*.txt'
+      - '**/uv.lock'
+      - '**/go.mod'
+      - '**/go.sum'
+      - '.github/workflows/**'
+      - '.github/actions/**'
   merge_group:
   workflow_dispatch:
 

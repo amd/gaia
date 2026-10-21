@@ -56,6 +56,31 @@ README for the per-platform builders and payload-staging steps.
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
 | `start-lemonade.ps1` | Launch a local Lemonade Server for development and CI (Windows). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
 
+### What the one-line installers download
+
+Both scripts install the `amd-gaia[api]` package from PyPI, the terminal binary
+(`gaia-<os>-<arch>`) from a GitHub release checked against that release's
+`gaia-tui-SHA256SUMS.txt`, and the GAIA agent (`gaia-agent`). Nothing installs
+without a matching SHA-256, and there is no fallback source.
+
+`GAIA_RELEASE_TAG` picks the release, and pins all three to it:
+
+| `GAIA_RELEASE_TAG` | Core package | Terminal binary | GAIA agent |
+|---|---|---|---|
+| unset | latest `amd-gaia` | latest release | Agent Hub (`hub.amd-gaia.ai`), as `gaia init` |
+| `v0.25.0` | `amd-gaia==0.25.0` | that release | Agent Hub |
+| `v0.25.1-rc2` | `amd-gaia==0.25.1rc2` | that pre-release | frozen on that pre-release (`gaia-agent-release.json`), as an RC core installs it |
+
+Any other value fails before anything installs.
+
+```bash
+curl -fsSL https://amd-gaia.ai/install.sh | GAIA_RELEASE_TAG=v0.25.1-rc2 sh
+```
+```powershell
+$env:GAIA_RELEASE_TAG = "v0.25.1-rc2"; irm https://amd-gaia.ai/install.ps1 | iex
+Remove-Item Env:GAIA_RELEASE_TAG   # or the next run pins it too
+```
+
 ### Building the GAIA terminal installer locally
 
 This is the one you send to a colleague: a single per-user `.exe` that installs

@@ -7,9 +7,10 @@
 // server-rendered so no-JS visitors see them; JS only adds the copy behavior.
 //
 // The commands are the real ones served at amd-gaia.ai (installer/scripts/):
-// they install the Python CLI and download the published terminal-hub binary
-// from hub.amd-gaia.ai, checksum-verified. Keep them byte-identical to
-// docs/quickstart.mdx.
+// they install the Python CLI, download the terminal binary from the latest
+// GitHub release (checked against its gaia-tui-SHA256SUMS.txt), and the GAIA
+// agent from hub.amd-gaia.ai (checked against its manifest). Keep them
+// byte-identical to docs/quickstart.mdx.
 
 interface Props {
   class?: string;
