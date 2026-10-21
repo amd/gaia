@@ -118,6 +118,52 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 - **Consumes** — `create_table`, `insert_data`, `query_data`, `list_tables`.
 - **Configure** — a CSV, export, or pasted table.
 
+### report-from-sources
+
+Builds a report, deck, brief or workbook from the user's files without dropping
+what the sources stress. It inventories the inputs and picks the newest file for
+each dataset, keeps a key-facts ledger per source (headline numbers, stated
+changes, notable events, risks), puts source and period on every figure, then
+checks the saved file against the ledger and against a numbered list of
+everything the user asked for.
+
+- **Demonstrates** — analyst practice as a procedure: provenance, coverage
+  checks, and verifying a saved file against the request with `run_python`.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — a folder of sources and the deliverable you want.
+
+### log-triage
+
+Finds the incident in a log rather than the noise. Its `triage_logs` tool
+(registered as `log-triage/triage_logs`) streams every file over its full time
+range, detects the format (JSON lines, syslog, Apache/Nginx, glog, `key=value`,
+timestamp-led lines with stack traces), groups messages into templates, keeps
+steady baseline templates apart from anomalies, finds bursts with exact first
+and last timestamps, compares each burst with the quiet window before it,
+measures clock offsets between files, and lists the hosts and ids an anomaly
+hit. The model then reads around the first burst line and writes a blameless
+postmortem.
+
+- **Demonstrates** — a skill shipping a deterministic tool for work small models
+  do unreliably from instructions, reading the user's files only through
+  `gaia.skills.context` (`open_read`, `list_readable`, `open_write`).
+- **Provides** — `triage_logs`. **Consumes** — `list_files`, `read_file`, and
+  `run_python` for the manual fallback.
+- **Configure** — one or more log files or folders; `timestamp_regex`,
+  `host_regex` and `entity_regex` when a format is unusual.
+
+### meeting-actions
+
+Turns meeting notes, minutes or transcripts into one action tracker. It catches
+commitments said in passing ("I'll send it", "let me check") as well as
+labelled actions, records owner, due date and evidence, and merges an item that
+comes back in later meetings into one row with its latest status.
+
+- **Demonstrates** — exhaustive extraction with a regex safety net, and
+  de-duplication across documents.
+- **Consumes** — `list_files`, `read_file`, `run_python`, `write_file`.
+- **Configure** — a folder of notes, or one meeting's transcript.
+
 ### source-watch
 
 The generic watcher, and the template the next two are forked from: fetch a
@@ -203,8 +249,8 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 ### rss-digest
 
-The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
-function, declared in `metadata.gaia.tools` and registered as
+A **tool-providing** skill, like `log-triage`: it ships a `tools.py` with a
+`fetch_rss` function, declared in `metadata.gaia.tools` and registered as
 `rss-digest/fetch_rss`.
 
 - **Demonstrates** — a skill contributing its own `@tool`. The loader compares
@@ -266,8 +312,8 @@ gaia skill info gpu-restock-watch
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).
-  `tools_required` names registry tools it *consumes*. Only `rss-digest` uses
-  the former.
+  `tools_required` names registry tools it *consumes*. `rss-digest` and
+  `log-triage` use the former.
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.
