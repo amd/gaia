@@ -428,15 +428,32 @@ def _setup_pptx_zip(rag, path, monkeypatch):
     monkeypatch.setattr("gaia.rag.sdk.zipfile.ZipFile", _bad_zip_over_a_lock)
 
 
+def _locked_open_of(path, real_open=open):
+    """``open`` that refuses *path* the way Windows refuses a held file."""
+
+    def _open(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and os.path.realpath(
+            file
+        ) == os.path.realpath(path):
+            raise _eacces(file)
+        return real_open(file, *args, **kwargs)
+
+    return _open
+
+
 def _setup_pptx_open(rag, path, monkeypatch):
-    pptx = pytest.importorskip("pptx")
+    """The lock lands after the zip-bomb check, as the library opens the file."""
+    pytest.importorskip("pptx")
     _make("pptx", path)
+    monkeypatch.setattr("gaia.rag.sdk.open", _locked_open_of(path), raising=False)
 
-    def _locked(*args, **kwargs):
-        # What python-pptx raises on a real partial lock: the bare read error.
-        raise _eacces()
 
-    monkeypatch.setattr(pptx, "Presentation", _locked)
+def _setup_docx_open(rag, path, monkeypatch):
+    pytest.importorskip("docx")
+    _make("docx", path)
+    monkeypatch.setattr(
+        "gaia.rag.docx_utils.open", _locked_open_of(path), raising=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -449,8 +466,9 @@ def _setup_pptx_open(rag, path, monkeypatch):
         ("doc.docx", _setup_docx),
         ("doc.pptx", _setup_pptx_zip),
         ("deck.pptx", _setup_pptx_open),
+        ("letter.docx", _setup_docx_open),
     ],
-    ids=["text", "csv", "json", "xlsx", "docx", "pptx-zip", "pptx-open"],
+    ids=["text", "csv", "json", "xlsx", "docx", "pptx-zip", "pptx-open", "docx-open"],
 )
 def test_each_parser_logs_a_lock_as_a_warning_not_an_error(
     windows, rag, tmp_path, monkeypatch, caplog, name, setup
@@ -482,10 +500,8 @@ def test_a_wrapped_stop_is_not_reported_as_locked(windows, rag, doc):
     stop = _wrapped(IndexingStopped("stopped"), _eacces(), "context")
     wrapped = _wrapped(RuntimeError("client wrapped the stop"), stop, "cause")
     with patch.object(rag, "_extract_text_from_file", side_effect=wrapped):
-        result = rag.index_document(str(doc))
-    assert result["success"] is False
-    assert "error_type" not in result
-    assert result["error"] == "client wrapped the stop"
+        with pytest.raises(IndexingStopped):
+            rag.index_document(str(doc))
 
 
 def _suppressed(outer, inner):
@@ -520,3 +536,252 @@ def test_a_lock_that_names_the_document_is_still_found(windows, rag, doc):
     with patch.object(rag, "_extract_text_from_file", side_effect=error):
         result = rag.index_document(str(doc))
     assert result["error_type"] == "file_locked"
+
+
+@pytest.mark.parametrize(
+    "kind, module, name",
+    [("pptx", "pptx", "Presentation"), ("docx", "docx", "Document")],
+)
+def test_the_library_is_given_a_stream_not_a_path(rag, tmp_path, kind, module, name):
+    """Given a path, python-pptx and python-docx call is_zipfile, which hides a lock."""
+    library = pytest.importorskip(module)
+    doc = tmp_path / f"doc.{kind}"
+    _make(kind, doc)
+    real = getattr(library, name)
+    seen = []
+
+    def _spy(source, *args, **kwargs):
+        seen.append(source)
+        return real(source, *args, **kwargs)
+
+    with patch.object(library, name, _spy):
+        rag._extract_text_from_file(str(doc))
+    assert seen and not isinstance(seen[0], (str, os.PathLike))
+
+
+def _hold(path, how):
+    """Take a real Windows lock on *path*; return a function that releases it."""
+    import msvcrt
+
+    if how == "range":
+        handle = open(path, "r+b")
+        size = os.path.getsize(path)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, size)
+
+        def release():
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, size)
+            handle.close()
+
+        return release
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    held = kernel32.CreateFileW(str(path), 0x80000000, 0, None, 3, 0x80, None)
+    assert held != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+    return lambda: kernel32.CloseHandle(held)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows mandatory locks")
+@pytest.mark.parametrize("how", ["range", "share-none"])
+@pytest.mark.parametrize(
+    "kind, module, name",
+    [("pptx", "pptx", "Presentation"), ("docx", "docx", "Document")],
+)
+def test_a_real_lock_taken_just_before_the_library_opens_is_reported_as_locked(
+    rag, tmp_path, caplog, kind, module, name, how
+):
+    """After the zip-bomb check, before the library open: the gap is_zipfile hid."""
+    library = pytest.importorskip(module)
+    doc = tmp_path / f"doc.{kind}"
+    _make(kind, doc)
+    real = getattr(library, name)
+    releases = []
+
+    def _lock_then_open(source, *args, **kwargs):
+        if not releases:
+            releases.append(_hold(doc, how))
+        return real(source, *args, **kwargs)
+
+    # Lock at whichever comes first: GAIA's open of the stream, or the library
+    # opening the path itself (what a revert to passing the path does).
+    real_open = open
+
+    def _open(file, *args, **kwargs):
+        if not releases and os.path.realpath(file) == os.path.realpath(doc):
+            releases.append(_hold(doc, how))
+        return real_open(file, *args, **kwargs)
+
+    target = "gaia.rag.sdk.open" if kind == "pptx" else "gaia.rag.docx_utils.open"
+    try:
+        with (
+            patch(target, _open, create=True),
+            patch.object(library, name, _lock_then_open),
+            caplog.at_level("WARNING"),
+        ):
+            result = rag.index_document(str(doc))
+    finally:
+        for release in releases:
+            release()
+    assert result["error_type"] == "file_locked", result.get("error")
+    errors = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelname == "ERROR" and r.name.startswith("gaia.rag")
+    ]
+    assert errors == []
+
+
+def _spellings(tmp_path):
+    """The document and its other Windows spellings."""
+    import ctypes
+
+    folder = tmp_path / "Quarterly Reports 2026"
+    folder.mkdir()
+    doc = folder / "Board Presentation Final.docx"
+    doc.write_bytes(b"x")
+    buffer = ctypes.create_unicode_buffer(1024)
+    ctypes.windll.kernel32.GetShortPathNameW(str(doc), buffer, 1024)
+    drive, rest = os.path.splitdrive(str(doc))
+    return str(doc), {
+        "upper-case": str(doc).upper(),
+        "8.3": buffer.value,
+        "unc": "\\\\localhost\\" + drive[0] + "$" + rest,
+        "extended": "\\\\?\\" + str(doc),
+    }
+
+
+def _skip_if_unavailable(doc, forms, form):
+    """Short names and admin shares are machine settings, not GAIA's behaviour."""
+    if form == "8.3" and forms[form] == doc:
+        pytest.skip("8.3 short names are disabled on this volume")
+    if form == "unc" and not os.path.exists(forms[form]):
+        pytest.skip("the C$ admin share is not reachable on this machine")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path spellings")
+@pytest.mark.parametrize("form", ["upper-case", "8.3", "unc", "extended"])
+def test_a_lock_naming_the_document_in_another_spelling_is_its_lock(tmp_path, form):
+    from gaia.rag.sdk import _same_file
+
+    doc, forms = _spellings(tmp_path)
+    _skip_if_unavailable(doc, forms, form)
+    assert _same_file(forms[form], doc)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path spellings")
+@pytest.mark.parametrize("form", ["upper-case", "8.3"])
+def test_the_fallback_compare_handles_case_and_short_names(tmp_path, monkeypatch, form):
+    """Without samefile (a file that can't be stat'd), normcase(realpath) decides."""
+    from gaia.rag import sdk
+
+    doc, forms = _spellings(tmp_path)
+    _skip_if_unavailable(doc, forms, form)
+
+    def _no_samefile(a, b):
+        raise OSError("cannot stat")
+
+    monkeypatch.setattr(sdk.os.path, "samefile", _no_samefile)
+    assert sdk._same_file(forms[form], doc)
+
+
+def test_the_fallback_compare_resolves_a_relative_path(tmp_path, monkeypatch):
+    from gaia.rag import sdk
+
+    doc = tmp_path / "report.txt"
+    doc.write_text("x")
+    monkeypatch.chdir(tmp_path)
+
+    def _no_samefile(a, b):
+        raise OSError("cannot stat")
+
+    monkeypatch.setattr(sdk.os.path, "samefile", _no_samefile)
+    assert sdk._same_file("report.txt", str(doc))
+    assert not sdk._same_file("other.txt", str(doc))
+
+
+def test_a_different_file_is_not_the_document(tmp_path):
+    from gaia.rag.sdk import _same_file
+
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_text("x")
+    b.write_text("x")
+    assert not _same_file(str(a), str(b))
+
+
+def test_a_stop_suppressed_with_from_none_is_not_a_stop(windows, rag, doc):
+    """A traceback hides a suppressed context, so the stop walk must too."""
+    from gaia.rag.sdk import IndexingStopped
+
+    error = _suppressed(ValueError("not a valid file"), IndexingStopped("old stop"))
+    with patch.object(rag, "_extract_text_from_file", side_effect=error):
+        result = rag.index_document(str(doc))
+    assert result["success"] is False
+    assert result["error"] == "not a valid file"
+
+
+def test_the_lock_warning_carries_only_the_lock_not_the_parsers_advice(
+    windows, rag, tmp_path, monkeypatch, caplog
+):
+    """Word's wrapper says "corrupted ... re-download"; that is wrong for a lock."""
+    doc = tmp_path / "letter.docx"
+    _setup_docx_open(rag, doc, monkeypatch)
+    with caplog.at_level("WARNING"):
+        result = rag.index_document(str(doc))
+    assert result["error_type"] == "file_locked"
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    lock_warnings = [m for m in warnings if "may have it locked" in m]
+    assert lock_warnings
+    assert not any("corrupted" in m or "Re-download" in m for m in lock_warnings)
+
+
+def test_a_hard_link_to_the_document_is_the_document(tmp_path):
+    """Only samefile sees two names for one file; no path compare can."""
+    from gaia.rag.sdk import _same_file
+
+    doc = tmp_path / "report.txt"
+    doc.write_text("x")
+    alias = tmp_path / "alias.txt"
+    try:
+        os.link(doc, alias)
+    except OSError as e:
+        pytest.skip(f"hard links unsupported here: {e}")
+    assert _same_file(str(alias), str(doc))
+
+
+def test_the_fallback_compare_follows_a_symlink(tmp_path, monkeypatch):
+    from gaia.rag import sdk
+
+    doc = tmp_path / "report.txt"
+    doc.write_text("x")
+    link = tmp_path / "link.txt"
+    try:
+        os.symlink(doc, link)
+    except (OSError, NotImplementedError) as e:
+        pytest.skip(f"symlinks unavailable here: {e}")
+
+    def _no_samefile(a, b):
+        raise OSError("cannot stat")
+
+    monkeypatch.setattr(sdk.os.path, "samefile", _no_samefile)
+    assert sdk._same_file(str(link), str(doc))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows paths ignore case")
+def test_a_missing_file_is_compared_ignoring_case(tmp_path):
+    """samefile can't stat a file that is gone; the fallback must still match."""
+    from gaia.rag.sdk import _same_file
+
+    gone = str(tmp_path / "Gone Report.docx")
+    assert _same_file(gone.upper(), gone.lower())

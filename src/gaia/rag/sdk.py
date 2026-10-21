@@ -145,8 +145,17 @@ def _stop_behind(error: BaseException) -> Optional[Exception]:
         if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
             return current
         seen.add(id(current))
-        current = current.__cause__ or current.__context__
+        current = _next_in_chain(current)
     return None
+
+
+def _next_in_chain(error: BaseException) -> Optional[BaseException]:
+    """The exception Python's traceback shows *error* as raised from or during."""
+    if error.__cause__ is not None:
+        return error.__cause__
+    if error.__suppress_context__:
+        return None
+    return error.__context__
 
 
 # The running index_document's ``heartbeat`` on this thread, called once per
@@ -332,7 +341,17 @@ class RAGResponse:
 
 
 def _same_file(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    """Whether *a* and *b* name one file, however spelled.
+
+    Case, 8.3 short names, UNC and extended-length paths all name the same file.
+    A file that no longer exists is compared by its normalised real path.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+            os.path.realpath(b)
+        )
 
 
 def _locked_cause(
@@ -351,12 +370,7 @@ def _locked_cause(
             if name is None or _same_file(os.fsdecode(name), file_path):
                 return error
         seen.add(id(error))
-        if error.__cause__ is not None:
-            error = error.__cause__
-        elif error.__suppress_context__:
-            error = None
-        else:
-            error = error.__context__
+        error = _next_in_chain(error)
     return None
 
 
@@ -508,10 +522,11 @@ class RAGSDK:
         self, error: BaseException, file_path: str, message: str
     ) -> None:
         """A warning for a lock, which the caller may retry; *message* otherwise."""
-        if _locked_cause(error, file_path) is not None:
+        locked = _locked_cause(error, file_path)
+        if locked is not None:
             self.log.warning(
                 f"Could not read {file_path}: another program may have it locked, "
-                f"or it is not readable: {error}"
+                f"or it is not readable: {locked}"
             )
         else:
             self.log.error(message)
@@ -1466,7 +1481,10 @@ class RAGSDK:
             raise ValueError(msg) from e
 
         try:
-            prs = Presentation(pptx_path)
+            # A stream, not the path: given a path, python-pptx's is_zipfile
+            # check swallows a lock and reports the file as not a package.
+            with open(pptx_path, "rb") as stream:
+                prs = Presentation(stream)
         except Exception as e:
             msg = (
                 f"Could not read PowerPoint file: {file_name}\n"
@@ -3292,8 +3310,9 @@ These positions indicate where to split the text."""
             try:
                 text, file_metadata = self._extract_text_from_file(file_path)
             except Exception as e:
-                if _stop_behind(e) is not None:
-                    raise
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 # Only the document's own read: a cache write can fail with EACCES too.
                 locked = _locked_cause(e, file_path)
                 if locked is not None:

@@ -708,7 +708,19 @@ def test_docs_list_exactly_the_extensions_the_watcher_watches(doc, start, end):
     from gaia.utils.file_watcher import FileChangeHandler
 
     text = (REPO_ROOT / doc).read_text(encoding="utf-8")
-    begin = text.index(start)
-    section = text[begin : text.index(end, begin + len(start))]
-    listed = set(re.findall(r"`(\.[a-z0-9]+)`", section))
-    assert listed == set(FileChangeHandler.DEFAULT_EXTENSIONS)
+    begin = text.find(start)
+    assert begin >= 0, f"{doc} no longer contains {start!r}; update this test's anchor"
+    stop = text.find(end, begin + len(start))
+    assert stop >= 0, f"{doc} has no {end!r} after {start!r}; update this test's anchor"
+    listed = set(re.findall(r"`(\.[a-z0-9]+)`", text[begin:stop]))
+    assert listed == set(FileChangeHandler.DEFAULT_EXTENSIONS), (
+        f"{doc} lists {sorted(listed)}, but the watcher watches "
+        f"{sorted(FileChangeHandler.DEFAULT_EXTENSIONS)}"
+    )
+
+
+def test_a_moved_docs_anchor_fails_with_a_message_not_a_value_error():
+    with pytest.raises(AssertionError, match="update this test's anchor"):
+        test_docs_list_exactly_the_extensions_the_watcher_watches(
+            "docs/spec/chat-agent.mdx", "no such lead-in:", "are not watched"
+        )
