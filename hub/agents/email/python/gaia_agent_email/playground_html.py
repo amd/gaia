@@ -714,12 +714,15 @@ function populateSend(connected){
   // surfaced per selection (and a send to a mailbox without mail-send access
   // returns an actionable error) rather than hiding the mailbox here.
   const canSendById = {};
+  // busy: another GAIA process is saving it, so can_send is unknown, not false.
+  const busyById = {};
   const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
   for(const p of sorted){
     canSendById[p.provider] = !!p.can_send;
+    busyById[p.provider] = !!p.busy;
     const o = document.createElement("option"); o.value = p.provider;
     o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "")
-      + (p.can_send ? "" : " · needs mail access");
+      + (p.busy ? " · being saved" : (p.can_send ? "" : " · needs mail access"));
     sel.appendChild(o);
   }
   if(!connected.length){
@@ -736,6 +739,8 @@ function populateSend(connected){
         $("send-note").textContent = "Connect a mailbox in the Connectors panel above.";
       } else if(canSend){
         $("send-note").textContent = "";
+      } else if(busyById[sel.value]){
+        $("send-note").textContent = "This mailbox is being saved by another GAIA process right now — retry in a moment.";
       } else {
         $("send-note").textContent = "This mailbox is missing mail-send access — reconnect to enable sending.";
       }

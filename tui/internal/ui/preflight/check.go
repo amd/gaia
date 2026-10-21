@@ -1332,10 +1332,7 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 	case resp.Status == http.StatusOK:
 		return probeResult{verdict: probeUsable, trace: trace(outcome)}
 
-	// The sidecar told us its forwarded token lapsed and the daemon has not
-	// re-sent one YET (forwarded_credentials: "Retry in a moment"). Blocking a
-	// launch on that would send the user through a browser sign-in for something
-	// pressing r clears — so believe the "transient" it just told us.
+	// Another GAIA process held the connection mid-save; it clears in a moment.
 	case connectionBeingSaved(detail):
 		return probeResult{
 			verdict: probeInconclusive,
@@ -1349,6 +1346,10 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 			trace: trace(outcome),
 		}
 
+	// The sidecar told us its forwarded token lapsed and the daemon has not
+	// re-sent one YET (forwarded_credentials: "Retry in a moment"). Blocking a
+	// launch on that would send the user through a browser sign-in for something
+	// pressing r clears — so believe the "transient" it just told us.
 	case transientCredentialGap(detail):
 		return probeResult{
 			verdict: probeInconclusive,

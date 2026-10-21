@@ -82,8 +82,12 @@ def _account_email(raw: Any) -> Optional[str]:
     return None if email == DEFAULT_ACCOUNT else email
 
 
-def _can_send(provider: str) -> bool:
-    """Return True when the installed:email grant for ``provider`` includes its send scope."""
+def _can_send(provider: str, conn: Optional[Dict[str, Any]] = None) -> bool:
+    """Return True when the installed:email grant for ``provider`` includes its send scope.
+
+    ``conn`` is a connection row the caller already read, so ``can_send`` and
+    ``busy`` describe the same read.
+    """
     from gaia_agent_email.outlook_scopes import SCOPE_MAIL_SEND
     from gaia_agent_email.scopes import SCOPE_GMAIL_SEND
 
@@ -91,7 +95,9 @@ def _can_send(provider: str) -> bool:
 
     send_scope = SCOPE_GMAIL_SEND if provider == "google" else SCOPE_MAIL_SEND
     try:
-        connection_scopes = set((get_connection(provider) or {}).get("scopes", []))
+        if conn is None:
+            conn = get_connection(provider) or {}
+        connection_scopes = set(conn.get("scopes", []))
         granted = set(list_agent_grants(provider).get(EMAIL_AGENT_ID, []))
         return send_scope in connection_scopes & granted
     except Exception as e:
@@ -114,7 +120,7 @@ def _read_connector_status() -> Dict[str, Any]:
                 "connected": pid in connected,
                 "account_email": _account_email(conn.get("account_email")),
                 "scopes": conn.get("scopes", []),
-                "can_send": _can_send(pid),
+                "can_send": _can_send(pid, conn),
                 # Mid-save in another GAIA process: scopes/can_send are unknown.
                 "busy": conn.get("error") == "busy",
             }
