@@ -19,6 +19,7 @@ on:
       - 'setup.py'
       - '**/pyproject.toml'
       - '**/requirements*.txt'
+      - '**/uv.lock'
       - '**/go.mod'
       - '**/go.sum'
       - '.github/workflows/**'

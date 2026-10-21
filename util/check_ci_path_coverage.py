@@ -35,7 +35,10 @@ reaches transitively (`gaia/__init__.py` pulls in ~100 core modules on any
 import) are not required, because the hosted unit and import-every-module lanes
 trigger on all of `src/**` and catch import-time breakage. A lane that drives the
 `gaia` CLI end to end depends on code no import names; its filter is reviewed by
-hand, and the comment in its `on:` block says why.
+hand, and the comment in its `on:` block says why. A pytest or python step that
+sets `working-directory` is not analysed, because its paths are relative to that
+directory; only Node and Go steps there are, as their whole tree. Scripts a
+script calls (a `.ps1` invoking another) are not followed.
 
 Run with no arguments to check (blocking in `util/lint.py --ci-paths` and
 `--all`). Pass changed paths to list the workflows a PR would trigger:
