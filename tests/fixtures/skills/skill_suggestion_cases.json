@@ -43,6 +43,9 @@
     {"request": "From these three sets of meeting notes, list every to-do with its owner and due date", "expected": ["meeting-actions"], "acceptable": ["summarize", "transcribe-meeting"]},
     {"request": "What's still open from our last few project meetings? The minutes are attached", "expected": ["meeting-actions"], "acceptable": ["summarize", "transcribe-meeting"]},
     {"request": "Make a list of who promised what in this meeting transcript", "expected": ["meeting-actions"], "acceptable": ["summarize", "transcribe-meeting"]},
+    {"request": "Build a slide deck from the PDFs and spreadsheets in my reports folder", "expected": ["report-from-sources"], "acceptable": ["office-docs", "document-brief", "data-explore", "summarize"]},
+    {"request": "Chart monthly signups from signups.csv and tell me when growth slowed", "expected": ["data-explore"], "acceptable": ["office-docs", "report-from-sources"]},
+    {"request": "Put the totals from these numbers into an Excel sheet with a bar chart", "expected": ["office-docs"], "acceptable": ["data-explore"]},
     {"request": "What is 17 times 23?", "expected": [], "acceptable": []},
     {"request": "Tell me a joke about penguins", "expected": [], "acceptable": []},
     {"request": "How do you say thank you in Japanese?", "expected": [], "acceptable": []},
@@ -54,6 +57,20 @@
     {"request": "How many slides should a ten-minute talk have?", "expected": [], "acceptable": []},
     {"request": "What does an HTTP 502 error usually mean?", "expected": [], "acceptable": []},
     {"request": "Any tips for running shorter meetings?", "expected": [], "acceptable": []},
-    {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []}
+    {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []},
+    {"request": "Should I send my resume as a PDF or a Word file?", "expected": [], "acceptable": []},
+    {"request": "What's the difference between a WARN and an ERROR log level?", "expected": [], "acceptable": []},
+    {"request": "What makes a good executive summary?", "expected": [], "acceptable": []},
+    {"request": "Who usually takes the minutes in a meeting?", "expected": [], "acceptable": []},
+    {"request": "What is the difference between a pull request and a fork?", "expected": [], "acceptable": []},
+    {"request": "How does RSS work?", "expected": [], "acceptable": []},
+    {"request": "What's a good convention for naming files?", "expected": [], "acceptable": []},
+    {"request": "How is the median different from the mean?", "expected": [], "acceptable": []},
+    {"request": "What's the best microphone for recording meetings?", "expected": [], "acceptable": []},
+    {"request": "How long should the abstract of a research paper be?", "expected": [], "acceptable": []},
+    {"request": "Do TV prices usually drop in November?", "expected": [], "acceptable": []},
+    {"request": "What is a Python decorator?", "expected": [], "acceptable": []},
+    {"request": "What's the weather usually like in Lisbon in May?", "expected": [], "acceptable": []},
+    {"request": "Translate good morning into Spanish", "expected": [], "acceptable": []}
   ]
 }

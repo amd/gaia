@@ -27,11 +27,17 @@ import pytest
 
 from gaia.agents.base.skill_loader import skill_doc_text
 from gaia.agents.base.skill_suggester import (
+    DEFAULT_AUTOLOAD_MARGIN,
+    DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_COMPANION_THRESHOLD,
     DEFAULT_SUGGEST_MARGIN,
     DEFAULT_SUGGEST_THRESHOLD,
     DEFAULT_SUGGEST_TOP_K,
+    MAX_AUTOLOADS_PER_TURN,
+    SkillMatches,
     SkillSuggester,
+    autoload_env_override,
+    render_autoloaded,
     render_suggestion,
     suggest_env_override,
 )
@@ -267,6 +273,124 @@ def test_env_override(monkeypatch, raw, expected):
     assert suggest_env_override() is expected
 
 
+# ── auto-load ───────────────────────────────────────────────────────────────
+
+
+def _auto(queries, **kwargs):
+    kwargs.setdefault("autoload_threshold", 0.55)
+    return _suggester(queries, **kwargs)
+
+
+def test_autoload_defaults_are_the_calibrated_values():
+    assert DEFAULT_AUTOLOAD_THRESHOLD == pytest.approx(0.55)
+    assert DEFAULT_AUTOLOAD_MARGIN == pytest.approx(0.03)
+    assert MAX_AUTOLOADS_PER_TURN == 2
+
+
+def test_nothing_is_auto_loaded_without_an_autoload_threshold():
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _suggester({"q": {"alpha": 0.90}})
+    assert s.select("q", skills) == SkillMatches(auto_load=[], suggest=["alpha"])
+
+
+def test_the_autoload_threshold_is_inclusive_and_lower_scores_stay_suggestions():
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({"at": {"alpha": 0.55}, "below": {"alpha": 0.549}})
+    assert s.select("at", skills) == SkillMatches(auto_load=["alpha"], suggest=[])
+    assert s.select("below", skills) == SkillMatches(auto_load=[], suggest=["alpha"])
+
+
+def test_an_auto_load_must_be_the_clear_best_match():
+    """A close runner-up below the threshold means the model should choose."""
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto(
+        {
+            "close": {"alpha": 0.60, "beta": 0.58},
+            "clear": {"alpha": 0.60, "beta": 0.50},
+        },
+        autoload_threshold=0.59,
+        margin=0.05,
+    )
+    assert s.select("close", skills) == SkillMatches(
+        auto_load=[], suggest=["alpha", "beta"]
+    )
+    assert s.select("clear", skills) == SkillMatches(auto_load=["alpha"], suggest=[])
+
+
+def test_two_skills_above_the_threshold_both_auto_load():
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({"q": {"alpha": 0.60, "beta": 0.59, "gamma": 0.40}})
+    assert s.select("q", skills).auto_load == ["alpha", "beta"]
+
+
+def test_at_most_two_skills_auto_load_per_turn():
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({"q": {"alpha": 0.80, "beta": 0.79, "gamma": 0.76}}, margin=0.05)
+    assert s.select("q", skills) == SkillMatches(
+        auto_load=["alpha", "beta"], suggest=["gamma"]
+    )
+
+
+def test_a_companion_above_the_threshold_can_auto_load():
+    skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
+    s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.56, "gamma": 0.30}})
+    assert s.select("q", skills).auto_load == ["alpha", "beta"]
+
+
+def test_a_loaded_skill_is_never_auto_loaded_and_a_better_one_blocks_it():
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.69}})
+    # alpha is loaded and the best match: beta is close behind it, so the
+    # request is already covered and beta is only suggested.
+    assert s.select("q", skills, loaded={"alpha"}) == SkillMatches(
+        auto_load=[], suggest=["beta"]
+    )
+    assert s.select("q", skills, loaded={"alpha", "beta"}) == SkillMatches()
+
+
+def test_suggest_lists_auto_loads_first():
+    skills = _skills(*(_skill(n) for n in NAMES))
+    s, _ = _auto({"q": {"alpha": 0.60, "beta": 0.40}}, margin=0.25)
+    assert s.suggest("q", skills) == ["alpha", "beta"]
+
+
+def test_embedder_failure_auto_loads_nothing():
+    skills = _skills(*(_skill(n) for n in NAMES))
+
+    def broken(text):
+        raise ConnectionError("embedder down")
+
+    s = SkillSuggester(broken, autoload_threshold=0.1)
+    assert s.select("draw me a cat", skills) == SkillMatches()
+
+
+def test_max_autoloads_must_not_be_negative():
+    with pytest.raises(ValueError, match="max_autoloads"):
+        SkillSuggester(lambda t: np.zeros(DIM), max_autoloads=-1)
+
+
+def test_render_autoloaded():
+    assert render_autoloaded([]) == ""
+    assert render_autoloaded(["report-from-sources"]).startswith(
+        "Loaded report-from-sources because it matches this request"
+    )
+    two = render_autoloaded(["alpha", "beta"])
+    assert two.startswith("Loaded alpha and beta because they match this request")
+    assert len(two.splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(None, None), ("1", True), ("on", True), ("0", False), ("off", False)],
+)
+def test_autoload_env_override(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("GAIA_SKILL_AUTOLOAD", raising=False)
+    else:
+        monkeypatch.setenv("GAIA_SKILL_AUTOLOAD", raw)
+    assert autoload_env_override() is expected
+
+
 # ── the labelled request set ────────────────────────────────────────────────
 
 
@@ -320,10 +444,10 @@ def test_every_hub_skill_has_labelled_requests():
     assert sum(1 for case in cases if not case["expected"]) >= 5
 
 
-def _measure(suggester, skills, cases):
+def _measure(picks):
+    """Precision, recall and negatives hit for ``[(case, picked names)]``."""
     tp = fp = fn = negatives_hit = 0
-    for case in cases:
-        got = suggester.suggest(case["request"], skills)
+    for case, got in picks:
         expected = set(case["expected"])
         allowed = expected | set(case["acceptable"])
         tp += len(expected & set(got))
@@ -368,24 +492,55 @@ def _real_embedder():
     return (lambda text: batch([text])[0]), batch
 
 
-@pytest.mark.real_model
-@pytest.mark.allow_network
-def test_calibration_against_the_real_embedder():
-    """Holds the defaults to what they measured, with pairs_with companions on.
-
-    Measured with embeddinggemma-300m over 20 hub skills: precision 0.84,
-    recall 0.93, 3 of 12 negatives suggested (all near misses).
-    """
+@pytest.fixture(scope="module")
+def calibration_matches():
+    """Every labelled case with what the default suggester matched for it."""
     embed, batch = _real_embedder()
     embed("probe")  # an unreachable embedder fails here, not as recall 0
     skills = _hub_skills()
-    cases = _present_cases(set(skills))
-    suggester = SkillSuggester(embed, embed_batch_fn=batch)
-    precision, recall, negatives_hit = _measure(suggester, skills, cases)
+    suggester = SkillSuggester(
+        embed, embed_batch_fn=batch, autoload_threshold=DEFAULT_AUTOLOAD_THRESHOLD
+    )
+    return [
+        (case, suggester.select(case["request"], skills))
+        for case in _present_cases(set(skills))
+    ]
+
+
+@pytest.mark.real_model
+@pytest.mark.allow_network
+def test_calibration_against_the_real_embedder(calibration_matches):
+    """Holds the suggestion defaults to what they measured, companions on.
+
+    Measured with embeddinggemma-300m over 20 hub skills and 71 requests:
+    precision 0.66, recall 0.91, 14 of 26 negatives suggested — all near
+    misses such as "how does RSS work?".
+    """
+    precision, recall, negatives_hit = _measure(
+        (case, m.auto_load + m.suggest) for case, m in calibration_matches
+    )
     print(f"precision={precision:.2f} recall={recall:.2f} negatives={negatives_hit}")
-    assert precision >= 0.80
+    assert precision >= 0.64
     assert recall >= 0.90
-    assert negatives_hit <= 3
+    assert negatives_hit <= 14
+
+
+@pytest.mark.real_model
+@pytest.mark.allow_network
+def test_autoload_calibration_against_the_real_embedder(calibration_matches):
+    """Auto-load must stay precise enough to act without the model's say.
+
+    Measured with embeddinggemma-300m over 20 hub skills and 71 requests: 11
+    auto-loads on 10 requests, none outside a request's labels (precision
+    1.00), none on any of the 26 negatives, recall 0.21.
+    """
+    precision, recall, negatives_hit = _measure(
+        (case, m.auto_load) for case, m in calibration_matches
+    )
+    print(f"autoload precision={precision:.2f} recall={recall:.2f}")
+    assert precision >= 0.97
+    assert negatives_hit == 0
+    assert recall >= 0.15
 
 
 def test_doc_text_is_what_the_fake_embedder_expects():

@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A skill that clearly fits the request loads before the turn.** Local models
+  often ignored the "skills that match this request" line, so a deck built from
+  documents loaded `office-docs` but not `report-from-sources`. A match scoring
+  at least 0.55 and 0.03 ahead of every other skill now loads first (two per
+  turn at most), and the request opens with "Loaded report-from-sources because
+  it matches this request". On 71 labelled requests it loaded nothing wrong and
+  nothing on the 26 that should match no skill, catching 21% of the needed
+  skills; the rest stay suggestions. A skill that would grant a command-line
+  program, or would push loaded skill bodies past ~6,000 tokens, is only
+  suggested. `GAIA_SKILL_AUTOLOAD=0` or `skill_autoload=False` turns it off.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
   reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
   floor and `min_gaia_version` rise to it in that release; a release whose
