@@ -132,19 +132,32 @@ def target_keys(name: str, version: str = TARGET) -> list:
     return [key.format(v=version) for key in load_checker().EXACT_PINS[name]]
 
 
+def outgoing_pins(installer_text: str) -> dict:
+    """The outgoing version's two MSI pins, as INSTALLER_SHA256 holds them on main."""
+    installer_text = installer_text.replace("\r\n", "\n")
+    block = installer_text[installer_text.index("INSTALLER_SHA256 = {") :]
+    block = block[: block.index("}\n")]
+    found = {}
+    for name in ("lemonade-server-minimal.msi", "lemonade.msi"):
+        key = f"v{CURRENT}/{name}"
+        found[key] = re.search(rf'"{re.escape(key)}": "([0-9a-f]{{64}})"', block)[1]
+    return found
+
+
 def honest_bump(repo: Path) -> None:
     """What a correct bump from CURRENT to TARGET changes, and nothing else."""
     edit(repo, "src/gaia/version.py", f'"{CURRENT}"', f'"{TARGET}"')
+    outgoing = outgoing_pins(read(repo / INSTALLER))
     installer = replace_block(
         read(repo / INSTALLER),
         "INSTALLER_SHA256",
         pin_block("INSTALLER_SHA256", target_keys("INSTALLER_SHA256")),
     )
-    outgoing = [f"v{CURRENT}/lemonade-server-minimal.msi", f"v{CURRENT}/lemonade.msi"]
+    # The outgoing MSIs move to the legacy pins with the digests main verified.
     legacy_end = installer.index("}\n", installer.index("LEGACY_MSI_SHA256 = {"))
     installer = (
         installer[:legacy_end]
-        + "".join(f'    "{key}": "{digest(key)}",\n' for key in outgoing)
+        + "".join(f'    "{key}": "{value}",\n' for key, value in outgoing.items())
         + installer[legacy_end:]
     )
     write(repo / INSTALLER, installer)
@@ -227,8 +240,20 @@ FAKE_GH = """#!/usr/bin/env bash
 # One call per line: arguments joined by \\x1f, newlines inside them escaped.
 printf '%s\\x1f' "${@//$'\\n'/\\\\n}" >> "$GH_LOG"
 printf '\\n' >> "$GH_LOG"
+jq_filter=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--jq" ]; then jq_filter="$arg"; fi
+  previous="$arg"
+done
 case "$1 $2" in
-  "issue list") printf '%s' "${FAKE_ISSUE_LIST:-}" ;;
+  "issue list")
+    # With FAKE_ISSUE_JSON, answer like gh: the search results through the caller's --jq.
+    if [ -n "${FAKE_ISSUE_JSON:-}" ]; then
+      printf '%s' "$FAKE_ISSUE_JSON" | jq -r "$jq_filter"
+    else
+      printf '%s' "${FAKE_ISSUE_LIST:-}"
+    fi ;;
   "pr list") printf '%s' "${FAKE_PR_LIST:-}" ;;
   "issue create")
     n=$(( $(grep -c '^issue.create' "$GH_LOG") + 100 ))

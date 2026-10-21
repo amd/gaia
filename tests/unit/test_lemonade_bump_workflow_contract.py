@@ -460,9 +460,50 @@ def test_a_write_job_acts_only_on_the_bump_verify_checked(
         assert "is not the one verify checked" in result.stdout
 
 
-def _file_proposals(bump: Path, tmp_path: Path, existing: str = ""):
+def _file_proposals(bump: Path, tmp_path: Path, existing: str = "", search=None):
     env = {"BUMP": bump.as_posix(), "TARGET": TARGET, "FAKE_ISSUE_LIST": existing}
+    if search is not None:
+        if not shutil.which("jq"):
+            pytest.skip("answering the dedupe search needs jq")
+        env["FAKE_ISSUE_JSON"] = json.dumps(search)
     return run_step("proposals", "File the feature proposals", REPO_ROOT, env, tmp_path)
+
+
+@pytest.mark.parametrize("extra", ["3.md", "notes.txt", ".hidden"])
+def test_the_proposals_job_refuses_more_than_two(bump_dir, tmp_path, extra):
+    """The privileged job enforces the cap; the agent's runner only asked for it."""
+    write(bump_dir / "proposals" / "2.md", "Two\nbody\n")
+    write(bump_dir / "proposals" / extra, "Three\nbody\n")
+    result, outputs, calls = _file_proposals(bump_dir, tmp_path)
+    assert result.returncode != 0
+    assert f"at most 1.md and 2.md, not {extra}" in result.stdout
+    assert calls == [], "nothing may be filed"
+    assert "numbers=" not in outputs
+
+
+def test_a_proposal_is_skipped_only_for_an_exact_title_match(bump_dir, tmp_path):
+    title = f"feat: Idea (unlocked by Lemonade v{TARGET})"
+    near_misses = [
+        {"number": 7, "title": f"feat: Idea and more (unlocked by Lemonade v{TARGET})"},
+        {"number": 8, "title": title.upper()},
+    ]
+    result, outputs, calls = _file_proposals(bump_dir, tmp_path, search=near_misses)
+    assert result.returncode == 0, result.stderr
+    assert "numbers=101" in outputs
+    exact = near_misses + [{"number": 9, "title": title}]
+    result, outputs, calls = _file_proposals(bump_dir, tmp_path, search=exact)
+    assert result.returncode == 0, result.stderr
+    assert "Proposal already open as #9" in result.stdout
+    assert not [c for c in calls if c[:2] == ["issue", "create"]]
+
+
+def test_a_proposal_title_is_capped(bump_dir, tmp_path):
+    write(bump_dir / "proposals" / "1.md", "x" * 300 + "\nbody\n")
+    result, _, calls = _file_proposals(bump_dir, tmp_path)
+    assert result.returncode == 0, result.stderr
+    create = next(c for c in calls if c[:2] == ["issue", "create"])
+    title = create[create.index("--title") + 1]
+    assert title == f"feat: {'x' * 100} (unlocked by Lemonade v{TARGET})"
 
 
 def test_proposals_are_filed_with_a_fixed_title_and_label(bump_dir, tmp_path):

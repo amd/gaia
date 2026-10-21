@@ -24,13 +24,13 @@ from tests.fixtures.lemonade_bump import (
     REPO_ROOT,
     TAGS,
     TARGET,
-    digest,
     edit,
     git,
     git_bytes,
     honest_bump,
     load_checker,
     make_main_repo,
+    outgoing_pins,
     outside_fences,
     patch_from,
     pin_block,
@@ -70,14 +70,21 @@ def _set_pins(repo: Path, name: str, keys: list) -> None:
     )
 
 
+OUTGOING = outgoing_pins(read(REPO_ROOT / INSTALLER))
+
+
 def _without_outgoing_legacy(repo: Path) -> None:
-    for name in ("lemonade-server-minimal.msi", "lemonade.msi"):
-        key = f"v{CURRENT}/{name}"
-        edit(repo, INSTALLER, f'    "{key}": "{digest(key)}",\n', "")
+    for key, value in OUTGOING.items():
+        edit(repo, INSTALLER, f'    "{key}": "{value}",\n', "")
+
+
+def _repinned_outgoing_legacy(repo: Path) -> None:
+    key = f"v{CURRENT}/lemonade.msi"
+    edit(repo, INSTALLER, f'"{key}": "{OUTGOING[key]}"', f'"{key}": "{"c" * 64}"')
 
 
 ADDED_LEGACY = (
-    f'    "v{CURRENT}/lemonade.msi": "{digest(f"v{CURRENT}/lemonade.msi")}",\n'
+    f'    "v{CURRENT}/lemonade.msi": "{OUTGOING[f"v{CURRENT}/lemonade.msi"]}",\n'
 )
 
 # attack -> (how the patch does it on top of an honest bump, why it must be refused)
@@ -137,6 +144,41 @@ MALICIOUS = {
     "the outgoing MSIs left out of the legacy pins": (
         _without_outgoing_legacy,
         "LEGACY_MSI_SHA256 must keep the outgoing",
+    ),
+    "a legacy pin for an unknown file": (
+        lambda r: edit(
+            r,
+            INSTALLER,
+            ADDED_LEGACY,
+            ADDED_LEGACY + f'    "zzz/evil.msi": "{"b" * 64}",\n',
+        ),
+        "LEGACY_MSI_SHA256 may only gain the MSIs of releases from",
+    ),
+    "a legacy pin for the target itself": (
+        lambda r: edit(
+            r,
+            INSTALLER,
+            ADDED_LEGACY,
+            ADDED_LEGACY + f'    "v{TARGET}/lemonade.msi": "{"b" * 64}",\n',
+        ),
+        "LEGACY_MSI_SHA256 may only gain the MSIs of releases from",
+    ),
+    "an older tag after the target": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v{TARGET}\nv1.0.0\n"),
+        "must gain releases newer than",
+    ),
+    "the target tag twice": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v{TARGET}\nv{TARGET}\n"),
+        "must gain releases newer than",
+    ),
+    "tags ending before the target": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", "v2026.42.5\n"),
+        "must gain releases newer than",
+    ),
+    "the outgoing MSI re-pinned with a new digest": (
+        _repinned_outgoing_legacy,
+        f"must keep the outgoing v{CURRENT}/lemonade.msi with the digest "
+        "INSTALLER_SHA256 pinned on main",
     ),
     "a pin listed twice": (
         lambda r: edit(r, INSTALLER, ADDED_LEGACY, ADDED_LEGACY + ADDED_LEGACY),
@@ -373,6 +415,17 @@ def test_a_target_in_non_ascii_digits_is_rejected(main_repo, tmp_path):
     result = run_checker(main_repo, patch_from(main_repo, tmp_path), target=target)
     assert result.returncode == 1
     assert "is not a version" in result.stderr
+
+
+@pytest.mark.parametrize("target", [CURRENT, "2026.40.0", "2026.9.9"])
+def test_a_target_that_is_not_newer_is_rejected(main_repo, tmp_path, target):
+    """A forced downgrade or re-bump must stop here, not only in main's tests."""
+    honest_bump(main_repo)
+    edit(main_repo, "src/gaia/version.py", f'"{TARGET}"', f'"{target}"')
+    result = run_checker(main_repo, patch_from(main_repo, tmp_path), target=target)
+    assert result.returncode == 1
+    assert f"--target {target} must be newer than main's {CURRENT}" in result.stderr
+    assert read(main_repo / "src/gaia/version.py").count(f'"{CURRENT}"') == 1
 
 
 def test_a_target_that_is_not_a_version_is_rejected(main_repo, tmp_path):

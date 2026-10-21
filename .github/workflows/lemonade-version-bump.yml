@@ -675,6 +675,17 @@ jobs:
           TARGET: ${{ needs.verify.outputs.target_version }}
         run: |
           set -euo pipefail
+          # The cap the agent was given is only checked on its own runner; enforce it here.
+          shopt -s nullglob dotglob
+          for entry in "$BUMP"/proposals/*; do
+            case "$(basename "$entry")" in
+              1.md | 2.md) ;;
+              *)
+                echo "::error::The bump may propose at most 1.md and 2.md, not $(basename "$entry")."
+                exit 1
+                ;;
+            esac
+          done
           numbers=""
           for proposal in "$BUMP"/proposals/1.md "$BUMP"/proposals/2.md; do
             if [ ! -f "$proposal" ]; then

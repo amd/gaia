@@ -14,8 +14,11 @@ The patch may only modify these files, and only like this:
   the target's four embeddable archives.
 - ``src/gaia/installer/lemonade_installer.py``: ``INSTALLER_SHA256``, pinning
   exactly the target's five installers, and ``LEGACY_MSI_SHA256``, which keeps
-  every existing pin and gains the outgoing version's two MSIs.
-- ``tests/fixtures/lemonade/release_tags.txt``: new tags appended.
+  every existing pin, gains the outgoing version's two MSIs with the digests
+  main pinned for them, and gains nothing but MSIs of releases before the target.
+- ``tests/fixtures/lemonade/release_tags.txt``: newer tags appended in order,
+  ending at the target.
+- The target itself must be newer than main's ``LEMONADE_VERSION``.
 - ``.md``/``.mdx`` files that main's util/check_doc_versions.py scans: only
   the Lemonade pins it finds for main's ``LEMONADE_VERSION``, set to
   ``--target``. Its own patterns decide, so version floors stay put.
@@ -72,6 +75,9 @@ DOC_RULES = "util/check_doc_versions.py"
 DOC_PATH = re.compile(r"(?:docs|cpp|tui|\.claude)/(?:[^/]+/)*[^/]+\.mdx?")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+LEGACY_KEY = re.compile(
+    r"v([0-9]+\.[0-9]+\.[0-9]+)/(?:lemonade|lemonade-server-minimal)\.msi"
+)
 ADDED_TAGS = re.compile(r"(?:v[0-9]+\.[0-9]+\.[0-9]+\n)+")
 CHANGEABLE_LINE = re.compile(
     r' {4}"[A-Za-z0-9._/-]+": "[0-9a-f]{64}",|LEMONADE_VERSION = "[0-9]+\.[0-9]+\.[0-9]+"'
@@ -245,18 +251,41 @@ def check_python(path: str, old: bytes, new: bytes, current: str, target: str) -
             kept = _literal_pins(old_values[name], path, name)
             if list(pins.items())[: len(kept)] != list(kept.items()):
                 raise BumpRejected(f"{path}: {name} may only gain entries at its end")
-            outgoing = {key.format(v=current) for key in OUTGOING_LEGACY_PINS}
-            if current != target and not outgoing <= set(pins):
-                raise BumpRejected(
-                    f"{path}: {name} must keep the outgoing {sorted(outgoing)}"
-                )
+            for key in list(pins)[len(kept) :]:
+                match = LEGACY_KEY.fullmatch(key)
+                if not (
+                    match
+                    and _as_tuple(current) <= _as_tuple(match[1]) < _as_tuple(target)
+                ):
+                    raise BumpRejected(
+                        f"{path}: {name} may only gain the MSIs of releases from "
+                        f"{current} up to {target}, not {key}"
+                    )
+            # Moved, not re-pinned: the digests main already verified for the outgoing MSIs.
+            was_installed = _literal_pins(
+                old_values["INSTALLER_SHA256"], path, "INSTALLER_SHA256"
+            )
+            for key in sorted(k.format(v=current) for k in OUTGOING_LEGACY_PINS):
+                if pins.get(key) is None or pins[key] != was_installed.get(key):
+                    raise BumpRejected(
+                        f"{path}: {name} must keep the outgoing {key} with the digest "
+                        "INSTALLER_SHA256 pinned on main"
+                    )
 
 
-def check_release_tags(old: str, new: str) -> None:
+def check_release_tags(old: str, new: str, current: str, target: str) -> None:
     if not (old.endswith("\n") and new.startswith(old)):
         raise BumpRejected(f"{RELEASE_TAGS} may only gain tags at its end")
-    if not ADDED_TAGS.fullmatch(new[len(old) :]):
+    added = new[len(old) :]
+    if not ADDED_TAGS.fullmatch(added):
         raise BumpRejected(f"{RELEASE_TAGS} must gain one or more vX.Y.Z tags")
+    versions = [_as_tuple(tag[1:]) for tag in added.split()]
+    ordered = all(a < b for a, b in zip([_as_tuple(current)] + versions, versions))
+    if not (ordered and versions[-1] == _as_tuple(target)):
+        raise BumpRejected(
+            f"{RELEASE_TAGS} must gain releases newer than {current}, in order, "
+            f"ending at {target}"
+        )
 
 
 def _doc_patterns(rules, path: str, current: str) -> list:
@@ -294,6 +323,12 @@ def check_doc(path: str, old: str, new: str, current: str, target: str, rules) -
         )
 
 
+def _as_tuple(version: str) -> tuple:
+    if not VERSION.fullmatch(version):
+        raise BumpRejected(f"{version!r} is not a version")
+    return tuple(int(part) for part in version.split("."))
+
+
 def current_version(repo: Path) -> str:
     _, values = _pin_values(
         _git_bytes(repo, "show", f"HEAD:{VERSION_FILE}"), VERSION_FILE
@@ -309,6 +344,8 @@ def check_and_apply(repo: Path, patch: Path, target: str) -> list:
     if not VERSION.fullmatch(target):
         raise BumpRejected(f"--target {target!r} is not a version")
     current = current_version(repo)
+    if _as_tuple(target) <= _as_tuple(current):
+        raise BumpRejected(f"--target {target} must be newer than main's {current}")
     rules = _load_doc_rules(repo)
     paths = changed_paths(repo, patch)
     check_allowed(repo, paths, rules)
@@ -329,7 +366,7 @@ def check_and_apply(repo: Path, patch: Path, target: str) -> list:
         if path in PIN_ASSIGNMENTS:
             check_python(path, old, new, current, target)
         elif path == RELEASE_TAGS:
-            check_release_tags(_text(old, path), _text(new, path))
+            check_release_tags(_text(old, path), _text(new, path), current, target)
         else:
             check_doc(path, _text(old, path), _text(new, path), current, target, rules)
     return paths
