@@ -16,12 +16,14 @@ Driven on a fake clock against a fake child.
 import json
 import threading
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.messaging.bridge import (
     CONTROL_CANCEL,
     CONTROL_KEY,
+    QUERY_KEY,
     AgentChannel,
     Turn,
 )
@@ -278,3 +280,121 @@ def test_gaia_stream_timeout_sets_the_window(monkeypatch):
 def test_idle_limit_must_be_positive():
     with pytest.raises(ValueError, match="idle_limit"):
         AgentChannel(on_event=lambda e, t: None, spawn=FakeProc, idle_limit=0)
+
+
+class _ChildWire:
+    """The child's stdout as ``stdio.run_turn`` writes it: one JSON line each."""
+
+    def __init__(self, stdout):
+        self._stdout = stdout
+        self._buf = ""
+
+    def write(self, text):
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self._stdout.emit(json.loads(line))
+
+    def flush(self):
+        pass
+
+
+class _AgentStdin(FakeStdin):
+    """Runs each query line through the real stdio turn on ``agent``."""
+
+    def __init__(self, agent, stdout):
+        super().__init__()
+        self._agent = agent
+        self._wire = _ChildWire(stdout)
+
+    def write(self, data):
+        super().write(data)
+        message = json.loads(data)
+        if QUERY_KEY in message:
+            from gaia_agent import stdio
+
+            threading.Thread(
+                target=stdio.run_turn,
+                args=(self._agent, message[QUERY_KEY], self._wire),
+                daemon=True,
+            ).start()
+
+
+def _slow_no_arg_tool_agent(started, release):
+    from gaia.agents.base.agent import Agent
+    from gaia.agents.base.tools import tool
+
+    class _SlowProbe(Agent):
+        def _get_system_prompt(self):
+            return "probe"
+
+        def _register_tools(self):
+            @tool
+            def wait_for_build() -> dict:
+                """Wait for the build to finish. Takes no arguments."""
+                started.set()
+                assert release.wait(10), "the test never released the tool"
+                return {"status": "success", "build": "green"}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _SlowProbe(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    replies = [
+        json.dumps({"thought": "wait", "tool": "wait_for_build", "tool_args": {}}),
+        json.dumps({"thought": "done", "answer": "The build is green."}),
+    ]
+
+    def _send(*_, **__):
+        resp = MagicMock()
+        resp.text = replies.pop(0)
+        resp.stats = {}
+        return resp
+
+    agent.chat = MagicMock()
+    agent.chat.config.max_tokens = 8192
+    agent.chat.send_messages = MagicMock(side_effect=_send)
+    # Unregistered, with a pinned window: sizing history asks no server.
+    agent.model_id = "probe-model"
+    return agent
+
+
+def test_a_long_tool_with_no_arguments_is_not_stopped_as_idle(monkeypatch):
+    """The real agent loop and stdio wire, a no-arg tool, a 1 s stream timeout."""
+    monkeypatch.setenv("GAIA_STREAM_TIMEOUT", "1")
+    monkeypatch.setenv("GAIA_CTX_SIZE", "32768")
+    started, release = threading.Event(), threading.Event()
+    proc, clock, seen = FakeProc(), FakeClock(), []
+    proc.stdin = _AgentStdin(_slow_no_arg_tool_agent(started, release), proc.stdout)
+    ch = AgentChannel(
+        on_event=lambda event, turn: seen.append((event, turn.text)),
+        spawn=lambda: proc,
+        cancel_grace=GRACE,
+        clock=clock,
+        poll_seconds=0.01,
+    )
+    ch.start()
+    try:
+        assert ch._idle_limit == 1.0
+        ch.submit(Turn(text="is the build done?"))
+        assert started.wait(10)
+        announced = _wait_for(lambda: any(e["type"] == "tool_call" for e, _ in seen))
+
+        clock.advance(30)  # thirty times the stream timeout, still in the tool
+        # Wait for the watchdog's verdict on the advanced clock: a stop, or the
+        # running tool being counted as progress.
+        assert _wait_for(
+            lambda: _cancels(proc) or ch._active.last_progress >= clock.now
+        )
+        assert not _cancels(proc), "the bridge stopped a tool that was still running"
+        # It knew a tool was running before the tool returned.
+        assert announced, [e["type"] for e, _ in seen]
+
+        release.set()
+        assert _wait_for(lambda: any(e["type"] == "final" for e, _ in seen))
+        [final] = [e for e, _ in seen if e["type"] == "final"]
+        assert final["answer"] == "The build is green."
+        assert not [e for e, _ in seen if e["type"] == "error"]
+    finally:
+        release.set()
+        ch.close()

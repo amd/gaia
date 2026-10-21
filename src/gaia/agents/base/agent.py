@@ -9372,8 +9372,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
+                    # Sent even when empty: it is what releases the call to the wire.
+                    self.console.pretty_print_json(tool_args, "Arguments")
 
                     # Start progress indicator for tool execution
                     self.console.start_progress(f"Executing {tool_name}")
@@ -10629,8 +10629,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
+                    # Sent even when empty: it is what releases the call to the wire.
+                    self.console.pretty_print_json(tool_args, "Arguments")
                     self.console.start_progress(f"Executing {tool_name}")
 
                     # Loop detection — same shape as legacy path so
@@ -10877,8 +10877,8 @@ Do NOT wrap conversational replies in JSON.
                 # Display the tool call in real-time
                 self.console.print_tool_usage(tool_name)
 
-                if tool_args:
-                    self.console.pretty_print_json(tool_args, "Arguments")
+                # Sent even when empty: it is what releases the call to the wire.
+                self.console.pretty_print_json(tool_args, "Arguments")
 
                 # Start progress indicator for tool execution
                 self.console.start_progress(f"Executing {tool_name}")

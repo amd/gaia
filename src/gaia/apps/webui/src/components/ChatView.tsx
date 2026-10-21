@@ -1036,8 +1036,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 // Tool args update the last TOOL step with detail
                 if (event.type === 'tool_args') {
+                    // A call with no arguments keeps its tool_start label, not "{}".
+                    const hasArgs = !!event.args && Object.keys(event.args).length > 0;
+                    const detail = event.detail || (hasArgs ? JSON.stringify(event.args) : '');
                     updateLastToolStep({
-                        detail: event.detail || JSON.stringify(event.args),
+                        ...(detail ? { detail } : {}),
                         ...(event.narration ? { narration: event.narration } : {}),
                     });
                     return;

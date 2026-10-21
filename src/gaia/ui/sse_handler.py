@@ -527,6 +527,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
+        self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
@@ -728,6 +729,7 @@ class SSEOutputHandler(OutputHandler):
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
+        self._last_tool_label = detail_label
         event = {
             "type": "tool_start",
             "tool": tool_name,
@@ -756,9 +758,22 @@ class SSEOutputHandler(OutputHandler):
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         # When title is "Arguments", emit tool args as a detail update
-        # so the frontend can show what the tool was called with.
-        if title == "Arguments" and isinstance(data, dict):
-            detail = _format_tool_args(self._last_tool_name, data)
+        # so the frontend can show what the tool was called with. Sent for an
+        # empty call too: the translator holds tool_start until this arrives.
+        if title == "Arguments":
+            if not isinstance(data, dict):
+                # The wire carries an object; log what the model really sent.
+                logger.warning(
+                    "Tool %s was called with %s arguments, not an object: %.200r",
+                    self._last_tool_name,
+                    type(data).__name__,
+                    data,
+                )
+                data = {}
+            # No arguments to describe: keep the tool_start label, don't blank it.
+            detail = (
+                _format_tool_args(self._last_tool_name, data) or self._last_tool_label
+            )
             self.turn_ledger.tool_args(data)
             self._emit(
                 {
