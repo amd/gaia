@@ -155,3 +155,69 @@ async def test_time_waiting_for_a_worker_does_not_count(slow_rag):
     with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.5):
         counts = await asyncio.gather(*(helpers._index_document(doc) for _ in range(4)))
     assert counts == [6] * 4
+
+
+class _QueuedForEmbedderRag(_SlowRag):
+    """Waits for the embedder's model-slot lease first, hearing the broker's
+    queue updates the way model_lease delivers them, then indexes."""
+
+    queued_seconds = 1.5
+    steps = 2
+
+    def index_document(self, path, progress_callback=None, heartbeat=None):
+        from gaia.daemon import broker_client
+
+        cls = type(self)
+        deadline = time.monotonic() + cls.queued_seconds
+        try:
+            while time.monotonic() < deadline:
+                broker_client.notify_wait(
+                    {"event": "queued", "scope": "daemon", "position": 1}
+                )
+                time.sleep(0.1)
+        except BaseException:
+            cls.stopped_early += 1
+            raise
+        return super().index_document(path, progress_callback, heartbeat)
+
+
+@pytest.fixture
+def queued_rag(slow_rag):
+    _rag, doc = slow_rag
+    queued = type(
+        "QueuedRag",
+        (_QueuedForEmbedderRag,),
+        {
+            "running": 0,
+            "peak": 0,
+            "stopped_early": 0,
+            "threads": [],
+            "lock": threading.Lock(),
+        },
+    )
+    with patch("gaia.rag.sdk.RAGSDK", queued):
+        yield queued, doc
+
+
+async def test_waiting_for_the_embedder_behind_a_chat_is_not_stopped(queued_rag):
+    """A wait for the model slot is not a stall: the broker reports it every
+    few seconds, and each report counts as progress."""
+    rag, doc = queued_rag
+    with patch.object(helpers, "_INDEX_TIMEOUT_S", 0.4):
+        assert await asyncio.wait_for(helpers._index_document(doc), 10) == 2
+    assert rag.stopped_early == 0
+
+
+async def test_cancel_stops_an_index_still_waiting_for_the_embedder(queued_rag):
+    rag, doc = queued_rag
+    rag.queued_seconds = 5
+    task = asyncio.create_task(helpers._index_document(doc))
+    await asyncio.sleep(0.4)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    deadline = time.monotonic() + 3
+    while rag.stopped_early == 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert rag.stopped_early == 1, "the queued wait kept going after Cancel"

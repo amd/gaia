@@ -133,6 +133,35 @@ class TestSdk:
                 sdk._load_embedder()
         assert exc.value.unreachable
 
+    def test_a_stop_during_the_embedder_load_is_a_stop_not_a_failure(self, sdk):
+        """Cancel can reach a wait for the embedder's model slot. Wrapped as an
+        embedder failure, it was logged as one."""
+        from gaia.rag.sdk import IndexingStopped
+
+        stopped = IndexingStopped("report.pdf")
+        sdk.llm_client = MagicMock()
+        sdk.llm_client.load_model.side_effect = LemonadeClientError("wrapped")
+        sdk.llm_client.load_model.side_effect.__cause__ = stopped
+        with patch("gaia.daemon.broker_client.model_lease"):
+            with pytest.raises(IndexingStopped) as exc:
+                sdk._load_embedder()
+        assert exc.value is stopped
+
+    def test_a_stop_during_an_embedding_request_is_a_stop_not_a_failure(
+        self, sdk, caplog
+    ):
+        from gaia.rag.sdk import IndexingStopped
+
+        stopped = IndexingStopped("report.pdf")
+        wrapped = LemonadeClientError("Error generating embeddings: wrapped")
+        wrapped.__cause__ = stopped
+        sdk.embedder = MagicMock()
+        sdk.embedder.embeddings.side_effect = wrapped
+
+        with pytest.raises(IndexingStopped):
+            sdk._encode_texts(["hello"])
+        assert "failed" not in caplog.text
+
     def test_index_document_reports_the_embedding_cause(self, sdk, tmp_path):
         doc = tmp_path / "doc.txt"
         doc.write_text("some content to index", encoding="utf-8")

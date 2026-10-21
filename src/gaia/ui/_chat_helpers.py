@@ -4554,7 +4554,8 @@ async def _index_document(filepath: Path) -> int:
     files have their own, and the rest wait their turn). Cancelling the
     awaiting task stops indexing at its next page or embedding batch, and so
     does going ``GAIA_INDEX_TIMEOUT`` seconds without one; time spent waiting
-    for a worker doesn't count.
+    for a worker doesn't count, and a wait for the model slot counts as
+    progress for as long as the broker keeps reporting it.
 
     Note: A return value of 0 means RAG reported success but produced
     no chunks. Callers must treat 0 chunks as a failure condition.
@@ -4575,6 +4576,7 @@ async def _index_document(filepath: Path) -> int:
             raise IndexingStopped(filepath.name)
 
     def _do_index():
+        from gaia.daemon.broker_client import lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
         _step()
@@ -4583,11 +4585,17 @@ async def _index_document(filepath: Path) -> int:
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
-        result = rag.index_document(
-            str(filepath),
-            progress_callback=lambda _done, _total: _step(),
-            heartbeat=_step,
-        )
+        # A wait for a model slot (embedder, VLM) reports every few seconds;
+        # each report is progress, and Cancel ends the wait through _step.
+        with lease_wait_listener(lambda _event: _step()):
+            result = rag.index_document(
+                str(filepath),
+                progress_callback=lambda _done, _total: _step(),
+                heartbeat=_step,
+            )
+        # A stop absorbed on the way (a degraded image page) is still a stop.
+        if stop.is_set():
+            raise IndexingStopped(filepath.name)
         logger.info("RAG index_document result for %s: %s", filepath, result)
 
         if not isinstance(result, dict):
