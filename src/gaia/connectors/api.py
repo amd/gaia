@@ -59,7 +59,6 @@ from gaia.connectors.grants import (
     load_grants,
     revoke_agent_grant,
 )
-from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
@@ -559,7 +558,7 @@ def import_forwarded_connection(
     """
     # Local imports keep the module-level dependency graph (and the lazy
     # keyring import contract in connectors/__init__.py) unchanged.
-    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.providers import reload as reload_provider
     from gaia.connectors.store import (
         save_connection,
         save_provider_credentials,
@@ -620,10 +619,9 @@ def import_forwarded_connection(
             provider, client_id=client_id, client_secret=client_secret
         )
 
-        # 5. Evict the cached provider instance so the next ``get_provider``
-        #    reads the forwarded client and recomputes ``client_id_hash``.
-        _provider_registry.pop(provider, None)
-        prov = get_provider(provider)
+        # 5. Rebuild the cached provider from the forwarded client so
+        #    ``client_id_hash`` is recomputed from it.
+        prov = reload_provider(provider)
 
         # 6. Persist the connection (refresh_token + metadata) →
         #    ``<provider>:default`` keyed by the forwarded client's hash so the

@@ -62,7 +62,7 @@ connection doesn't match that cache, the process re-reads the client
 config from the credential store before judging it. A connection another
 GAIA process just forwarded or reconnected under a new client is kept. A
 connection that still doesn't match is cleared only while holding the
-connection lock; if another process holds it, the connection is left in
+connection lock; if another GAIA operation holds it, the connection is left in
 place and the call raises `AuthRequiredError(REAUTH_REQUIRED)`, so a retry
 can succeed.
 

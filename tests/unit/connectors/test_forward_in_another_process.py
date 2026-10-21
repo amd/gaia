@@ -395,3 +395,96 @@ async def test_a_connection_whose_tenant_is_gone_is_still_cleared(
 
     assert exc.value.reason == AuthRequiredError.Reason.TENANT_MISMATCH
     assert _stored_refresh_token("microsoft_work") is None
+
+
+def test_the_startup_sweep_keeps_a_connection_another_process_forwarded(
+    connected_under_old_client,
+):
+    from gaia.connectors.api import tripwire_check
+
+    _written_by_another_process()
+
+    tripwire_check()
+    assert _stored_refresh_token() == "forwarded-refresh"
+
+
+def test_the_startup_sweep_still_clears_a_connection_whose_client_is_gone(
+    connected_under_old_client,
+):
+    from gaia.connectors.api import tripwire_check
+
+    _written_by_another_process()
+    save_provider_credentials("google", client_id="third.apps.example")
+
+    tripwire_check()
+    assert _stored_refresh_token() is None
+
+
+@respx.mock
+async def test_a_disconnect_in_another_process_stays_disconnected(
+    connected_under_old_client,
+):
+    """A stale cache must not read as a reason to keep, or rewrite, a
+    connection the user removed from another process."""
+    from gaia.connectors.api import list_connections
+    from gaia.connectors.store import delete_connection
+
+    _written_by_another_process()
+    delete_connection("google")
+    route = respx.post(TOKEN_URL).mock(side_effect=_accepts_only_the_forwarded_grant)
+
+    assert list_connections() == []
+    with pytest.raises(AuthRequiredError) as exc:
+        await tokens.get_or_refresh("google")
+
+    assert exc.value.reason == AuthRequiredError.Reason.NOT_CONNECTED
+    assert route.call_count == 0
+    assert peek_connection("google") is None
+
+
+def test_a_mismatch_is_not_cleared_while_another_thread_here_holds_the_lock(
+    connected_under_old_client,
+):
+    """The lock is per open file, so a writer on another thread of this same
+    process blocks the clear exactly as another process would."""
+    from gaia.connectors.api import _authorize_access
+
+    _written_by_another_process()
+    save_provider_credentials("google", client_id="third.apps.example")
+    holding, release = threading.Event(), threading.Event()
+
+    def hold():
+        with _refresh_lock.held_sync("google"):
+            holding.set()
+            release.wait(_CHILD_TIMEOUT)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert holding.wait(_CHILD_TIMEOUT)
+        with pytest.raises(AuthRequiredError, match="this process or another"):
+            _authorize_access(
+                provider="google",
+                scopes=[GMAIL],
+                agent_id=None,
+                account_email="default",
+            )
+        assert _stored_refresh_token() == "forwarded-refresh"
+    finally:
+        release.set()
+        holder.join(timeout=_CHILD_TIMEOUT)
+
+
+@respx.mock
+async def test_reloading_a_stale_client_never_logs_a_secret(
+    caplog, connected_under_old_client
+):
+    _written_by_another_process()
+    respx.post(TOKEN_URL).mock(side_effect=_accepts_only_the_forwarded_grant)
+
+    with caplog.at_level("DEBUG", logger="gaia.connectors"):
+        assert await tokens.get_or_refresh("google") == "fresh"
+
+    assert "reloading" in caplog.text
+    for secret in ("forwarded-refresh", "old-refresh"):
+        assert secret not in caplog.text
