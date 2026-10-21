@@ -10,12 +10,11 @@
     background: var(--bg-input);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
-    transition: box-shadow var(--duration) var(--ease);
 }
 
-/* A brass edge and a soft ring: focus is the one place brass frames a surface. */
+/* A hairline, not a glow: just enough to show where keyboard focus is. */
 .composer:focus-within {
-    box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--accent-solid), 0 0 0 4px var(--accent-ring);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
 }
 
 .composer-disabled {
