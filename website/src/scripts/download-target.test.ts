@@ -19,6 +19,7 @@ import {
   resolveArch,
   resolveTargets,
   windowsSetupOffersChoice,
+  WINDOWS_INSTALL_COMMAND,
   WINDOWS_SETUP_SINCE,
   type DownloadKey,
   type NavigatorLike,
@@ -198,6 +199,17 @@ describe('artifactFileName', () => {
     // free to follow the gaia-<version>-<platform> house style.
     expect(artifactFileName('linux-x64-deb', V)).toBe('gaia_0.23.0_amd64.deb');
     expect(artifactFileName('linux-x64-rpm', V)).toBe('gaia-0.23.0.x86_64.rpm');
+  });
+
+  // The names #5509's attach job gives a final release, as v0.25.0 carries them.
+  it('maps the Windows setup and its two single-app files to the 0.25.0 asset names', () => {
+    expect(artifactFileName('win-x64-setup', '0.25.0')).toBe('gaia-0.25.0-win-x64-setup.exe');
+    expect(desktopArtifactFileName('win-x64', '0.25.0')).toBe('gaia-agent-ui-0.25.0-x64-setup.exe');
+    expect(artifactFileName('win-x64', '0.25.0')).toBe('gaia-windows-amd64.exe');
+  });
+
+  it('spells the Windows one-liner exactly as docs/quickstart.mdx does', () => {
+    expect(WINDOWS_INSTALL_COMMAND).toBe('irm https://amd-gaia.ai/install.ps1 | iex');
   });
 
   // The regression this replaces: the download block derived the platform by stripping
