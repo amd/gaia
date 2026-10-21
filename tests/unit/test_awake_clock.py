@@ -568,19 +568,46 @@ def test_a_replacement_that_cannot_start_is_retried_not_skipped(
     assert awake_clock._monitor.problem() is None
 
 
+def _end_monitor_thread():
+    """Make the current monitor's thread exit, as a crash would."""
+    monitor = awake_clock._monitor
+    awake_clock._kernel32.SetEvent(monitor._stop_event)
+    monitor._thread.join(5)
+
+
 @windows_only
-def test_a_healthy_replacement_wipes_the_failure_count(fresh_clock, monkeypatch):
+def test_a_healthy_replacement_wipes_the_failure_count(
+    fresh_clock, monkeypatch, caplog
+):
     """Weeks apart, unrelated failures must not add up to giving up."""
     awake_clock.monotonic()
-    old = awake_clock._monitor
-    awake_clock._kernel32.SetEvent(old._stop_event)  # the monitor thread exits
-    old._thread.join(5)
+    with caplog.at_level(logging.ERROR, logger=LEDGER_LOG):
+        _end_monitor_thread()
+        awake_clock.monotonic()
+        assert awake_clock._restarts == 1
+        monkeypatch.setattr(awake_clock, "HEALTHY_RESET", 0.2)
+        time.sleep(0.3)
+        awake_clock.monotonic()
+        assert awake_clock._restarts == 0
+        _end_monitor_thread()
+        awake_clock.monotonic()
+    # The next failure counts from one again, and the log says so.
+    assert caplog.text.count("failure 1 of 4") == 2
+    assert "failure 2 of 4" not in caplog.text
+
+
+@windows_only
+def test_the_last_failure_says_it_gives_up_not_that_it_restarts(fresh_clock, caplog):
     awake_clock.monotonic()
-    assert awake_clock._restarts == 1
-    monkeypatch.setattr(awake_clock, "HEALTHY_RESET", 0.2)
-    time.sleep(0.3)
-    awake_clock.monotonic()
-    assert awake_clock._restarts == 0
+    with caplog.at_level(logging.ERROR, logger=LEDGER_LOG):
+        for _ in range(awake_clock.MAX_RESTARTS):
+            _end_monitor_thread()
+            awake_clock.monotonic()
+        _end_monitor_thread()
+        with pytest.raises(awake_clock.AwakeClockError, match="Restart GAIA"):
+            awake_clock.monotonic()
+    [last] = [r.message for r in caplog.records if "failure 4 of 4" in r.message]
+    assert "giving up" in last and "starting a new one" not in last
 
 
 @windows_only

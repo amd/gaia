@@ -659,11 +659,14 @@ if sys.platform == "win32":
                     _restarts = 0
                 return _ledger
             _last_problem = problem
-            _failure(
-                problem,
-                "starting a new one; the time since its last beat counts "
-                "toward limits",
-            )
+            if _restarts + 1 > MAX_RESTARTS:
+                outcome = "giving up; every time limit now fails with an error"
+            else:
+                outcome = (
+                    "starting a new one; the time since its last beat counts "
+                    "toward limits"
+                )
+            _failure(problem, outcome)
             began = _unbiased()
             # Its time counts, unjudged; then it is told to stop, and forgotten
             # so a failed replacement is retried on the next read.
