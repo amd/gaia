@@ -105,7 +105,7 @@ jobs:
             python3.12 python3.12-devel git binutils gcc gcc-c++ tar gzip findutils
           ln -sf /usr/bin/python3.12 /usr/local/bin/python
           echo "UV_PYTHON_PREFERENCE=only-system" >> "$GITHUB_ENV"
-          ldd --version | head -1
+          ldd --version | sed -n 1p
 
       - uses: actions/checkout@v7
 
@@ -238,7 +238,7 @@ jobs:
           else
             dnf install -y --setopt=install_weak_deps=False python3 ca-certificates git
           fi
-          ldd --version | head -1
+          ldd --version | sed -n 1p
 
       - uses: actions/checkout@v7
         with:
