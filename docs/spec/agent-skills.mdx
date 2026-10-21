@@ -389,6 +389,95 @@ audited bytes: editing a promoted skill re-defers its code, and a failed
 re-promote revokes the earlier trust. An instruction-only capture has nothing
 to defer and simply loads.
 
+### Bundled skills: code trusted by provenance
+
+A skill that ships **inside GAIA** — the flagship's starter pack in
+`hub/skills/<name>/` and its own `gaia_agent/skills/` — needs no promote. It
+loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
+`tools.py` registers on the first `load_skill` and its `scripts/` are on disk
+beside it. In a checkout the flagship reads `hub/skills` in place; the frozen
+binary carries the pack under `gaia_agent/skills`, and the build fails if a
+bundled skill's code imports a module the binary would not contain.
+
+The review a promote would do happens before the skill ships instead: CI audits
+every bundled skill that ships code and fails unless `gaia skill audit` returns
+`ALLOW`, and `python util/lint.py --tool-descriptions` holds its tools to the
+same description budget as core tools. Domain capability belongs here — a
+skill's own `tools.py` — while the core agent keeps only generic tools:
+
+```python
+# hub/skills/log-triage/tools.py
+from gaia.agents.base.tools import tool
+
+@tool
+def count_errors(path: str) -> dict:
+    """Count ERROR lines in a log file.
+
+    Args:
+        path: Log file to read.
+    """
+    ...
+```
+
+```yaml
+# hub/skills/log-triage/SKILL.md — under metadata.gaia
+tools:
+  - name: count_errors
+    description: Count ERROR lines in a log file.
+    parameters:
+      path: {type: string, required: true}
+```
+
+Loaded, it is `log-triage/count_errors`. Checks that classify tools by name
+read the bare name, so a skill tool is held to the rule its core namesake
+meets: a `write_*` / `edit_*` tool counts as a file change for the
+verify-after-change check and the turn-scope guard, and one named like a
+confirmation-gated core tool (`run_python`, `write_file`) always asks first —
+no skill grant pre-authorizes it. Anything a user installs or captures keeps the
+lock-bound flow above.
+
+### Skill context: paths, programs, temp files, preferences
+
+A skill tool has no `self`, so it reaches the agent that called it through
+`gaia.skills.context`. The agent binds every skill tool call, and these
+functions act for that agent and that skill:
+
+| Function | Needs | Does |
+|----------|-------|------|
+| `check_read(path)` / `check_write(path)` | — | The agent's allowed-folders check, the same `validate_read` / `validate_write` that `read_file` / `write_file` use, including the approval prompt. Returns the resolved `Path` or raises `SkillPermissionError`. |
+| `open_read(path, mode="r", *, encoding=None, errors=None, newline=None)` | — | `open()` for reading (`"r"` or `"rb"`) at the path `check_read` resolved, so a symlink or junction that lands outside the scope is refused. Text defaults to UTF-8, never the locale's. A mode that writes raises `ValueError`. |
+| `open_write(path, mode="w", *, encoding=None, errors=None, newline=None)` | — | Create, replace (`"w"`), create-only (`"x"`) or append (`"a"`), each with `"b"` for bytes, after `check_write` and its overwrite confirmation. Missing parent folders are created. |
+| `list_readable(root, *, recursive=True, include_hidden=False)` | — | The files under a `check_read`-approved folder, sorted. Never prompts per file: secrets and links that resolve outside the scope are left out, and linked folders are not entered. |
+| `run_program(name, args, *, timeout, cwd=None)` | `program:run:<name>` | Starts the named program, found on PATH or in its usual install folder. Runs with no shell, stdin closed, and an environment without the agent's keys and tokens. Returns a `CompletedProcess`. It does **not** block network access. |
+| `temp_dir(sub=None)`, `write_temp_file(name, data)`, `copy_to_temp(path)` | `scratch:write` | A fresh folder under `<gaia_home>/skill-temp/<skill>/`, deleted when the call returns. `copy_to_temp` read-checks its source first. |
+| `preferences().get()` / `.update(dict)` / `.reset()` | — | The skill's own saved preferences, described below. |
+
+Every path-named argument (`path`, `file_path`, `*_path`, `*_dir`, `*_file`,
+and similar) is read-checked **before** the tool body runs. A skill tool can't
+be pointed outside the agent's scope unless the user approves the path. A tool
+that writes calls `check_write` or `open_write` itself.
+
+`gaia skill audit` matches these calls against the manifest. A declared
+`run_program("soffice")` passes. An undeclared one, or one naming a program the
+manifest doesn't list, is flagged. The file functions need no `filesystem`
+permission, since the agent's allowed folders bound every call. A raw
+`subprocess`, `tempfile` or `open()` is flagged as before. A bundled skill's
+declared capabilities are approved by the audit it passed before release. Any other skill that declares `program:run`
+asks the user before each call to its tools, through the usual confirmation
+prompt. `experimental` skills may use `scratch:write` but not `program:run`.
+
+**Preferences** are per user, per skill: one JSON file in
+`<gaia_home>/skill-preferences/`. They stay on this machine and are never
+synced. If the skill folder has a `preferences.schema.json`, every write is
+checked against it. That schema uses a small JSON Schema subset (`type`,
+`properties`, `required`, `additionalProperties`, `enum`, `minimum`/`maximum`,
+`minLength`/`maxLength`, `items`, `maxItems`); a schema using any other keyword
+is refused. In a private chat, or with memory off, reads still work. A write
+or reset is skipped instead, and returns `saved: False` with a note saying why.
+The Agent UI reads and edits preferences through `GET /api/skills/preferences`,
+plus `GET`, `PUT` (merge; `null` removes a key) and `DELETE` (reset) on
+`/api/skills/{name}/preferences`.
+
 ### Invocation
 
 Once a skill is in scope, it is triggered by the model calling `load_skill` —
@@ -420,7 +509,7 @@ with, rundown).
 
 The list depends only on what is installed, so it is identical on every turn and
 stays in the cached head of the prompt. It costs about one line per skill (roughly
-1,000 tokens for the starter pack) plus a ~96-token sourcing rule: facts about live
+1,600 tokens for the starter pack) plus a ~96-token sourcing rule: facts about live
 external state must come from a tool call, never from memory. A description is
 cut at 480 characters in the list, so put the "use when" triggers early. A skill
 already under LOADED SKILLS stays listed, and the model is told not to load it
@@ -689,7 +778,8 @@ Highlights as they apply at the agent boundary:
 |---------|------------------|-------|
 | Bridged permissions | `network:*` / `mcp:connect` become per-agent `ConnectorRequirement`s | Shipped (declaration; egress not enforced) |
 | Local-capability permissions | `filesystem` / `shell` / `database` / `desktop` / `env` refuse the load outright | Shipped (refusal); enforcement deferred |
-| Per-agent least privilege | An agent receives a skill's tools only after the skill is explicitly loaded; no ambient activation. Tools are namespaced and instance-scoped | Shipped |
+| Per-agent least privilege | An agent receives a skill's tools only after the skill is explicitly loaded; no ambient activation. Tools are namespaced and instance-scoped, and gated by their bare name like core tools | Shipped |
+| Bundled code | Skills shipped inside GAIA are trusted by provenance; every one that ships code must pass the audit with `ALLOW` in CI | Shipped |
 | Instruction-only bodies | Loaded as context under a `==== LOADED SKILLS ====` prompt fragment (on the flagship agent, split into an `(active this turn)` bodies section and a collapsed one-line menu for the rest — per-turn semantic selection); treated as untrusted input, never as system-level instructions | Shipped |
 | Untrusted imports | `gaia skill import` stamps `security_tier: experimental` regardless of the tier the skill claims, and reports the reset. It accepts https URLs only, refuses symlinked or audit-blocked bundles, and requires `--allow-experimental` for a skill that ships code | Shipped |
 | Resource escape | A skill may only read files inside its own directory; `SkillManager.resource_path` rejects traversal, as does `.zip` import. The read-only folder grant a loaded skill gets resolves `..` and symlinks first, so it never reaches a file outside that folder | Shipped |

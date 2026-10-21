@@ -730,3 +730,22 @@ def test_a_skill_whose_directory_name_differs_still_audits(tmp_path):
     directory.rename(tmp_path / "unpacked-123")
     report = audit_skill(tmp_path / "unpacked-123")
     assert report.skill == "demo"
+
+
+@pytest.mark.parametrize(
+    "module,distribution",
+    [("pptx", "python-pptx>=1.0"), ("docx", "python-docx>=1.1")],
+)
+def test_office_imports_resolve_to_their_distributions(tmp_path, module, distribution):
+    """``import pptx`` is satisfied by declaring ``python-pptx``, not ``pptx``."""
+    directory = _skill(
+        tmp_path,
+        dependencies=[distribution],
+        tools=f"""
+        import {module}
+
+        def f():
+            return {module}.__name__
+        """,
+    )
+    assert "supply.undeclared_dependency" not in _rules(audit_skill(directory))

@@ -57,3 +57,88 @@ def _skills_from_agent() -> Dict[str, Any]:
             status_code=502,
             detail=f"The GAIA agent could not list its skills: {e}",
         ) from e
+
+
+# ---------------------------------------------------------------------------
+# Per-skill preferences (gaia.skills.preferences) — local to this machine.
+# ---------------------------------------------------------------------------
+
+
+def _preference_store():
+    from gaia.skills.preferences import SkillPreferenceStore
+
+    return SkillPreferenceStore()
+
+
+def _preference_schema(name: str) -> Any:
+    """The skill's ``preferences.schema.json``, or None when it ships none.
+
+    Writes are validated against it, so the skill has to be found here: the
+    UI does not save a preference it cannot check.
+    """
+    from gaia.skills.errors import SkillError
+    from gaia.skills.manager import SkillManager
+    from gaia.skills.preferences import load_schema
+
+    try:
+        from gaia_agent.agent import GaiaAgent
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The GAIA agent package is not installed beside the UI, so the "
+                f"preference schema of '{name}' cannot be read to check the change."
+            ),
+        ) from e
+    try:
+        skill = SkillManager(agent_skill_dirs=GaiaAgent.SKILL_DIRS).load(name)
+        return load_schema(skill.directory)
+    except SkillError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.get("/api/skills/preferences")
+def list_skill_preferences() -> Dict[str, Any]:
+    """Every skill with saved preferences."""
+    from gaia.skills.errors import SkillError
+
+    try:
+        return {"skills": _preference_store().list()}
+    except SkillError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/api/skills/{name}/preferences")
+def get_skill_preferences(name: str) -> Dict[str, Any]:
+    """One skill's saved preferences (``{}`` when none)."""
+    from gaia.skills.errors import SkillError
+
+    try:
+        return {"skill": name, "preferences": _preference_store().get(name)}
+    except SkillError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.put("/api/skills/{name}/preferences")
+def update_skill_preferences(name: str, changes: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge *changes* into a skill's preferences; a ``null`` value removes a key."""
+    from gaia.skills.errors import SkillError
+
+    schema = _preference_schema(name)
+    try:
+        saved = _preference_store().update(name, changes, schema=schema)
+    except SkillError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"skill": name, "preferences": saved}
+
+
+@router.delete("/api/skills/{name}/preferences")
+def reset_skill_preferences(name: str) -> Dict[str, Any]:
+    """Forget every saved preference of a skill."""
+    from gaia.skills.errors import SkillError
+
+    try:
+        removed = _preference_store().reset(name)
+    except SkillError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"skill": name, "reset": removed}

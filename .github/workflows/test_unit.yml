@@ -132,9 +132,10 @@ jobs:
           # tests/unit/eval/test_pdf_document_generator.py and
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
+          # openpyxl: tests/unit/test_report_from_sources_*.py, same reason.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk openpyxl
           uv pip install --system -e ".[api]"
 
       - name: Check no test file skips wholesale
@@ -420,7 +421,7 @@ jobs:
           # one is needed. A missing one skips files that Linux runs.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk openpyxl
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -467,7 +468,7 @@ jobs:
           # one is needed.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk openpyxl
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity

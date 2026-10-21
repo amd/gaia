@@ -118,6 +118,60 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 - **Consumes** — `create_table`, `insert_data`, `query_data`, `list_tables`.
 - **Configure** — a CSV, export, or pasted table.
 
+### report-from-sources
+
+Builds a report, deck, brief or workbook from the user's files without dropping
+what the sources stress. It inventories the inputs and picks the newest file for
+each dataset, keeps a key-facts ledger per source (headline numbers, stated
+changes, notable events, risks), puts source and period on every figure, then
+checks the saved file against the ledger and against a numbered list of
+everything the user asked for.
+
+- **Provides** — three tools in its `tools.py`, registered as
+  `report-from-sources/<tool>` when the skill loads:
+  - `inventory_data_files(folder)`: every spreadsheet, CSV and JSON file with
+    its sheets, header rows, units and period coverage, and the copies of each
+    dataset ranked by vintage ("two versions of the same series: X (through
+    2026Q2, newest) and Y (through 2025Q2)").
+  - `series_from_workbook(file_path, labels, periods="last 5")`: named series
+    matched by label (the matched label is echoed; two close labels are
+    reported as ambiguous, a missing one with its nearest labels), values
+    exactly as stored, each cited to its cell, with units, footnote flags and a
+    provenance line. Reads wide tables (periods across, including two-row
+    headers such as a year over its quarters) and long ones (periods down).
+  - `chart_into_workbook(output_path, file_path, labels)`: the same series as
+    a table plus a native Excel chart, with a source and period footnote,
+    reread from the saved file and compared with the source before it reports
+    success.
+- **Demonstrates** — analyst practice as a procedure: provenance, coverage
+  checks, and verifying a saved file against the request with `run_python`.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — a folder of sources and the deliverable you want.
+
+### log-triage
+
+Finds the incident in a log rather than the noise. It parses every file over its
+full time range, groups messages into templates, ranks them by severity, hosts
+hit and rarity instead of volume, finds bursts, and reports exact first and last
+timestamps, with routine baseline messages kept apart from anomalies.
+
+- **Demonstrates** — whole-file analysis with pandas in `run_python` instead of
+  reading a large file into the conversation.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — one or more log files; fit the line pattern to their format.
+
+### meeting-actions
+
+Turns meeting notes, minutes or transcripts into one action tracker. It catches
+commitments said in passing ("I'll send it", "let me check") as well as
+labelled actions, records owner, due date and evidence, and merges an item that
+comes back in later meetings into one row with its latest status.
+
+- **Demonstrates** — exhaustive extraction with a regex safety net, and
+  de-duplication across documents.
+- **Consumes** — `list_files`, `read_file`, `run_python`, `write_file`.
+- **Configure** — a folder of notes, or one meeting's transcript.
+
 ### source-watch
 
 The generic watcher, and the template the next two are forked from: fetch a
@@ -203,7 +257,7 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 ### rss-digest
 
-The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
+The pack's smallest **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
 function, declared in `metadata.gaia.tools` and registered as
 `rss-digest/fetch_rss`.
 
