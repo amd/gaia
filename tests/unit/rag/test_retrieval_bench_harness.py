@@ -180,6 +180,98 @@ def test_a_chunk_split_to_fit_the_embedder_does_not_hide_the_next_one(tmp_path):
     assert all(spans[i].end > spans[i - 1].start for i in range(1, len(chunks)))
 
 
+def _vlm_document(rag, pages, images_per_page, body_sections=6, headings=True):
+    """A PDF's extracted text with image text merged exactly as indexing merges it."""
+    out = []
+    for p in range(1, pages + 1):
+        body = "\n\n".join(
+            ("# " if headings else "")
+            + f"Heading {p}.{s}\nBody text of section {p}.{s} on page {p}. "
+            + " ".join(f"word{p}x{s}x{w}" for w in range(20))
+            for s in range(body_sections)
+        )
+        images = [
+            {
+                "image_num": n,
+                "text": f"Figure {p}.{n} shows the separator.\n# Diagram {p}.{n}\n"
+                + " ".join(f"img{p}x{n}x{w}" for w in range(30))
+                + f" ends{p}x{n}.",
+            }
+            for n in range(1, images_per_page.get(p, 0) + 1)
+        ]
+        out.append(f"[Page {p}]\n{rag._merge_page_texts(body, images, page_num=p)}")
+    return "\n\n".join(out)
+
+
+def _locate_all(chunks, full):
+    doc = DocText.from_full_text("d.pdf", full)
+    return locate_chunks(chunks, {"d.pdf": list(range(len(chunks)))}, {"d.pdf": doc})
+
+
+@pytest.mark.parametrize(
+    "pages, images, headings, blocks",
+    [
+        (5, {1: 3, 2: 1, 4: 2, 5: 2}, True, [(1, 1), (1, 2), (1, 3), (4, 1), (5, 2)]),
+        # Too few sections, so the chunker splits on blank lines instead.
+        (1, {1: 3}, False, [(1, 1), (1, 2), (1, 3)]),
+    ],
+    ids=["sections", "paragraphs"],
+)
+def test_image_text_on_several_pages_maps_back_to_the_source(
+    tmp_path, pages, images, headings, blocks
+):
+    rag = _fake_make_rag(tmp_path / "c", [tmp_path])
+    full = _vlm_document(rag, pages, images, body_sections=1, headings=headings)
+    chunks = rag._split_text_into_chunks(full)
+    spans, unlocated = _locate_all(chunks, full)
+    assert unlocated == []
+    joined = " ".join(chunks)
+    for p, n in blocks:
+        assert f"ends{p}x{n}." in joined
+        # The last word of one image block never fuses with the next marker.
+        assert f"ends{p}x{n}.[Page" not in joined
+
+
+@pytest.mark.parametrize(
+    "images", [{1: 2, 2: 1}, {1: 2, 2: 1, 3: 1}], ids=["two-pages", "three-pages"]
+)
+def test_a_chunk_of_document_and_image_text_spans_both_pages(tmp_path, images):
+    rag = _fake_make_rag(tmp_path / "c", [tmp_path])
+    full = _vlm_document(rag, 3, images, body_sections=2, headings=False)
+    chunks = rag._split_text_into_chunks(full)
+    spans, unlocated = _locate_all(chunks, full)
+    assert unlocated == []
+    mixed = [
+        i
+        for i, c in enumerate(chunks)
+        if "IMAGE 2" in c and "ends1x2." in c and "word2x0x0" in c
+    ]
+    assert mixed, "expected a chunk holding page 1's image text and page 2's body"
+    assert {1, 2} <= spans[mixed[0]].pages
+
+
+def test_a_chunk_absent_from_the_source_is_still_unlocated(tmp_path):
+    rag = _fake_make_rag(tmp_path / "c", [tmp_path])
+    full = _vlm_document(rag, 2, {1: 2})
+    chunks = rag._split_text_into_chunks(full)
+    fused = "ends1x1.[Page 1] ### 🖼️ IMAGE 2 Figure 1.2 shows the separator."
+    invented = "[Page 1] ### 🖼️ IMAGE 9 text the model never produced"
+    _, unlocated = _locate_all(chunks + [fused, invented], full)
+    assert unlocated == [len(chunks), len(chunks) + 1]
+
+
+def test_unlocatable_chunks_still_stop_the_benchmark(tmp_path):
+    rag = _fake_make_rag(tmp_path / "c", [tmp_path])
+    full = _vlm_document(rag, 2, {1: 2})
+    chunks = rag._split_text_into_chunks(full)
+    rag.chunks = chunks + ["[Page 1] ### 🖼️ IMAGE 9 text the model never produced"]
+    rag.file_to_chunk_indices = {"d.pdf": list(range(len(rag.chunks)))}
+    rag.file_metadata = {"d.pdf": {"full_text": full}}
+    bench = harness.BenchIndex(tmp_path, [], rag=rag)
+    with pytest.raises(harness.IndexingError, match="could not be located"):
+        bench._locate()
+
+
 def test_both_pipelines_find_the_labelled_evidence(dataset, tmp_path):
     _needs_chat_agent()
     bench = harness.index_dataset(dataset, tmp_path / "work")
