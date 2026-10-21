@@ -56,7 +56,15 @@ Either is surfaced to the user; nothing falls through silently.
 verifies that the OAuth client id under which it was issued matches
 the current configuration. A mismatch (e.g. after rotation) clears the
 stored entry and raises `AuthRequiredError(REAUTH_REQUIRED)`. Users
-reconnect explicitly; we never use a stale connection.
+reconnect explicitly; we never use a stale connection. The daemon, the
+Agent UI and the CLI each cache the OAuth client, so when a stored
+connection doesn't match that cache, the process re-reads the client
+config from the credential store before judging it. A connection another
+GAIA process just forwarded or reconnected under a new client is kept. A
+connection that still doesn't match is cleared only while holding the
+connection lock; if another process holds it, the connection is left in
+place and the call raises `AuthRequiredError(REAUTH_REQUIRED)`, so a retry
+can succeed.
 
 ## What we do not protect
 
