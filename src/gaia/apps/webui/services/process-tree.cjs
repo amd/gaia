@@ -22,7 +22,9 @@ const childProcess = require("child_process");
 
 const DEFAULT_GRACE_MS = 3000;
 const DEFAULT_FORCE_WAIT_MS = 1000;
-const LIST_TIMEOUT_MS = 5000;
+// PowerShell's CIM query takes about a second on an idle PC and several on a
+// loaded one; timing out strands every process the agent started.
+const LIST_TIMEOUT_MS = 20000;
 const POLL_MS = 50;
 
 // The daemon by its module or CLI verb; Lemonade by its executable's name,
@@ -295,6 +297,7 @@ async function killProcessTree(target, opts = {}) {
 }
 
 module.exports = {
+  LIST_TIMEOUT_MS,
   killProcessTree,
   listDescendants,
   listProcesses,

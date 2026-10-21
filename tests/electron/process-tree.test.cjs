@@ -13,8 +13,10 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const {
+  LIST_TIMEOUT_MS,
   killProcessTree,
   listDescendants,
+  listProcesses,
   descendantsFromTable,
   isSharedServer,
   parsePosixTable,
@@ -307,5 +309,21 @@ describe("process table parsing", () => {
       { pid: 4, ppid: 0, started: null, command: "" },
       { pid: 812, ppid: 4, started: 134369906458328030n, command: "C:\\x.exe a\tb" },
     ]);
+  });
+});
+
+
+describe("listProcesses on a loaded PC", () => {
+  test("gives the process table query time to finish before giving up", async () => {
+    let seen;
+    const execFile = (cmd, args, options, cb) => {
+      seen = options;
+      cb(null, "");
+    };
+    await listProcesses({ platform: "win32", execFile });
+    // A timeout here leaves the agent's children running, so it must cover a
+    // slow PowerShell start on a busy machine, not just an idle one.
+    expect(LIST_TIMEOUT_MS).toBeGreaterThanOrEqual(15000);
+    expect(seen.timeout).toBe(LIST_TIMEOUT_MS);
   });
 });
