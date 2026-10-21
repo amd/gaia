@@ -176,6 +176,75 @@ def test_both_layouts_carry_the_same_sections():
     assert other_sys == cached_sys
 
 
+def test_parallel_judges_always_read_the_whole_prefix(tmp_path, monkeypatch):
+    """The prefix is written before the pool starts, never by a racing call."""
+    import yaml
+
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    results = []
+    for n in range(6):
+        sid = f"s{n}"
+        (scenarios / f"{sid}.yaml").write_text(
+            yaml.dump(_scenario(sid)), encoding="utf-8"
+        )
+        results.append(RECORDED | {"scenario_id": sid, "category": f"c{n % 3}"})
+    artifacts = tmp_path / "artifacts" / "lane" / "cat"
+    artifacts.mkdir(parents=True)
+    (artifacts / "scorecard.json").write_text(
+        json.dumps({"scenarios": results}), encoding="utf-8"
+    )
+    monkeypatch.setattr(runner, "SCENARIOS_DIR", scenarios)
+    monkeypatch.setattr(runner, "USER_SCENARIOS_DIR", tmp_path / "absent")
+    monkeypatch.setattr(rejudge, "_load_merged_manifest", lambda: MANIFEST)
+
+    seen = []
+
+    def fake_claude(cmd, *, input, **_kwargs):  # pylint: disable=redefined-builtin
+        prefix = open(
+            cmd[cmd.index("--append-system-prompt-file") + 1], encoding="utf-8"
+        ).read()
+        sid = input.split("id: ", 1)[1].split()[0]
+        seen.append(prefix)
+        verdict = {
+            "scenario_id": sid,
+            "status": "PASS",
+            "overall_score": 9,
+            "turns": [{"turn": 1, "scores": {k: 9 for k in runner._SCORE_WEIGHTS}}],
+        }
+        payload = {"structured_output": verdict, "usage": {}, "num_turns": 1}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(rejudge.subprocess, "run", fake_claude)
+    out = tmp_path / "out"
+    code = rejudge.main(
+        [
+            "--artifacts",
+            str(tmp_path / "artifacts"),
+            "--out",
+            str(out),
+            "--model",
+            "m",
+            "--sample",
+            "6",
+            "--arms",
+            "cached",
+            "--workers",
+            "3",
+        ]
+    )
+    assert code == 0
+    expected, _ = rejudge.build_judge_prompt(
+        "cached", _scenario("s0"), RECORDED, MANIFEST
+    )
+    assert len(seen) == 6 and all(prefix == expected for prefix in seen)
+
+
+def test_a_judge_call_without_its_prefix_is_refused():
+    with pytest.raises(ValueError, match="system prefix written first"):
+        rejudge.judge_once("cached", _scenario("a"), RECORDED, MANIFEST, "m", None, 5)
+
+
 def test_an_unknown_layout_is_refused():
     with pytest.raises(ValueError, match="unknown layout"):
         rejudge.build_judge_prompt("fancy", _scenario("a"), RECORDED, MANIFEST)

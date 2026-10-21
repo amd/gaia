@@ -214,14 +214,28 @@ def _command(model: str, system_file) -> list:
     return cmd
 
 
-def judge_once(layout, scenario_data, recorded, manifest, model, workdir, timeout):
+def write_system_prefix(layout, scenario_data, recorded, manifest, workdir):
+    """Write *layout*'s shared prefix once, before any call reads it.
+
+    ``None`` for a layout with no system prefix. Never written by a judge call:
+    parallel calls would otherwise read a half-written rubric.
+    """
+    system, _user = build_judge_prompt(layout, scenario_data, recorded, manifest)
+    if system is None:
+        return None
+    path = Path(workdir) / f"system-{layout}.md"
+    path.write_text(system, encoding="utf-8")
+    return path
+
+
+def judge_once(layout, scenario_data, recorded, manifest, model, system_file, timeout):
     """Run one judge call; returns a record for ``calls.jsonl``."""
     system, user = build_judge_prompt(layout, scenario_data, recorded, manifest)
-    system_file = None
-    if system is not None:
-        system_file = Path(workdir) / f"system-{layout}.md"
-        if not system_file.exists():
-            system_file.write_text(system, encoding="utf-8")
+    if (system is None) != (system_file is None):
+        raise ValueError(
+            f"layout {layout!r} needs its system prefix written first "
+            "(write_system_prefix) and only then judged"
+        )
     start = time.time()
     proc = subprocess.run(
         _command(model, system_file),
@@ -337,7 +351,9 @@ def _load_calls(path: Path) -> list:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m gaia.eval.rejudge", description=__doc__
+        prog="python -m gaia.eval.rejudge",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
@@ -374,15 +390,20 @@ def main(argv=None) -> int:
         for index, layout in enumerate(arms):
             arm = f"{index + 1}:{layout}"
             todo = [sid for sid in sample if (arm, sid) not in done]
+            if not todo:
+                continue
+            system_file = write_system_prefix(
+                layout, scenarios[todo[0]], recorded[todo[0]], manifest, workdir
+            )
 
-            def run(sid, layout=layout):
+            def run(sid, layout=layout, system_file=system_file):
                 return judge_once(
                     layout,
                     scenarios[sid],
                     recorded[sid],
                     manifest,
                     args.model,
-                    workdir,
+                    system_file,
                     args.timeout,
                 )
 
