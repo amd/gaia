@@ -15,6 +15,12 @@ name: Agent GAIA npm Package Tests
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: 'Commit to test. Empty (the default) tests the caller''s commit.'
+        required: false
+        type: string
+        default: ''
   push:
     branches: [ main ]
     paths:
@@ -30,7 +36,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  # inputs.ref: two release-train dry runs on one branch must not cancel each other.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}${{ inputs.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -53,6 +60,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

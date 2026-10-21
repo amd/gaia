@@ -19,6 +19,15 @@ on:
       # filename table.
       - 'util/check_pe_resources.py'
       - 'util/check_component_core_api.py'
+      # The release-train dry run's no-publish guard and the build workflows it
+      # calls (tests/unit/test_release_train*.py).
+      - 'util/release_train.py'
+      - '.github/workflows/release_train_dryrun.yml'
+      - '.github/workflows/build-installers.yml'
+      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/test_agent_gaia_npm.yml'
+      - '.github/workflows/tui_installers.yml'
+      - '.github/workflows/windows_setup.yml'
       # The wholesale-skip guard and the allowlist it reads.
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
@@ -51,6 +60,15 @@ on:
       # filename table.
       - 'util/check_pe_resources.py'
       - 'util/check_component_core_api.py'
+      # The release-train dry run's no-publish guard and the build workflows it
+      # calls (tests/unit/test_release_train*.py).
+      - 'util/release_train.py'
+      - '.github/workflows/release_train_dryrun.yml'
+      - '.github/workflows/build-installers.yml'
+      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/test_agent_gaia_npm.yml'
+      - '.github/workflows/tui_installers.yml'
+      - '.github/workflows/windows_setup.yml'
       # The wholesale-skip guard and the allowlist it reads.
       - 'util/check_module_skips.py'
       - 'util/check_test_lane_coverage.py'
