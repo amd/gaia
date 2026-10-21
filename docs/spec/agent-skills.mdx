@@ -436,6 +436,44 @@ confirmation-gated core tool (`run_python`, `write_file`) always asks first —
 no skill grant pre-authorizes it. Anything a user installs or captures keeps the
 lock-bound flow above.
 
+### Skill context: paths, programs, temp files, preferences
+
+A skill tool has no `self`, so it reaches the agent that called it through
+`gaia.skills.context`. The agent binds every skill tool call, and these
+functions act for that agent and that skill:
+
+| Function | Needs | Does |
+|----------|-------|------|
+| `check_read(path)` / `check_write(path)` | — | The agent's allowed-folders check, the same `validate_read` / `validate_write` that `read_file` / `write_file` use, including the approval prompt. Returns the resolved `Path` or raises `SkillPermissionError`. |
+| `run_program(name, args, *, timeout, cwd=None)` | `program:run:<name>` | Starts the named program, found on PATH or in its usual install folder. Runs with no shell, stdin closed, and an environment without the agent's keys and tokens. Returns a `CompletedProcess`. It does **not** block network access. |
+| `temp_dir(sub=None)`, `write_temp_file(name, data)`, `copy_to_temp(path)` | `scratch:write` | A fresh folder under `<gaia_home>/skill-temp/<skill>/`, deleted when the call returns. `copy_to_temp` read-checks its source first. |
+| `preferences().get()` / `.update(dict)` / `.reset()` | — | The skill's own saved preferences, described below. |
+
+Every path-named argument (`path`, `file_path`, `*_path`, `*_dir`, `*_file`,
+and similar) is read-checked **before** the tool body runs. A skill tool can't
+be pointed outside the agent's scope unless the user approves the path. A tool
+that writes calls `check_write` itself.
+
+`gaia skill audit` matches these calls against the manifest. A declared
+`run_program("soffice")` passes. An undeclared one, or one naming a program the
+manifest doesn't list, is flagged. A raw `subprocess`, `tempfile` or `open()` is
+flagged as before. A bundled skill's declared capabilities are approved by the
+audit it passed before release. Any other skill that declares `program:run`
+asks the user before each call to its tools, through the usual confirmation
+prompt. `experimental` skills may use `scratch:write` but not `program:run`.
+
+**Preferences** are per user, per skill: one JSON file in
+`<gaia_home>/skill-preferences/`. They stay on this machine and are never
+synced. If the skill folder has a `preferences.schema.json`, every write is
+checked against it. That schema uses a small JSON Schema subset (`type`,
+`properties`, `required`, `additionalProperties`, `enum`, `minimum`/`maximum`,
+`minLength`/`maxLength`, `items`, `maxItems`); a schema using any other keyword
+is refused. In a private chat, or with memory off, reads still work. A write
+or reset is skipped instead, and returns `saved: False` with a note saying why.
+The Agent UI reads and edits preferences through `GET /api/skills/preferences`,
+plus `GET`, `PUT` (merge; `null` removes a key) and `DELETE` (reset) on
+`/api/skills/{name}/preferences`.
+
 ### Invocation
 
 Once a skill is in scope, it is triggered by the model calling `load_skill` —

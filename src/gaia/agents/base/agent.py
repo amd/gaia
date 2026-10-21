@@ -9,6 +9,7 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import contextlib
 import contextvars
 import datetime
 import inspect
@@ -6694,8 +6695,28 @@ Do NOT wrap conversational replies in JSON.
         if tool_name not in TOOLS_WITHOUT_EXTERNAL_CONTENT:
             self._turn_saw_external_content = True
 
+        # A skill's own tool runs bound to this agent, so gaia.skills.context
+        # can check its paths and declared capabilities against this agent's
+        # scope; a path-named argument outside that scope never reaches it.
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        skill_scope: Any = contextlib.nullcontext()
+        skill_refusals: tuple = ()
+        if skill is not None:
+            from gaia.skills.context import bind, path_argument_refusal
+            from gaia.skills.errors import SkillPermissionError
+
+            skill_refusals = (SkillPermissionError,)
+
+            refusal = path_argument_refusal(self, tool_args)
+            if refusal is not None:
+                logger.info("Skill tool %s refused: %s", tool_name, refusal["error"])
+                return refusal
+            skill_scope = bind(self, skill)
+
         try:
-            result = self._call_tool_bounded(tool, tool_args, tool_name)
+            with skill_scope:
+                result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             self._fold_tool_usage(tool_name, result)
             return result
@@ -6731,6 +6752,11 @@ Do NOT wrap conversational replies in JSON.
                 "timeout": True,
                 "tool_name": tool_name,
             }
+        except skill_refusals as e:
+            # A skill tool asked gaia.skills.context for something outside its
+            # declaration or this agent's scope. The message says what to do.
+            logger.warning("Skill tool %s refused: %s", tool_name, e)
+            return {"status": "error", "error": str(e), "tool_name": tool_name}
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"

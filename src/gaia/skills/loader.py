@@ -290,7 +290,19 @@ def _validate_signature(
 def _namespace_entries(
     skill: Skill, discovered: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
-    """Re-key the discovered entries under ``<skill-name>/<tool>``."""
+    """Re-key the discovered entries under ``<skill-name>/<tool>``.
+
+    A skill that may start a program (``program:run:<name>``) has every tool
+    confirmed per call through the agent's usual permission prompt, unless it
+    shipped inside GAIA: a bundled skill's declared capabilities are approved
+    by the audit it passed before release.
+    """
+    from gaia.skills.manager import ROOT_AGENT_BUNDLED
+
+    runs_programs = any(
+        p.domain == "program" and p.level == "run" for p in skill.parsed_permissions()
+    )
+    confirm = runs_programs and skill.root != ROOT_AGENT_BUNDLED
     namespaced: dict[str, dict[str, Any]] = {}
     for tool_name, entry in discovered.items():
         key = skill.namespaced_tool_name(tool_name)
@@ -300,4 +312,6 @@ def _namespace_entries(
             "display_name": f"{tool_name} ({skill.name})",
             "skill": skill.name,
         }
+        if confirm:
+            namespaced[key]["requires_confirmation"] = True
     return namespaced
