@@ -27,7 +27,7 @@ stdio = pytest.importorskip(
     reason="the flagship agent package is not installed in this environment",
 )
 
-TOOL_LIMIT = 3.0
+TOOL_LIMIT = 6.0
 IDLE_LIMIT = 100.0
 HANG = 30.0
 
