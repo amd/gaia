@@ -209,6 +209,230 @@ def _as_list(value: Any) -> List[Any]:
     return [value]
 
 
+#: Field names small models reach for, mapped to the ones the builder reads.
+FIELD_SYNONYMS = {
+    "bullet_points": "bullets",
+    "bulletpoints": "bullets",
+    "bullet": "bullets",
+    "key_points": "bullets",
+    "lines": "bullets",
+    "body": "text",
+    "paragraph": "text",
+    "paragraphs": "text",
+    "header": "title",
+    "slide_title": "title",
+    "name": "title",
+    "note": "notes",
+    "speaker_note": "notes",
+    "presenter_notes": "notes",
+    "charttype": "chart_type",
+    "chart_kind": "chart_type",
+    "graph_type": "chart_type",
+    "x_labels": "categories",
+    "x": "categories",
+    "data_series": "series",
+    "datasets": "series",
+    "table_rows": "rows",
+    "headers": "columns",
+    "column_names": "columns",
+    "kpis": "metrics",
+    "stats": "metrics",
+    "numbers": "metrics",
+    "image_path": "path",
+    "file": "path",
+    "dates": "milestones",
+    "source_note": "source",
+    "citation": "source",
+}
+
+#: Fields every slide may carry.
+COMMON_FIELDS = {
+    "type",
+    "title",
+    "subtitle",
+    "notes",
+    "source",
+    "sources",
+    "footnote",
+    "allow_split",
+    "kind",
+    "todo",
+    "slot",
+    "headline",
+    "heading",
+    "tagline",
+    "speaker_notes",
+}
+
+#: Fields each slide type reads, beyond the common ones.
+TYPE_FIELDS = {
+    "title": {"author", "presenter", "date", "organization"},
+    "section": {"number"},
+    "agenda": {"items", "bullets", "highlight", "current"},
+    "bullets": {"text", "bullets", "points", "items", "content"},
+    "two_column": {"left", "right", "columns"},
+    "chart": {
+        "chart_type",
+        "chart",
+        "data",
+        "categories",
+        "labels",
+        "series",
+        "values",
+        "series_name",
+        "csv",
+        "rows",
+        "columns",
+        "number_format",
+        "format",
+        "data_labels",
+        "legend",
+        "x_title",
+        "x_axis_title",
+        "category_axis_title",
+        "y_title",
+        "y_axis_title",
+        "value_axis_title",
+        "units",
+        "y2_title",
+        "secondary_axis_title",
+        "y_min",
+        "y_max",
+        "y2_number_format",
+        "chart_title",
+        "gridlines",
+        "smooth",
+        "highlight",
+        "axis_group",
+        "intent",
+        "sort",
+        "bullets",
+        "takeaways",
+        "callouts",
+        "csv_path",
+        "y",
+    },
+    "table": {
+        "columns",
+        "header",
+        "rows",
+        "data",
+        "csv",
+        "formats",
+        "number_formats",
+        "align",
+        "total_row",
+        "highlight_rows",
+        "col_widths",
+        "category_label",
+        "csv_path",
+    },
+    "kpi": {"metrics", "items", "bullets", "takeaways"},
+    "quote": {"quote", "text", "attribution", "author", "by"},
+    "image": {"path", "image", "src", "caption", "alt", "alt_text", "bullets"},
+    "diagram": {
+        "diagram",
+        "kind",
+        "layout",
+        "items",
+        "steps",
+        "nodes",
+        "levels",
+        "quadrants",
+        "cells",
+        "stages",
+        "style",
+        "direction",
+        "center",
+        "hub",
+        "highlight",
+        "columns",
+        "x_axis",
+        "y_axis",
+        "points",
+        "bullets",
+        "edges",
+        "links",
+        "connections",
+        "numbered",
+    },
+    "timeline": {
+        "periods",
+        "columns",
+        "lanes",
+        "tracks",
+        "workstreams",
+        "milestones",
+        "items",
+        "events",
+        "highlight",
+    },
+}
+
+#: A corrected, minimal shape per slide type, quoted in error messages.
+EXAMPLES = {
+    "title": '{"type": "title", "title": "Q3 business review", "subtitle": "Leadership team, October"}',
+    "section": '{"type": "section", "title": "Results"}',
+    "agenda": '{"type": "agenda", "title": "Agenda", "items": ["Results", "Risks", "Next steps"]}',
+    "bullets": '{"type": "bullets", "title": "Sales grew 7% in Q3", "bullets": ["First point", ["a sub-point"], "Second point"]}',
+    "two_column": '{"type": "two_column", "title": "Option B is faster", "left": {"heading": "Option A", "bullets": ["$1.2M"]}, "right": {"heading": "Option B", "bullets": ["$1.5M"]}}',
+    "chart": '{"type": "chart", "title": "Revenue rose every quarter", "chart_type": "column", "categories": ["Q1", "Q2", "Q3"], "series": {"Revenue": [4.1, 4.6, 5.0]}, "y_title": "Revenue ($M)", "source": "sales.xlsx, 2026"}',
+    "table": '{"type": "table", "title": "North beat plan", "columns": ["Region", "Plan", "Actual"], "rows": [["North", 100, 112], ["South", 90, 88]], "source": "plan.xlsx, Q3"}',
+    "kpi": '{"type": "kpi", "title": "Every metric improved", "metrics": [{"label": "Revenue", "value": 12.4, "unit": "M", "delta": "+6%"}], "source": "kpis.xlsx, Q3"}',
+    "quote": '{"type": "quote", "title": "Customers want speed", "quote": "Faster delivery matters most.", "attribution": "Survey respondent"}',
+    "image": '{"type": "image", "title": "The new site", "path": "C:/Users/me/site.png", "alt": "Photo of the new site"}',
+    "diagram": '{"type": "diagram", "diagram": "process", "title": "Four steps to launch", "items": [{"title": "Plan", "text": "Scope"}, {"title": "Build"}, {"title": "Test"}, {"title": "Ship"}]}',
+    "timeline": '{"type": "timeline", "title": "Launch lands in March", "milestones": [{"date": "Jan", "title": "Pilot"}, {"date": "Mar", "title": "Launch"}]}',
+}
+
+
+def _canonical_fields(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Rename common synonym fields; a 'content' string becomes 'text'."""
+    out = dict(raw)
+    for key in list(out):
+        low = key.strip().lower().replace("-", "_").replace(" ", "_")
+        target = FIELD_SYNONYMS.get(low)
+        if low != key and low not in out:
+            out[low] = out.pop(key)
+            key = low
+        if target and target not in out:
+            out[target] = out.pop(key)
+    if "content" in out:
+        content = out["content"]
+        if isinstance(content, str) and "text" not in out:
+            out["text"] = out.pop("content")
+        elif isinstance(content, list) and "bullets" not in out:
+            out["bullets"] = out.pop("content")
+    return out
+
+
+def _carries_content(value: Any) -> bool:
+    """Lists, objects and sentences are content; a short token ("wide", 3) is a setting."""
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return isinstance(value, str) and (len(value) > 30 or len(value.split()) > 3)
+
+
+def _unknown_fields(raw: Dict[str, Any], stype: str) -> List[str]:
+    import difflib
+
+    known = COMMON_FIELDS | TYPE_FIELDS.get(stype, set())
+    out = []
+    for key, value in raw.items():
+        if key in known or not _carries_content(value):
+            continue
+        guess = difflib.get_close_matches(key, sorted(known), n=1, cutoff=0.6)
+        hint = (
+            f"did you mean '{guess[0]}'?"
+            if guess
+            else f"a {stype} slide reads: {', '.join(sorted(TYPE_FIELDS.get(stype, set()))[:12])}."
+        )
+        out.append(
+            f"unknown field '{key}' ({hint}) Its content would not appear on the slide."
+        )
+    return out
+
+
 def load_outline(outline: Any) -> Dict[str, Any]:
     """Accept a dict, a list of slides, or JSON text."""
     if isinstance(outline, (bytes, bytearray)):
@@ -221,8 +445,8 @@ def load_outline(outline: Any) -> Dict[str, Any]:
             raise OutlineError(
                 [
                     "The outline is not JSON. Pass an object like "
-                    '{"slides": [{"type": "title", "title": "..."}, ...]} '
-                    "(or Markdown through deck_outline_from_markdown first)."
+                    '{"slides": [{"type": "title", "title": "..."}, ...]}, '
+                    "or write Markdown and call build_deck_from_markdown instead."
                 ]
             )
         try:
@@ -235,6 +459,18 @@ def load_outline(outline: Any) -> Dict[str, Any]:
             ) from exc
     if isinstance(outline, list):
         outline = {"slides": outline}
+    if isinstance(outline, dict) and "slides" not in outline:
+        for wrapper in ("deck", "presentation", "outline"):
+            if isinstance(outline.get(wrapper), dict):
+                outline = {
+                    **{k: v for k, v in outline.items() if k != wrapper},
+                    **outline[wrapper],
+                }
+                break
+        for alias in ("pages", "slide_list"):
+            if isinstance(outline.get(alias), list):
+                outline = {**outline, "slides": outline[alias]}
+                break
     if not isinstance(outline, dict):
         raise OutlineError(
             [
@@ -243,7 +479,12 @@ def load_outline(outline: Any) -> Dict[str, Any]:
         )
     slides = outline.get("slides")
     if not isinstance(slides, list) or not slides:
-        raise OutlineError(["The outline has no 'slides' list (or it is empty)."])
+        raise OutlineError(
+            [
+                "The outline has no 'slides' list (or it is empty). Use: "
+                '{"slides": [' + EXAMPLES["title"] + ", " + EXAMPLES["bullets"] + "]}"
+            ]
+        )
     return outline
 
 
@@ -752,8 +993,26 @@ def normalize_slide(
     if isinstance(raw, str):
         raw = {"type": "bullets", "title": raw}
     if not isinstance(raw, dict):
-        problems.append(f"{where}: must be an object, got {type(raw).__name__}.")
+        problems.append(
+            f"{where}: must be an object, got {type(raw).__name__}. For example: {EXAMPLES['bullets']}"
+        )
         return {"type": "bullets", "index": index, "title": "", "paras": []}
+    raw = _canonical_fields(raw)
+    before = len(problems)
+    s = _normalize_slide(raw, index, problems, base_dir)
+    for issue in _unknown_fields(raw, s["type"]):
+        problems.append(f"slide {index} ({s['type']}): {issue}")
+    if len(problems) > before:
+        problems.append(
+            f"slide {index}: a valid {s['type']} slide looks like {EXAMPLES[s['type']]}"
+        )
+    return s
+
+
+def _normalize_slide(
+    raw: Dict[str, Any], index: int, problems: List[str], base_dir: Optional[Path]
+) -> Dict[str, Any]:
+    where = f"slide {index}"
     raw_type = (
         str(raw.get("type") or "").strip().lower().replace("-", "_").replace(" ", "_")
     )
@@ -765,8 +1024,14 @@ def normalize_slide(
             raw_type = "table"
         elif raw.get("metrics") or raw.get("kpis"):
             raw_type = "kpi"
-        elif raw.get("bullets") or raw.get("points"):
+        elif raw.get("bullets") or raw.get("points") or raw.get("text"):
             raw_type = "bullets"
+        elif raw.get("quote"):
+            raw_type = "quote"
+        elif raw.get("milestones") or raw.get("lanes"):
+            raw_type = "timeline"
+        elif raw.get("path"):
+            raw_type = "image"
         elif index == 1:
             raw_type = "title"
         else:
@@ -1110,6 +1375,15 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
             f"The outline has {len(slides)} slides but expected_slides is {expected}. "
             "Add or remove slides so the count is exactly what was asked."
         )
+    required_raw = data.get("required_items") or data.get("must_show") or []
+    if isinstance(required_raw, str):
+        required_raw = [x for x in required_raw.split(";")]
+    if not isinstance(required_raw, list):
+        problems.append(
+            'required_items must be a list of short strings, e.g. ["Revenue $12.4M", "3 site closures"].'
+        )
+        required_raw = []
+    required = [_text(x) for x in required_raw if _text(x)]
     if problems:
         raise OutlineError(problems)
     return {
@@ -1121,6 +1395,7 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         "expected_slides": expected,
         "require_notes": bool(data.get("require_notes", False)),
         "style": data.get("style") if isinstance(data.get("style"), dict) else {},
+        "required_items": required,
         "slides": slides,
     }
 

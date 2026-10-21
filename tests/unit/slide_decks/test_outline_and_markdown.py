@@ -53,7 +53,7 @@ def test_malformed_json_names_the_position():
 
 
 def test_non_json_text_points_at_markdown_tool():
-    with pytest.raises(OutlineError, match="deck_outline_from_markdown"):
+    with pytest.raises(OutlineError, match="build_deck_from_markdown"):
         normalize_outline("# My deck")
 
 

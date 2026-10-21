@@ -1225,7 +1225,7 @@ class DeckBuilder:
                 return
         if not ok:
             self.warn(
-                f"body text needs {need:.0f}pt of height at the minimum {size:.0f}pt but the box has {avail:.0f}pt; it will overflow. Cut words or move detail to the notes (or set allow_split)."
+                f"body text needs {need:.0f}pt of height at the minimum {size:.0f}pt but the box has {avail:.0f}pt; it will overflow. Cut words, split the slide (allow_split), or move extra detail (never requested content) to the notes."
             )
         colors = [self.theme.text if p.level <= 0 else self.theme.muted for p in paras]
         self.write(
@@ -3427,13 +3427,14 @@ def _verify_summary(path: str, normalized, builder, rules_prefs) -> Dict[str, An
             normalized.get("require_notes")
             or builder.tokens.get("speaker_notes") is True
         ),
+        required_items=normalized.get("required_items") or None,
         render=False,
         prefs=rules_prefs,
         tokens=builder.tokens,
     )
     return {
         k: report[k]
-        for k in ("status", "style_score", "summary", "issues")
+        for k in ("status", "style_score", "summary", "issues", "required_items")
         if k in report
     }
 

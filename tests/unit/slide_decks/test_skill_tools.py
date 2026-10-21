@@ -22,6 +22,7 @@ from .conftest import SKILL_DIR
 
 TOOL_NAMES = {
     "build_deck",
+    "build_deck_from_markdown",
     "verify_deck",
     "add_slide",
     "update_slide",
@@ -182,3 +183,31 @@ def test_the_procedure_asks_at_most_once_and_never_blocks():
     assert "default_if_no_response=" in body
     # The example of a request that must NOT trigger a question is there too.
     assert "no question" in body
+
+
+def test_markdown_tool_and_required_items_through_the_tool_layer(tools, tmp_path):
+    skill, fns, _r = tools
+    md = (
+        "# Harbour ferry update\n\n"
+        "## Crossings rose to 1,180 a week after the timetable change\n"
+        "- 1,180 weekly crossings, up from 960\n"
+        "Notes: the pier repair finishes in May.\n"
+    )
+    with bind(_Host(), skill):
+        r = fns["build_deck_from_markdown"](
+            markdown=md,
+            output_path=str(tmp_path / "ferry.pptx"),
+            required_items=["1,180 weekly crossings", "pier repair finishes in May"],
+        )
+        assert r["status"] == "built_with_issues"
+        assert r["verify"]["summary"]["required_in_notes_only"] == 1
+        report = fns["verify_deck"](
+            path=str(tmp_path / "ferry.pptx"),
+            render=False,
+            required_items=["1,180 weekly crossings"],
+        )
+        assert report["status"] == "pass", report["issues"]
+        bad = fns["build_deck_from_markdown"](
+            markdown="", output_path=str(tmp_path / "x.pptx")
+        )
+        assert bad["status"] == "error"

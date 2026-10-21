@@ -14,8 +14,15 @@ Conventions (all optional):
   that is only a ``>`` block is a quote slide.
 - ``Source: ...`` and ``Note: ...`` lines become the source and footnote lines;
   ``Notes:`` (or ``Speaker notes:``) starts the speaker notes.
-- A fenced ```` ```slide ```` (or ```` ```json ````) block holds slide fields as
-  JSON, merged into the slide — the way to declare a chart or diagram.
+- A fenced ```` ```chart line ```` block (type after ``chart``: column, bar,
+  line, pie...; default auto) holds optional ``y_title:``/``source:``/
+  ``format:``/``highlight:`` lines, then CSV: a header (category, series...)
+  and one row per category. ```` ```table ```` takes the same CSV for a table;
+  ```` ```kpi ```` takes ``label,value,delta,note`` rows for KPI tiles.
+- A fenced ```` ```slide ```` (or ```` ```json ````) block holds any slide
+  fields as JSON, merged into the slide.
+- ``Must show: a; b; c`` before the first slide lists required_items: things
+  the request needs visible on the slides.
 """
 
 from __future__ import annotations
@@ -28,6 +35,9 @@ from .outline import OutlineError
 
 _BULLET = re.compile(r"^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+_REQUIRED = re.compile(
+    r"^\s*(must[\s_-]*show|required(?:[\s_-]*items)?)\s*:\s*(.+)$", re.I
+)
 _IMAGE = re.compile(r"^\s*!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)\s*$")
 
 
@@ -49,6 +59,84 @@ def _number(cell: str) -> Any:
     return cell
 
 
+_BLOCK_OPTIONS = {
+    "title": "title",
+    "type": "chart_type",
+    "chart_type": "chart_type",
+    "y_title": "y_title",
+    "y axis": "y_title",
+    "x_title": "x_title",
+    "x axis": "x_title",
+    "y2_title": "y2_title",
+    "source": "source",
+    "format": "number_format",
+    "number_format": "number_format",
+    "highlight": "highlight",
+    "intent": "intent",
+    "legend": "legend",
+    "footnote": "footnote",
+}
+
+
+def _csv_block(title: str, lang: str, lines: List[str]) -> Dict[str, Any]:
+    """A ```chart / ```table / ```kpi block: optional 'key: value' lines, then CSV."""
+    parts = re.split(r"[\s:]+", lang.strip(), maxsplit=1)
+    kind = parts[0]
+    options: Dict[str, Any] = {}
+    body: List[str] = []
+    for line in lines:
+        m = re.match(r"^\s*([A-Za-z_ 0-9]+?)\s*:\s*(.+?)\s*$", line)
+        if not body and m and m.group(1).strip().lower() in _BLOCK_OPTIONS:
+            options[_BLOCK_OPTIONS[m.group(1).strip().lower()]] = m.group(2)
+        elif line.strip():
+            body.append(line)
+    csv_text = "\n".join(body)
+    if not body:
+        raise OutlineError(
+            [
+                f"slide {title!r}: the ```{kind} block has no rows. Put a header line, then one line per row, e.g.\nQuarter,Revenue\nQ1,4.1"
+            ]
+        )
+    if kind == "chart":
+        out: Dict[str, Any] = {
+            "type": "chart",
+            "chart_type": (
+                parts[1].strip() if len(parts) > 1 and parts[1].strip() else "auto"
+            ),
+            "csv": csv_text,
+        }
+        out.update(options)
+        return out
+    if kind == "table":
+        out = {"type": "table", "csv": csv_text}
+        out.update(
+            {k: v for k, v in options.items() if k in ("title", "source", "footnote")}
+        )
+        return out
+    from .outline import _read_csv
+
+    rows = _read_csv(csv_text)
+    header = [h.strip().lower() for h in rows[0]]
+    col = {name: i for i, name in enumerate(header)}
+    label_i = col.get("label", col.get("metric", col.get("name", 0)))
+    value_i = col.get("value", 1 if len(header) > 1 else 0)
+    metrics = []
+    for r in rows[1:]:
+        m: Dict[str, Any] = {
+            "label": r[label_i].strip() if label_i < len(r) else "",
+            "value": _number(r[value_i]) if value_i < len(r) else None,
+        }
+        for key in ("delta", "change", "note", "unit", "good"):
+            if key in col and col[key] < len(r) and r[col[key]].strip():
+                m["delta" if key == "change" else key] = r[col[key]].strip()
+        metrics.append(m)
+    out = {"type": "kpi", "metrics": metrics}
+    out.update(
+        {k: v for k, v in options.items() if k in ("title", "source", "footnote")}
+    )
+    return out
+
+
 def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
     slide: Dict[str, Any] = {"title": title.strip()}
     bullets: List[Any] = []
@@ -59,6 +147,7 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
     table: List[List[str]] = []
     in_notes = False
     fence: Optional[List[str]] = None
+    fence_lang = ""
     extra: Dict[str, Any] = {}
     target = bullets
 
@@ -73,22 +162,49 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
         line = raw.rstrip("\n")
         if fence is not None:
             if line.strip().startswith("```"):
-                try:
-                    extra.update(json.loads("\n".join(fence) or "{}"))
-                except json.JSONDecodeError as exc:
-                    raise OutlineError(
-                        [
-                            f"slide {title!r}: the ```slide block is not valid JSON ({exc.msg})."
-                        ]
-                    ) from exc
+                body = "\n".join(fence).strip()
+                kind = (
+                    re.split(r"[\s:]+", fence_lang, maxsplit=1)[0] if fence_lang else ""
+                )
+                if kind in (
+                    "chart",
+                    "table",
+                    "kpi",
+                    "kpis",
+                    "metrics",
+                ) and not body.startswith("{"):
+                    extra.update(_csv_block(title, fence_lang, fence))
+                else:
+                    try:
+                        extra.update(json.loads(body or "{}"))
+                    except json.JSONDecodeError as exc:
+                        raise OutlineError(
+                            [
+                                f"slide {title!r}: the ```{fence_lang or 'slide'} block is not valid JSON ({exc.msg}). "
+                                "For a chart, a CSV block is easier:\n```chart line\ny_title: Revenue ($M)\n"
+                                "Quarter,Revenue\nQ1,4.1\nQ2,4.6\n```"
+                            ]
+                        ) from exc
                 fence = None
             else:
                 fence.append(line)
             continue
         if line.strip().startswith("```"):
             lang = line.strip()[3:].strip().lower()
-            if lang in ("slide", "json", "chart", "diagram", ""):
+            first = re.split(r"[\s:]+", lang, maxsplit=1)[0] if lang else ""
+            if first in (
+                "slide",
+                "json",
+                "chart",
+                "diagram",
+                "table",
+                "kpi",
+                "kpis",
+                "metrics",
+                "",
+            ):
                 fence = []
+                fence_lang = lang
                 continue
         if in_notes:
             notes.append(line)
@@ -151,8 +267,16 @@ def _slide_from_block(title: str, lines: List[str]) -> Dict[str, Any]:
                 else slide.get("type")
             ),
         )
-        if text and "bullets" not in slide:
-            slide["bullets"] = text
+        commentary = [b for b in bullets] + [{"text": t, "level": 0} for t in text]
+        if commentary and "bullets" not in slide:
+            if slide.get("type") == "table":
+                # A table slide has no bullet area: keep the words visible as its note line.
+                note = "; ".join(c["text"] for c in commentary)
+                slide["footnote"] = "; ".join(
+                    x for x in (slide.get("footnote"), note) if x
+                )
+            else:
+                slide["bullets"] = commentary
         return {
             k: v
             for k, v in slide.items()
@@ -222,6 +346,19 @@ def outline_from_markdown(md: str) -> Dict[str, Any]:
     if not md or not md.strip():
         raise OutlineError(["The Markdown is empty."])
     lines = md.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    # "Must show: a; b" lines (outside code blocks) list the required_items.
+    required: List[str] = []
+    kept: List[str] = []
+    fenced = False
+    for line in lines:
+        if line.strip().startswith("```"):
+            fenced = not fenced
+        m = None if fenced else _REQUIRED.match(line)
+        if m:
+            required += [x.strip() for x in re.split(r"[;|]", m.group(2)) if x.strip()]
+        else:
+            kept.append(line)
+    lines = kept
     # Drop YAML front matter.
     if lines and lines[0].strip() == "---":
         end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
@@ -294,4 +431,7 @@ def outline_from_markdown(md: str) -> Dict[str, Any]:
         raise OutlineError(
             ["No slides found: start each slide with a '## Title' line."]
         )
-    return {"slides": out}
+    result: Dict[str, Any] = {"slides": out}
+    if required:
+        result["required_items"] = required
+    return result

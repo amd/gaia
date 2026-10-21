@@ -77,6 +77,30 @@ metadata:
           outline:
             type: object
             required: false
+          required_items:
+            type: array
+            required: false
+        returns:
+          type: object
+      - name: build_deck_from_markdown
+        description: Build and check a .pptx from Markdown.
+        parameters:
+          markdown:
+            type: string
+            required: true
+          output_path:
+            type: string
+            required: true
+          theme:
+            type: string
+            required: false
+            default: ""
+          prefs:
+            type: object
+            required: false
+          required_items:
+            type: array
+            required: false
         returns:
           type: object
       - name: add_slide
@@ -158,25 +182,76 @@ metadata:
 
 # Slide Decks
 
-**Write an outline and call `slide-decks/build_deck`; then call
-`slide-decks/verify_deck` and fix what it reports.** Never write python-pptx
-code for a deck: the tool measures every text box, builds native editable
-charts, and applies the theme, the fonts and the grid. Your job is the story
-and the numbers.
+**Do not write python-pptx code. Build the deck with
+`slide-decks/build_deck_from_markdown` (or `slide-decks/build_deck` for a JSON
+outline), then check it with `slide-decks/verify_deck`.** The tools measure
+every text box, build native editable charts, and apply the theme, fonts and
+grid. Hand-written python-pptx code gets charts as pictures, text off the
+slide and the wrong slide count. Your job is the story and the numbers.
+
+The quickest deck: write Markdown and make one call.
+
+````markdown
+# Northwind Q3 2026 review
+Leadership team | October 2026
+Must show: Revenue $12.4M; 3 site closures; West +37%
+
+## Q3 revenue grew 12% as the West launch landed
+- Revenue $12.4M, up 12% on Q2
+- West +37% year on year
+  - Two new distributors
+- 3 site closures, all in the East
+Source: finance_q3.xlsx, Jul-Sep 2026
+Notes: Lead with West.
+
+## West drove most of the quarter's growth
+- West +37% in a year
+```chart column
+y_title: Revenue ($M)
+source: sales.xlsx, Q3 2025-Q3 2026
+Quarter,West,East
+Q3 25,4.1,3.9
+Q1 26,4.6,4.0
+Q3 26,5.6,4.1
+```
+
+## Every headline metric moved the right way
+```kpi
+source: metrics.xlsx, Q3 2026
+label,value,delta
+Revenue ($M),12.4,+12%
+Churn,2.1%,-0.4 pts
+```
+````
+
+`build_deck_from_markdown(markdown=..., output_path=r"C:\Users\me\Documents\q3_review.pptx")`.
+`# ` is the cover, every `## ` line is one slide and its title, `-` lines are
+bullets (indent for a sub-bullet), `Source:` and `Notes:` lines add the source
+line and speaker notes. A ```` ```chart <type> ```` block (column, bar, line,
+pie, area, combo...), a ```` ```table ```` block or a ```` ```kpi ```` block
+holds `key: value` lines then CSV. `Must show:` lists what has to be visible.
 
 ## 1. Settle the brief (usually without asking)
 
-- Saved preferences (theme, brand colours, density, notes on/off, template)
-  are applied by the tools automatically. Explicit instructions in this
-  request win over them; pass those as `prefs` (or `theme`, `template_path`).
-- Decide audience, purpose and the **exact slide count** from the request. If
-  the user named a number, that is the number — `expected_slides` in
-  `verify_deck` checks it. No number: use the blueprint's default.
+- **List the must-show items first.** Write down every number, name, event,
+  section and message the request asks to see. Pass them as `required_items`
+  (or a `Must show:` line). `verify_deck` fails if one is missing from the
+  slides, or is only in the speaker notes.
+- **Everything the request asks to show goes on the slides.** Density limits
+  (words and bullets per slide) are soft. When a slide is too full, cut other
+  words or split it. Never move requested content into the notes. Notes are
+  for extra detail and the spoken script only.
+- Decide audience, purpose and the **exact slide count**. If the user named a
+  number, that is the number (`expected_slides`). Otherwise use the
+  blueprint's default.
+- Saved preferences (theme, brand colours, density, notes, template) apply
+  automatically. What this request says wins: pass it as `prefs`, `theme` or
+  `template_path`.
 - Ask **one** short question **only** for a material ambiguity: two
   instructions that conflict, or a deck for an outside audience with no brand
   (template or colours) known. Use `request_user_input` with 3-4 choices, a
-  default and `timeout_seconds` of 60 or less; on no answer, go on with the
-  default. Never ask about anything a default covers.
+  default and `timeout_seconds` of 60 or less. If nobody answers, go on with
+  the default. Never ask about anything a default covers.
 
   > *"Make a 6-slide pitch for the Lakeside Clinics partnership"* (no
   > template, outside audience) → `request_user_input(message="This deck goes
@@ -185,12 +260,31 @@ and the numbers.
   > path"], default_if_no_response="Light corporate theme", timeout_seconds=45)`.
   > *"Turn these notes into slides for our team meeting"* → no question.
 
-## 2. Plan the storyline
+## 2. Pull the key facts from the sources
 
-Call `list_blueprints`, pick the closest, and call
-`outline_from_blueprint(name, slide_count=N)`. It returns an outline scaled to
-exactly N slides, with a `guidance` line per slot and TODO markers in every
-slot still to fill.
+When the deck is built from documents or data, do this before writing slides.
+Find the files with `list_files`, read each document in full with
+`read_file` (follow `next_offset`), and compute numbers from data with
+`run_python`. Never retype a number from a page. For **each source**, write a
+short ledger:
+
+| Fact | Value | Source |
+|---|---|---|
+| Headline numbers (totals, rates, counts) | Revenue $12.4M | finance_q3.xlsx |
+| Change vs the prior period, as the source states it | +12% vs Q2 | finance_q3.xlsx |
+| Notable events and their counts (closures, incidents, launches) | 3 site closures | board_memo.docx |
+| Risks, caveats, missed targets | single supplier for part B | board_memo.docx |
+
+Every ledger row goes on a slide, in the source's own framing ("fell 8% to
+$4.2M"), and into `required_items`. When several files cover the same thing,
+use the newest one for the requested period. `report-from-sources` has the
+longer version of this step.
+
+## 3. Plan the storyline
+
+For a standard deck, `list_blueprints` then `outline_from_blueprint(name,
+slide_count=N)` gives exactly N slides with a guidance line per slot. Unfilled
+slots stay TODO, and `verify_deck` fails on them.
 
 | The user wants | Blueprint |
 |---|---|
@@ -204,105 +298,78 @@ slot still to fill.
 | Roadmap, plan, timeline, launch plan | `roadmap` |
 | One slide: 2x2, pyramid, cycle, process, layer stack, canvas | `one_slide_framework` (`variant`) |
 
-Rules the verifier enforces (limits follow the user's density preference):
-
-- **Action titles**: each title is the slide's takeaway as a sentence, at most
-  ~15 words, no full stop ("Revenue grew 12% on West demand", not
-  "Revenue"). Read the titles alone: they must tell the whole story.
-- **One message per slide**; at most 6 bullets of at most 12 words, one level
-  of sub-bullets, about 60 words of body text (30 on an executive summary).
-  Detail goes in `notes` (speaker notes) or an appendix.
-- Answer first: the executive summary states the conclusions the later slides
-  prove. Decks over 10 slides get section dividers; end with next steps
+- **Action titles**: each title is the slide's takeaway as one sentence, about
+  15 words at most, no full stop ("Revenue grew 12% on West demand", not
+  "Revenue"). The titles alone should tell the story.
+- One message per slide; aim for 6 bullets or fewer, 12 words each, one level
+  of sub-bullets.
+- Answer first: an executive summary states the conclusions later slides
+  prove. Decks over 10 slides get section dividers. End with next steps
   (action, owner, date).
-- Numbers carry units and periods ("$4.2M, Q3 2026").
-
-## 3. Gather content, with sources
-
-Load `report-from-sources` for any deck built from the user's files: find them
-with `list_files`, read documents in full with `read_file`, keep the key-facts
-ledger, and compute every number with `run_python`.
-A chart-data tool result `{"categories", "series": {name: values}, "source"}`
-drops straight into a chart slide's `data`. Every chart, table and KPI slide
-needs `source` ("sales_2026.xlsx, Jan-Sep 2026"); `verify_deck` fails without
-one.
+- Numbers carry units and periods ("$4.2M, Q3 2026"). Every chart, table and
+  KPI slide names its source and period.
 
 ## 4. Build
 
-Fill the slots and call `build_deck(outline, output_path)` with an absolute
-path in the user's folder. A compact outline:
+- Markdown (above) suits most decks. For diagrams, timelines, combo charts or
+  blueprint outlines, use `build_deck(outline, output_path)` with JSON. Each
+  slide has a `type` and its fields:
 
 ```json
-{"slides": [
-  {"type": "title", "title": "Northwind Q3 review", "subtitle": "Operations | October 2026"},
-  {"type": "bullets", "kind": "executive_summary", "title": "Q3 revenue grew 12% as the West launch landed",
-   "bullets": ["Revenue $12.4M, +12% vs Q2", "West +37% year on year", ["Two new distributors"], "Churn down to 2.1%"],
-   "notes": "Lead with West; East is flat by design."},
-  {"type": "chart", "title": "West drove most of the quarter's growth", "chart_type": "column",
-   "categories": ["Q3 25", "Q4 25", "Q1 26", "Q2 26", "Q3 26"],
-   "series": {"West": [4.1, 4.3, 4.6, 5.0, 5.6], "East": [3.9, 3.8, 4.0, 4.0, 4.1]},
-   "y_title": "Revenue ($M)", "number_format": "0.0", "highlight": "West",
-   "bullets": ["West +37% in a year"], "source": "sales.xlsx, Q3 2025-Q3 2026"},
-  {"type": "kpi", "title": "Every headline metric moved the right way", "source": "metrics.xlsx, Q3 2026",
-   "metrics": [{"label": "Revenue", "value": 12.4, "unit": "M", "format": "$0.0", "delta": "+12% vs Q2"},
-               {"label": "Churn", "value": 0.021, "format": "0.0%", "delta": "-0.4 pts", "good": "down"}]},
-  {"type": "diagram", "diagram": "process", "title": "Onboarding takes five steps",
-   "items": [{"title": "Sign up", "text": "Web form"}, {"title": "Verify", "text": "ID check in 24h"}]},
-  {"type": "table", "title": "Three regions beat plan; North missed by 6%", "source": "plan.xlsx, Q3 2026",
-   "columns": ["Region", "Plan ($M)", "Actual ($M)"], "rows": [["West", 5.0, 5.6], ["North", 1.8, 1.69]]}
+{"required_items": ["Revenue $12.4M"], "slides": [
+  {"type": "title", "title": "Northwind Q3 review", "subtitle": "October 2026"},
+  {"type": "bullets", "title": "Q3 revenue grew 12% to $12.4M", "bullets": ["West +37%", ["two new distributors"]]},
+  {"type": "chart", "title": "West drove the growth", "chart_type": "column", "categories": ["Q1", "Q2", "Q3"],
+   "series": {"West": [4.6, 5.0, 5.6]}, "y_title": "Revenue ($M)", "source": "sales.xlsx, 2026"},
+  {"type": "diagram", "diagram": "process", "title": "Onboarding takes four steps", "items": ["Sign up", "Verify", "Train", "Order"]}
 ]}
 ```
 
-Other slide types: `section`, `agenda{items}`, `two_column{left, right}`,
-`quote{quote, attribution}`, `image{path, alt}` (alt text is required),
-`timeline{milestones: [{date, title}]}` or `{periods, lanes: [{name, items:
-[{label, start, end}]}]}`. Charts: `column`, `bar` (ranked, sorted), `line`
-(time series), `area`, `pie`/`doughnut` (up to 4-5 parts of one whole),
-`scatter`, `combo` (a series with `"type": "line", "axis": "secondary"`), or
-`auto` to choose from the data. Diagrams: `process`, `flow` (`items` with
-`id` + `edges`), `cycle`, `pyramid`, `matrix` (4 quadrants, `x_axis`,
-`y_axis`, optional `points`), `grid` (cells with `row`/`col`/spans), `boxes`,
-`tree` (`parent`), `stack`. `**bold**` inside any text marks emphasis.
-
-- **Big decks in steps**: build the first 6-8 slides, then
-  `add_slide(deck_path, {"slides": [...]})` a few at a time, so no single call
-  is long. `update_slide(deck_path, index, slide)` replaces one slide.
-- An `error` result lists every problem in the outline at once; fix them all
-  and call again. Warnings name the slide and say what to shorten.
-- Markdown from the user: `deck_outline_from_markdown(markdown)` first.
+  Other types: `section`, `agenda{items}`, `two_column{left, right}`,
+  `table{columns, rows}`, `kpi{metrics}`, `quote{quote, attribution}`,
+  `image{path, alt}`, `timeline{milestones}` or `{periods, lanes}`. Diagrams:
+  `process`, `flow`, `cycle`, `pyramid`, `matrix` (2x2), `grid`, `boxes`,
+  `tree`, `stack`. Charts: `column`, `bar`, `line`, `area`, `pie`,
+  `doughnut`, `scatter`, `combo`, `auto`.
+- **On `status: "error"`**, the `problems` list names every field to fix and
+  gives a corrected example for that slide type. Fix them all and call
+  again. Do not switch to writing code.
+- **Big decks in steps**: build 6-8 slides, then `add_slide(deck_path,
+  {"slides": [...]})` a few at a time. `update_slide(deck_path, index,
+  slide)` replaces one slide.
 
 ## 5. Verify and fix
 
-`verify_deck(path, expected_slides=N)` checks the saved file: slide count,
-text overflow (measured, and rendered with LibreOffice when installed),
-overlaps, margins, font sizes, contrast, titles, words and bullets per slide,
-chart values against the data, pictures used instead of charts, missing
-sources, alt text, notes (`require_notes=True` when the user wants a script),
-colours and fonts outside the theme, and TODO slots left unfilled. Every
-issue has a `fix`. Fix all errors, rebuild (or `update_slide`), and verify
-again until `status` is `pass`. Warnings are worth fixing too: they lower the
-`style_score`. Pass `render_dir` to get slide PNGs if you can look at images.
+`verify_deck(path, expected_slides=N, required_items=[...])` checks the saved
+file:
+- slide count, and every required item visible on a slide
+- text overflow (rendered with LibreOffice when it is installed)
+- overlaps, fonts, contrast, titles and density
+- chart values, pictures used instead of charts
+- sources, alt text, notes (`require_notes=True` when a script is wanted)
+- TODO slots left unfilled
+
+Fix every error, rebuild (or `update_slide`) and verify again until `status`
+is `pass`.
 
 ## 6. Report
 
 Give the path, then one line per slide from `slides_overview` (title, what is
-on it, its source), the verify status, and anything you could not do. Then
-offer the `style_options` from the build result in one line ("Want it in the
-dark theme, with less text, or with speaker notes?"). When the user answers
-with style feedback ("less text", "use our blue #1F4E79", "no notes"), call
-`update_deck_prefs(feedback=...)`, apply it to this deck, and say it is saved
-for next time (or, if `saved` is false, that this chat does not save it).
+on it, its source), the verify status, and anything you could not do. Offer
+the `style_options` in one line. When the user gives style feedback ("less
+text", "use our blue #1F4E79", "no notes"), call
+`update_deck_prefs(feedback=...)`, apply it, and say it is saved (or, if
+`saved` is false, that this chat does not save it).
 
-## When the tools are not available
+## When the tools are not offered
 
-If `slide-decks/build_deck` is not offered, run the same engine through
-`run_python` with this skill's folder on the path:
+Run the same engine through `run_python`. Still no hand-written python-pptx:
 
 ```python
 import sys; sys.path.insert(0, r"<this skill's folder>")
+from slidedeck.markdown import outline_from_markdown
 from slidedeck.build import build_deck
-from slidedeck.verify import verify_deck
-print(build_deck(outline, r"C:\Users\me\Documents\q3_review.pptx", verify=True))
+print(build_deck(outline_from_markdown(open(r"C:\Users\me\deck.md", encoding="utf-8").read()), r"C:\Users\me\deck.pptx"))
 ```
 
-`office-docs` covers Word and Excel files and the manual python-pptx route.
+`office-docs` covers Word and Excel files.

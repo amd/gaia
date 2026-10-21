@@ -147,7 +147,10 @@ missing sources and style, rendering it with LibreOffice when installed.
 - **Demonstrates** — a tool-providing skill built on `gaia.skills.context`:
   scope-checked paths, a declared program (`program:run:soffice`), per-call
   temporary files, and per-user preferences with a `preferences.schema.json`.
-- **Provides** — `build_deck`, `verify_deck`, `add_slide`, `update_slide`,
+- **Provides** — `build_deck_from_markdown` (the easy path: headings become
+  slides, with `chart`, `table` and `kpi` CSV blocks), `build_deck`,
+  `verify_deck` (including `required_items`: what the request needs visible on
+  the slides, not only in the notes), `add_slide`, `update_slide`,
   `list_blueprints`, `outline_from_blueprint`, `deck_outline_from_markdown`,
   `update_deck_prefs`.
 - **Configure** — nothing. Saved preferences (theme, brand colours, density,

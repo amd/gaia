@@ -842,6 +842,152 @@ def _hue_families(colors: Iterable[str]) -> int:
     return len(bases) + (1 if greys else 0)
 
 
+# ----------------------------------------------------------------------
+# Required content
+# ----------------------------------------------------------------------
+
+_REQ_TOKEN = re.compile(r"\d+(?:\.\d+)?%?|[^\W\d_]+")
+_REQ_STOP = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "are",
+    "was",
+    "were",
+    "has",
+    "have",
+    "its",
+    "into",
+    "over",
+    "per",
+    "our",
+    "their",
+    "than",
+    "then",
+    "also",
+    "but",
+    "not",
+    "all",
+}
+
+
+def _req_norm(text: str) -> str:
+    t = (text or "").lower().replace("−", "-").replace("–", "-").replace("—", "-")
+    return re.sub(r"(?<=\d),(?=\d{3}\b)", "", t)  # 1,240 -> 1240
+
+
+def _req_tokens(text: str) -> List[str]:
+    return _REQ_TOKEN.findall(_req_norm(text))
+
+
+def required_item_found(item: str, text: str) -> bool:
+    """Whether *item* is stated in *text*: verbatim, or by its numbers and most of its words.
+
+    Every number in the item must appear; at least three quarters of its other
+    significant words must too (a word of four letters or more also matches
+    by its first five, so "site" finds "sites" and "closures" finds "closure").
+    """
+    compact = lambda x: " ".join(_req_tokens(x))  # noqa: E731
+    want = compact(item)
+    if want and want in compact(text):
+        return True
+    toks = [
+        t
+        for t in _req_tokens(item)
+        if t not in _REQ_STOP and (len(t) > 2 or t[0].isdigit())
+    ]
+    if not toks:
+        return False
+    have = set(_req_tokens(text))
+    have_bare = {h.rstrip("%") for h in have}
+    for n in (t for t in toks if t[0].isdigit()):
+        if n not in have and n.rstrip("%") not in have_bare:
+            return False
+    words = [t for t in toks if not t[0].isdigit()]
+    if not words:
+        return True
+
+    def present(w: str) -> bool:
+        return w in have or (len(w) >= 4 and any(h.startswith(w[:5]) for h in have))
+
+    hit = sum(1 for w in words if present(w))
+    return hit / len(words) >= 0.75
+
+
+def visible_text(slide) -> str:
+    """Everything an audience can read on *slide*: text, table cells, chart labels and values."""
+    parts: List[str] = []
+
+    def walk(shapes):
+        for shape in shapes:
+            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                walk(shape.shapes)
+                continue
+            if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+                parts.append(shape.text_frame.text)
+            if getattr(shape, "has_table", False) and shape.has_table:
+                parts.extend(c.text for row in shape.table.rows for c in row.cells)
+            if getattr(shape, "has_chart", False) and shape.has_chart:
+                ch = shape.chart
+                try:
+                    if ch.has_title:
+                        parts.append(ch.chart_title.text_frame.text)
+                except (AttributeError, ValueError):
+                    pass
+                for s in chart_series(ch):
+                    parts.append(str(s["name"]))
+                    parts.extend(str(c) for c in s["categories"])
+                    parts.extend(_fmt_value(v) for v in s["values"] if v is not None)
+
+    walk(slide.shapes)
+    return "\n".join(parts)
+
+
+def _fmt_value(v: Any) -> str:
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def check_required(prs, items: Sequence[str], issues: "Issues") -> List[Dict[str, Any]]:
+    """Each required item must be on a slide; in the notes only is a failure."""
+    slides = list(prs.slides)
+    texts = [visible_text(s) for s in slides]
+    notes = [
+        s.notes_slide.notes_text_frame.text if s.has_notes_slide else "" for s in slides
+    ]
+    out = []
+    for item in items:
+        where = next(
+            (i for i, t in enumerate(texts, 1) if required_item_found(item, t)), None
+        )
+        in_notes = where is None and any(required_item_found(item, n) for n in notes)
+        out.append({"item": item, "slide": where, "only_in_notes": in_notes})
+        if where is not None:
+            continue
+        if in_notes:
+            issues.add(
+                None,
+                "required_in_notes_only",
+                "error",
+                f"{item!r} is only in the speaker notes, which the audience never sees.",
+                "Put it on a slide: in a title, a bullet, a KPI tile or a chart label. Keep density limits by cutting other words, never by moving requested content to the notes.",
+            )
+        else:
+            issues.add(
+                None,
+                "required_missing",
+                "error",
+                f"{item!r} does not appear on any slide.",
+                "Add it to the slide it belongs on (title, bullet, tile, table or chart), with its number and period.",
+            )
+    return out
+
+
 def verify_deck(
     path: str,
     expected_slides: Optional[int] = None,
@@ -857,6 +1003,7 @@ def verify_deck(
     rules: Optional[Dict[str, Any]] = None,
     min_font_pt: Optional[float] = None,
     renderer: Optional[Callable[[Path], Path]] = None,
+    required_items: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Check a saved deck and return a compact report.
 
@@ -1306,7 +1453,7 @@ def verify_deck(
                 "too_many_words",
                 "warning",
                 f"{body_words} words of body text (limit {limit} for {R['density']} density).",
-                "Keep one message per slide; move detail to the speaker notes or an appendix.",
+                "Cut words or split the slide. Never move content the request asks to show into the notes; only extra detail goes there or to an appendix.",
             )
         if bullets > R["max_bullets"]:
             issues.add(
@@ -1455,6 +1602,13 @@ def verify_deck(
                     "Set the same y_min/y_max on comparable charts.",
                 )
 
+    required = list(required_items or []) + [
+        x
+        for x in ((outline or {}).get("required_items") or [])
+        if x not in (required_items or [])
+    ]
+    required_report = check_required(prs, required, issues) if required else []
+
     render_info: Dict[str, Any] = {"rendered": False}
     if render and renderer is None:
         render_info["reason"] = (
@@ -1504,6 +1658,7 @@ def verify_deck(
             )
         },
         "render": render_info,
+        **({"required_items": required_report} if required_report else {}),
         "text_metrics": MEASURER.method(FontSpec(ctx.fonts.get("body", "Calibri"))),
     }
     if len(items) > MAX_ISSUES:

@@ -23,6 +23,7 @@ TOOLS = {
     f"{SKILL}/{t}"
     for t in (
         "build_deck",
+        "build_deck_from_markdown",
         "verify_deck",
         "add_slide",
         "update_slide",

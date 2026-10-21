@@ -186,16 +186,30 @@ def build_deck(
         template_path: Optional .pptx/.potx whose layouts and theme to use.
         prefs: Optional style the user asked for in this request (density, colors...).
     """
+    return _build_from(outline, output_path, theme, template_path, prefs)
+
+
+def _build_from(
+    outline: Any,
+    output_path: str,
+    theme: str,
+    template_path: str,
+    prefs: Optional[dict],
+    required_items: Optional[list] = None,
+) -> dict:
     try:
         saved = _saved_prefs()
         request = dict(prefs or {})
         problems = _style.validate_prefs(request)
         if problems:
             raise OutlineError(problems)
-        data = load_outline(outline)
+        data = dict(load_outline(outline))
         if request:
-            data = dict(data)
             data["style"] = _style.merge_prefs(data.get("style") or {}, request)
+        if required_items:
+            data["required_items"] = list(
+                dict.fromkeys([*(data.get("required_items") or []), *required_items])
+            )
         _check_inputs(data, saved, template_path)
         out = _writable_deck(output_path)
         result = _build.build_deck(
@@ -216,6 +230,37 @@ def build_deck(
         }
 
 
+@tool(display_label="Building slide deck from Markdown")
+def build_deck_from_markdown(
+    markdown: str,
+    output_path: str,
+    theme: str = "",
+    prefs: Optional[dict] = None,
+    required_items: Optional[list] = None,
+) -> dict:
+    """Build and check a .pptx from Markdown: the easiest way to make a deck.
+
+    '# Title' is the cover; each '## Claim as a sentence' starts a slide; '-'
+    lists are bullets ('  -' a sub-bullet); 'Source:' and 'Notes:' lines add
+    the source line and speaker notes. A ```chart line block (y_title: and
+    source: lines, then CSV: header row, one row per category), a ```table
+    CSV block, or a ```kpi block (label,value,delta rows) makes that slide a
+    chart, table or KPI tiles. Returns what build_deck returns.
+
+    Args:
+        markdown: The deck as Markdown.
+        output_path: Absolute path of the .pptx to write, in an existing folder.
+        theme: light, dark or minimal; empty uses the saved preference.
+        prefs: Optional style the user asked for in this request.
+        required_items: Facts the request needs visible on the slides; checked.
+    """
+    try:
+        outline = _md.outline_from_markdown(markdown)
+    except OutlineError as exc:
+        return _error(exc)
+    return _build_from(outline, output_path, theme, "", prefs, required_items)
+
+
 @tool(display_label="Checking slide deck", timeout=RENDER_TIMEOUT_S + 90)
 def verify_deck(
     path: str,
@@ -225,6 +270,7 @@ def verify_deck(
     render: bool = True,
     render_dir: str = "",
     outline: Optional[dict] = None,
+    required_items: Optional[list] = None,
 ) -> dict:
     """Check a saved .pptx: slide count, overflow, overlaps, fonts, contrast, charts, sources, notes, style.
 
@@ -239,6 +285,7 @@ def verify_deck(
         render: Render with LibreOffice (slower, about 10-30 s).
         render_dir: Optional existing folder to save slide PNGs in, to look at.
         outline: The outline the deck was built from, to compare chart values.
+        required_items: Facts the request needs visible on slides (not only in notes).
 
     Returns:
         {"status": "pass"|"fail", "errors", "warnings", "style_score",
@@ -269,6 +316,7 @@ def verify_deck(
             render_dir=str(png_dir) if png_dir else None,
             prefs=_saved_prefs(),
             renderer=renderer,
+            required_items=required_items or None,
         )
         if render and renderer is None:
             report["render"] = {
