@@ -30,8 +30,11 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.python_jobs import (
     DEFAULT_PYTHON_TIMEOUT,
+    describe_code,
+    files_written_by,
     finished_job_note,
     folders_named_in,
+    may_write_files,
     resolve_python_timeout,
     run_python_job,
     stop_requested,
@@ -1798,19 +1801,37 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
-                    note_untracked("execute_python_file", str(p))
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        # The script's own output folders first: the search is bounded.
-                        watch=watch_folders(
-                            *folders_named_in(source), run_dir, project
-                        ),
-                        ignore=[p.resolve()],
-                    )
+                    writes = may_write_files(source)
+                    if writes:
+                        note_untracked("execute_python_file", str(p))
+                    # The script's own output folders first: the search is bounded.
+                    watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    started = time.time()
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[p.resolve()],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("execute_python_file", str(p))
+                        raise
+                    if not writes:
+                        # Read-only by its code; the folders it ran in confirm it.
+                        written, complete = files_written_by(
+                            job, watch, started, [p.resolve()]
+                        )
+                        note_untracked(
+                            "execute_python_file",
+                            str(p),
+                            written,
+                            may_write=bool(written) or not complete,
+                        )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
                     r = job.run
@@ -1940,20 +1961,39 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     handle.write(code)
                     snippet = Path(handle.name)
                 cmd = python_command(snippet)
-                note_untracked(
-                    "run_python", code.strip().splitlines()[0] if code.strip() else ""
-                )
+                detail = describe_code(code)
+                writes = may_write_files(code)
+                if writes:
+                    note_untracked("run_python", detail)
+                watch = watch_folders(*folders_named_in(code), run_dir, project)
+                started = time.time()
                 start = time.monotonic()
                 try:
-                    job = run_python_job(
-                        cmd,
-                        cwd=str(run_dir),
-                        env=env,
-                        timeout=timeout,
-                        should_stop=lambda: stop_requested(self),
-                        watch=watch_folders(*folders_named_in(code), run_dir, project),
-                        ignore=[snippet],
-                    )
+                    try:
+                        job = run_python_job(
+                            cmd,
+                            cwd=str(run_dir),
+                            env=env,
+                            timeout=timeout,
+                            should_stop=lambda: stop_requested(self),
+                            watch=watch,
+                            ignore=[snippet],
+                        )
+                    except BaseException:
+                        if not writes:  # it may have run part-way: assume it wrote
+                            note_untracked("run_python", detail)
+                        raise
+                    if not writes:
+                        # Read-only by its code; the folders it ran in confirm it.
+                        written, complete = files_written_by(
+                            job, watch, started, [snippet]
+                        )
+                        note_untracked(
+                            "run_python",
+                            detail,
+                            written,
+                            may_write=bool(written) or not complete,
+                        )
                     if job.stopped:
                         return stopped_job_result(job, timeout)
                     r = job.run
