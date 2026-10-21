@@ -27,8 +27,8 @@ EIGHT_HOURS = 8 * 60 * 60.0
 
 
 class _Clock:
-    def __init__(self):
-        self.now = 1000.0
+    def __init__(self, now=1000.0):
+        self.now = now
         self._lock = threading.Lock()
 
     def __call__(self):
@@ -44,7 +44,8 @@ class SleepingPC:
     """``time.monotonic`` as Windows has it (counts sleep), and the awake clock."""
 
     def __init__(self):
-        self.monotonic = _Clock()
+        # Different origins, so code reading the wrong clock for a limit shows.
+        self.monotonic = _Clock(50_000.0)
         self.awake = _Clock()
 
     def sleep(self, seconds):
@@ -308,7 +309,7 @@ def test_a_tool_whose_clock_fails_is_cancelled_not_left_running(monkeypatch):
     def failing_clock():
         reads.append(1)
         if len(reads) > 1:
-            raise awake_clock.AwakeClockError("the standby monitor gave up")
+            raise awake_clock.AwakeClockError("Windows refused the clock")
         return 1000.0
 
     monkeypatch.setattr(awake_clock, "monotonic", failing_clock)
