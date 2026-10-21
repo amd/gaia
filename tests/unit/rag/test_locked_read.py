@@ -26,8 +26,11 @@ pytest.importorskip("faiss", reason="RAGSDK requires faiss-cpu")
 from gaia.rag.sdk import RAGSDK, RAGConfig  # noqa: E402
 
 
-def _eacces():
-    return PermissionError(errno.EACCES, "Permission denied", "report.txt")
+def _eacces(filename=None):
+    """A read of a locked range carries no filename; a refused open names the file."""
+    if filename is None:
+        return PermissionError(errno.EACCES, "Permission denied")
+    return PermissionError(errno.EACCES, "Permission denied", str(filename))
 
 
 @pytest.fixture
@@ -363,3 +366,157 @@ def test_a_stop_raised_while_a_lock_was_being_handled_is_not_reported_as_locked(
     with patch.object(rag, "_extract_text_from_file", side_effect=stopped):
         with pytest.raises(IndexingStopped):
             rag.index_document(str(doc))
+
+
+def _bad_zip_over_a_lock(*args, **kwargs):
+    """What zipfile raises for a locked file: BadZipFile, with the lock as context."""
+    import zipfile
+
+    try:
+        raise _eacces()
+    except PermissionError:
+        raise zipfile.BadZipFile("File is not a zip file")
+
+
+def _lock_after_hash(rag, monkeypatch):
+    real_open = rag._safe_open
+    reads = []
+
+    def _open(path, mode="rb"):
+        reads.append(path)
+        if len(reads) > 1:
+            raise _eacces()
+        return real_open(path, mode)
+
+    monkeypatch.setattr(rag, "_safe_open", _open)
+
+
+def _setup_text(rag, path, monkeypatch):
+    path.write_text("some text worth indexing", encoding="utf-8")
+    _lock_after_hash(rag, monkeypatch)
+
+
+def _setup_csv(rag, path, monkeypatch):
+    path.write_text("a,b\n1,2\n", encoding="utf-8")
+    _lock_after_hash(rag, monkeypatch)
+
+
+def _setup_json(rag, path, monkeypatch):
+    path.write_text('{"k": [1, 2]}', encoding="utf-8")
+    _lock_after_hash(rag, monkeypatch)
+
+
+def _setup_xlsx(rag, path, monkeypatch):
+    openpyxl = pytest.importorskip("openpyxl")
+    path.write_bytes(b"PK placeholder")
+
+    def _locked(*args, **kwargs):
+        raise _eacces()
+
+    monkeypatch.setattr(openpyxl, "load_workbook", _locked)
+
+
+def _setup_docx(rag, path, monkeypatch):
+    pytest.importorskip("docx")
+    path.write_bytes(b"PK placeholder")
+    monkeypatch.setattr("gaia.rag.docx_utils.zipfile.ZipFile", _bad_zip_over_a_lock)
+
+
+def _setup_pptx_zip(rag, path, monkeypatch):
+    pytest.importorskip("pptx")
+    path.write_bytes(b"PK placeholder")
+    monkeypatch.setattr("gaia.rag.sdk.zipfile.ZipFile", _bad_zip_over_a_lock)
+
+
+def _setup_pptx_open(rag, path, monkeypatch):
+    pptx = pytest.importorskip("pptx")
+    _make("pptx", path)
+
+    def _locked(*args, **kwargs):
+        # What python-pptx raises on a real partial lock: the bare read error.
+        raise _eacces()
+
+    monkeypatch.setattr(pptx, "Presentation", _locked)
+
+
+@pytest.mark.parametrize(
+    "name, setup",
+    [
+        ("doc.txt", _setup_text),
+        ("doc.csv", _setup_csv),
+        ("doc.json", _setup_json),
+        ("doc.xlsx", _setup_xlsx),
+        ("doc.docx", _setup_docx),
+        ("doc.pptx", _setup_pptx_zip),
+        ("deck.pptx", _setup_pptx_open),
+    ],
+    ids=["text", "csv", "json", "xlsx", "docx", "pptx-zip", "pptx-open"],
+)
+def test_each_parser_logs_a_lock_as_a_warning_not_an_error(
+    windows, rag, tmp_path, monkeypatch, caplog, name, setup
+):
+    """Runs everywhere: the real-lock race test above is Windows-only."""
+    doc = tmp_path / name
+    setup(rag, doc, monkeypatch)
+    with caplog.at_level("WARNING"):
+        result = rag.index_document(str(doc))
+    assert result["error_type"] == "file_locked", result.get("error")
+    records = [r for r in caplog.records if r.name.startswith("gaia.rag")]
+    assert [r.getMessage() for r in records if r.levelname == "ERROR"] == []
+    assert any("may have it locked" in r.getMessage() for r in records)
+    assert not any("Corrupted" in r.getMessage() for r in records)
+
+
+def test_a_cancelled_model_slot_wait_is_not_reported_as_locked(windows, rag, doc):
+    from gaia.daemon.broker_client import LeaseWaitCancelled
+
+    stopped = _wrapped(LeaseWaitCancelled("cancelled"), _eacces(), "context")
+    with patch.object(rag, "_extract_text_from_file", side_effect=stopped):
+        with pytest.raises(LeaseWaitCancelled):
+            rag.index_document(str(doc))
+
+
+def test_a_wrapped_stop_is_not_reported_as_locked(windows, rag, doc):
+    from gaia.rag.sdk import IndexingStopped
+
+    stop = _wrapped(IndexingStopped("stopped"), _eacces(), "context")
+    wrapped = _wrapped(RuntimeError("client wrapped the stop"), stop, "cause")
+    with patch.object(rag, "_extract_text_from_file", side_effect=wrapped):
+        result = rag.index_document(str(doc))
+    assert result["success"] is False
+    assert "error_type" not in result
+    assert result["error"] == "client wrapped the stop"
+
+
+def _suppressed(outer, inner):
+    try:
+        try:
+            raise inner
+        except BaseException:
+            raise outer from None
+    except BaseException as error:
+        return error
+
+
+@pytest.mark.parametrize("how", ["cause", "context", "from-none"])
+def test_a_corrupt_file_with_another_files_lock_in_its_chain_is_not_locked(
+    windows, rag, doc, tmp_path, how
+):
+    """A temp or cache file's EACCES says nothing about the document."""
+    other = _eacces(tmp_path / "convert" / "slides.tmp")
+    corrupt = ValueError("not a valid file")
+    if how == "from-none":
+        error = _suppressed(corrupt, _eacces())
+    else:
+        error = _wrapped(corrupt, other, how)
+    with patch.object(rag, "_extract_text_from_file", side_effect=error):
+        result = rag.index_document(str(doc))
+    assert "error_type" not in result
+    assert result["error"] == "not a valid file"
+
+
+def test_a_lock_that_names_the_document_is_still_found(windows, rag, doc):
+    error = _wrapped(ValueError("not a zip file"), _eacces(doc), "context")
+    with patch.object(rag, "_extract_text_from_file", side_effect=error):
+        result = rag.index_document(str(doc))
+    assert result["error_type"] == "file_locked"

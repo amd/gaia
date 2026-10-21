@@ -688,3 +688,27 @@ class TestDefaultExtensions:
         # Check for config files
         assert ".yaml" in defaults
         assert ".yml" in defaults
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    "doc, start, end",
+    [
+        ("docs/spec/chat-agent.mdx", "default extensions:", "are not watched"),
+        ("docs/sdk/utils/file-watcher.mdx", "## Default Extensions", "\n## "),
+    ],
+    ids=["chat-agent-spec", "file-watcher-guide"],
+)
+def test_docs_list_exactly_the_extensions_the_watcher_watches(doc, start, end):
+    """The docs name each watched extension; they must not drift from the code."""
+    import re
+
+    from gaia.utils.file_watcher import FileChangeHandler
+
+    text = (REPO_ROOT / doc).read_text(encoding="utf-8")
+    begin = text.index(start)
+    section = text[begin : text.index(end, begin + len(start))]
+    listed = set(re.findall(r"`(\.[a-z0-9]+)`", section))
+    assert listed == set(FileChangeHandler.DEFAULT_EXTENSIONS)

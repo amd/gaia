@@ -16,13 +16,14 @@
   so the file watcher retries it 1, 2 and 4 windows later. If it is still
   locked after those three retries, the watcher gives up and logs one error
   telling the user to close the program and save the file again. This covers
-  the formats the watcher watches: PDF, text, Markdown, reStructuredText, CSV,
-  JSON, logs, and common code and config files (Python, JS/TS, Java, C/C++,
-  HTML/CSS, YAML, XML). Word, PowerPoint and Excel files are not watched
-  (#5478).
+  the extensions the watcher watches: `.pdf`, `.txt`, `.md`, `.markdown`,
+  `.rst`, `.log`, `.csv`, `.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`,
+  `.ts`, `.java`, `.cpp`, `.c`, `.html` and `.css`. Word, PowerPoint and Excel
+  files are not watched (#5478).
 - Indexing a locked document directly, in any format, now reports it as locked
-  (`error_type: "file_locked"`). A Word, PowerPoint or Excel file used to be
-  reported as corrupted, with advice to re-download it.
+  (`error_type: "file_locked"`). A Word or PowerPoint file used to be reported
+  as corrupted, with advice to re-download it, and an Excel file could fail
+  with "File is not a zip file".
 - Any other reindex failure is still logged: an exception with its traceback,
   a failed index with RAG's error.
 - Needs core 0.25.1, whose file watcher retries, whose RAG reports a locked

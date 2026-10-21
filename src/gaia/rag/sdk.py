@@ -331,14 +331,32 @@ class RAGResponse:
     query_metadata: Optional[Dict[str, Any]] = None  # Query-level metadata
 
 
-def _locked_cause(error: Optional[BaseException]) -> Optional[BaseException]:
-    """The lock in *error*'s chain, if any; parsers wrap the OS error they hit."""
+def _same_file(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def _locked_cause(
+    error: Optional[BaseException], file_path: str
+) -> Optional[PermissionError]:
+    """The lock on *file_path* in *error*'s chain, if any.
+
+    Parsers wrap the OS error they hit, so the chain is walked the way Python
+    prints it. A lock that names another file (a temp or cache file) is not
+    this document's; a read error carries no filename, an open names the file.
+    """
     seen = set()
     while error is not None and id(error) not in seen:
-        if held_by_another_program(error):
-            return error
+        if isinstance(error, PermissionError) and held_by_another_program(error):
+            name = error.filename
+            if name is None or _same_file(os.fsdecode(name), file_path):
+                return error
         seen.add(id(error))
-        error = error.__cause__ or error.__context__
+        if error.__cause__ is not None:
+            error = error.__cause__
+        elif error.__suppress_context__:
+            error = None
+        else:
+            error = error.__context__
     return None
 
 
@@ -486,9 +504,17 @@ class RAGSDK:
                 )
             raise ImportError(error_msg)
 
-    def _read_failure_log(self, error: BaseException) -> Callable[..., None]:
-        """A warning for a lock, which the caller may retry; an error otherwise."""
-        return self.log.warning if _locked_cause(error) else self.log.error
+    def _log_read_failure(
+        self, error: BaseException, file_path: str, message: str
+    ) -> None:
+        """A warning for a lock, which the caller may retry; *message* otherwise."""
+        if _locked_cause(error, file_path) is not None:
+            self.log.warning(
+                f"Could not read {file_path}: another program may have it locked, "
+                f"or it is not readable: {error}"
+            )
+        else:
+            self.log.error(message)
 
     def _safe_open(self, file_path: str, mode="rb"):
         """
@@ -1434,7 +1460,9 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self._read_failure_log(e)(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            self._log_read_failure(
+                e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
+            )
             raise ValueError(msg) from e
 
         try:
@@ -1449,7 +1477,7 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self._read_failure_log(e)(f"Corrupted PPTX {pptx_path}: {e}")
+            self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
             raise ValueError(msg) from e
 
         try:
@@ -1930,7 +1958,9 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            self._read_failure_log(e)(f"Error reading text file {file_path}: {e}")
+            self._log_read_failure(
+                e, file_path, f"Error reading text file {file_path}: {e}"
+            )
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -1991,7 +2021,7 @@ These positions indicate where to split the text."""
                 "  3. Try opening and re-saving in a text editor"
             )
         except Exception as e:
-            self._read_failure_log(e)(f"Error reading CSV {csv_path}: {e}")
+            self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
@@ -2034,7 +2064,7 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from JSON")
             return text
         except Exception as e:
-            self._read_failure_log(e)(f"Error reading JSON {json_path}: {e}")
+            self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
@@ -2094,7 +2124,9 @@ These positions indicate where to split the text."""
             )
             return text
         except Exception as e:
-            self._read_failure_log(e)(f"Error reading Excel file {xlsx_path}: {e}")
+            self._log_read_failure(
+                e, xlsx_path, f"Error reading Excel file {xlsx_path}: {e}"
+            )
             raise
 
     def _extract_text_from_docx(self, docx_path: str) -> str:
@@ -2115,7 +2147,9 @@ These positions indicate where to split the text."""
         try:
             text = extract_docx_text(docx_path)
         except (ImportError, ValueError) as e:
-            self._read_failure_log(e)(f"Error reading Word file {docx_path}: {e}")
+            self._log_read_failure(
+                e, docx_path, f"Error reading Word file {docx_path}: {e}"
+            )
             raise
 
         if self.config.show_stats:
@@ -3257,11 +3291,11 @@ These positions indicate where to split the text."""
             # Extract text based on file type
             try:
                 text, file_metadata = self._extract_text_from_file(file_path)
-            except IndexingStopped:
-                raise
             except Exception as e:
+                if _stop_behind(e) is not None:
+                    raise
                 # Only the document's own read: a cache write can fail with EACCES too.
-                locked = _locked_cause(e)
+                locked = _locked_cause(e, file_path)
                 if locked is not None:
                     return self._document_locked(stats, file_path, locked)
                 raise

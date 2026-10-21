@@ -265,9 +265,10 @@ Agent: {"answer": "According to the Oil & Gas Manual, the vision is..."}
 Each watched directory gets a `FileChangeHandler` from `gaia.utils.file_watcher`
 (see the [file change handler spec](/spec/file-change-handler)), with
 `reindex_file` as its created and modified callback. It watches the handler's
-default types (PDF, text, Markdown, reStructuredText, CSV, JSON, logs, and common
-code and config files: Python, JS/TS, Java, C/C++, HTML/CSS, YAML, XML); Word,
-PowerPoint and Excel files are not watched.
+default extensions: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.log`, `.csv`,
+`.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`,
+`.html` and `.css` (see [default extensions](/sdk/utils/file-watcher#default-extensions)).
+Word, PowerPoint and Excel files are not watched.
 
 - A created or modified file is reindexed once it has gone a full window
   (`debounce_seconds`, 2 s by default) with no change in size or modification
