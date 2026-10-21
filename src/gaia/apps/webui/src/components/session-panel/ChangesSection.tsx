@@ -345,7 +345,7 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
     const [body, setBody] = useState(repo.draft.body);
     const [running, setRunning] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    useEscapeToClose(!running, onClose);
+    useEscapeToClose(true, onClose, !running);
 
     const run = async () => {
         setRunning(true);

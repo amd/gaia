@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for the Agent Hub HTTP router (gaia.ui.routers.hub)."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -83,6 +84,37 @@ def test_catalog_offline_503_when_no_cache(client, monkeypatch):
     monkeypatch.setattr(catalog_mod, "build_catalog", boom)
     resp = client.get("/api/agents/catalog")
     assert resp.status_code == 503
+
+
+def test_catalog_malformed_offline_cache_keeps_local_view(
+    client, app, monkeypatch, tmp_path
+):
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text("[]", encoding="utf-8")
+    catalog_mod.clear_cache()
+    app.state.agent_registry.list.return_value = [
+        SimpleNamespace(
+            id="local",
+            name="Local",
+            description="",
+            category="general",
+            icon="",
+            language="python",
+            source="builtin",
+            hidden=False,
+        )
+    ]
+    monkeypatch.setattr(catalog_mod, "default_cache_path", lambda: cache)
+
+    def offline(url):
+        raise ConnectionError("offline fixture")
+
+    monkeypatch.setattr(catalog_mod, "fetch_bytes", offline)
+    resp = client.get("/api/agents/catalog?refresh=true")
+
+    assert resp.status_code == 200
+    assert resp.json()["offline"] is True
+    assert [agent["id"] for agent in resp.json()["agents"]] == ["local"]
 
 
 # ---------------------------------------------------------------------------

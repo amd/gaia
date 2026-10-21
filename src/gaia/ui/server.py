@@ -61,6 +61,7 @@ from .agent_loop import agent_loop
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
+from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
 from .routers import agents as agents_router_mod
 from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
@@ -372,6 +373,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # Initialize database early so lifespan can access it
     db = ChatDatabase(db_path)
+    # What a crashed or closed server left mid-way, before anything new starts.
+    recover_interrupted_work(db)
 
     # Background indexing: track running tasks by document ID
     # so we can report status and cancel them.
@@ -631,6 +634,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         app.state.document_monitor = monitor
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
+        recovery_sweep = asyncio.create_task(sweep_interrupted_work(db))
 
         # ── Connector activation watcher (issue #1226) ──────────────────
         # CLI/SDK activation writes land in the activations ledger from a
@@ -707,6 +711,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         await stop_watcher()
         logger.info("Connector activation watcher stopped")
+        recovery_sweep.cancel()
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()

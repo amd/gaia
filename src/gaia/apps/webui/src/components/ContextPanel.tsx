@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import * as api from '../services/api';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { cloudProviderName } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import type { ChatPerformance, ContextUsage, TurnPerformance } from '../types';
@@ -446,10 +447,9 @@ export function ContextPanel({ sessionId, busy, onClose, onUsage }: ContextPanel
     // Mount only: re-running on each parent render would pull focus back to Close.
     useEffect(() => {
         closeRef.current?.focus();
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseRef.current(); };
-        document.addEventListener('keydown', onKey);
-        return () => document.removeEventListener('keydown', onKey);
     }, []);
+    const close = useCallback(() => onCloseRef.current(), []);
+    useEscapeToClose(true, close);
 
     return (
         <div className="cp-overlay" onClick={onClose}>

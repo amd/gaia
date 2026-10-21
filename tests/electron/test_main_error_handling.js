@@ -112,7 +112,7 @@ describe("installSafetyNet", () => {
   // fatal() must not recurse if it is re-invoked while already running.
   // We trigger genuine re-entry by emitting a second uncaughtException from
   // inside showErrorBox — at that point _inFatalHandler is true, so the
-  // second invocation must call process.exit(2) without touching the dialog.
+  // second invocation must only log: exiting would skip the quit cleanup.
 
   test("re-entry guard prevents recursive dialog on second call", () => {
     const { installSafetyNet } = require(SAFETY_NET_PATH);
@@ -132,8 +132,9 @@ describe("installSafetyNet", () => {
 
     // showErrorBox called exactly once — re-entrant call bailed before dialog.
     expect(dialog.showErrorBox).toHaveBeenCalledTimes(1);
-    // process.exit called with 2 for the re-entrant bail, then 1 for the outer.
-    expect(exitSpy).toHaveBeenCalledWith(2);
+    // The re-entrant call neither exits nor quits; it is logged.
+    expect(exitSpy).not.toHaveBeenCalledWith(2);
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/FATAL \(while already quitting\).*re-entrant error/);
 
     exitSpy.mockRestore();
   });

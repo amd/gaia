@@ -24,7 +24,9 @@ const mockSpawnHolder = { returnValue: null };
 
 /** Create a mock ChildProcess that behaves like a real spawned process. */
 function mockCreateChildProcess() {
-  const stdin = { write: jest.fn(), destroyed: false };
+  const stdin = new EventEmitter();
+  stdin.write = jest.fn();
+  stdin.destroyed = false;
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
   const proc = new EventEmitter();
@@ -34,6 +36,7 @@ function mockCreateChildProcess() {
   proc.stderr = stderr;
   proc.pid = Math.floor(Math.random() * 90000) + 10000;
   proc.exitCode = null;
+  proc.signalCode = null;
   proc.kill = jest.fn(() => {
     proc.exitCode = null; // killed
   });
@@ -153,7 +156,15 @@ function createManager(options = {}) {
   mockSpawnHolder.returnValue = null;
   spawn.mockClear();
 
-  const manager = new AgentProcessManager(mainWindow);
+  // The real tree helpers read the OS process table; these stand in for
+  // them (tests/electron/process-tree.test.cjs covers them for real).
+  const manager = new AgentProcessManager(mainWindow, {
+    listDescendants: jest.fn(async () => ({ descendants: [], skipped: [] })),
+    killTree: jest.fn(async (proc) => {
+      if (proc.exitCode === null) proc.kill();
+      return { killed: [], survivors: [] };
+    }),
+  });
   _activeManagers.push(manager);
   return { manager, mainWindow };
 }
@@ -471,7 +482,7 @@ describe("AgentProcessManager", () => {
         const stopPromise = manager.stopAgent("test-agent");
 
         // Advance past the shutdown timeout (5000ms) without the process exiting
-        jest.advanceTimersByTime(5001);
+        await jest.advanceTimersByTimeAsync(5001);
 
         await stopPromise;
 
