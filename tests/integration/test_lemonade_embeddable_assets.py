@@ -239,8 +239,9 @@ def test_a_rate_limit_skips_locally(rate_limited_api, monkeypatch):
     monkeypatch.delenv("GAIA_REQUIRE_RELEASE_API", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    with pytest.raises(pytest.skip.Exception, match="rate limit"):
-        _get_json(rate_limited_api)
+    outcome = _outcome_of(_get_json, rate_limited_api)
+    assert type(outcome) is pytest.skip.Exception, outcome
+    assert "rate limit" in str(outcome)
 
 
 @pytest.mark.parametrize("rate_limited_api", [403, 429], indirect=True)
@@ -248,5 +249,15 @@ def test_a_rate_limit_fails_a_bump_pr(rate_limited_api, monkeypatch):
     monkeypatch.setenv("GAIA_REQUIRE_RELEASE_API", "1")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    with pytest.raises(pytest.fail.Exception, match="GAIA_REQUIRE_RELEASE_API"):
-        _get_json(rate_limited_api)
+    outcome = _outcome_of(_get_json, rate_limited_api)
+    assert type(outcome) is pytest.fail.Exception, outcome
+    assert "GAIA_REQUIRE_RELEASE_API" in str(outcome)
+
+
+def _outcome_of(call, *args):
+    """Catch a skip or a fail, so a skip can't pass this test by skipping it."""
+    try:
+        call(*args)
+    except (pytest.skip.Exception, pytest.fail.Exception) as e:
+        return e
+    pytest.fail(f"{call.__name__} neither skipped nor failed")

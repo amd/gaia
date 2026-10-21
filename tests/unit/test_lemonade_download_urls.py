@@ -852,11 +852,17 @@ class TestUninstallFallbackErrors:
 
 
 def _disk_fills_on_write(monkeypatch, mod, on="write"):
-    """The temp file opens, then the disk fills on a write or on the final flush."""
+    """Saving the download fails on open, on a write, or on the final flush.
+
+    ``write`` is a buffered file, so the closing flush fails again;
+    ``write_only`` fails the write alone.
+    """
     import builtins
 
     class _FullDisk:
         def __init__(self, path, mode):
+            if on == "open":
+                raise PermissionError(13, "Permission denied", str(path))
             self._file = builtins.open(path, mode)
             self._unflushed = False
 
@@ -868,8 +874,8 @@ def _disk_fills_on_write(monkeypatch, mod, on="write"):
             return False
 
         def write(self, data):
-            if on == "write":
-                self._unflushed = True
+            if on in ("write", "write_only"):
+                self._unflushed = on == "write"
                 raise OSError(28, "No space left on device")
             return self._file.write(data)
 
@@ -886,8 +892,12 @@ def _disk_fills_on_write(monkeypatch, mod, on="write"):
 
 
 class TestFullDiskIsNotANetworkError:
-    @pytest.mark.parametrize("on", ["write", "close"])
-    def test_download_installer_raises_the_write_error(self, tmp_path, monkeypatch, on):
+    @pytest.mark.parametrize(
+        "on,errno", [("open", 13), ("write", 28), ("write_only", 28), ("close", 28)]
+    )
+    def test_download_installer_raises_the_write_error(
+        self, tmp_path, monkeypatch, on, errno
+    ):
         from gaia.installer import lemonade_installer as mod
 
         installer = _installer("Windows", "AMD64")
@@ -895,7 +905,7 @@ class TestFullDiskIsNotANetworkError:
         _pin(monkeypatch, installer, payload)
         _disk_fills_on_write(monkeypatch, mod, on=on)
         with _serve(payload):
-            with pytest.raises(OSError, match="No space left on device") as exc:
+            with pytest.raises(OSError) as exc:
                 installer.download_installer(dest_dir=str(tmp_path))
-        assert exc.value.errno == 28
+        assert exc.value.errno == errno
         assert list(tmp_path.iterdir()) == []
