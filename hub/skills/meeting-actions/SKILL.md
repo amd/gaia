@@ -43,6 +43,13 @@ three times.
    Not commitments: ideas and hypotheticals ("we could", "maybe someone
    should"), questions nobody accepted, and reports of finished work ("I sent
    it yesterday"), which are status updates for an existing item.
+
+   The test for every row: a named person (or group) took on a specific
+   future task. Discussion points, decisions, opinions, agenda items and
+   summaries of what was said are not actions, however important. A tracker
+   with far more rows than the meetings plausibly assigned (several per
+   meeting is typical) has swept in discussion: re-check each row against
+   this test before saving.
 3. **Run the cue scan** (below) with `run_python` as a safety net. Every line
    it flags `C` is either in your list or deliberately left out. Every line
    flagged `S` is a status update to attach to an item.
@@ -73,6 +80,8 @@ three times.
    - `Dropped`: explicitly cancelled.
    - `Carried over`: mentioned again, still not done.
 
+   `Done` needs a statement that it happened ("sent", "merged", "closed").
+   A plan or a date for doing it ("we'll send it on the 9th") leaves it open.
    Never mark an item done because time passed or because a later meeting
    did not mention it.
 7. **Count before and after.** Report how many commitments you found per
