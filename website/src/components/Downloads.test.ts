@@ -10,36 +10,31 @@
 // HTML back, so those two failures are assertions rather than a code review.
 //
 // Container API rather than parsing a built dist/index.html: it needs no build
-// step, lets the hub manifest be a fixture instead of the live network, and
+// step, lets the GitHub releases be a fixture instead of the live network, and
 // fails at the component rather than at whichever page happened to embed it.
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-const HUB = 'https://hub.test';
+import type { GithubRelease } from '../data/github';
+
 const VERSION = '0.24.1';
 
-// Filenames are spelled out rather than produced by artifactFileName: a test
+// Asset names are spelled out rather than produced by artifactFileName: a test
 // that asks the source for the name it expects cannot notice the source
-// changing it. These are what hub.amd-gaia.ai publishes today.
-//
-// agent-ui's paths deliberately do NOT follow `agents/<id>/<version>/<file>`,
-// so an href that re-derives the object key instead of honouring the published
-// `path` fails here rather than in a visitor's 404.
+// changing it. These are the names publish.yml and release_components.yml
+// attach to a final release.
 const DESKTOP_FILES = {
   'win-x64': 'gaia-agent-ui-0.24.1-x64-setup.exe',
   'darwin-arm64': 'gaia-agent-ui-0.24.1-arm64.dmg',
   'linux-x64': 'gaia-agent-ui-0.24.1-x86_64.AppImage',
 } as const;
 
-const desktopUrl = (platform: keyof typeof DESKTOP_FILES) =>
-  `${HUB}/dl/desktop/${DESKTOP_FILES[platform]}`;
-
 const TUI_FILES = {
-  'win-x64': 'gaia-win-x64.exe',
-  'win-arm64': 'gaia-win-arm64.exe',
-  'darwin-x64': 'gaia-darwin-x64',
+  'win-x64': 'gaia-windows-amd64.exe',
+  'win-arm64': 'gaia-windows-arm64.exe',
+  'darwin-x64': 'gaia-darwin-amd64',
   'darwin-arm64': 'gaia-darwin-arm64',
-  'linux-x64': 'gaia-linux-x64',
+  'linux-x64': 'gaia-linux-amd64',
   'linux-arm64': 'gaia-linux-arm64',
   'win-x64-setup': 'gaia-0.24.1-win-x64-setup.exe',
   'darwin-arm64-pkg': 'gaia-0.24.1-darwin-arm64.pkg',
@@ -48,45 +43,56 @@ const TUI_FILES = {
   'linux-x64-rpm': 'gaia-0.24.1.x86_64.rpm',
 } as const;
 
-const tuiUrl = (key: keyof typeof TUI_FILES) =>
-  `${HUB}/agents/terminal-hub/${VERSION}/${TUI_FILES[key]}`;
+// Not the `releases/download/<tag>/<name>` shape GitHub happens to use today,
+// so an href built from the tag and name instead of the asset's own
+// browser_download_url fails here rather than in a visitor's 404.
+const assetUrl = (tag: string, name: string) => `https://objects.test/${tag}/${name}`;
 
-const artifact = (filename: string, path: string) => ({
-  filename,
-  path,
-  size_bytes: 98_765_432,
-  sha256: 'a'.repeat(64),
-  content_type: 'application/octet-stream',
+const desktopUrl = (platform: keyof typeof DESKTOP_FILES) =>
+  assetUrl(`v${VERSION}`, DESKTOP_FILES[platform]);
+const tuiUrl = (key: keyof typeof TUI_FILES) => assetUrl(`v${VERSION}`, TUI_FILES[key]);
+
+const asset = (tag: string, name: string) => ({
+  name,
+  browser_download_url: assetUrl(tag, name),
+  size: 98_765_432,
+  download_count: 7,
 });
 
-const MANIFESTS: Record<string, unknown> = {
-  'agent-ui': {
-    latest_version: VERSION,
-    versions: {
-      [VERSION]: {
-        artifacts: [
-          ...Object.values(DESKTOP_FILES).map((f) => artifact(f, `dl/desktop/${f}`)),
-          // Published beside the builds and matched by no key — the card has to
-          // ignore it rather than offer a sidecar file as a download.
-          artifact(
-            'gaia-agent-ui-0.24.1-arm64.dmg.blockmap',
-            'dl/desktop/gaia-agent-ui-0.24.1-arm64.dmg.blockmap',
-          ),
-        ],
-      },
-    },
-  },
-  'terminal-hub': {
-    latest_version: VERSION,
-    versions: {
-      [VERSION]: {
-        artifacts: Object.values(TUI_FILES).map((f) =>
-          artifact(f, `agents/terminal-hub/${VERSION}/${f}`),
-        ),
-      },
-    },
-  },
-};
+function release(tag: string, names: readonly string[], prerelease = false): GithubRelease {
+  return {
+    tag_name: tag,
+    draft: false,
+    prerelease,
+    published_at: '2026-09-16T08:00:00Z',
+    html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+    assets: names.map((n) => asset(tag, n)),
+  };
+}
+
+const stable = (version: string, names: readonly string[]) => release(`v${version}`, names);
+
+// What the GitHub releases API returns, newest first. The pre-release is newer
+// than the stable one and carries the same terminal names, so a page that took
+// the newest release rather than the newest STABLE one links its files.
+let RELEASES: GithubRelease[] = [];
+const defaultReleases = (): GithubRelease[] => [
+  release(
+    'v0.25.0-rc1',
+    ['gaia-agent-ui-0.25.0-rc.1-x64-setup.exe', ...Object.values(TUI_FILES)],
+    true,
+  ),
+  stable(VERSION, [
+    ...Object.values(DESKTOP_FILES),
+    ...Object.values(TUI_FILES),
+    // Attached beside the builds and matched by no key — the card has to
+    // ignore them rather than offer an updater or checksum file as a download.
+    'gaia-agent-ui-0.24.1-arm64.dmg.blockmap',
+    'gaia-tui-SHA256SUMS.txt',
+    'amd_gaia-0.24.1-py3-none-any.whl',
+  ]),
+  stable('0.24.0', ['gaia-agent-ui-0.24.0-x64-setup.exe']),
+];
 
 // ---- A minimal HTML reader -------------------------------------------------
 //
@@ -181,53 +187,54 @@ const hrefsIn = (el: El): string[] =>
 
 // ---- Rendering -------------------------------------------------------------
 
-async function render() {
-  vi.resetModules();
-  process.env.HUB_CATALOG_URL = HUB;
+function stubReleases(respond: () => Response) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL) => {
       const url = String(input);
-      const id = /\/agents\/([^/]+)\/manifest\.json/.exec(url)?.[1];
-      const manifest = id ? MANIFESTS[id] : undefined;
-      if (!manifest) throw new Error(`unexpected fetch in test: ${url}`);
-      return { ok: true, status: 200, json: async () => manifest } as Response;
+      if (!url.startsWith('https://api.github.com/repos/amd/gaia/releases?')) {
+        throw new Error(`unexpected fetch in test: ${url}`);
+      }
+      return respond();
     }),
   );
+}
 
-  const { getComponentRelease } = await import('../data/catalog');
+async function renderHtml(): Promise<string> {
+  vi.resetModules();
   const { experimental_AstroContainer } = await import('astro/container');
   const Downloads = (await import('./Downloads.astro')).default;
-
   const container = await experimental_AstroContainer.create();
-  const html = await container.renderToString(Downloads);
-  const [desktop, tui] = await Promise.all([
-    getComponentRelease('agent-ui'),
-    getComponentRelease('terminal-hub'),
-  ]);
+  return container.renderToString(Downloads);
+}
 
+async function render() {
+  stubReleases(() => Response.json(RELEASES));
+  const html = await renderHtml();
+  const { pickStableRelease } = await import('../data/github');
   return {
     html,
     root: parse(html),
-    publishedUrls: new Set([...desktop.binaries, ...tui.binaries].map((b) => b.url)),
+    // The stable release's own asset URLs: the only hrefs the page may use.
+    publishedUrls: new Set(pickStableRelease(RELEASES)!.assets.map((a) => a.url)),
   };
 }
 
 let rendered: Awaited<ReturnType<typeof render>>;
 
 beforeEach(async () => {
+  RELEASES = defaultReleases();
   rendered = await render();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  delete process.env.HUB_CATALOG_URL;
 });
 
 const ctas = () => descendants(rendered.root).filter((e) => 'data-dl-cta' in e.attrs);
 
 describe('Downloads.astro', () => {
-  it('links only to files the hub actually published', () => {
+  it('links only to assets of the newest stable release', () => {
     const links = descendants(rendered.root).filter(
       (e) => e.tag === 'a' && typeof e.attrs.href === 'string',
     );
@@ -238,7 +245,9 @@ describe('Downloads.astro', () => {
 
     // 3 desktop CTAs + 7 terminal CTAs + 3 + 11 in the all-downloads list.
     expect(links).toHaveLength(24);
-    expect(rendered.publishedUrls.size).toBe(15);
+    expect(rendered.publishedUrls.size).toBe(17);
+    // Never the pre-release, though it is newer and carries the same names.
+    expect(links.filter((a) => String(a.attrs.href).includes('-rc'))).toEqual([]);
   });
 
   it('keeps every reveal block hidden until the script places the machine', () => {
@@ -347,18 +356,23 @@ describe('Downloads.astro', () => {
 
 // ---- The one Windows setup (0.25.0 on) -------------------------------------
 //
-// From 0.25.0 the terminal hub's win-x64-setup is the setup that asks desktop
+// From 0.25.0 the terminal's win-x64-setup is the setup that asks desktop
 // app / terminal / both. Same filename pattern as the terminal-only 0.24.1
 // setup above, which is why the card is gated on the version as well as on the
-// file being published.
+// file being on the release.
 
 const SETUP_VERSION = '0.25.0';
+const SETUP_DESKTOP_FILES = {
+  'win-x64': 'gaia-agent-ui-0.25.0-x64-setup.exe',
+  'darwin-arm64': 'gaia-agent-ui-0.25.0-arm64.dmg',
+  'linux-x64': 'gaia-agent-ui-0.25.0-x86_64.AppImage',
+} as const;
 const SETUP_RELEASE_FILES = {
-  'win-x64': 'gaia-win-x64.exe',
-  'win-arm64': 'gaia-win-arm64.exe',
-  'darwin-x64': 'gaia-darwin-x64',
+  'win-x64': 'gaia-windows-amd64.exe',
+  'win-arm64': 'gaia-windows-arm64.exe',
+  'darwin-x64': 'gaia-darwin-amd64',
   'darwin-arm64': 'gaia-darwin-arm64',
-  'linux-x64': 'gaia-linux-x64',
+  'linux-x64': 'gaia-linux-amd64',
   'linux-arm64': 'gaia-linux-arm64',
   'win-x64-setup': 'gaia-0.25.0-win-x64-setup.exe',
   'darwin-arm64-pkg': 'gaia-0.25.0-darwin-arm64.pkg',
@@ -366,27 +380,17 @@ const SETUP_RELEASE_FILES = {
 } as const;
 
 const setupUrl = (key: keyof typeof SETUP_RELEASE_FILES) =>
-  `${HUB}/agents/terminal-hub/${SETUP_VERSION}/${SETUP_RELEASE_FILES[key]}`;
+  assetUrl(`v${SETUP_VERSION}`, SETUP_RELEASE_FILES[key]);
+const setupDesktopUrl = (platform: keyof typeof SETUP_DESKTOP_FILES) =>
+  assetUrl(`v${SETUP_VERSION}`, SETUP_DESKTOP_FILES[platform]);
 
-function terminalHubAt(files: readonly string[]) {
-  return {
-    latest_version: SETUP_VERSION,
-    versions: {
-      [SETUP_VERSION]: {
-        artifacts: files.map((f) => artifact(f, `agents/terminal-hub/${SETUP_VERSION}/${f}`)),
-      },
-    },
-  };
-}
+const releaseAt = (tuiFiles: readonly string[]) => [
+  stable(SETUP_VERSION, [...Object.values(SETUP_DESKTOP_FILES), ...tuiFiles]),
+];
 
 describe('Downloads.astro with the one Windows setup', () => {
-  const original = MANIFESTS['terminal-hub'];
-  afterEach(() => {
-    MANIFESTS['terminal-hub'] = original;
-  });
-
   it('offers Windows one setup instead of a card each', async () => {
-    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(SETUP_RELEASE_FILES));
+    RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
     rendered = await render();
     const all = descendants(rendered.root);
 
@@ -422,14 +426,14 @@ describe('Downloads.astro with the one Windows setup', () => {
   });
 
   it('lists the setup once, and keeps the desktop-only setup and the raw binary', async () => {
-    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(SETUP_RELEASE_FILES));
+    RELEASES = releaseAt(Object.values(SETUP_RELEASE_FILES));
     rendered = await render();
     const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
     const links = descendants(list).filter((e) => e.tag === 'a');
     const hrefs = links.map((a) => a.attrs.href as string);
 
     expect(hrefs.filter((h) => h === setupUrl('win-x64-setup'))).toHaveLength(1);
-    expect(hrefs).toContain(desktopUrl('win-x64'));
+    expect(hrefs).toContain(setupDesktopUrl('win-x64'));
     expect(hrefs).toContain(setupUrl('win-x64'));
 
     const names = links.map((a) =>
@@ -439,9 +443,9 @@ describe('Downloads.astro with the one Windows setup', () => {
     expect(names.find((n) => n.includes('Desktop app only'))).toContain('Windows (x64)');
   });
 
-  it('keeps the two cards when 0.25.0 published no Windows setup', async () => {
+  it('keeps the two cards when the release carries no Windows setup', async () => {
     const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
-    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(rest));
+    RELEASES = releaseAt(Object.values(rest));
     rendered = await render();
 
     expect(ctas().filter((b) => b.attrs['data-surface'] === 'setup')).toEqual([]);
@@ -451,8 +455,88 @@ describe('Downloads.astro with the one Windows setup', () => {
         .map((b) => [b.attrs['data-surface'], hrefsIn(b)]),
     );
     expect(windows).toEqual({
-      desktop: [desktopUrl('win-x64')],
+      desktop: [setupDesktopUrl('win-x64')],
       tui: [setupUrl('win-x64')],
     });
+  });
+});
+
+// ---- What the release does not carry ---------------------------------------
+
+describe('Downloads.astro against an incomplete release', () => {
+  // v0.25.0 as GitHub actually has it: the desktop app and the raw terminal
+  // binaries, but none of the terminal installers (those went to the hub only).
+  // Each missing installer is absent — never a link built from a name the
+  // release does not carry.
+  it('renders no button for an installer the release does not carry', async () => {
+    const {
+      'win-x64-setup': _setup,
+      'darwin-arm64-pkg': _pkg,
+      'linux-x64-deb': _deb,
+      ...raw
+    } = SETUP_RELEASE_FILES;
+    RELEASES = releaseAt(Object.values(raw));
+    rendered = await render();
+
+    const tui = Object.fromEntries(
+      ctas()
+        .filter((b) => b.attrs['data-surface'] === 'tui')
+        .map((b) => [b.attrs['data-platform'], [b.attrs['data-kind'], ...hrefsIn(b)]]),
+    );
+    expect(tui).toEqual({
+      'win-x64': ['binary', setupUrl('win-x64')],
+      'darwin-arm64': ['binary', setupUrl('darwin-arm64')],
+      'linux-x64': ['binary', setupUrl('linux-x64')],
+      'win-arm64': ['binary', setupUrl('win-arm64')],
+      'darwin-x64': ['binary', setupUrl('darwin-x64')],
+      'linux-arm64': ['binary', setupUrl('linux-arm64')],
+    });
+    const hrefs = descendants(rendered.root)
+      .filter((e) => e.tag === 'a')
+      .map((a) => a.attrs.href as string);
+    expect(hrefs.filter((h) => !rendered.publishedUrls.has(h))).toEqual([]);
+    expect(hrefs.filter((h) => /\.(pkg|deb|rpm)$|win-x64-setup/.test(h))).toEqual([]);
+  });
+
+  it('drops a desktop platform the release does not carry, and keeps the rest', async () => {
+    RELEASES = [
+      stable(SETUP_VERSION, [
+        SETUP_DESKTOP_FILES['linux-x64'],
+        ...Object.values(SETUP_RELEASE_FILES),
+      ]),
+    ];
+    rendered = await render();
+    const desktop = ctas().filter(
+      (b) => b.attrs['data-surface'] === 'desktop' && b.attrs['data-kind'] === 'build',
+    );
+    expect(desktop.map((b) => b.attrs['data-platform'])).toEqual(['linux-x64']);
+  });
+
+  it('fails the build when the stable release carries no desktop build', async () => {
+    stubReleases(() => Response.json([stable(SETUP_VERSION, Object.values(SETUP_RELEASE_FILES))]));
+    await expect(renderHtml()).rejects.toThrow(
+      /v0\.25\.0 carries \d+ assets, none of which is a desktop app build/,
+    );
+  });
+
+  it('fails the build when the stable release carries no terminal build', async () => {
+    stubReleases(() => Response.json([stable(SETUP_VERSION, Object.values(SETUP_DESKTOP_FILES))]));
+    await expect(renderHtml()).rejects.toThrow(
+      /v0\.25\.0 carries \d+ assets, none of which is a terminal build/,
+    );
+  });
+
+  // A release candidate is offered in its own section; it never stands in for
+  // a missing stable release.
+  it('fails the build when only pre-releases exist', async () => {
+    stubReleases(() =>
+      Response.json([release('v0.25.0-rc1', Object.values(SETUP_DESKTOP_FILES), true)]),
+    );
+    await expect(renderHtml()).rejects.toThrow(/no published stable release/);
+  });
+
+  it('fails the build when the GitHub API does', async () => {
+    stubReleases(() => new Response('rate limited', { status: 403 }));
+    await expect(renderHtml()).rejects.toThrow(/\[github\].*releases.*HTTP 403.*GITHUB_TOKEN/s);
   });
 });
