@@ -1940,6 +1940,19 @@ def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
     return ""
 
 
+# A sentence break: ". " before a capital, not inside "e.g. " / "i.e. ".
+_SENTENCE_BREAK_RE = re.compile(r"(?<!e\.g)(?<!i\.e)\.\s+(?=[A-Z])")
+
+
+def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
+    """Split a provider's error message into what happened and what to do."""
+    text = message.strip()
+    match = _SENTENCE_BREAK_RE.search(text)
+    if match is None:
+        return text, None
+    return text[: match.start()], text[match.end() :].strip() or None
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -7783,8 +7796,7 @@ Do NOT wrap conversational replies in JSON.
                 break
             cur = cur.__cause__ or cur.__context__
         if typed_msg:
-            cause, _, advice = typed_msg.strip().partition(". ")
-            advice = advice.strip() or None
+            cause, advice = _split_cause_and_advice(typed_msg)
         else:
             cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
         return self._model_failure_answer(

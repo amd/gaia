@@ -741,3 +741,50 @@ def test_a_successful_turn_is_not_marked_failed(clean_registry):
             events.append(event)
     assert result["model_failed"] is False
     assert all("failed" not in e for e in _answers(events))
+
+
+def test_lemonade_connection_failure_mid_turn_reaches_the_ui_as_failed(
+    clean_registry,
+):  # pylint: disable=unused-argument
+    """A plain connection error skips the printed answer; the turn must still
+    end as failed, via the error event and the result flag."""
+    from gaia.ui._chat_helpers import _turn_failure
+
+    agent = _make_agent(streaming=True)
+    result, events = _sse_turn(agent, ConnectionError("Connection refused"))
+
+    assert result["status"] == "failed"
+    assert result["model_failed"] is True
+    assert "having trouble reaching the language model" in result["result"]
+    errors = [e for e in events if e.get("type") == "agent_error"]
+    assert len(errors) == 1 and "Connection refused" in errors[0]["content"]
+    assert _TOOL_RUNS == [1]
+    assert _turn_failure(None, None, result) == (True, None)
+
+
+@pytest.mark.parametrize(
+    "message, cause, advice",
+    [
+        (
+            "Fireworks returned HTTP 404 for the model. Pick another model.",
+            "Fireworks returned HTTP 404 for the model",
+            "Pick another model.",
+        ),
+        (
+            "The provider rejected the request, e.g. a bad key. Check the key.",
+            "The provider rejected the request, e.g. a bad key",
+            "Check the key.",
+        ),
+        (
+            "Needs Lemonade v10.7.1 or newer. Update Lemonade.",
+            "Needs Lemonade v10.7.1 or newer",
+            "Update Lemonade.",
+        ),
+        ("The model is gone", "The model is gone", None),
+    ],
+    ids=["two-sentences", "e.g.", "version", "one-sentence"],
+)
+def test_provider_message_splits_at_the_real_sentence_break(message, cause, advice):
+    from gaia.agents.base.agent import _split_cause_and_advice
+
+    assert _split_cause_and_advice(message) == (cause, advice)
