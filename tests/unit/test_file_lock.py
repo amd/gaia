@@ -369,12 +369,12 @@ def test_an_earlier_entry_seen_before_its_owner_locked_it_still_counts(tmp_path)
     lock = lock_path_for(target)
     earlier = mod._create_entry(lock, target)  # created, not locked yet
     me = mod._join_queue(lock, target)
-    spent, dead = set(), set()
+    dead = set()
     try:
         assert me.place > earlier.place
-        assert mod._ahead(lock, me, spent, dead)[0] == 0  # looks dead for now
+        assert mod._ahead(lock, me, dead)[0] == 0  # looks dead for now
         assert mod.try_lock(earlier.fd)  # its owner locks it
-        assert mod._ahead(lock, me, spent, dead)[0] == 1
+        assert mod._ahead(lock, me, dead)[0] == 1
     finally:
         me.leave()
         earlier.leave()
@@ -421,54 +421,78 @@ def test_an_uncontended_lock_does_not_slow_down_in_a_crowded_folder(tmp_path):
     assert statistics.median(times) < 0.002, f"median {statistics.median(times)}"
 
 
-def test_the_next_waiter_takes_the_lock_within_milliseconds(tmp_path):
-    """The waiter at the front notices a release fast, not on a 20 ms poll."""
-    target = tmp_path / "state.json"
-    delays = []
-    for _ in range(30):
-        queued, took = threading.Event(), []
+def _median_hand_off(target, rounds=40):
+    """Median time from a release to the queued waiter holding the lock.
+
+    The release comes at a random point in the waiter's poll, so a 20 ms poll
+    averages about 10 ms and a 1 ms poll about 0.5 ms.
+    """
+    import random
+
+    gaps = []
+    for _ in range(rounds):
+        took = []
 
         def waiter():
-            queued.set()
-            with file_lock(target, timeout=10):
+            with file_lock(target, timeout=60):
                 took.append(time.perf_counter())
 
         with file_lock(target):
             thread = threading.Thread(target=waiter)
             thread.start()
-            assert queued.wait(10)
-            time.sleep(0.03)  # it has queued and settled into polling
+            deadline = time.monotonic() + 30
+            while _live_entries(target) < 1:
+                assert time.monotonic() < deadline, "the waiter never queued"
+                time.sleep(0.001)
+            time.sleep(random.uniform(0.02, 0.04))
             released = time.perf_counter()
         thread.join()
-        delays.append(took[0] - released)
-    assert statistics.median(delays) < 0.005, f"median {statistics.median(delays)}"
+        gaps.append(took[0] - released)
+    return statistics.median(gaps)
 
 
-def test_a_busy_lock_keeps_its_throughput(tmp_path):
-    """Four threads taking turns hand the lock on in a few milliseconds each."""
+def test_a_busy_lock_hands_off_far_faster_than_a_flat_poll(tmp_path, monkeypatch):
+    """The waiter at the front notices a release fast, not on a 20 ms poll.
+
+    Timed against a flat 20 ms poll in the same run. A loaded runner, or one
+    that overshoots short sleeps (macOS CI), adds about the same delay to both,
+    so the test asserts the margin rather than a fixed bound.
+    """
+    from gaia.utils import file_lock as mod
+
+    real = _median_hand_off(tmp_path / "real.json")
+    monkeypatch.setattr(mod, "_poll_interval", lambda listed_ahead: 0.02)
+    flat = _median_hand_off(tmp_path / "flat.json")
+    assert flat - real >= 0.004, f"{real * 1000:.1f} ms vs {flat * 1000:.1f} ms flat"
+    assert _queue_files(tmp_path / "real.json") == []
+
+
+def test_waiters_far_back_poll_slowly_and_the_front_fast():
+    from gaia.utils import file_lock as mod
+
+    assert mod._poll_interval(0) == mod._NEXT_POLL_SECONDS
+    assert mod._poll_interval(5) == 5 * mod._NEXT_POLL_SECONDS
+    assert mod._poll_interval(1000) == mod._POLL_SECONDS
+
+
+def test_an_unchecked_entry_stops_counting_once_older_than_the_timeout(
+    tmp_path, monkeypatch
+):
+    """Another user's dead entry on NFS cannot be tested or cleared by anyone;
+    it must not block every later waiter for good."""
+    from gaia.utils import file_lock as mod
+
     target = tmp_path / "state.json"
-    cycles, threads = 100, 4
-    durations = []
-
-    def work():
-        for _ in range(cycles):
-            started = time.perf_counter()
-            with file_lock(target, timeout=60):
-                pass
-            durations.append(time.perf_counter() - started)
-
-    workers = [threading.Thread(target=work) for _ in range(threads)]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join()
-    # A median, so one antivirus or GC stall on a shared runner cannot fail it.
-    typical = statistics.median(durations)
-    # macOS CI runners overshoot short sleeps (24-28 ms measured there, ~3 ms on
-    # Linux); a 20 ms poll would still be ~60 ms, so the bound still catches it.
-    limit = 0.040 if sys.platform == "darwin" else 0.008
-    assert typical < limit, f"{typical * 1000:.1f} ms per turn"
-    assert _queue_files(target) == []
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    stuck = queue / _entry_name(0)
+    stuck.write_text("", encoding="utf-8")
+    old = time.time() - mod.LOCK_TIMEOUT_SECONDS - 5
+    os.utime(stuck, (old, old))
+    monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
+    with file_lock(target, timeout=0.5):
+        pass
+    assert stuck.exists()  # never deleted: it might still be someone's
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")

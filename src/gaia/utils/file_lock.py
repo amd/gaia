@@ -22,6 +22,9 @@ The lock is an OS advisory lock on ``<name>.lock`` beside the target
 (:func:`gaia.daemon.lock.try_lock`), released by the OS if the holder dies.
 Waiters queue for it in arrival order through entry files in
 ``<name>.lock.d/``, so a later waiter cannot take it ahead of an earlier one.
+The one exception is a moment under a millisecond wide: a request that finds
+the lock busy and is about to queue can be beaten by one that arrives just as
+the lock comes free and takes it straight away.
 """
 
 from __future__ import annotations
@@ -275,30 +278,43 @@ def _open_entry(entry: Path) -> int:
         return os.open(str(entry), os.O_RDONLY)
 
 
-#: A holder writes this past the locked byte before it unlocks its entry, so a
-#: waiter can tell a finished entry from one whose owner has not locked it yet.
-_SPENT_MARK = b"x"
-_ALIVE, _UNKNOWN, _DEAD, _SPENT = "alive", "unknown", "dead", "spent"
+_ALIVE, _UNKNOWN, _STALE, _DEAD = "alive", "unknown", "stale", "dead"
+
+
+def _unchecked(entry: Path) -> str:
+    """The state of an entry this user cannot test (another user's, or NFS).
+
+    Once older than :data:`LOCK_TIMEOUT_SECONDS` it no longer counts as ahead:
+    a waiter on the default timeout has given up by then, so it is far more
+    likely a dead process's entry, which nothing could ever clear. At worst a
+    live one loses its place, never exclusion. On NFS the age compares the
+    server's file time with this clock, so skew moves that point earlier or
+    later.
+    """
+    try:
+        age = time.time() - os.stat(entry).st_mtime
+    except FileNotFoundError:
+        return _DEAD
+    return _STALE if age > LOCK_TIMEOUT_SECONDS else _UNKNOWN
 
 
 def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
-    """Whether *entry*'s owner still waits for, or holds, the lock.
+    """Whether *entry*'s owner still waits for the lock.
 
-    ``_SPENT`` for an entry its holder gave up, which stays dead. ``_DEAD`` for
-    one nobody holds that is not marked: its owner crashed, or has created it
-    and not locked it yet, so it must be looked at again. ``_UNKNOWN`` when this
-    user cannot tell. With *delete_dead*, a dead entry is deleted; a waiter
-    polls without it, because a delete on Windows costs as much as the whole
-    hand-off, and reaps what it saw after its turn.
+    ``_DEAD`` when nobody holds it: its owner finished or crashed, or has
+    created it and not locked it yet, so a waiter looks again on its next poll
+    rather than skip it for good. ``_UNKNOWN`` or ``_STALE`` when this user
+    cannot tell (see :func:`_unchecked`). With *delete_dead*, a dead entry is
+    deleted; a waiter polls without it, because a delete on Windows costs as
+    much as the whole hand-off, and reaps what it saw after its turn.
     """
     try:
         fd = _open_entry(entry)
     except FileNotFoundError:
-        return _SPENT
+        return _DEAD
     except PermissionError:
         # Windows: being deleted, or held without sharing by another program.
-        # Not cached: once deleted it reads as gone, and is cached then.
-        return _DEAD if os.name == "nt" else _UNKNOWN
+        return _DEAD if os.name == "nt" else _unchecked(entry)
     except OSError as e:
         raise FileLockError(
             f"Cannot open the queue entry {entry} for the lock {path}: {e}", path
@@ -306,18 +322,12 @@ def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
     taken = _probe_lock(fd)
     if not taken:
         os.close(fd)
-        return _UNKNOWN if taken is None else _ALIVE
-    try:
-        os.lseek(fd, len(_SPENT_MARK), os.SEEK_SET)
-        state = _SPENT if os.read(fd, len(_SPENT_MARK)) == _SPENT_MARK else _DEAD
-    except BaseException:
-        _release_fd(fd)
-        raise
+        return _unchecked(entry) if taken is None else _ALIVE
     if delete_dead:
         _release_and_discard(fd, entry)
     else:
         _release_fd(fd)
-    return state
+    return _DEAD
 
 
 def _reap(entries: List[Path], path: Path) -> None:
@@ -348,11 +358,7 @@ class _QueueEntry:
         inside its critical section. Its name is never reused, so whoever
         deletes it removes only this file.
         """
-        try:
-            os.lseek(self.fd, len(_SPENT_MARK), os.SEEK_SET)
-            os.write(self.fd, _SPENT_MARK)
-        finally:
-            _release_fd(self.fd)
+        _release_fd(self.fd)
         return self.path
 
     def leave(self) -> None:
@@ -423,15 +429,14 @@ def _join_queue(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
 def _ahead(
     path: Path,
     entry: Optional[_QueueEntry],
-    spent: Set[Path],
     dead: Set[Path],
     *,
     count_all: bool = False,
 ) -> Tuple[int, List[Path], int]:
     """Live waiters queued before *entry* (all of them when None), the entries
     this user could not check, and how many entries are listed ahead. The
-    holder is not among them. Entries found spent or dead are added to *spent*
-    or *dead*, for :func:`_reap` after this waiter's turn.
+    holder is not among them. Entries found dead are added to *dead*, for
+    :func:`_reap` after this waiter's turn.
 
     Unless *count_all*, stops at the first live one: a poll only needs to know
     whether anyone is still ahead.
@@ -443,18 +448,13 @@ def _ahead(
     ]
     count, unknown = 0, []
     for other in listed:
-        if other in spent:
-            # Names are never reused, so a spent entry stays dead.
-            continue
         state = _entry_state(other, path)
         if state == _UNKNOWN:
             unknown.append(other)
-        if state == _SPENT:
-            spent.add(other)
-        elif state == _DEAD:
-            # Not cached: it may be a new entry its owner has yet to lock.
+        if state == _DEAD:
+            # Not skipped later: it may be a new entry its owner has yet to lock.
             dead.add(other)
-        else:
+        elif state != _STALE:
             count += 1
             if not count_all:
                 break
@@ -569,7 +569,6 @@ def acquire_file_lock(
         timeout = LOCK_TIMEOUT_SECONDS
     deadline = time.monotonic() + timeout
     entry: Optional[_QueueEntry] = None
-    spent: Set[Path] = set()
     dead: Set[Path] = set()
     try:
         # Nobody waiting: take it without the cost of a queue entry.
@@ -577,10 +576,10 @@ def acquire_file_lock(
             return HeldFileLock(path, fd)
         entry = _join_queue(path, target)
         while True:
-            queued, unknown, listed_ahead = _ahead(path, entry, spent, dead)
+            queued, unknown, listed_ahead = _ahead(path, entry, dead)
             timed_out = time.monotonic() >= deadline
             if timed_out and queued:
-                queued, unknown, _ = _ahead(path, entry, spent, dead, count_all=True)
+                queued, unknown, _ = _ahead(path, entry, dead, count_all=True)
             if queued == 0 and try_lock(fd):
                 # A holder has no live entry: the waiter behind sees itself next.
                 spent_by_me = None
@@ -588,7 +587,7 @@ def acquire_file_lock(
                     mine: _QueueEntry = entry
                     entry = None
                     spent_by_me = mine.give_up_place()
-                return HeldFileLock(path, fd, spent_by_me, spent | dead)
+                return HeldFileLock(path, fd, spent_by_me, dead)
             if timed_out:
                 # With nobody queued ahead, the try above failed: it is held.
                 holder = 1 if queued == 0 or not _lock_is_free(fd) else 0
@@ -605,7 +604,7 @@ def acquire_file_lock(
         finally:
             if entry is not None:
                 entry.leave()
-            _reap(list(spent | dead), path)
+            _reap(list(dead), path)
         raise
 
 
