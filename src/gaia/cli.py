@@ -1076,6 +1076,21 @@ HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: an integer of at least 1."""
+    import argparse
+
+    try:
+        number = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"expected a whole number, got {value!r}"
+        ) from e
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
+    return number
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1122,8 +1137,62 @@ def build_parser():
         default=None,
         help=(
             "Remote Lemonade server base URL (e.g. https://host:13305/api/v1)."
-            " Used with --ui."
+            " Used with --ui and -p."
         ),
+    )
+    parser.add_argument(
+        "-p",
+        "--print",
+        dest="print_prompt",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PROMPT",
+        help="Run the GAIA agent once on PROMPT, print the answer and exit "
+        "(reads the prompt from stdin when PROMPT is omitted)",
+    )
+    # Own dests, so a subcommand's same-named flag can't silently overwrite them.
+    parser.add_argument(
+        "--model",
+        dest="print_model",
+        default=None,
+        help="Model id for -p (default: config default_model, else the agent's)",
+    )
+    parser.add_argument(
+        "--output-format",
+        dest="print_output_format",
+        choices=["text", "json"],
+        default=None,
+        help="With -p: text (default) prints the answer; json prints one result object "
+        "with steps, tool calls and tokens",
+    )
+    parser.add_argument(
+        "--verbose",
+        dest="print_verbose",
+        action="store_true",
+        help="With -p --output-format json: include the full conversation",
+    )
+    parser.add_argument(
+        "--max-steps",
+        dest="print_max_steps",
+        type=_positive_int,
+        default=None,
+        help="With -p: cap on agent steps (default: the agent's own limit)",
+    )
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        dest="print_skip_permissions",
+        action="store_true",
+        help="With -p: run confirmation-gated tools (file writes, shell) without "
+        "asking. Without it they are denied, since nobody is there to approve",
+    )
+    parser.add_argument(
+        "--full-access",
+        dest="print_full_access",
+        action="store_true",
+        help="With -p: full access, as the TUI's /full-access: lifts the shell "
+        "guardrails (test runners, build tools run) and grants paths outside the "
+        "current folder without asking. Implies --dangerously-skip-permissions",
     )
 
     # Create a parent parser for common arguments
@@ -4612,6 +4681,52 @@ def main():
         from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
 
         parser.error(REMOVED_PROVIDER_MESSAGE)
+
+    print_only = {
+        "--model": args.print_model is not None,
+        "--output-format": args.print_output_format is not None,
+        "--verbose": args.print_verbose,
+        "--max-steps": args.print_max_steps is not None,
+        "--dangerously-skip-permissions": args.print_skip_permissions,
+        "--full-access": args.print_full_access,
+    }
+    if args.print_prompt is None and any(print_only.values()):
+        used = ", ".join(flag for flag, given in print_only.items() if given)
+        parser.error(
+            f"{used} before a subcommand only applies to -p. Pass it after the "
+            'subcommand (`gaia chat --model X`) or use `gaia -p "<prompt>" --model X`.'
+        )
+    if args.print_prompt is not None:
+        if args.action:
+            parser.error("-p runs one prompt on its own; it takes no subcommand.")
+        launcher_flags = [
+            flag
+            for flag, given in (
+                ("--ui", args.ui),
+                ("--cli", args.cli),
+                ("--ui-dist", args.ui_dist is not None),
+                ("--ui-port", args.ui_port != 4200),
+            )
+            if given
+        ]
+        if launcher_flags:
+            parser.error(f"-p runs headless; {', '.join(launcher_flags)} cannot apply.")
+        if args.print_verbose and args.print_output_format != "json":
+            parser.error("--verbose adds the conversation to --output-format json.")
+        from gaia.print_mode import run as run_print_mode
+
+        sys.exit(
+            run_print_mode(
+                args.print_prompt,
+                model=args.print_model,
+                output_format=args.print_output_format or "text",
+                verbose=args.print_verbose,
+                max_steps=args.print_max_steps,
+                skip_permissions=args.print_skip_permissions,
+                full_access=args.print_full_access,
+                base_url=args.base_url,
+            )
+        )
 
     # Check if action is specified
     if not args.action:

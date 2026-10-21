@@ -172,6 +172,13 @@ One binary, two surfaces — always state which:
 Launching bare and typing lands your text in the Hub's filter box, not a chat
 composer. That produced a fake bug report once.
 
+For a single-turn check that needs no TUI — one tool path, one model —
+`gaia -p "<prompt>" --model <id> --output-format json` runs the flagship once,
+headless, and reports steps and tool calls. It has no conversation history and
+denies gated tools unless `--dangerously-skip-permissions`, so it replaces neither
+the follow-up canary nor the permission-gate checks. Set `GAIA_MEMORY_DB` for it
+too: it writes to the memory store like any other turn.
+
 ## Setup
 
 ### 1. Build

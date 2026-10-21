@@ -2951,8 +2951,9 @@ class ShellToolsMixin:
         """Whether this session is running under full access (#3373).
 
         One source of truth, read live: the session's output handler carries
-        ``full_access``, set only by the sidecar's ``PermissionState``
-        from ``--full-access`` or the TUI's ``/full-access``. Every gate reads
+        ``full_access``, set only by a named opt-in: the sidecar's
+        ``PermissionState`` from ``--full-access`` or the TUI's ``/full-access``,
+        or ``gaia -p --full-access``. Every gate reads
         this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
         executor — so they cannot hold different opinions about whether a
         command is legal.
@@ -3038,7 +3039,8 @@ class ShellToolsMixin:
         pre-approve for unattended runs. They were granted when commands outside
         the no-prompt list could not be approved at all, so neither widens what
         such a run executes. Only the console's ``full_access`` (the TUI's
-        ``/full-access``, on screen for the whole session) runs them unasked.
+        ``/full-access``, on screen for the whole session, or ``gaia -p
+        --full-access``, announced on stderr) runs them unasked.
         """
         console = getattr(self, "console", None)
         if getattr(console, "full_access", False) is True:
