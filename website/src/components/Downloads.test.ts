@@ -263,7 +263,7 @@ describe('Downloads.astro', () => {
 
     const windows = ctas().filter((b) => b.attrs['data-platform'] === 'win-x64');
     expect(windows.map((b) => [b.attrs['data-surface'], b.attrs['data-kind']])).toEqual([
-      ['setup', 'none'],
+      ['setup', 'setup-missing'],
     ]);
     expect(hrefsIn(windows[0])).toEqual([]);
     expect(textOf(windows[0])).toContain(`not published for v${VERSION}`);
@@ -478,7 +478,7 @@ describe('Downloads.astro with the one Windows setup', () => {
 
     const windows = ctas().filter((b) => b.attrs['data-platform'] === 'win-x64');
     expect(windows.map((b) => [b.attrs['data-surface'], b.attrs['data-kind']])).toEqual([
-      ['setup', 'none'],
+      ['setup', 'setup-missing'],
     ]);
     expect(textOf(windows[0])).toContain(`not published for v${SETUP_VERSION}`);
 

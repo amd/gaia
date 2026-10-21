@@ -188,7 +188,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
       holds a Windows x64 download. */}
   {!windowsSetup && (
     <div class="mx-auto w-full max-w-[720px] space-y-3 text-left">
-      <div data-dl-cta data-surface="setup" data-kind="none" data-platform="win-x64" hidden>
+      <div data-dl-cta data-surface="setup" data-kind="setup-missing" data-platform="win-x64" hidden>
         <p class="g-body text-[13.5px]">
           The Windows installer is not published for v{version}. Every other platform is
           listed below.
@@ -438,7 +438,8 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     });
 
     // Every platform stays one disclosure away, including this machine's other
-    // options — so someone who came for the standalone binary still finds it.
+    // options — so someone who came for a standalone binary still finds it
+    // (Windows x64 excepted: its only download is the setup).
     const list = root.querySelector<HTMLElement>('[data-dl-list]');
     const listLabel = root.querySelector('[data-dl-list-label]');
     if (!list || !listLabel) return;
