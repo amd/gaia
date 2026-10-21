@@ -61,7 +61,7 @@ def test_explicit_empty_scopes_takes_the_union_path(client, monkeypatch):
 def test_a_busy_connection_is_flagged_so_can_send_false_is_not_final(
     client, monkeypatch
 ):
-    """Mid-save in another GAIA process: scopes are unknown, so the entry says
+    """Mid-save by another GAIA operation: scopes are unknown, so the entry says
     busy and the TUI does not read ``can_send: false`` as "reconnect"."""
     import gaia.connectors.api as capi
 

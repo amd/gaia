@@ -955,7 +955,7 @@ type connectorEntry struct {
 	AccountEmail *string  `json:"account_email"`
 	Scopes       []string `json:"scopes"`
 	CanSend      bool     `json:"can_send"`
-	// Busy: another GAIA process is saving the connection, so its scopes and
+	// Busy: another GAIA operation is saving the connection, so its scopes and
 	// can_send are unknown for the moment, not false.
 	Busy bool `json:"busy"`
 }
@@ -1165,14 +1165,14 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	return row
 }
 
-// busyMailboxRow reports a mailbox another GAIA process is saving right now.
+// busyMailboxRow reports a mailbox another GAIA operation is saving right now.
 // Its scopes are unknown, not missing, so this is never a sign-in remedy.
 func busyMailboxRow(row Row, p *connectorEntry) Row {
 	row.State = StateUnknown
 	row.Disposition = status.DispositionNotify
 	row.Line = fmt.Sprintf("%s · being saved, not verified",
 		accountOr(p.AccountEmail, providerName(p.Provider)))
-	row.Detail = "Another GAIA process is saving this mailbox connection right now, " +
+	row.Detail = "Another GAIA operation is saving this mailbox connection right now, " +
 		"so whether it can read and send can't be checked yet."
 	row.Remedy = Remedy{
 		Action:  "Press r — this clears on its own in a moment.",
@@ -1332,11 +1332,11 @@ func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount i
 	case resp.Status == http.StatusOK:
 		return probeResult{verdict: probeUsable, trace: trace(outcome)}
 
-	// Another GAIA process held the connection mid-save; it clears in a moment.
+	// Another GAIA operation held the connection mid-save; it clears in a moment.
 	case connectionBeingSaved(detail):
 		return probeResult{
 			verdict: probeInconclusive,
-			cause: "Another GAIA process was saving the mailbox connection at that moment, " +
+			cause: "Another GAIA operation was saving the mailbox connection at that moment, " +
 				"so the mailbox could not be verified. " + detailSuffix(firstSentence(detail)),
 			remedy: Remedy{
 				Action:  "Press r — this clears on its own in a moment.",
@@ -1484,10 +1484,10 @@ func relayGaveUp(detail string) bool {
 }
 
 // connectionBeingSaved reports whether gaia.connectors refused because another
-// GAIA process held the connection mid-save (ConnectionBusyError), which clears
+// GAIA operation held the connection mid-save (ConnectionBusyError), which clears
 // itself in a moment.
 func connectionBeingSaved(detail string) bool {
-	return strings.Contains(strings.ToLower(detail), "being saved by another gaia process")
+	return strings.Contains(strings.ToLower(detail), "being saved by another gaia operation")
 }
 
 // transientCredentialGap reports whether the sidecar said the forwarded token

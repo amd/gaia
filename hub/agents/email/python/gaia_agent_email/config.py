@@ -747,7 +747,7 @@ class EmailAgentConfig:
             # of its calendar scopes. NOTE: get_connection() returns None once a
             # provider's re-auth tripwire has cleared it, so a scoped provider can
             # be transiently treated as unscoped; the error below still names the
-            # scope to grant. A busy row (another GAIA process mid-save) has no
+            # scope to grant. A busy row (another GAIA operation mid-save) has no
             # scopes yet, so it says busy instead of asking for a grant.
             rows = {p: get_connection(p) or {} for p in connected}
             scoped = [

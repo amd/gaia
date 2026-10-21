@@ -116,11 +116,11 @@ def load_current_connection(
     A connection that still mismatches is cleared (the store's tripwire raises
     ``AuthRequiredError``) only under the connection lock, so a forward landing
     meanwhile is never the one deleted. ``lock_held`` says the caller holds it;
-    otherwise it is taken without waiting, and when another process holds it
-    the connection is left in place and ``ConnectionBusyError`` is raised. An
-    unreadable blob (absent, torn or corrupt) is handed to the store under the
-    lock too, and raises ``ConnectionBusyError`` while another process holds
-    it. Blocking keyring I/O.
+    otherwise it is taken without waiting, and when anything else holds it
+    (another process, or another thread here) the connection is left in place
+    and ``ConnectionBusyError`` is raised. An unreadable blob (absent, torn or
+    corrupt) is handed to the store under the lock too, and raises
+    ``ConnectionBusyError`` while the lock is busy. Blocking keyring I/O.
     """
     provider = get_provider(provider_id)
     current = peek_connection(provider_id, account_email=account_email)

@@ -246,10 +246,10 @@ def inspect_provider(provider: str, *, probe: bool = True) -> Dict[str, Any]:
     result["scopes"] = granted
 
     if conn.get("error") == "busy":
-        # Mid-save in another GAIA process: not gone, just not judgeable now.
+        # Mid-save by another GAIA operation: not gone, just not judgeable now.
         result["state"] = STATE_ERROR
         result["detail"] = (
-            f"The {label} connection is being saved by another GAIA process "
+            f"The {label} connection is being saved by another GAIA operation "
             "right now. Retry in a moment."
         )
         return result

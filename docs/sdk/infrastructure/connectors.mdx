@@ -99,7 +99,8 @@ empty. An empty list satisfies the grant check vacuously, so it would hand back
 a full-capability token with the ledger never consulted; naming nothing is
 refused rather than treated as needing nothing.
 
-It raises `ConnectionBusyError` when another GAIA process is saving the
+It raises `ConnectionBusyError` when another GAIA operation (in this process
+or another) is saving the
 connection at that moment. That is transient, not a disconnect: retry shortly,
 and don't prompt the user to reconnect. Over HTTP it is a `503` with
 `{"error": "connection_busy"}` and a `Retry-After` header. Listing connections

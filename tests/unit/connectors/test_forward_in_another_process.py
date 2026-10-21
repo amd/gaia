@@ -304,7 +304,7 @@ def test_a_busy_connection_is_not_reported_as_disconnected(busy_mismatch):
     err = _busy_error()
 
     # The TUI keys on this phrase (preflight/check.go connectionBeingSaved).
-    assert "being saved by another GAIA process" in str(err)
+    assert "being saved by another GAIA operation" in str(err)
     tool_text = format_connector_error(err)
     assert tool_text.startswith("CONNECTION_BUSY:")
     assert "Retry" in tool_text and "click Connect" not in tool_text
@@ -534,7 +534,7 @@ def test_a_mismatch_is_not_cleared_while_another_thread_here_holds_the_lock(
     holder.start()
     try:
         assert holding.wait(_CHILD_TIMEOUT)
-        with pytest.raises(ConnectionBusyError):
+        with pytest.raises(ConnectionBusyError, match="this process or another"):
             _authorize_access(
                 provider="google",
                 scopes=[GMAIL],
@@ -639,7 +639,7 @@ def test_the_startup_sweep_leaves_a_busy_connection_in_place(busy_mismatch, capl
         tripwire_check()
 
     assert _stored_refresh_token() == "forwarded-refresh"
-    assert "being saved by another GAIA process" in caplog.text
+    assert "being saved by another GAIA operation" in caplog.text
     assert "cleared by tripwire" not in caplog.text
 
 

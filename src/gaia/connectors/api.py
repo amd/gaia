@@ -420,7 +420,7 @@ def list_connections() -> List[Dict[str, Any]]:
     #2466), and ``None`` otherwise — including for every Google connection,
     which has no equivalent notion.
 
-    A row with ``"error": "busy"`` is a connection another GAIA process is
+    A row with ``"error": "busy"`` is a connection another GAIA operation is
     writing right now: it is kept, because it is not known to be gone, with
     its display metadata as last read and ``scopes`` empty, because scopes
     that may be about to change can't be trusted for a decision. Asking
@@ -477,7 +477,7 @@ def list_connections() -> List[Dict[str, Any]]:
 def get_connection(provider: str) -> Optional[Dict[str, Any]]:
     """Return one connection's metadata, or None if missing.
 
-    A connection another process is writing comes back as its busy row (see
+    A connection another GAIA operation is writing comes back as its busy row (see
     :func:`list_connections`), never as None.
     """
     for entry in list_connections():
@@ -868,7 +868,7 @@ def tripwire_check() -> None:
             continue
         except ConnectionBusyError:
             logger.info(
-                "tripwire: provider %s is being saved by another GAIA process; "
+                "tripwire: provider %s is being saved by another GAIA operation; "
                 "left in place",
                 provider_id,
             )

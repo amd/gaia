@@ -200,13 +200,13 @@ const (
 		"reconnect with `gaia connectors connect google --scopes <scopes>` (or Settings -> " +
 		`Connections in the Agent UI)."}`
 
-	// Another GAIA process held the connection mid-save. VERBATIM from
+	// Another GAIA operation held the connection mid-save. VERBATIM from
 	// gaia.connectors.errors.ConnectionBusyError via api_routes' 502 branch.
 	searchConnectionBusy = `{"detail":"The google connection is being saved by another GAIA ` +
-		"process right now, so it was left as is. Retry in a moment; if this keeps " +
+		"operation (in this process or another) right now, so it was left as is. Retry in a moment; if this keeps " +
 		"happening, look for a stuck `gaia daemon` or Agent UI process.\"}"
 
-	// The connector list while another GAIA process is saving the connection:
+	// The connector list while another GAIA operation is saving the connection:
 	// scopes and can_send are unknown, not missing.
 	connectorsBusy = `{"agent_id":"installed:email","providers":[` +
 		`{"provider":"google","connected":true,"account_email":"you@gmail.com",` +
@@ -2251,7 +2251,7 @@ func TestALapsedForwardedTokenIsNotReportedAsADeadSignIn(t *testing.T) {
 	}
 }
 
-// A connection another GAIA process is mid-save on refuses with a 502 that says
+// A connection another GAIA operation is mid-save on refuses with a 502 that says
 // so. It clears in a moment, so it must not cost the user a browser sign-in.
 func TestAConnectionBeingSavedElsewhereIsNotReportedAsADeadSignIn(t *testing.T) {
 	rep := Check(context.Background(),

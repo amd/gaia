@@ -219,7 +219,7 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
         return None, _not_connected(provider)
     if conn.get("error") == "busy":
         return None, (
-            "being saved by another GAIA process right now, so its state can't "
+            "being saved by another GAIA operation right now, so its state can't "
             "be read yet. Retry in a moment"
         )
     if conn.get("error") == "configuration":

@@ -121,7 +121,7 @@ def _read_connector_status() -> Dict[str, Any]:
                 "account_email": _account_email(conn.get("account_email")),
                 "scopes": conn.get("scopes", []),
                 "can_send": _can_send(pid, conn),
-                # Mid-save in another GAIA process: scopes/can_send are unknown.
+                # Mid-save by another GAIA operation: scopes/can_send are unknown.
                 "busy": conn.get("error") == "busy",
             }
         )

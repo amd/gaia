@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """The calendar provider pick must not ask for a grant the user already gave.
 
-While another GAIA process is saving a connection, the connection listing
+While another GAIA operation is saving a connection, the connection listing
 returns it as a busy row with no scopes. Read as "no calendar scope", that
 sends the user off to grant permissions they already have.
 """

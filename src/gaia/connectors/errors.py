@@ -227,7 +227,7 @@ class ConnectionRevokedError(ConnectorsError):
 
 
 class ConnectionBusyError(ConnectorsError):
-    """Another GAIA process is writing this connection right now; retry.
+    """Another GAIA operation is writing this connection right now; retry.
 
     Transient: the connection is NOT known to be gone, so callers must not
     treat it like ``AuthRequiredError`` (no reconnect prompt, no 401, no
@@ -240,8 +240,8 @@ class ConnectionBusyError(ConnectorsError):
         self.provider = provider
         self.connection = connection
         super().__init__(
-            f"The {provider} connection is being saved by another GAIA process "
-            "right now, so it was left as is. Retry in a moment; if this keeps "
+            f"The {provider} connection is being saved by another GAIA operation "
+            "(in this process or another) right now, so it was left as is. Retry in a moment; if this keeps "
             "happening, look for a stuck `gaia daemon` or Agent UI process."
         )
 

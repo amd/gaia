@@ -270,7 +270,7 @@ class ConnectionForwarder:
                 provider=provider, scopes=required, agent_id=grant_agent_id
             )
         except ConnectionBusyError as e:
-            # Another process is mid-save: the connection is not known to be
+            # Another GAIA operation is mid-save: the connection is not known to be
             # gone, so the sidecar keeps its forward until the next refresh.
             logger.warning(
                 "forward-out: '%s' for agent '%s' is busy (%s); retaining any "
