@@ -57,7 +57,7 @@ not add one.
 The committed lock carries real hashes only once a flagship release fills it in:
 `release_agent_gaia.yml` regenerates it with
 `hub/agents/gaia/python/packaging/gen_binaries_lock.py` and opens a PR
-(`release/flagship-lock-v<version>`) committing it to main. Until that PR merges,
+(`flagship-lock/v<version>`) committing it to main. Until that PR merges,
 the installer build fails — on a placeholder, or on hashes from the previous
 release. That is the intended state; the same placeholder already blocks
 `npx @amd-gaia/gaia`. Merge the PR rather than editing the hashes by hand.

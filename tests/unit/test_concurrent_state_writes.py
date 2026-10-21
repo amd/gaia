@@ -666,3 +666,42 @@ def test_hub_install_guard_holds_across_processes(tmp_path):
         rc, _, err = _finish([other])[0]
     assert rc == 0, err
     assert installer.read_sentinel("demo", root).version == "1.0.0"
+
+
+def test_config_save_into_an_acl_denied_directory_fails_loudly(tmp_path):
+    """A save that cannot land names the folder and leaves the old file whole."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from tests.unit.denied_folder import cannot_create_files_in
+
+    config_dir = tmp_path / "denied"
+    config_dir.mkdir()
+    path = config_dir / "config.json"
+    path.write_text(json.dumps({"profile": "npu"}), encoding="utf-8")
+    with cannot_create_files_in(config_dir):
+        with pytest.raises(GaiaConfigError) as exc:
+            GaiaConfig.save_key("default_model", "other", path)
+        assert str(config_dir) in str(exc.value)
+        assert GaiaConfig.load(path).profile == "npu"
+    assert json.loads(path.read_text(encoding="utf-8")) == {"profile": "npu"}
+
+
+def test_config_save_with_an_existing_lock_in_a_denied_directory_fails_loudly(
+    tmp_path,
+):
+    """The lock is taken, but the new copy cannot be created: still a clear error."""
+    from gaia.config import GaiaConfig
+    from gaia.utils.file_lock import lock_path_for
+    from tests.unit.denied_folder import cannot_create_files_in
+
+    config_dir = tmp_path / "denied"
+    config_dir.mkdir()
+    path = config_dir / "config.json"
+    path.write_text(json.dumps({"profile": "npu"}), encoding="utf-8")
+    lock_path_for(path).write_text("", encoding="utf-8")
+    with cannot_create_files_in(config_dir):
+        start = time.monotonic()
+        with pytest.raises(OSError) as exc:
+            GaiaConfig.save_key("default_model", "other", path)
+        assert time.monotonic() - start < 10
+        assert str(config_dir) in str(exc.value)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"profile": "npu"}

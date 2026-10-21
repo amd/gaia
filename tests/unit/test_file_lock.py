@@ -360,39 +360,6 @@ def test_a_held_lock_can_be_released_from_another_thread(tmp_path):
     assert _queue_files(target) == []
 
 
-def test_a_checker_never_deletes_an_entry_its_owner_has_just_locked(
-    tmp_path, monkeypatch
-):
-    """The owner locks its new entry the instant a checker that took it for
-    dead lets go: the owner must then either see it gone or keep it."""
-    from gaia.utils import file_lock as mod
-
-    target = tmp_path / "state.json"
-    lock = lock_path_for(target)
-    owner = mod._create_entry(lock, target)  # created, not locked yet
-    real_release = mod._release_fd
-    owner_saw_it_in_place = []
-
-    def checker_lets_go(fd):
-        real_release(fd)
-        if not owner_saw_it_in_place:
-            locked = mod.try_lock(owner.fd)
-            owner_saw_it_in_place.append(
-                locked and mod._same_file(owner.fd, owner.path)
-            )
-
-    monkeypatch.setattr(mod, "_release_fd", checker_lets_go)
-    try:
-        mod._entry_state(owner.path, lock, delete_dead=True)
-    finally:
-        monkeypatch.undo()
-    try:
-        if owner_saw_it_in_place[0]:
-            assert owner.path.exists(), "deleted an entry its owner holds"
-    finally:
-        owner.leave()
-
-
 def test_an_earlier_entry_seen_before_its_owner_locked_it_still_counts(tmp_path):
     """A waiter that polls inside another's create-then-lock gap must not skip
     that entry for the rest of its wait, or it jumps the queue."""
@@ -583,3 +550,149 @@ def test_processes_get_the_lock_in_the_order_they_asked(tmp_path):
     # The holder plus the four that queued before it.
     assert "5 other GAIA operations were ahead" in out, out + err
     assert _queue_files(target) == []
+
+
+# ---------------------------------------------------------------------------
+# Crashes and races that must not lose data or reorder the queue
+# ---------------------------------------------------------------------------
+
+_HOLD_THEN_HANG = """
+import sys, time
+from pathlib import Path
+from gaia.utils.file_lock import file_lock
+
+target, marker = sys.argv[1:3]
+with file_lock(target):
+    Path(marker).write_text("held", encoding="utf-8")
+    time.sleep(120)
+"""
+
+_REWRITE_FOREVER = """
+import json, sys
+from gaia.utils.file_lock import file_lock, write_text_atomic
+
+target = sys.argv[1]
+i = 0
+while True:
+    with file_lock(target):
+        write_text_atomic(target, json.dumps({"n": i, "pad": "x" * 200_000}))
+    i += 1
+"""
+
+
+def _spawn(tmp_path, script, *args):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_SRC) + os.pathsep + env.get("PYTHONPATH", "")
+    env["GAIA_HOME"] = str(tmp_path / "gaia-home")
+    env["HOME"] = env["USERPROFILE"] = str(tmp_path / "home")
+    return subprocess.Popen(
+        [sys.executable, "-c", script, *map(str, args)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def test_a_process_killed_while_holding_the_lock_frees_it(tmp_path):
+    """The OS drops a dead holder's lock, and the queue is left clean."""
+    target = tmp_path / "state.json"
+    marker = tmp_path / "held"
+    holder = _spawn(tmp_path, _HOLD_THEN_HANG, target, marker)
+    try:
+        deadline = time.monotonic() + 120
+        while not marker.exists():
+            assert holder.poll() is None, holder.communicate()
+            assert time.monotonic() < deadline, "holder never took the lock"
+            time.sleep(0.01)
+        with pytest.raises(FileLockTimeout):
+            with file_lock(target, timeout=0.1):
+                pass
+    finally:
+        holder.kill()
+        holder.communicate(timeout=30)
+    # A holder keeps no live entry, and the waiter that timed out took its own.
+    assert _queue_files(target) == []
+    with file_lock(target, timeout=5):
+        pass
+    assert _queue_files(target) == []
+
+
+def test_a_writer_killed_mid_rewrite_leaves_a_whole_file(tmp_path):
+    """Killing a writer at an arbitrary point never leaves a torn target."""
+    import json
+
+    target = tmp_path / "state.json"
+    write_text_atomic(target, json.dumps({"n": -1}))
+    for _ in range(3):
+        writer = _spawn(tmp_path, _REWRITE_FOREVER, target)
+        time.sleep(1.0)
+        assert writer.poll() is None, writer.communicate()
+        writer.kill()
+        writer.communicate(timeout=30)
+        with file_lock(target, timeout=5):
+            doc = json.loads(target.read_text(encoding="utf-8"))
+        assert isinstance(doc["n"], int)
+
+
+def test_leaving_never_deletes_a_newer_entry_with_the_same_name(tmp_path, monkeypatch):
+    """A newcomer that reuses a leaving waiter's entry name keeps its entry."""
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    entry = mod._join_queue(lock_path_for(target), target)
+    newcomer = []
+    real_release = mod._release_fd
+
+    def release_then_newcomer_takes_the_name(fd):
+        real_release(fd)
+        if fd == entry.fd and not entry.path.exists():
+            fd2 = os.open(str(entry.path), os.O_RDWR | os.O_CREAT | os.O_EXCL)
+            newcomer.append(fd2)
+
+    monkeypatch.setattr(mod, "_release_fd", release_then_newcomer_takes_the_name)
+    try:
+        entry.leave()
+        if newcomer:
+            assert entry.path.exists(), "a newcomer's queue entry was deleted"
+            assert mod._same_file(newcomer[0], entry.path)
+    finally:
+        for fd in newcomer:
+            os.close(fd)
+    if os.name != "nt":
+        # POSIX unlinks while still locked, so the name was free for the newcomer.
+        assert newcomer
+
+
+def test_probing_a_new_entry_never_strands_its_owner(tmp_path, monkeypatch):
+    """An owner that locks its entry just after a probe must not lose the file.
+
+    A waiter can probe an entry between its owner's create and lock. If the
+    owner then locks it and sees its file in place, the probe must not delete
+    it, or later waiters would stop counting the owner and jump ahead.
+    """
+    from gaia.daemon.lock import try_lock
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    entry = mod._create_entry(lock_path_for(target), target)
+    owner_fd = entry.fd
+    seen = {}
+    real_release = mod._release_fd
+
+    def owner_locks_right_after_the_probe(fd):
+        real_release(fd)
+        if "same" not in seen:
+            seen["locked"] = try_lock(owner_fd)
+            seen["same"] = mod._same_file(owner_fd, entry.path)
+
+    monkeypatch.setattr(mod, "_release_fd", owner_locks_right_after_the_probe)
+    try:
+        state = mod._entry_state(entry.path, lock_path_for(target), delete_dead=True)
+        assert state == "dead"
+        if seen.get("locked") and seen["same"]:
+            assert entry.path.exists(), "an owner's locked entry was deleted"
+    finally:
+        monkeypatch.setattr(mod, "_release_fd", real_release)
+        real_release(owner_fd)
+        mod._discard_entry(entry.path)

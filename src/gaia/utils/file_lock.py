@@ -30,7 +30,6 @@ import errno
 import os
 import re
 import stat
-import tempfile
 import threading
 import time
 import uuid
@@ -215,6 +214,22 @@ def _discard_entry(entry: Path) -> None:
         log.debug("Left queue entry %s for the next waiter: %s", entry, e)
 
 
+def _release_and_discard(fd: int, entry: Path) -> None:
+    """Release the lock *fd* holds on *entry* and delete *entry*.
+
+    POSIX deletes first, while still locked, so no waiter can create a new entry
+    under the same name in between. Windows cannot delete an open file, so it
+    releases first; an open handle there also protects a newer entry's name.
+    """
+    if os.name != "nt":
+        _discard_entry(entry)
+    try:
+        _release_fd(fd)
+    finally:
+        if os.name == "nt":
+            _discard_entry(entry)
+
+
 def _probe_lock(fd: int) -> Optional[bool]:
     """Take *fd*'s lock if free: True taken, False held elsewhere, None unknown."""
     if os.name == "nt":
@@ -272,14 +287,13 @@ def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
     try:
         os.lseek(fd, len(_SPENT_MARK), os.SEEK_SET)
         state = _SPENT if os.read(fd, len(_SPENT_MARK)) == _SPENT_MARK else _DEAD
-        if delete_dead and os.name != "nt":
-            # Deleted while locked, so an owner that locks it next sees it gone.
-            _discard_entry(entry)
-    finally:
+    except BaseException:
         _release_fd(fd)
-    if delete_dead and os.name == "nt":
-        # Windows refuses the delete while the owner still has it open.
-        _discard_entry(entry)
+        raise
+    if delete_dead:
+        _release_and_discard(fd, entry)
+    else:
+        _release_fd(fd)
     return state
 
 
@@ -319,16 +333,7 @@ class _QueueEntry:
         return self.path
 
     def leave(self) -> None:
-        if os.name == "nt":
-            try:
-                _release_fd(self.fd)
-            finally:
-                _discard_entry(self.path)
-            return
-        try:
-            _discard_entry(self.path)
-        finally:
-            _release_fd(self.fd)
+        _release_and_discard(self.fd, self.path)
 
 
 def _create_entry(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
@@ -371,8 +376,10 @@ def _join_queue(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
         deadline = time.monotonic() + _ENTRY_LOCK_SECONDS
         while not try_lock(entry.fd):
             if time.monotonic() >= deadline:
+                ours = _same_file(entry.fd, entry.path)
                 os.close(entry.fd)
-                _discard_entry(entry.path)
+                if ours:
+                    _discard_entry(entry.path)
                 raise FileLockTimeout(
                     f"Could not lock this waiter's queue entry {entry.path} for "
                     f"{target}: another process held it for over "
@@ -624,7 +631,23 @@ def write_bytes_atomic(
     """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    tmp = str(target.with_name(f".{target.name}.{uuid.uuid4().hex}"))
+    try:
+        # One create, not tempfile.mkstemp: on Windows it retries a refused
+        # create 10,000 times whenever os.access calls the folder writable.
+        fd = os.open(
+            tmp,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+    except PermissionError as e:
+        raise PermissionError(
+            e.errno,
+            f"Cannot write {target}: this user cannot create files in "
+            f"{target.parent}. Fix its permissions or point GAIA at a folder "
+            "this user can write",
+            e.filename,
+        ) from e
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
