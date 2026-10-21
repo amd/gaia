@@ -77,7 +77,7 @@ Two structural facts matter more than any single row:
 | 401/403 gives the wrong app's advice ([#5440](https://github.com/amd/gaia/pull/5440)) | Provider fault | A provider that fails partway through a turn, asserted on each front-end | No front-end test injects provider errors. Eval lanes use a healthy local model |
 | Model died mid-turn but turn shown as done ([#5432](https://github.com/amd/gaia/pull/5432)) | Provider fault | A scripted stall, 404 or exhausted-retries case driven to UI status | Same reason. `error_recovery` has 3 scenarios, and none of them breaks the model |
 | Web search dies under DDG rate limits ([#5434](https://github.com/amd/gaia/pull/5434)) | External service | A fixture search engine that refuses bursts with 202 or 429 | `res_web_rate_limited` covers a *fetch* 429, not parallel *searches* |
-| One parallel batch kills the turn ([#5413](https://github.com/amd/gaia/pull/5413)) | Model misbehavior | A scripted model that emits a failing parallel batch | The scenario eval can't make a model do a specific thing. Found by an external benchmark |
+| One parallel batch kills the turn ([#5413](https://github.com/amd/gaia/pull/5413)) | Model misbehavior | A scripted model that emits a failing parallel batch | The scenario eval can't make a model do a specific thing. Found by manual testing, not CI |
 | False "tests pass" claims slip past the checker ([#5415](https://github.com/amd/gaia/pull/5415)) | Honesty | Property tests on mixed clauses, plus a gated `adversarial` task suite | The claim checker skipped any sentence with a negation. The trap suite has no committed expectations |
 | Context overflow ([#5219](https://github.com/amd/gaia/pull/5219), [#5310](https://github.com/amd/gaia/pull/5310)) | Resource exhaustion | A long tool-heavy turn at 32K/64K with a second model loaded | Scenarios max out at ~15 turns with one model loaded. The deterministic stress test lives only in #5310 |
 | Unit tests kill developers' Lemonade ([#5439](https://github.com/amd/gaia/pull/5439)) | Test isolation | A guard that stops the unit suite from touching real processes | A mock PID plus a `__del__` finalizer. Found when it killed an eval that was running |
@@ -151,9 +151,9 @@ By class: **7 of 17 are lifecycle or multi-process**, 4 are provider or model fa
 | Flaky scenarios, run-to-run noise | No (one iteration, no re-run) | No | #4473 |
 | Baseline compare | Partial (flagship compares, report only) | No (#5197; `gaia_git`, `gaia_resilience` have no baseline) | — |
 | Harness depends on outside networks | No | No (code retrieval red on a `git fetch`) | Red that isn't the product teaches people to ignore red |
-| Fixture integrity before grading *(from ai-pc-evals)* | No | No | Staged fixtures are never hash-checked |
-| Unrequested writes and secret leaks in deliverables *(from ai-pc-evals)* | Partial (`bench/leaks.py` for the task bench) | No | The scenario eval never compares the workspace before and after |
-| Checker validation *(from ai-pc-evals)* | No | No | Deterministic criteria aren't proven to fail on wrong work |
+| Fixture integrity before grading | No | No | Staged fixtures are never hash-checked |
+| Unrequested writes and secret leaks in deliverables | Partial (`bench/leaks.py` for the task bench) | No | The scenario eval never compares the workspace before and after |
+| Checker validation | No | No | Deterministic criteria aren't proven to fail on wrong work |
 
 ---
 
@@ -185,8 +185,8 @@ Would have caught #5469, #5467, #5472, #5438, #5386, #5282, #5378 and #5377. Abo
 
 - Fix #5197. Commit `gaia_git` and `gaia_resilience` baselines and the task expectations from a real run. Remove the #3016 exception (that issue is closed).
 - Add a `release-verdict` job that `approve-publish` waits on **for final tags only**. It fails on missing or unmeasured scenarios, and on **confirmed** regressions in a short must-not-regress set: `gaia_honesty`, `gaia_resilience`, `adversarial`, `error_recovery`, and the security and injection scenarios. Anything else that regresses needs a waiver naming the approver in the tag annotation.
-- **Confirm before failing:** re-run only the scenarios that flipped from PASS to FAIL, two more times, and count a regression only if most runs fail (#4473). Compare scores against a measured noise floor: re-grade the same transcripts twice and ignore differences smaller than that spread *(from ai-pc-evals)*.
-- **Retry rule** *(from ai-pc-evals)*: re-run a scenario that produced no work (an infra error) up to twice and record every attempt. Never re-run one that produced work.
+- **Confirm before failing:** re-run only the scenarios that flipped from PASS to FAIL, two more times, and count a regression only if most runs fail (#4473). Compare scores against a measured noise floor: re-grade the same transcripts twice and ignore differences smaller than that spread.
+- **Retry rule**: re-run a scenario that produced no work (an infra error) up to twice and record every attempt. Never re-run one that produced work.
 - A final tag can't inherit a `[skip eval]` pass. It needs a measured run on its own commit, or on an RC whose diff touches no LLM-affecting path.
 - Make the benchmarks self-contained: vendor the code-retrieval repositories as cached archives, so a red result means the product broke, not someone else's network.
 
@@ -212,7 +212,7 @@ Start from an empty `GAIA_HOME` and a clean image. Install the wheel and the fro
 
 ### 7. A soak suite: nightly, hosted
 
-Run a 200-turn tool-heavy session against the fault server, and an 8-hour daemon with schedules firing. Sample RSS, handles, threads, open files and DB size every 30 s, and fail on growth that doesn't level off. Sampling resources throughout a run, not just at the end, is *(from ai-pc-evals)*.
+Run a 200-turn tool-heavy session against the fault server, and an 8-hour daemon with schedules firing. Sample RSS, handles, threads, open files and DB size every 30 s, and fail on growth that doesn't level off.
 
 - 200 turns with 3 MB tool results stay under the context window, and memory levels off.
 - A daemon that has run for 8 hours answers `/health` within its SLO, and its log and DB rotate.
@@ -225,7 +225,7 @@ Only for faults that need a real model's behavior under them. A scenario-level `
 - A second front-end opens the same session mid-stream. Both show one consistent transcript.
 - Overflow the context with a VLM loaded alongside. The trim-and-retry path answers from the evidence.
 
-Add two checks to every scenario: compare the workspace before and after, and fail on unrequested writes or deletes; and search deliverables for planted secret markers *(both from ai-pc-evals)*. Also validate every deterministic success criterion: it must pass a known-good reference transcript and fail an untouched one and a plausible wrong one *(from ai-pc-evals)*.
+Add two checks to every scenario: compare the workspace before and after, and fail on unrequested writes or deletes; and search deliverables for planted secret markers. Also validate every deterministic success criterion: it must pass a known-good reference transcript and fail an untouched one and a plausible wrong one.
 
 ### 9. A hardware chaos lane: release tags, one Strix Halo machine
 
