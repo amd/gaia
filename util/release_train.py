@@ -61,6 +61,7 @@ AGENT_UI_NPM = "@amd-gaia/agent-ui"
 FLAGSHIP_NPM = "@amd-gaia/gaia"
 # Decision 4 of the plan: the flagship's train name, with a `gaia-agent` bin.
 FLAGSHIP_NPM_TRAIN = "@amd-gaia/agent"
+TUI_SUMS = "gaia-tui-SHA256SUMS.txt"
 
 # Same platform keys and order as tui_installers.yml's six targets.
 TUI_PLATFORMS = (
@@ -804,6 +805,35 @@ def verify(
             continue
         a.sha256, a.size = sha256(a.path), a.path.stat().st_size
         report.artifacts.append(a)
+    # install.sh and install.ps1 verify the terminal binary against this file.
+    for f in (rc, final):
+        tui = sorted(
+            (
+                a
+                for a in report.artifacts
+                if a.flavor == f.name and a.kind == "tui-binary"
+            ),
+            key=lambda a: a.name,
+        )
+        if not tui:
+            continue
+        sums = out / f.name / TUI_SUMS
+        sums.parent.mkdir(parents=True, exist_ok=True)
+        sums.write_text(
+            "".join(f"{a.sha256}  {a.name}\n" for a in tui), encoding="utf-8"
+        )
+        report.artifacts.append(
+            Artifact(
+                f.name,
+                TUI_SUMS,
+                "checksums",
+                sums,
+                f.npm,
+                [_gh(f)],
+                sha256=sha256(sums),
+                size=sums.stat().st_size,
+            )
+        )
     by_name = {(a.flavor, a.name): a for a in report.artifacts}
 
     check_versions(report, by_name, rc, final, agent_ver)

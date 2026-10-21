@@ -286,6 +286,13 @@ def test_a_clean_build_passes_and_lists_every_destination(tmp_path, flavors):
     assert f"amd_gaia-{rc.pep440}.tar.gz" in sums
     assert f"amd_gaia-{final.pep440}.tar.gz" not in sums
     assert "twin-diff" in "\n".join(report.checks)
+    # The install scripts verify the terminal binary against this file.
+    for f in flavors:
+        assert (f.name, rt.TUI_SUMS) in names
+        lines = (tmp_path / "out" / f.name / rt.TUI_SUMS).read_text().splitlines()
+        assert len(lines) == len(rt.TUI_PLATFORMS)
+        linux = art / f"{f.name}-tui-binaries" / "gaia-linux-x64"
+        assert f"{rt.sha256(linux)}  gaia-linux-x64" in lines
 
 
 def test_the_lock_pins_this_runs_bytes(tmp_path, flavors):
