@@ -1047,7 +1047,7 @@
       "evidence": [
         {
           "page": 5,
-          "quote": "and the inner-layer has dimensionality df f = 2048."
+          "quote": "and the inner-layer has dimensionality df f"
         }
       ],
       "tags": [
@@ -1087,7 +1087,7 @@
       "evidence": [
         {
           "page": 8,
-          "quote": "During training, we employed label smoothing of value ϵls = 0.1"
+          "quote": "During training, we employed label smoothing of value ϵls"
         }
       ],
       "tags": [
