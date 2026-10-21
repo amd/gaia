@@ -3,10 +3,8 @@
 """The agent's per-reply output cap must reach the wire, sized per model.
 
 Cloud reasoning models spend output tokens on thinking, so an 8K cap sized for a
-local 32K context truncates them. A local model loaded with a larger window gets
-a proportionally larger cap: Qwen3.6 at 64K kept cutting big scripts off at 8K.
-These tests read the JSON body Lemonade actually receives, not the kwargs
-handed to an internal client.
+local 32K context truncates them. These tests read the JSON body Lemonade
+actually receives, not the kwargs handed to an internal client.
 """
 
 import json
@@ -21,9 +19,7 @@ from gaia.agents.base.agent import (
     CLOUD_MAX_OUTPUT_TOKENS,
     LOCAL_MAX_OUTPUT_TOKENS,
     Agent,
-    local_max_output_tokens,
 )
-from gaia.llm import lemonade_client
 from gaia.llm.lemonade_client import LemonadeClient
 
 BASE_URL = "http://127.0.0.1:9/api/v1"
@@ -38,13 +34,9 @@ class _Agent(Agent):
 
 @pytest.fixture
 def no_local_model_management(monkeypatch):
-    """Local model loading is not what these tests exercise; the request is.
-
-    The local window is pinned to 32K, where the cap is the 8K floor.
-    """
+    """Local model loading is not what these tests exercise; the request is."""
     monkeypatch.setattr(LemonadeClient, "_ensure_model_loaded", lambda *a, **k: None)
     monkeypatch.setattr(LemonadeClient, "health_check", lambda self: {"ok": True})
-    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 32768)
 
 
 def _request_bodies(model_id, **agent_kwargs):
@@ -116,74 +108,6 @@ def test_catalog_metadata_marks_a_custom_provider_as_cloud(no_local_model_manage
         "recipe": "cloud"
     }
     assert agent._max_output_tokens() == CLOUD_MAX_OUTPUT_TOKENS
-
-
-@pytest.mark.parametrize(
-    "ctx,expected",
-    [
-        (8192, 4096),
-        (16384, 8192),
-        (32768, 8192),
-        (65536, 16384),
-        (131072, 32768),
-        (262144, 32768),
-    ],
-)
-def test_local_cap_is_a_quarter_of_the_window_within_bounds(ctx, expected):
-    assert local_max_output_tokens(ctx) == expected
-
-
-def test_a_large_local_window_raises_the_cap_on_the_wire(
-    no_local_model_management, monkeypatch
-):
-    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 65536)
-    bodies = _request_bodies(LOCAL_MODEL)
-    assert {b["max_completion_tokens"] for b in bodies} == {16384}
-
-
-def _local_agent():
-    return _Agent(
-        model_id=LOCAL_MODEL, base_url=BASE_URL, skip_lemonade=True, silent_mode=True
-    )
-
-
-def test_the_cap_follows_a_window_that_shrinks(no_local_model_management, monkeypatch):
-    """Free memory can shrink the window between turns; the cap must follow it,
-    or a cap sized for 128K would take a 32K window whole."""
-    from gaia.agents.base.history import history_budget
-
-    window = {"ctx": 131072}
-    monkeypatch.setattr(
-        lemonade_client, "resolve_ctx_size", lambda *a, **k: window["ctx"]
-    )
-    agent = _local_agent()
-    assert agent._max_output_tokens() == 32768
-
-    window["ctx"] = 32768
-    assert agent._max_output_tokens() == 8192
-    assert history_budget(agent, "hi") > 0
-
-
-def test_a_pinned_client_window_sizes_the_cap(no_local_model_management, monkeypatch):
-    """A client pinned to 16K loads at 16K, whatever the model would get."""
-    from gaia.agents.base.history import context_window
-
-    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 65536)
-    agent = _local_agent()
-    agent.chat.llm_client._backend.ctx_size_override = 16384
-
-    assert context_window(agent) == 16384
-    assert agent._max_output_tokens() == 8192
-
-
-def test_history_reserves_the_cap_actually_sent(no_local_model_management, monkeypatch):
-    from gaia.agents.base.history import _reply_reserve
-
-    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda *a, **k: 65536)
-    agent = _Agent(
-        model_id=LOCAL_MODEL, base_url=BASE_URL, skip_lemonade=True, silent_mode=True
-    )
-    assert _reply_reserve(agent) == 16384
 
 
 @pytest.mark.parametrize("bad", [0, -1, 1.5, "32768", True])
