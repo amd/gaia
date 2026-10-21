@@ -28,6 +28,34 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it('shows short code whole, with no expand control', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },
+            summary: 'print(1)\nprint(2)',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-code').textContent).toBe('print(1)\nprint(2)');
+        expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+    });
+
+    it('collapses long code and shows every line on "Show all"', () => {
+        const code = Array.from({ length: 30 }, (_, i) => `line_${i + 1} = ${i + 1}`).join('\n');
+        useNotificationStore.getState().addNotification(request({
+            tool: 'run_python', toolArgs: { code },
+            // What a relayed agent's summary looks like: the middle elided.
+            summary: 'line_1 = 1\n…[18 more lines]…\nline_30 = 30',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const block = screen.getByTestId('perm-code');
+        expect(block.textContent).toContain('line_12 = 12');
+        expect(block.textContent).not.toContain('line_13 = 13');
+        // The code block replaces the shortened summary rather than repeating it.
+        expect(screen.getByRole('alertdialog')).not.toHaveTextContent('more lines');
+        fireEvent.click(screen.getByRole('button', { name: 'Show all 30 lines' }));
+        expect(screen.getByTestId('perm-code').textContent).toBe(code);
+        expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+    });
+
     it('renders nothing when this chat has no pending request', () => {
         useNotificationStore.getState().addNotification(request({ sessionId: 'other-chat' }));
         const { container } = render(<PermissionPrompt sessionId="chat-1" />);

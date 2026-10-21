@@ -13,6 +13,7 @@ accessed through ``gaia.ui.server`` so that test patches applied to
 import asyncio
 import logging
 import os
+import sqlite3
 import sys
 import threading
 from typing import List, Literal, Optional
@@ -30,6 +31,7 @@ from .._chat_helpers import _spawn_background, stuck_producer
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
+from ..restart_recovery import CANCELLED_TURN_NOTICE
 from ..run_manager import run_manager
 from ..security import flagship_only
 from ..sse_handler import (
@@ -133,13 +135,14 @@ async def send_message(
     # chat while it waits doesn't drop it. A non-streamed one is saved first,
     # so a long wait never loses it.
     holds_turn = False
+    question_id = None
     if not request.stream:
         try:
-            db.add_message(sid, "user", request.message)
+            question_id = db.begin_turn(sid, request.message)
             await turn_queue.acquire(sid)
             holds_turn = True
         except TurnCancelled:
-            db.add_message(sid, "assistant", "Cancelled.")
+            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
             session_lock.release()
             raise HTTPException(
                 status_code=409,
@@ -148,10 +151,12 @@ async def send_message(
             )
         except asyncio.CancelledError:
             # The client left while waiting: close the turn it saved.
-            db.add_message(sid, "assistant", "Cancelled.")
+            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
             session_lock.release()
             raise
         except BaseException:
+            if question_id is not None:
+                db.discard_turn(question_id)
             session_lock.release()
             raise
 
@@ -191,7 +196,7 @@ async def send_message(
 
             async def _stream():
                 try:
-                    db.add_message(request.session_id, "user", request.message)
+                    db.begin_turn(request.session_id, request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
                     async for chunk in srv._stream_chat_response(
@@ -217,30 +222,44 @@ async def send_message(
             run_status = "failed"
             try:
                 model_messages = []
-                turn_box: dict = {}
-                response_text = await srv._get_chat_response(
-                    db,
-                    session,
-                    agent_request,
-                    model_messages=model_messages,
-                    turn_box=turn_box,
-                )
-                # Clean LLM output artifacts (same pipeline as streaming path)
-                if response_text:
-                    response_text = _clean_answer_json(response_text)
-                    response_text = _TOOL_CALL_JSON_SUB_RE.sub("", response_text)
-                    response_text = _THOUGHT_JSON_SUB_RE.sub("", response_text)
-                    response_text = _RAG_RESULT_JSON_SUB_RE.sub("", response_text)
-                    response_text = _fix_double_escaped(response_text)
-                    response_text = response_text.strip()
-                msg_id = db.add_message(
-                    request.session_id,
-                    "assistant",
-                    response_text,
-                    model_messages=model_messages or None,
-                )
-                if "recording" in turn_box:
-                    turn_box["recording"].link_message(msg_id)
+                try:
+                    turn_box: dict = {}
+                    response_text = await srv._get_chat_response(
+                        db,
+                        session,
+                        agent_request,
+                        model_messages=model_messages,
+                        turn_box=turn_box,
+                    )
+                    # Clean LLM output artifacts (same pipeline as streaming path)
+                    if response_text:
+                        response_text = _clean_answer_json(response_text)
+                        response_text = _TOOL_CALL_JSON_SUB_RE.sub("", response_text)
+                        response_text = _THOUGHT_JSON_SUB_RE.sub("", response_text)
+                        response_text = _RAG_RESULT_JSON_SUB_RE.sub("", response_text)
+                        response_text = _fix_double_escaped(response_text)
+                        response_text = response_text.strip()
+                    msg_id = db.add_message(
+                        request.session_id,
+                        "assistant",
+                        response_text,
+                        model_messages=model_messages or None,
+                        ends_turn=True,
+                    )
+                    if "recording" in turn_box:
+                        turn_box["recording"].link_message(msg_id)
+                except Exception:
+                    # The caller gets this error in the response itself.
+                    db.discard_turn(question_id)
+                    raise
+                except asyncio.CancelledError:
+                    # Shutdown or a dropped client: the reply is lost. Say so now;
+                    # if the database has already closed, the next start does.
+                    try:
+                        db.close_turn(question_id, CANCELLED_TURN_NOTICE)
+                    except (RuntimeError, sqlite3.Error) as exc:
+                        logger.warning("Could not close the cancelled turn: %s", exc)
+                    raise
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 

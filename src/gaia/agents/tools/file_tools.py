@@ -29,6 +29,8 @@ from gaia.agents.tools.document_text import (
     document_type,
     index_only_error,
     read_document,
+    text_page_notes,
+    with_small_limit_warning,
 )
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
@@ -895,7 +897,7 @@ class FileSearchToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
+                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -929,7 +931,11 @@ class FileSearchToolsMixin:
                 if unreadable:
                     return unreadable
                 if document_type(file_path) is not None:
-                    return read_document(self, file_path, offset, limit)
+                    return with_small_limit_warning(
+                        read_document(self, file_path, offset, limit),
+                        limit,
+                        line_ranges=False,
+                    )
 
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
@@ -944,7 +950,17 @@ class FileSearchToolsMixin:
                         encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
-                    return {"status": "success", "file_path": file_path, **page}
+                    return with_small_limit_warning(
+                        {
+                            "status": "success",
+                            "file_path": file_path,
+                            **text_page_notes(
+                                page, os.path.getsize(file_path), line_ranges=False
+                            ),
+                        },
+                        limit,
+                        line_ranges=False,
+                    )
 
                 # Guard against reading very large files into memory
                 file_size = os.path.getsize(file_path)
