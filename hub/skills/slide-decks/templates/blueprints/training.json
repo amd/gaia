@@ -1,0 +1,92 @@
+{
+  "name": "training",
+  "aliases": [
+    "explainer",
+    "tutorial",
+    "workshop",
+    "onboarding",
+    "lesson"
+  ],
+  "title": "Training / explainer",
+  "description": "Training session or explainer: objectives, concepts one per slide, a process, worked examples, a check for understanding and a summary; the script lives in the speaker notes.",
+  "default_slides": 10,
+  "min_slides": 2,
+  "max_slides": 16,
+  "one_slide": "summary",
+  "storyline": "Tell them what they will learn, teach one idea per slide with an example, check, then summarise. Put the spoken script in the notes, not on the slide.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Topic>: <what the learner will be able to do>",
+      "guidance": "Course name, presenter, date."
+    },
+    {
+      "id": "objectives",
+      "type": "agenda",
+      "priority": 1,
+      "title": "What you will be able to do",
+      "guidance": "3-5 learning objectives, each starting with a verb."
+    },
+    {
+      "id": "concept",
+      "type": "bullets",
+      "priority": 2,
+      "title": "<One idea, stated as a sentence>",
+      "guidance": "One concept per slide, 3-4 short points; the explanation in the notes.",
+      "repeat": 6,
+      "grow": 1.0
+    },
+    {
+      "id": "process",
+      "type": "diagram",
+      "priority": 2,
+      "title": "<How the steps fit together>",
+      "guidance": "The procedure as 3-6 steps.",
+      "spec": {
+        "diagram": "process"
+      }
+    },
+    {
+      "id": "example",
+      "type": "two_column",
+      "priority": 3,
+      "title": "<A worked example>",
+      "guidance": "Left: the situation; right: what to do and why.",
+      "repeat": 3,
+      "grow": 1.5
+    },
+    {
+      "id": "framework",
+      "type": "diagram",
+      "priority": 4,
+      "title": "<The model that ties it together>",
+      "guidance": "A cycle, pyramid or 2x2 that organises the concepts.",
+      "spec": {
+        "diagram": "cycle"
+      }
+    },
+    {
+      "id": "check",
+      "type": "bullets",
+      "priority": 4,
+      "title": "Check your understanding",
+      "guidance": "2-4 questions; answers in the notes."
+    },
+    {
+      "id": "summary",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<The three things to remember>",
+      "guidance": "The key points, mirroring the objectives."
+    },
+    {
+      "id": "resources",
+      "type": "bullets",
+      "priority": 5,
+      "title": "Where to learn more",
+      "guidance": "Links, documents and contacts."
+    }
+  ]
+}

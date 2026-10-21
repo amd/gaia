@@ -118,6 +118,68 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 - **Consumes** — `create_table`, `insert_data`, `query_data`, `list_tables`.
 - **Configure** — a CSV, export, or pasted table.
 
+### report-from-sources
+
+Builds a report, deck, brief or workbook from the user's files without dropping
+what the sources stress. It inventories the inputs and picks the newest file for
+each dataset, keeps a key-facts ledger per source (headline numbers, stated
+changes, notable events, risks), puts source and period on every figure, then
+checks the saved file against the ledger and against a numbered list of
+everything the user asked for.
+
+- **Demonstrates** — analyst practice as a procedure: provenance, coverage
+  checks, and verifying a saved file against the request with `run_python`.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — a folder of sources and the deliverable you want.
+
+### slide-decks
+
+Builds and checks PowerPoint decks. The model writes a short outline (slide
+types such as title, bullets, chart, table, kpi, diagram, timeline) and the
+skill's tools turn it into a .pptx on a real slide master: native editable
+charts, measured text that never overflows silently, the theme's fonts and
+colours, sources and speaker notes. Blueprints for common decks (business
+review, pitch, project status, training, research readout, decision, roadmap,
+one-slide framework) scale to the exact slide count asked for, and
+`verify_deck` checks the saved file for fit, overlaps, contrast, chart data,
+missing sources and style, rendering it with LibreOffice when installed.
+
+- **Demonstrates** — a tool-providing skill built on `gaia.skills.context`:
+  scope-checked paths, a declared program (`program:run:soffice`), per-call
+  temporary files, and per-user preferences with a `preferences.schema.json`.
+- **Provides** — `build_deck_from_markdown` (the easy path: headings become
+  slides, with `chart`, `table` and `kpi` CSV blocks), `build_deck`,
+  `verify_deck` (including `required_items`: what the request needs visible on
+  the slides, not only in the notes), `add_slide`, `update_slide`,
+  `list_blueprints`, `outline_from_blueprint`, `deck_outline_from_markdown`,
+  `update_deck_prefs`.
+- **Configure** — nothing. Saved preferences (theme, brand colours, density,
+  notes, template) apply automatically; pairs with `report-from-sources`.
+
+### log-triage
+
+Finds the incident in a log rather than the noise. It parses every file over its
+full time range, groups messages into templates, ranks them by severity, hosts
+hit and rarity instead of volume, finds bursts, and reports exact first and last
+timestamps, with routine baseline messages kept apart from anomalies.
+
+- **Demonstrates** — whole-file analysis with pandas in `run_python` instead of
+  reading a large file into the conversation.
+- **Consumes** — `list_files`, `read_file`, `run_python`.
+- **Configure** — one or more log files; fit the line pattern to their format.
+
+### meeting-actions
+
+Turns meeting notes, minutes or transcripts into one action tracker. It catches
+commitments said in passing ("I'll send it", "let me check") as well as
+labelled actions, records owner, due date and evidence, and merges an item that
+comes back in later meetings into one row with its latest status.
+
+- **Demonstrates** — exhaustive extraction with a regex safety net, and
+  de-duplication across documents.
+- **Consumes** — `list_files`, `read_file`, `run_python`, `write_file`.
+- **Configure** — a folder of notes, or one meeting's transcript.
+
 ### source-watch
 
 The generic watcher, and the template the next two are forked from: fetch a
@@ -203,7 +265,7 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 ### rss-digest
 
-The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
+A **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
 function, declared in `metadata.gaia.tools` and registered as
 `rss-digest/fetch_rss`.
 
@@ -266,8 +328,8 @@ gaia skill info gpu-restock-watch
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).
-  `tools_required` names registry tools it *consumes*. Only `rss-digest` uses
-  the former.
+  `tools_required` names registry tools it *consumes*. `rss-digest` and
+  `slide-decks` use the former.
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.
