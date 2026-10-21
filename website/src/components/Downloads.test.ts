@@ -502,6 +502,11 @@ describe('Downloads.astro with the one Windows setup', () => {
     // Not the desktop-only setup or the raw binary promoted in its place.
     expect(ctas().filter((b) => b.attrs['data-platform'] === 'win-x64')).toEqual([]);
     expect(descendants(rendered.root).filter((e) => 'data-dl-win-option' in e.attrs)).toEqual([]);
+    // Still reachable from the full list, just never promoted to the button.
+    const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
+    expect(hrefsIn(list)).toEqual(
+      expect.arrayContaining([setupDesktopUrl('win-x64'), setupUrl('win-x64')]),
+    );
   });
 });
 
