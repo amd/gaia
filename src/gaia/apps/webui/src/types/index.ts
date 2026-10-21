@@ -976,6 +976,8 @@ export interface SetupRunStatus {
     steps?: SetupStep[];
     text?: string;
     percent?: number | null;
+    /** How much of the current download is done, e.g. "1.20 GB of 5.60 GB". */
+    size?: string | null;
     error?: string | null;
     command?: string;
     log_tail?: string[];
@@ -986,7 +988,8 @@ export interface SetupRunStatus {
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
-    lemonade: { mode: 'gaia' | 'external'; url: string; reachable: boolean };
+    /** `url` is null while GAIA's own server isn't running: it has no address yet. */
+    lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
     chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */

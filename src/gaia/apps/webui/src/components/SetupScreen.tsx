@@ -189,7 +189,7 @@ function plannedSteps(steps: SetupStep[], plan: SetupPlan | null, cloud: boolean
     if (!plan) return steps;
     return steps.map((step) => {
         if (step.key === 'server' && plan.lemonade.mode === 'external') {
-            return { ...step, label: 'Use your Lemonade Server', detail: plan.lemonade.url };
+            return { ...step, label: 'Use your Lemonade Server', detail: plan.lemonade.url ?? step.detail };
         }
         if (step.key === 'models' && !cloud && !plan.decided_after_server) {
             const size = plan.download_gb === 0 ? 'already downloaded'
@@ -231,6 +231,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         ?? plannedSteps(cloud ? initial.cloud_steps ?? initial.steps : initial.steps, plan, cloud);
     const running = run?.state === 'running' || run?.state === 'verifying';
     const installed = run?.state === 'ready';
+    // A failed or stopped run leaves the choices open, so a retry can change them.
+    const locked = running || installed;
     // The run's steps are numbered after: check, where, and (local) model.
     const firstRunStep = cloud ? 3 : 4;
 
@@ -352,19 +354,19 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                             <span className="setup-step-num">{hardware || hardwareError ? <Check size={14} aria-hidden="true" /> : 1}</span>
                             <span className="setup-step-label">Check this PC</span>
                         </div>
-                        {!run && (
+                        {!locked && (
                             <div className="setup-step-body">
                                 <SystemCheck hardware={hardware} error={hardwareError} />
                             </div>
                         )}
                     </li>
 
-                    <li className={`setup-step${run ? ' is-done' : ' is-current'}`}>
+                    <li className={`setup-step${locked ? ' is-done' : ' is-current'}`}>
                         <div className="setup-step-head">
-                            <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 2}</span>
+                            <span className="setup-step-num">{locked ? <Check size={14} aria-hidden="true" /> : 2}</span>
                             <span className="setup-step-label">Choose where GAIA runs</span>
                         </div>
-                        {!run && (
+                        {!locked && (
                             <div className="setup-step-body">
                                 <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); loadPlan(); }} />
                                 <div className="setup-choices" role="radiogroup" aria-label="Where GAIA runs">
@@ -390,9 +392,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                     </li>
 
                     {!cloud && (
-                        <li className={`setup-step${run ? ' is-done' : ' is-current'}`}>
+                        <li className={`setup-step${locked ? ' is-done' : ' is-current'}`}>
                             <div className="setup-step-head">
-                                <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 3}</span>
+                                <span className="setup-step-num">{locked ? <Check size={14} aria-hidden="true" /> : 3}</span>
                                 <span className="setup-step-label">Chat model</span>
                             </div>
                             <div className="setup-step-body">
@@ -400,7 +402,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                     plan={plan}
                                     planError={planError}
                                     chosen={run?.chat_model ?? null}
-                                    locked={!!run}
+                                    locked={locked}
                                     onPlan={setPlan}
                                 />
                             </div>
@@ -433,7 +435,10 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                     <div className="setup-step-body">
                                         <p className="setup-hint" role="status">{run.text}</p>
                                         {run.percent != null && (
-                                            <progress className="setup-progress" max={100} value={run.percent} aria-label={run.text} />
+                                            <>
+                                                <progress className="setup-progress" max={100} value={run.percent} aria-label={run.text} />
+                                                <p className="setup-hint">{run.percent}%{run.size ? ` · ${run.size}` : ''}</p>
+                                            </>
                                         )}
                                     </div>
                                 )}

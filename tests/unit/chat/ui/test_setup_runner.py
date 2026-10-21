@@ -227,6 +227,24 @@ def test_describe_progress_bar_and_failure():
     assert failed.text == "user.embeddinggemma-300m-GGUF - Request failed"
 
 
+@pytest.mark.parametrize(
+    "line,size",
+    [
+        # The model pull's bar (AgentConsole.print_download_progress).
+        (
+            "   [━━━━━━─────] 45%  1.20 GB / 2.50 GB @ 30 MB/s",
+            "1.20 GB of 2.50 GB",
+        ),
+        # The server download's bar (InitCommand._download_progress).
+        ("   [========------------] 42% (2.1 MB/5.1 MB)", "2.1 MB of 5.1 MB"),
+        ("   [====] 7%", None),
+    ],
+)
+def test_describe_reads_the_download_size(line, size):
+    progress = sr.describe(line)
+    assert progress is not None and progress.size == size
+
+
 def test_describe_reads_the_chat_model_setup_chose():
     progress = sr.describe(
         "   Chat model: Qwen3.6-35B-A3B-GGUF — this PC has 32 GB for models (AMD iGPU)"
@@ -434,8 +452,8 @@ def test_progress_follows_the_output(monkeypatch):
         time.sleep(0.02)
     assert view["text"] == "Downloading user.embeddinggemma-300m-GGUF"
     assert [s["status"] for s in view["steps"]] == ["done", "active", "pending"]
-    # A phase line resets the percentage of the previous download.
-    assert view["percent"] is None
+    # A phase line resets the percentage and size of the previous download.
+    assert view["percent"] is None and view["size"] is None
     assert runner.cancel() is True
     _wait_done(runner)
 

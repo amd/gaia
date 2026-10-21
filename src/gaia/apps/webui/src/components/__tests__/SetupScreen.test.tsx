@@ -550,4 +550,52 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(mockedApi.detectLemonade).not.toHaveBeenCalled();
         expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
     });
+
+    it("re-plans after Use GAIA's own, so it no longer says the models are downloaded", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found: FOUND });
+        mockedApi.setLemonadeTarget.mockResolvedValue({ ...TARGET, daemon: null });
+        mockedApi.getSetupPlan
+            .mockResolvedValueOnce({ ...PLAN, chat_model: { ...PLAN.chat_model, downloaded: true }, download_gb: 0 })
+            .mockResolvedValueOnce({
+                ...PLAN,
+                lemonade: { mode: 'gaia', url: null, reachable: false },
+                chat_model: { ...PLAN.chat_model, downloaded: null },
+                decided_after_server: true,
+            });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText(/will answer your chats \(already downloaded\)/)).toBeInTheDocument();
+
+        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own/ }));
+        expect(await screen.findByText(/Picked once the model server is running/)).toBeInTheDocument();
+        expect(screen.queryByText(/already downloaded/)).not.toBeInTheDocument();
+        expect(mockedApi.getSetupPlan).toHaveBeenCalledTimes(2);
+    });
+
+    it('still offers it after an earlier run failed, so the next launch can choose', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
+        mockedApi.detectLemonade.mockResolvedValue({ found: FOUND });
+        mockedApi.getSetupStatus.mockResolvedValue(FAILED);
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent('Not enough disk space');
+        expect(await screen.findByRole('button', { name: 'Use mine' })).toBeInTheDocument();
+    });
+});
+
+describe('SetupScreen: download progress', () => {
+    it('shows the percentage and size of the current download', async () => {
+        mockedApi.startSetup.mockResolvedValue({
+            state: 'running',
+            steps: steps('done', 'active'),
+            text: 'Downloading Gemma-4-E4B-it-GGUF',
+            percent: 45,
+            size: '2.50 GB of 5.60 GB',
+        });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue({
+            state: 'running', steps: steps('done', 'active'), text: 'Downloading Gemma-4-E4B-it-GGUF', percent: 45, size: '2.50 GB of 5.60 GB',
+        });
+        await start();
+        expect(await screen.findByText('45% · 2.50 GB of 5.60 GB')).toBeInTheDocument();
+        expect(screen.getByRole('progressbar')).toHaveAttribute('value', '45');
+    });
 });

@@ -47,6 +47,8 @@ _STEP_RE = re.compile(r"^Step \d+/\d+:\s*(.+?)\.*$")
 _DOWNLOAD_RE = re.compile(r"^Downloading:\s*(\S+)")
 _FETCH_RE = re.compile(r"^Downloading Lemonade Server v(\S+?)\.*$")
 _PERCENT_RE = re.compile(r"\]\s*(\d{1,3})%")
+# "1.20 GB / 2.50 GB" (a model pull) or "(1.0 MB/5.0 MB)" (the server download).
+_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?\s*[KMG]B)\s*/\s*(\d+(?:\.\d+)?\s*[KMG]B)")
 _CHAT_MODEL_RE = re.compile(r"^Chat model:\s*(\S+)")
 _LOG_PREFIX_RE = re.compile(r"^\[\d{4}-\d\d-\d\d [\d:]+\]\s*\|")
 
@@ -167,6 +169,7 @@ class Progress:
     phase: Optional[str] = None
     text: str = ""
     percent: Optional[int] = None
+    size: Optional[str] = None
     failed: bool = False
     chat_model: Optional[str] = None
 
@@ -182,7 +185,11 @@ def describe(line: str) -> Optional[Progress]:
         return None
     m = _PERCENT_RE.search(line)
     if m:
-        return Progress(percent=min(100, int(m.group(1))))
+        size = _SIZE_RE.search(line)
+        return Progress(
+            percent=min(100, int(m.group(1))),
+            size=f"{size.group(1)} of {size.group(2)}" if size else None,
+        )
     m = _CHAT_MODEL_RE.match(line)
     if m:
         return Progress(chat_model=m.group(1))
@@ -264,6 +271,7 @@ class SetupRun:
     phase: Optional[str] = None
     text: str = "Starting setup"
     percent: Optional[int] = None
+    size: Optional[str] = None
     error: Optional[str] = None
     log: List[str] = field(default_factory=list)
     status: Optional[Dict[str, Any]] = None
@@ -289,6 +297,7 @@ class SetupRun:
             "steps": steps,
             "text": self.text,
             "percent": self.percent,
+            "size": self.size,
             "error": self.error,
             "command": run_command(self.skip_chat_model),
             "log_tail": self.log[-40:],
@@ -394,7 +403,7 @@ class SetupRunner:
             run.state = "verifying"
             run.phase = PHASE_FINISH
             run.text = "Checking that the models load"
-            run.percent = None
+            run.percent = run.size = None
         self._verify(run)
 
     def _verify(self, run: SetupRun) -> None:
@@ -432,13 +441,13 @@ class SetupRunner:
                 run.chat_model = progress.chat_model
                 return
             if progress.percent is not None:
-                run.percent = progress.percent
+                run.percent, run.size = progress.percent, progress.size
             if progress.phase is not None:
                 if run.phase not in PHASES or PHASES.index(
                     progress.phase
                 ) >= PHASES.index(run.phase):
                     run.phase = progress.phase
-                run.percent = None
+                run.percent = run.size = None
             if progress.text:
                 run.text = progress.text
 
