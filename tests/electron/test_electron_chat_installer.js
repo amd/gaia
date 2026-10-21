@@ -372,6 +372,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   // ── File Size Checks ───────────────────────────────────────────────
 
   describe('source file size validation', () => {
+    // Bytes as committed: a Windows checkout's CRLF must not fail a file CI passes.
+    const committedSize = (filePath) =>
+      Buffer.byteLength(fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
+
     it('should have reasonably sized TypeScript files (each < 56KB)', () => {
       const tsFiles = [
         'src/services/api.ts',
@@ -383,9 +387,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       tsFiles.forEach(file => {
         const filePath = path.join(CHAT_APP_PATH, file);
         if (fs.existsSync(filePath)) {
-          const stats = fs.statSync(filePath);
           // api.ts is the whole client and sits near this; split it rather than raise it again.
-          expect(stats.size).toBeLessThan(56 * 1024);
+          expect(committedSize(filePath)).toBeLessThan(56 * 1024);
         }
       });
     });
@@ -403,9 +406,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         files.forEach(file => {
           const filePath = path.join(componentDir, file);
           if (fs.statSync(filePath).isFile()) {
-            const stats = fs.statSync(filePath);
             const limit = LARGE_FILE_ALLOWLIST.has(file) ? LARGE_FILE_LIMIT : DEFAULT_LIMIT;
-            expect(stats.size).toBeLessThan(limit);
+            expect(committedSize(filePath)).toBeLessThan(limit);
           }
         });
       }

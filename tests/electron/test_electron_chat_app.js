@@ -1098,8 +1098,10 @@ describe('Chat App Integration', () => {
     let chatContent;
 
     beforeAll(() => {
-      const chatPath = path.join(CHAT_APP_PATH, 'src/components/ChatView.tsx');
-      chatContent = fs.readFileSync(chatPath, 'utf8');
+      // ChatView's pure stream helpers (event-to-step mapping) live in utils/chatStream.ts.
+      chatContent = ['src/components/ChatView.tsx', 'src/utils/chatStream.ts']
+        .map((rel) => fs.readFileSync(path.join(CHAT_APP_PATH, rel), 'utf8'))
+        .join('\n');
     });
 
     it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
