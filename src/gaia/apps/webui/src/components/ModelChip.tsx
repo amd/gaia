@@ -74,6 +74,8 @@ export function ModelChip() {
     const [pendingCloud, setPendingCloud] = useState<{ model: string; provider: ProviderInfo } | null>(null);
     const [switching, setSwitching] = useState<string | null>(null);
     const [downloading, setDownloading] = useState<string | null>(null);
+    // A model picked from the list before it was downloaded: switch to it once it is.
+    const [pickAfterDownload, setPickAfterDownload] = useState<{ model: string; provider: ProviderInfo } | null>(null);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -110,10 +112,10 @@ export function ModelChip() {
 
     const anyDownloading = !!groups?.some((g) => g.models.some(isDownloading));
     useEffect(() => {
-        if (!open || !anyDownloading) return;
+        if (!(open || pickAfterDownload) || !(anyDownloading || pickAfterDownload)) return;
         const t = setInterval(() => { void load(true); }, DOWNLOAD_POLL_MS);
         return () => clearInterval(t);
-    }, [open, anyDownloading, load]);
+    }, [open, anyDownloading, pickAfterDownload, load]);
 
     const download = useCallback(async (model: string) => {
         setDownloading(model);
@@ -122,6 +124,7 @@ export function ModelChip() {
             await api.downloadModel(model);
             await load(true);
         } catch (err) {
+            setPickAfterDownload(null);
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setDownloading(null);
@@ -151,6 +154,16 @@ export function ModelChip() {
             setSwitching(null);
         }
     }, [active?.model, active?.remote, pendingCloud, queue, select, turnRunning]);
+
+    useEffect(() => {
+        // Wait out the download request itself; until it answers, the row still reads "not downloaded".
+        if (!pickAfterDownload || !groups || downloading !== null) return;
+        const m = groups.flatMap((g) => g.models).find((x) => x.id === pickAfterDownload.model);
+        if (!m || isDownloading(m)) return;
+        setPickAfterDownload(null);
+        // Downloaded now: use it, as the click asked. A failed download keeps its error showing.
+        if (modelState(m) !== 'not_downloaded') void choose(pickAfterDownload.model, pickAfterDownload.provider);
+    }, [groups, pickAfterDownload, downloading, choose]);
 
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = chipModel ? displayModelName(chipModel) : 'Model';
@@ -230,7 +243,11 @@ export function ModelChip() {
                                     <button
                                         type="button"
                                         className="popover-item"
-                                        onClick={() => (needsDownload ? download(m.id) : choose(m.id, provider))}
+                                        onClick={() => {
+                                            if (!needsDownload) return void choose(m.id, provider);
+                                            setPickAfterDownload({ model: m.id, provider });
+                                            void download(m.id);
+                                        }}
                                         disabled={switching !== null || isDownloading(m)}
                                         aria-current={current ? 'true' : undefined}
                                         title={m.placement?.warning ?? m.id}

@@ -214,9 +214,13 @@ class _FakeSSEHandler:
     def __init__(self):
         self.events = []
         self.cancelled = threading.Event()
+        self.relay_question = None
 
     def _emit(self, event):
         self.events.append(event)
+
+    def set_relay_question(self, request_id):
+        self.relay_question = request_id
 
 
 class _FakeProxy:

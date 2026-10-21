@@ -59,6 +59,15 @@ async function openPicker() {
     return screen.findByRole('dialog', { name: 'Choose a model' });
 }
 
+/** The model's row in the list, not its download icon. */
+async function rowFor(dialog: HTMLElement, name: RegExp) {
+    await within(dialog).findAllByRole('button', { name });
+    const row = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button.popover-item'))
+        .find((b) => name.test(b.textContent ?? '') || name.test(b.title));
+    if (!row) throw new Error(`no model row matching ${name}`);
+    return row;
+}
+
 describe('ModelChip', () => {
     it('labels a local model with Local', () => {
         render(<ModelChip />);
@@ -193,6 +202,34 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
         fireEvent.click(await within(dialog).findByRole('button', { name: /Qwen3-8B-GGUF/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+    });
+
+    it('picking a model that is not downloaded downloads it, then switches to it', async () => {
+        let downloaded = false;
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', { downloaded })] : [],
+        }));
+        mockedApi.downloadModel.mockImplementation(async () => { downloaded = true; return {} as never; });
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+    });
+
+    it('does not switch to a model whose download failed', async () => {
+        mockedApi.downloadModel.mockRejectedValue(new Error('Disk full'));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        expect(await within(dialog).findByText(/Disk full/)).toBeInTheDocument();
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
     });
 
     it('shows why a switch failed', async () => {

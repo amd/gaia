@@ -329,8 +329,13 @@ export function ScheduleManager() {
                                         ) : parsed ? (
                                             <>
                                                 <div className="schedule-parsed-description">
-                                                    {parsed.valid ? parsed.description : 'Could not parse schedule'}
+                                                    {parsed.valid ? parsed.description : "GAIA didn't understand that schedule."}
                                                 </div>
+                                                {!parsed.valid && (
+                                                    <div className="schedule-parsed-next">
+                                                        Try &ldquo;every 30m&rdquo;, &ldquo;daily at 9pm&rdquo; or &ldquo;every hour from 8am to 6pm on weekdays&rdquo;.
+                                                    </div>
+                                                )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
                                                         Next run: {new Date(parsed.next_run_at).toLocaleString()}

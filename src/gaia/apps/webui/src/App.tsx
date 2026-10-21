@@ -433,13 +433,15 @@ function App() {
     const finishSetup = useCallback((first?: StartCard) => {
         setSetup({ state: 'ready' });
         void checkSystemStatus();
+        // Setup installs the agent; the list read at startup predates it.
+        loadAgents().catch((err) => log.api.warn('Agent list unavailable after setup', err));
         if (!first) return;
         if (first.needs_input) {
             setDraftText(first.prompt);
             return;
         }
         startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
-    }, [checkSystemStatus, startChat]);
+    }, [checkSystemStatus, loadAgents, startChat]);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
     useEffect(() => {

@@ -43,6 +43,16 @@ describe('Runs on', () => {
         expect(screen.getByText('6.2 GB in use · 40.5 GB free')).toBeInTheDocument();
     });
 
+    it("doesn't describe another chat's model as this one's", async () => {
+        useChatStore.setState({
+            sessions: [{ ...useChatStore.getState().sessions[0], effective_model: 'Qwen3.6-35B-A3B-GGUF' }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText(/not loaded right now/)).toBeInTheDocument();
+        expect(screen.queryByText('Gemma 4 E4B')).not.toBeInTheDocument();
+        expect(screen.queryByText(/GB in use/)).not.toBeInTheDocument();
+    });
+
     it('names the cloud provider for a cloud chat, without reading local status', async () => {
         setPlace(true);
         render(<EnvironmentSection sessionId={SID} busy={false} />);
@@ -116,6 +126,10 @@ describe('Can read and write', () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
+        // Not a boundary: say so rather than listing folders as if they were the limit.
+        expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
+        expect(screen.getByText(/rest of\s+your user folder/)).toBeInTheDocument();
+        expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
         expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();

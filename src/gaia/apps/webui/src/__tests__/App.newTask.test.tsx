@@ -223,6 +223,24 @@ describe('first-run setup', () => {
         expect(mocked.createSession).not.toHaveBeenCalled();
     });
 
+    it('re-reads the agents when setup finishes, so the agent it installed counts', async () => {
+        mocked.checkSetup.mockResolvedValue(NOT_READY);
+        mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
+        render(<App />);
+        await waitFor(() => expect(mocked.listAgents).toHaveBeenCalled());
+        mocked.listAgents.mockResolvedValue({
+            agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia' }] as never, total: 1,
+        });
+
+        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
+
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        await waitFor(() =>
+            expect(screen.queryByText(/The GAIA agent isn.t installed/)).not.toBeInTheDocument(),
+        );
+    });
+
     it('shows the setup screen when GAIA is not set up', async () => {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         render(<App />);

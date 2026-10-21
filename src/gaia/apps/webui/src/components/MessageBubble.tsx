@@ -6,6 +6,7 @@ import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } fro
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
+import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
@@ -737,7 +738,7 @@ export function RenderedContent({ content, showCursor }: { content: string; show
     return (
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={{

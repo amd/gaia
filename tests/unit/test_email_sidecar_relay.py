@@ -58,9 +58,13 @@ class _FakeHandler:
         self.cancelled = threading.Event()
         self.active_relay_response = None
         self.done_calls = 0
+        self.relay_question = None
 
     def _emit(self, event):
         self.events.append(event)
+
+    def set_relay_question(self, request_id):
+        self.relay_question = request_id
 
     def signal_done(self):
         self.done_calls += 1
