@@ -114,14 +114,14 @@ describe('SetupScreen', () => {
 
     it('installs the local chat model when running on this PC', async () => {
         await start();
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false));
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
         expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
     });
 
     it('skips the local chat model for Fireworks AI', async () => {
         await start(/Fireworks AI/);
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(true));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(true, false));
     });
 
     it('shows a failed step\'s error with a Try again button', async () => {
@@ -579,6 +579,76 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
         expect(await screen.findByRole('alert')).toHaveTextContent('Not enough disk space');
         expect(await screen.findByRole('button', { name: 'Use mine' })).toBeInTheDocument();
+    });
+});
+
+describe("SetupScreen: the user's server isn't answering", () => {
+    const RAW = "Lemonade Server at http://127.0.0.1:9/api/v1 is not reachable: HTTPConnectionPool(host='127.0.0.1', port=9)";
+    const UNREACHABLE: SetupRunStatus = {
+        state: 'failed',
+        steps: steps('failed', 'pending'),
+        error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
+        problem: {
+            kind: 'server_unreachable',
+            message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
+            start: 'Start Lemonade Server from the Lemonade tray icon.',
+            use_gaia: true,
+            switch_hint: null,
+        },
+        command: 'gaia init --profile gaia',
+        log_tail: [`❌ ${RAW}`],
+    };
+
+    it('says so plainly, says how to start it, and keeps the exception in Details', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, decided_after_server: true });
+        mockedApi.startSetup.mockResolvedValue(UNREACHABLE);
+        await start();
+
+        expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
+        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/in a terminal/)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+        expect(screen.getByText(/HTTPConnectionPool/)).toBeInTheDocument();
+    });
+
+    it("switches to GAIA's own server and runs setup again", async () => {
+        mockedApi.startSetup.mockResolvedValueOnce(UNREACHABLE).mockResolvedValueOnce(READY);
+        await start();
+        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own instead/ }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true));
+        expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+    });
+
+    it("keeps switching to GAIA's own when that run fails and the user tries again", async () => {
+        mockedApi.startSetup
+            .mockResolvedValueOnce(UNREACHABLE)
+            .mockResolvedValueOnce({ ...FAILED, gaia_lemonade: true, command: 'gaia init --profile gaia --gaia-lemonade' })
+            .mockResolvedValueOnce(READY);
+        await start();
+        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own instead/ }));
+        expect(await screen.findByText(/Not enough disk space/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(3));
+        expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true);
+    });
+
+    it("doesn't offer a switch LEMONADE_BASE_URL would override, and says what does", async () => {
+        const hint = "LEMONADE_BASE_URL points GAIA at this server. To use GAIA's own instead, unset it and restart GAIA.";
+        mockedApi.startSetup.mockResolvedValue({ ...UNREACHABLE, problem: { ...UNREACHABLE.problem!, use_gaia: false, switch_hint: hint } });
+        await start();
+        expect(await screen.findByText(hint)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Use GAIA.s own instead/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    });
+
+    it("doesn't mark the chat model done when setup never picked one", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, decided_after_server: true });
+        mockedApi.startSetup.mockResolvedValue(UNREACHABLE);
+        await start();
+        await screen.findByRole('alert');
+        expect(screen.getByText('Chat model').closest('li')).not.toHaveClass('is-done');
+        expect(screen.getByText(/Picked once the model server is running/)).toBeInTheDocument();
     });
 });
 

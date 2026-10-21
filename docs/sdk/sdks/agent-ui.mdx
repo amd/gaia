@@ -2271,18 +2271,27 @@ so the two can never disagree about whether GAIA is set up.
 
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes` in the background; follow it with
-    `/api/setup/status`. Body: `{"skip_chat_model": false}`. **409** when setup
-    is already running.
+    `/api/setup/status`. Body: `{"skip_chat_model": false, "gaia_lemonade":
+    false}`; `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up
+    and saves GAIA's own server instead of the user's. **409** when setup is
+    already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
+    picks the server.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
     their status, progress `text`, `percent` and `size` (e.g. `"1.20 GB of
-    5.60 GB"`), `error`, the equivalent
-    `command`, the last 40 output lines, and `chat_model` once setup has said
-    which chat model it chose. When the user chose their own Lemonade Server,
-    the first step is "Use your Lemonade Server" rather than an install.
+    5.60 GB"`), `error`, the equivalent `command`, the last 40 output lines,
+    and `chat_model` once setup has said which chat model it chose. When the
+    user chose their own Lemonade Server, the first step is "Use your Lemonade
+    Server" rather than an install. When that server isn't answering, `error`
+    says so in one sentence and `problem` carries the next steps: `start` (how
+    to start it on this PC, or null), `use_gaia` (setup can switch to GAIA's
+    own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
+    only unsetting it switches). The raw error stays in the output lines.
+    `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
+    keeps switching.
   </Accordion>
 
   <Accordion title="POST /api/setup/cancel">

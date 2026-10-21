@@ -11,7 +11,7 @@ import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
 import { ChatModelChoice, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupRunStatus, SetupStep, StartCard } from '../types';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupProblem, SetupRunStatus, SetupStep, StartCard } from '../types';
 import './SetupScreen.css';
 
 const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
@@ -177,6 +177,25 @@ function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'ga
     );
 }
 
+/** The user's Lemonade isn't answering: start it, or set up GAIA's own instead. */
+function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem; onRetry: () => void; onUseGaia: () => void }) {
+    return (
+        <>
+            {problem.start && <p className="setup-hint">{problem.start}</p>}
+            <div className="setup-row">
+                <button type="button" className="btn-primary" onClick={onRetry}>Try again</button>
+                {problem.use_gaia && (
+                    <button type="button" className="btn-secondary" onClick={onUseGaia}>Use GAIA&rsquo;s own instead</button>
+                )}
+            </div>
+            {problem.use_gaia && (
+                <p className="setup-hint">GAIA&rsquo;s own Lemonade Server downloads its own copy of the models.</p>
+            )}
+            {problem.switch_hint && <p className="setup-hint">{problem.switch_hint}</p>}
+        </>
+    );
+}
+
 interface SetupScreenProps {
     /** What `gaia init --check` said; the screen is shown only when it is not ready. */
     initial: SetupCheck;
@@ -233,6 +252,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const installed = run?.state === 'ready';
     // A failed or stopped run leaves the choices open, so a retry can change them.
     const locked = running || installed;
+    const modelNamed = !!run?.chat_model || (!!plan && !plan.decided_after_server);
     // The run's steps are numbered after: check, where, and (local) model.
     const firstRunStep = cloud ? 3 : 4;
 
@@ -289,11 +309,12 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         return stopPolling;
     }, [running, stopPolling]);
 
-    const start = useCallback(async () => {
+    const start = useCallback(async (gaiaLemonade = false) => {
         setStartError(null);
         try {
             saveChoice(choice);
-            setRun(await api.startSetup(cloud));
+            setRun(await api.startSetup(cloud, gaiaLemonade));
+            if (gaiaLemonade) setUsersServer(false);
         } catch (err) {
             setStartError(err instanceof Error ? err.message : String(err));
         }
@@ -392,9 +413,9 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                     </li>
 
                     {!cloud && (
-                        <li className={`setup-step${locked ? ' is-done' : ' is-current'}`}>
+                        <li className={`setup-step${locked && modelNamed ? ' is-done' : locked ? ' is-pending' : ' is-current'}`}>
                             <div className="setup-step-head">
-                                <span className="setup-step-num">{locked ? <Check size={14} aria-hidden="true" /> : 3}</span>
+                                <span className="setup-step-num">{locked && modelNamed ? <Check size={14} aria-hidden="true" /> : 3}</span>
                                 <span className="setup-step-label">Chat model</span>
                             </div>
                             <div className="setup-step-body">
@@ -445,10 +466,15 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                 {failed && run && step === activeStep && (
                                     <div className="setup-step-body">
                                         <p className="setup-error" role="alert">{run.error ?? 'Setup stopped.'}</p>
-                                        <div className="setup-row">
-                                            <button type="button" className="btn-primary" onClick={() => void start()}>Try again</button>
-                                            <span className="setup-hint">or run <code>{run.command}</code> in a terminal.</span>
-                                        </div>
+                                        {run.problem ? (
+                                            <ServerProblem problem={run.problem} onRetry={() => void start()} onUseGaia={() => void start(true)} />
+                                        ) : (
+                                            <div className="setup-row">
+                                                <button type="button" className="btn-primary" onClick={() => void start(!!run.gaia_lemonade)}>Try again</button>
+                                                <span className="setup-hint">or run <code>{run.command}</code> in a terminal.</span>
+                                            </div>
+                                        )}
+                                        {startError && <p className="setup-error" role="alert">{startError}</p>}
                                     </div>
                                 )}
                             </li>
