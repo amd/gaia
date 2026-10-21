@@ -12,6 +12,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat as done. The final answer now names the step, the provider and the
   cause, what already ran, and what is unfinished, and the `final` event
   carries `failed: true`.
+- **Full access in the Agent UI grants the folders you name.** Turning it on
+  over `/sessions/{id}/bypass` refused every path outside the chat's scope with
+  nobody asked. On a run the caller can answer for, Full access now grants the
+  path without a prompt, as it does in-process; Ask mode asks. Unattended runs,
+  the home folder and drive roots are still refused.
+- **`/query` takes the chat's file scope and memory mode** (contract **2.18**).
+  `allowed_paths` lets the Agent UI hand the agent the same scope its session
+  panel shows. `memory` fixes private chats saving to memory: the relayed turn
+  never said the chat was private or that memory was off, so the agent went on
+  saving the errors and lessons it records on its own. `"private"` or `"off"`
+  now turns off every memory write for the turn.
+- **A confirmation carries the call it asks about.** `needs_confirmation` now
+  has `args` (each value capped at 64,000 characters, with `args_truncated`
+  when one was cut) and `tool_label`, so a client can show all of the code it
+  is approving rather than the shortened `summary`, and word a path prompt for
+  a file or folder that exists.
 - **Needs core 0.25.1.** The chat agent this one builds on imports the
   reasoning-effort tool, which first ships in core 0.25.1. The `amd-gaia`
   floor and `min_gaia_version` rise to it in that release; a release whose

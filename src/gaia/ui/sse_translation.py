@@ -519,6 +519,15 @@ class CanonicalTranslator:
         risk = event.get("risk")
         if risk:
             canonical["risk"] = str(risk)
+        tool_label = event.get("tool_label")
+        if tool_label:
+            canonical["tool_label"] = str(tool_label)
+        # The call itself, so a front-end can show all of what it is approving
+        # (the summary shortens code) and word a path prompt for what is there.
+        if args:
+            canonical["args"], truncated = bounded_prompt_args(args)
+            if truncated:
+                canonical["args_truncated"] = True
         return [canonical]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -696,6 +705,35 @@ SUMMARY_COMMAND_CHARS = 240
 SUMMARY_LOCATION_CHARS = 48
 #: Longest a code snippet may run, in lines, before its middle is elided.
 SUMMARY_CODE_LINES = 12
+
+
+#: Longest one argument value a ``needs_confirmation`` carries in ``args``.
+#: Generous on purpose: this is what the user reads before approving code.
+PROMPT_ARG_VALUE_CHARS = 64_000
+
+
+def bounded_prompt_args(args: Dict[str, Any]) -> "tuple[Dict[str, Any], bool]":
+    """*args* made JSON-safe with every value capped; and whether any was cut.
+
+    A cut value ends with a note saying how much is missing, never silently.
+    """
+    out: Dict[str, Any] = {}
+    truncated = False
+    for key, value in args.items():
+        if value is None or isinstance(value, (bool, int, float)):
+            out[str(key)] = value
+            continue
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        if len(text) > PROMPT_ARG_VALUE_CHARS:
+            hidden = len(text) - PROMPT_ARG_VALUE_CHARS
+            out[str(key)] = (
+                text[:PROMPT_ARG_VALUE_CHARS]
+                + f"\n… [+{hidden:,} more characters not shown]"
+            )
+            truncated = True
+        else:
+            out[str(key)] = value if isinstance(value, str) else json.loads(text)
+    return out, truncated
 
 
 def _elide_middle(text: str, limit: int) -> str:
@@ -918,6 +956,7 @@ def _render_block(key: str, value: str) -> str:
 
 __all__ = [
     "CanonicalTranslator",
+    "bounded_prompt_args",
     "TERMINAL_TYPES",
     "render_command_summary",
     "render_invocation",

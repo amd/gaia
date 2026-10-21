@@ -4,6 +4,7 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
+import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { GeneralSettings } from './GeneralSettings';
 import { ModelSettings } from './ModelSettings';
 import { PermissionsSettings } from './PermissionsSettings';
@@ -39,13 +40,11 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const returnFocus = useRef<Element | null>(null);
 
     const isOpen = section !== null;
+    useEscapeToClose(isOpen, close);
     useEffect(() => {
         if (!isOpen) return;
         returnFocus.current = document.activeElement;
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-        document.addEventListener('keydown', onKey);
         return () => {
-            document.removeEventListener('keydown', onKey);
             (returnFocus.current as HTMLElement | null)?.focus?.();
         };
     }, [isOpen, close]);

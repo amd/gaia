@@ -12,6 +12,7 @@ import {
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
+import { isEscapeClaimed } from '../hooks/useEscapeToClose';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -21,6 +22,32 @@ function summarize(n: GaiaNotification): string {
         .map((k) => args[k])
         .find((v) => typeof v === 'string' && v.trim());
     return typeof primary === 'string' ? primary : '';
+}
+
+/** Lines of code a prompt shows before "Show all". */
+export const CODE_PREVIEW_LINES = 12;
+
+/** The code a gated call runs, collapsed past {@link CODE_PREVIEW_LINES} lines. */
+function CodeBlock({ code }: { code: string }) {
+    const [expanded, setExpanded] = useState(false);
+    const lines = code.replace(/^\n+|\n+$/g, '').split('\n');
+    const long = lines.length > CODE_PREVIEW_LINES;
+    const shown = (long && !expanded ? lines.slice(0, CODE_PREVIEW_LINES) : lines).join('\n');
+    return (
+        <>
+            <pre className={`perm-card-pre perm-card-code${expanded ? ' is-expanded' : ''}`} data-testid="perm-code">{shown}</pre>
+            {long && (
+                <button
+                    type="button"
+                    className="perm-card-args-toggle"
+                    onClick={() => setExpanded((v) => !v)}
+                    aria-expanded={expanded}
+                >
+                    {expanded ? 'Show less' : `Show all ${lines.length} lines`}
+                </button>
+            )}
+        </>
+    );
 }
 
 /**
@@ -70,6 +97,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     // show that text unwrapped, the folder it runs in, and its risk note.
     const riskNote = typeof args._risk_note === 'string' ? args._risk_note : '';
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
+    // Code is approved as written, so all of it is one click away, never only a summary.
+    const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
 
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
@@ -100,7 +129,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     // Capture phase, so this runs before ChatView's Escape-stops-the-reply.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape' || e.defaultPrevented) return;
+            if (e.key !== 'Escape' || isEscapeClaimed(e)) return;
             if (remaining !== null && remaining <= 0) return;
             // Claimed even mid-answer: a second Esc would otherwise stop the whole reply.
             e.preventDefault();
@@ -133,7 +162,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {detail && !riskNote && <p className="perm-card-detail"><code>{detail}</code></p>}
                     {folder && <p className="perm-card-detail">in <code>{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note">{riskNote}</p>}
-                    {!detail && notification.summary && <p className="perm-card-detail">{notification.summary}</p>}
+                    {code && <CodeBlock code={code} />}
+                    {!detail && !code && notification.summary && <p className="perm-card-detail">{notification.summary}</p>}
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
                 </div>
                 {remaining !== null && !expired && (

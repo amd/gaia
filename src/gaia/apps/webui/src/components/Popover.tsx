@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEscapeLayer } from '../hooks/useEscapeToClose';
 import './Popover.css';
 
 interface PopoverProps {
@@ -50,6 +51,7 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
         };
     }, [open, placement, anchor]);
 
+    useEscapeLayer(open);
     useEffect(() => {
         if (!open) return;
         const first = ref.current?.querySelector<HTMLElement>('button:not(:disabled), input, [tabindex="0"]');
@@ -62,6 +64,7 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return;
             e.stopPropagation();
+            e.preventDefault();
             onClose();
             anchor.current?.focus();
         };

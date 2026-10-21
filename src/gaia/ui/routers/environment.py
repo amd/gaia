@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from gaia.agents.base import file_snapshots
 from gaia.logger import get_logger
+from gaia.security import AllowedPathsEnvError
 
 from .. import session_environment as env
 from .. import session_outputs
@@ -30,6 +31,17 @@ class InternetRequest(BaseModel):
     on: bool
 
 
+async def _describe(db: ChatDatabase, session: dict) -> dict:
+    """The panel's view of *session*; a bad ``GAIA_ALLOWED_PATHS`` is a 500 naming it.
+
+    An empty list would read as "this chat can open nothing" with no reason.
+    """
+    try:
+        return await asyncio.to_thread(env.describe, db, session)
+    except AllowedPathsEnvError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 def _session(db: ChatDatabase, session_id: str) -> dict:
     session = db.get_session(session_id)
     if session is None:
@@ -41,7 +53,7 @@ def _session(db: ChatDatabase, session_id: str) -> dict:
 async def get_environment(session_id: str, db: ChatDatabase = Depends(get_db)):
     """The folders this chat may touch and whether it may use the internet."""
     session = _session(db, session_id)
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
 
 
 @router.post("/api/sessions/{session_id}/environment/folders")
@@ -54,7 +66,7 @@ async def add_folder(
         await asyncio.to_thread(env.add_folder, db, session_id, body.path)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
 
 
 @router.post("/api/sessions/{session_id}/environment/folders/remove")
@@ -67,7 +79,7 @@ async def remove_folder(
         await asyncio.to_thread(env.remove_folder, db, session_id, body.path)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
 
 
 @router.put("/api/sessions/{session_id}/environment/internet")
@@ -80,7 +92,7 @@ async def set_internet(
         await asyncio.to_thread(env.set_internet, db, session_id, body.on)
     except env.EnvironmentChangeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return await asyncio.to_thread(env.describe, db, session)
+    return await _describe(db, session)
 
 
 @router.get("/api/sessions/{session_id}/outputs")

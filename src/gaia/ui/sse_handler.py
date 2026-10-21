@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
-from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.base.tool_outcome import FAILED_STATUSES
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
@@ -1722,7 +1722,9 @@ class SSEOutputHandler(OutputHandler):
         # emitted: neither has a question to ask, so putting a modal up would be
         # theatre. Checked per call, so toggling full access mid-run takes effect on
         # the very next gated tool.
-        if self.auto_approve_confirmations_enabled():
+        # Pre-approval answers tool prompts; only full access widens the file scope.
+        widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
+        if self.auto_approve_confirmations_enabled() and not widens_scope:
             self.log_auto_approval(tool_name)
             self._emit(
                 {
@@ -2507,4 +2509,24 @@ def _fix_double_escaped(text: str) -> str:
         text = text.replace("\\n", "\n")
         text = text.replace("\\t", "\t")
         text = text.replace('\\"', '"')
+    return text
+
+
+def clean_reply_text(text: str) -> str:
+    """Strip the LLM output artifacts a reply must not be stored with."""
+    if not text:
+        return text
+    text = _TOOL_CALL_JSON_SUB_RE.sub("", text)
+    # _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE, or a leaked
+    # {"thought":..., "answer":...} blob is stripped whole, answer included.
+    text = _clean_answer_json(text)
+    text = _THOUGHT_JSON_SUB_RE.sub("", text)
+    text = _RAG_RESULT_JSON_SUB_RE.sub("", text)
+    # Mixed content: plain text followed by a duplicate {"answer": "..."} wrapper.
+    text = _ANSWER_JSON_SUB_RE.sub("", text)
+    text = _fix_double_escaped(text)
+    # 3+ closing braces at the end are a leaked nested tool result.
+    text = re.sub(r"\}{3,}\s*$", "", text).strip()
+    # A code fence left after JSON extraction, e.g. "}\n```".
+    text = re.sub(r"[\n\s]*`{3,}\s*$", "", text).strip()
     return text
