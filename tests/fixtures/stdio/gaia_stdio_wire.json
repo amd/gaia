@@ -53,6 +53,10 @@
         "timeout_seconds"
       ]
     },
+    "task_list": {
+      "fields": ["items", "source", "current_action", "action_started_at", "steps_since_update", "updated_at"],
+      "item_fields": ["id", "content", "status", "started_at", "completed_at"]
+    },
     "final": { "fields": ["answer", "usage"] },
     "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] }
   }

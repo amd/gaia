@@ -30,6 +30,7 @@ from gaia.config import (
 )
 from gaia.llm.lemonade_embedded import gaia_home
 
+from .database import ChatDatabase
 from .models import (
     DocumentResponse,
     FileEntry,
@@ -168,6 +169,7 @@ def session_to_response(
         unread=bool(session.get("unread", 0)),
         last_run_status=session.get("last_run_status"),
         kind=session.get("kind") or "chat",
+        task_list=ChatDatabase.decode_task_list(session),
     )
 
 

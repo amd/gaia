@@ -716,6 +716,9 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def print_task_list(self, state: Dict[str, Any]) -> None:
+        self._emit({"type": "task_list", **state})
+
     # === Tool Execution Methods ===
 
     def print_tool_usage(self, tool_name: str):

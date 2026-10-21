@@ -518,7 +518,7 @@ export interface StreamCallbacks {
 
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
-    'status', 'step', 'thinking', 'plan',
+    'status', 'step', 'thinking', 'plan', 'task_list',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
     'followup_taken', 'followup_returned', 'context_usage',

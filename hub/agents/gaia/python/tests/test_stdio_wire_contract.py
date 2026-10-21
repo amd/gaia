@@ -222,6 +222,22 @@ def test_terminal_types_are_canonical_event_types():
     assert TERMINAL_TYPES <= set(EVENTS)
 
 
+def _task_list_state():
+    """A list mid-turn, as the agent's TaskList reports it."""
+    from gaia.agents.tools.task_list_tools import TaskList
+
+    task_list = TaskList()
+    task_list.update(items=["Read the config", "Fix the bug"])
+    task_list.update(advance=True)
+    task_list.action_started("read_file", {})
+    return task_list.state()
+
+
+def test_task_list_items_carry_the_fields_the_tui_reads():
+    for item in _task_list_state()["items"]:
+        assert set(item) == set(EVENTS["task_list"]["item_fields"])
+
+
 def _translated_events():
     """Every canonical event type, built the way run_turn builds its translator."""
     translator = CanonicalTranslator(run_id=None, agent_id=stdio.AGENT_ID, debug=False)
@@ -258,6 +274,7 @@ def _translated_events():
             "options": [{"value": "a", "label": "A"}],
             "timeout_seconds": 30,
         },
+        {"type": "task_list", **_task_list_state()},
     ]
     events = []
     for event in source:

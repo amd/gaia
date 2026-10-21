@@ -194,7 +194,7 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (16 tools). Deliberately a smaller share of the registry than
+# Always-on set (17 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
@@ -231,6 +231,8 @@ FULL_CORE_TOOLS = frozenset(
         "set_loop_state",
         "request_user_input",
         "sleep",
+        # the pinned task list -- kept across the whole turn, not one step
+        "update_tasks",
         # escape hatch (#1450)
         "load_tools",
         "read_tool_output",
@@ -507,11 +509,17 @@ FULL_BUNDLES = [
     ToolBundle(
         name="loop_control",
         members=frozenset(
-            {"set_loop_state", "request_user_input", "sleep", "set_reasoning_effort"}
+            {
+                "set_loop_state",
+                "request_user_input",
+                "sleep",
+                "set_reasoning_effort",
+                "update_tasks",
+            }
         ),
         description=(
             "Control the autonomous loop, wait before retrying, set how hard "
-            "the model reasons, and ask the user questions."
+            "the model reasons, keep the task list, and ask the user questions."
         ),
     ),
     ToolBundle(

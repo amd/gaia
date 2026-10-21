@@ -286,6 +286,9 @@ def _dispatch_one(
             }
         )
 
+    elif etype == "task_list":
+        handler._emit(dict(event))
+
     elif etype == "final":
         answer = str(event.get("answer", "") or "")
         cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()

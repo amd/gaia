@@ -82,10 +82,12 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ReasoningEffortToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
+    TaskListMixin,
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.agents.tools.task_list_tools import PROMPT_RULES as TASK_LIST_PROMPT_RULES
 from gaia.env import child_env
 from gaia.llm.inference_location import (
     InferenceLocation,
@@ -361,6 +363,7 @@ class ChatAgent(
     AudioToolsMixin,
     WaitToolsMixin,
     ReasoningEffortToolsMixin,
+    TaskListMixin,
     MCPClientMixin,
 ):
     """
@@ -1383,6 +1386,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "discovery_rules_tail": discovery_rules_tail,
             "rag_query_rules": rag_query_rules,
             "data_file_rules": data_file_rules,
+            "task_list_rules": TASK_LIST_PROMPT_RULES,
             "load_tools_menu": load_tools_menu,
         }
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
@@ -2687,6 +2691,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - TaskListMixin (task_list_tools.py): update_tasks, the pinned task list
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:

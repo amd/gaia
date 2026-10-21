@@ -1636,6 +1636,9 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        task_list = getattr(agent, "task_list", None)
+        if task_list is not None:
+            task_list.clear(emit=False)
         _write({"type": "final", "answer": "conversation_cleared"}, out)
         return
     if query == MEMORY_DUMP_QUERY:
@@ -1790,6 +1793,10 @@ def main(argv: Optional[list] = None) -> int:
         )
         agent.conversation_history = SessionHistory(history_path)
         logger.info("Session transcript: %s", history_path)
+        agent.bind_task_list_store(
+            agent.conversation_history.load_task_list,
+            agent.conversation_history.save_task_list,
+        )
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
         _write_if_wire_alive(_terminal_error(exc), out)
@@ -1812,6 +1819,10 @@ def main(argv: Optional[list] = None) -> int:
         # Model load is the longest window the parent has to leave in, and it
         # is gone — there is nobody left to serve.
         _exit_cleanly(out)
+    # A resumed transcript's list; read with the first turn, like the ping above.
+    task_list = getattr(agent, "task_list", None)
+    if task_list is not None and task_list.items:
+        _write({"type": "task_list", **task_list.state()}, out)
 
     # stdin is read by its own thread so it keeps being read DURING a turn —
     # which is the only time a confirmation decision can arrive. The turn loop
@@ -1829,6 +1840,9 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            task_list = getattr(agent, "task_list", None)
+            if task_list is not None:
+                task_list.clear(emit=False)
             logger.info("conversation history cleared by host /clear")
             continue
         try:

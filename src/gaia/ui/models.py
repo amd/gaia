@@ -443,6 +443,8 @@ class SessionResponse(BaseModel):
     last_run_status: Optional[str] = None
     # "chat" for a person's chats; "eval" and "scheduled" are hidden by default.
     kind: str = "chat"
+    # The agent's task list (the last ``task_list`` event), None when it has none.
+    task_list: Optional[Dict[str, Any]] = None
 
 
 class SessionPinRequest(BaseModel):

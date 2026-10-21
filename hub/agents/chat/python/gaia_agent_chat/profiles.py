@@ -64,6 +64,7 @@ TOOL_GROUP_REGISTRARS: Dict[str, Tuple[str, ...]] = {
     "full_screenshot": ("register_screenshot_tools",),
     "media_transcribe": ("register_audio_tools",),
     "loop_wait": ("register_wait_tools",),
+    "task_list": ("register_task_list_tools",),
 }
 
 
@@ -154,6 +155,7 @@ PROFILE_SPECS: Dict[str, ProfileSpec] = {
             "discovery_rules_tail",
             "rag_query_rules",
             "data_file_rules",
+            "task_list_rules",
             "load_tools_menu",
         ),
         capabilities=frozenset({"filesystem", "scratchpad", "browser"}),
@@ -165,6 +167,7 @@ PROFILE_SPECS: Dict[str, ProfileSpec] = {
             "full_screenshot",
             "media_transcribe",
             "loop_wait",
+            "task_list",
         ),
         generic_file_ops=True,
         web_tools=True,

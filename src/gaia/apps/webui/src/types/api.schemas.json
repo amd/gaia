@@ -3505,6 +3505,18 @@
         ],
         "title": "System Prompt"
       },
+      "task_list": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Task List"
+      },
       "title": {
         "title": "Title",
         "type": "string"
