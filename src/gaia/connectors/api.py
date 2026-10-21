@@ -439,7 +439,8 @@ def list_connections() -> List[Dict[str, Any]]:
             )
             continue
         except AuthRequiredError:
-            # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
+            # Tripwire fired (hash OR tenant): cleared, or left in place while
+            # another process holds the lock. Skip either way.
             continue
         if blob is None:
             continue
@@ -812,10 +813,9 @@ def tripwire_check() -> None:
         except ConfigurationError as e:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
-        except AuthRequiredError:
-            # Tripwire fired (hash OR tenant) — load_connection already
-            # cleared the entry; nothing else to do here.
-            logger.info("tripwire: provider %s entry cleared by tripwire", provider_id)
+        except AuthRequiredError as e:
+            # Cleared, or left in place while another process holds the lock.
+            logger.info("tripwire: provider %s tripwire fired: %s", provider_id, e)
         except Exception as e:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)
 

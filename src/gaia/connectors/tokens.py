@@ -116,14 +116,24 @@ def load_current_connection(
     ``AuthRequiredError``) only under the connection lock, so a forward landing
     meanwhile is never the one deleted. ``lock_held`` says the caller holds it;
     otherwise it is taken without waiting, and when another process holds it
-    the connection is left in place and ``AuthRequiredError`` is raised.
+    the connection is left in place and ``AuthRequiredError`` is raised. An
+    unreadable blob (absent, torn or corrupt) is handed to the store under the
+    lock too, and reads as ``None`` while another process holds it.
     Blocking keyring I/O.
     """
     provider = get_provider(provider_id)
     current = peek_connection(provider_id, account_email=account_email)
     if current is None:
-        # Absent, or a torn/corrupt blob: the store decides, as before.
-        return provider, _load(provider_id, provider, account_email)
+        # Absent, torn or corrupt: the store's own read decides, and may delete,
+        # so it runs under the lock. Busy means a writer is mid-save.
+        if lock_held:
+            return provider, _load(provider_id, provider, account_email)
+        with _refresh_lock.try_held_sync(provider_id) as acquired:
+            if acquired:
+                return load_current_connection(
+                    provider_id, account_email=account_email, lock_held=True
+                )
+        return provider, None
     if _disagrees(provider, current):
         logger.info(
             "connectors: %s client config changed outside this process "

@@ -131,10 +131,16 @@ def lock_held_elsewhere(shared_keyring):
         text=True,
         env=_child_env(),
     )
+    # A child hung on import fails the test instead of hanging it.
+    watchdog = threading.Timer(_CHILD_TIMEOUT, holder.kill)
+    watchdog.start()
     try:
-        assert holder.stdout.readline().strip() == "held"
+        ready = holder.stdout.readline().strip()
+        watchdog.cancel()
+        assert ready == "held"
         yield holder
     finally:
+        watchdog.cancel()
         if holder.poll() is None:
             holder.stdin.close()
             holder.wait(timeout=_CHILD_TIMEOUT)
@@ -243,6 +249,26 @@ def test_a_forward_landing_right_after_the_read_is_not_deleted(
         return blob
 
     monkeypatch.setattr(tokens, "peek_connection", peek_then_forward)
+
+    assert [c["provider"] for c in list_connections()] == ["google"]
+    assert _stored_refresh_token() == "forwarded-refresh"
+
+
+def test_a_forward_landing_after_an_empty_read_is_not_deleted(
+    monkeypatch, connected_under_old_client
+):
+    """An unreadable first read (absent, torn, corrupt) defers to the store,
+    which must re-read under the lock, not judge the forward unlocked."""
+    from gaia.connectors.api import list_connections
+
+    real_peek = tokens.peek_connection
+
+    def empty_then_forward(*args, **kwargs):
+        monkeypatch.setattr(tokens, "peek_connection", real_peek)
+        _written_by_another_process()
+        return None
+
+    monkeypatch.setattr(tokens, "peek_connection", empty_then_forward)
 
     assert [c["provider"] for c in list_connections()] == ["google"]
     assert _stored_refresh_token() == "forwarded-refresh"
