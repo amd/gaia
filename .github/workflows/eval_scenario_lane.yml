@@ -1,0 +1,907 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# One lane of the flagship scenario eval, for ONE pinned local model on ONE
+# runner pool. Called per lane by a model's eval workflow; today that is
+# eval_flagship_gemma_stx.yml (Gemma-4-E4B on Strix Point). eval_flagship.yml
+# still carries its own copy of this job and moves onto this file after the
+# v0.25.1 release, together with the Qwen-on-Strix-Halo baseline (#5505).
+#
+# The rationale for nearly every step lives beside the same step in
+# eval_flagship.yml: the serial-per-backend rule, why every category gets its
+# own GAIA home, the secret scan before a public upload, the integrity gate,
+# report vs enforce, the ASCII-only PowerShell bodies. What differs here:
+#
+# THE MODEL IS PINNED, NOT INFERRED. A fresh GAIA home resolves the hardware
+# default, which on a big Strix Halo is Qwen and on everything else Gemma, so a
+# scorecard would name whichever model the machine happened to pick. Each
+# category's home gets `default_model = inputs.agent-model`
+# (util/eval_gaia_home.py pin-model, which reads it back), and the eval runs
+# with `--agent-model`, which checks every scenario's session and discards any
+# that ran something else. The scorecard records the model, and `--compare`
+# refuses (exit 3) a baseline whose meta.json names a different model or eval
+# model.
+#
+# THE BASELINE DIRECTORY DECLARES ITS MODEL. meta.json in inputs.baseline-dir
+# must name inputs.agent-model, or the lane stops before using the pool. A
+# directory with meta.json but no scorecards is "no baseline yet": every
+# category runs, uploads, and is reported NOT COMPARED, never as a pass.
+#
+# NO EMBEDDER DEGRADE PATH. eval_flagship.yml cuts a Strix Halo lane down when
+# the RAG embedder will not load (#3016). The embedder loads on Strix Point, so
+# here a failed embedder probe fails the lane. Add the degrade path back only
+# for a pool that needs it, when eval_flagship.yml moves here.
+
+name: Agent Eval - scenario lane (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      lane:
+        description: 'Lane name, used in the job name, concurrency group and summary'
+        required: true
+        type: string
+      categories:
+        description: 'Space-separated categories this lane runs, serially'
+        required: true
+        type: string
+      memory-disabled:
+        description: "GAIA_MEMORY_DISABLED for this lane ('0' or '1'), from util/eval_lane_matrix.py"
+        required: true
+        type: string
+      memory-admin:
+        description: "GAIA_MEMORY_ADMIN for this lane, from util/eval_lane_matrix.py"
+        required: true
+        type: string
+      memory-mcp:
+        description: "GAIA_MEMORY_MCP_ALWAYS for this lane, from util/eval_lane_matrix.py"
+        required: true
+        type: string
+      gaia-fixtures:
+        description: "'1' stages the gaia_* fixtures, from util/eval_lane_matrix.py"
+        required: true
+        type: string
+      runs-on:
+        description: 'Runner labels as a JSON array. Must include Windows: every step is PowerShell'
+        required: true
+        type: string
+      agent-model:
+        description: 'Local model the agent runs in every scenario'
+        required: true
+        type: string
+      baseline-dir:
+        description: 'Committed baseline directory; its meta.json must name agent-model'
+        required: true
+        type: string
+      artifact-name:
+        description: "Name of this lane's uploaded artifact"
+        required: true
+        type: string
+      enforce:
+        description: 'Fail on a regression or an incomplete run (false = report as ::warning::)'
+        required: false
+        type: boolean
+        default: false
+      eval-model:
+        description: "Claude driver and judge. Blank = the baseline meta.json's eval_model"
+        required: false
+        type: string
+        default: ''
+      eval-timeout-minutes:
+        description: 'Limit for the step that runs the categories'
+        required: false
+        type: number
+        default: 360
+      job-timeout-minutes:
+        description: 'Limit for the whole lane. Keep it ~60 above eval-timeout-minutes for setup, collect and upload, or a job timeout cancels the upload'
+        required: false
+        type: number
+        default: 420
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Driver and judge credential. This or ANTHROPIC_API_KEY is required; the preflight fails without one.'
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN_SECONDARY:
+        description: 'Used instead while the repo variable CLAUDE_ACCOUNT is "secondary".'
+        required: false
+      ANTHROPIC_API_KEY:
+        description: 'Fallback credential, used only when no OAuth token is set.'
+        required: false
+      HUGGINGFACE_ACCESS_TOKEN:
+        description: 'Model downloads.'
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_DIR: ${{ inputs.baseline-dir }}
+  AGENT_MODEL: ${{ inputs.agent-model }}
+  BACKEND_URL: http://127.0.0.1:4200
+  # Without it every scenario with `setup.index_documents` 403s on this
+  # runner's systemprofile home (#3585).
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
+  ENFORCE: ${{ inputs.enforce }}
+  EVAL_MODEL_OVERRIDE: ${{ inputs.eval-model }}
+  NO_PROXY: 'localhost,127.0.0.1'
+  LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
+  PYTHONIOENCODING: 'utf-8'
+  PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+  GAIA_EVAL_SCRIPTED_USER: '1'
+
+jobs:
+  lane:
+    name: Scenario eval - ${{ inputs.lane }}
+    # Per lane, never shared: a group shared across lanes queues them behind
+    # each other, and one shared with the caller deadlocks (the phantom-job bug
+    # described in eval_flagship.yml). github.workflow is the CALLER's name, so
+    # two models' lanes never share a group either.
+    concurrency:
+      group: ${{ github.workflow }}-${{ inputs.lane }}-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    defaults:
+      run:
+        # Windows PowerShell 5.1, and every run body pure ASCII: 5.1 reads the
+        # BOM-less script Actions writes as ANSI (see eval_flagship.yml).
+        shell: powershell
+    timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    env:
+      VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
+      VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
+      EVAL_CATEGORIES: ${{ inputs.categories }}
+      EVAL_LANE: ${{ inputs.lane }}
+      GAIA_MEMORY_DISABLED: ${{ inputs.memory-disabled }}
+      GAIA_MEMORY_ADMIN: ${{ inputs.memory-admin }}
+      GAIA_MEMORY_MCP_ALWAYS: ${{ inputs.memory-mcp }}
+      GAIA_FIXTURES: ${{ inputs.gaia-fixtures }}
+    steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Before anything touches the pool: a baseline captured on another model
+      # cannot judge this one, so a mismatch here is a wiring error.
+      - name: Check the baseline directory is for this model
+        run: |
+          $meta = Join-Path $env:BASELINE_DIR 'meta.json'
+          if (-not (Test-Path $meta)) {
+            Write-Host "::error title=No baseline meta::$meta does not exist. Every baseline directory declares the model it measures, even before it has scorecards. Create it (see tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/README.md) or point baseline-dir at the right directory."
+            exit 1
+          }
+          $declared = (Get-Content -Raw $meta | ConvertFrom-Json).model
+          if ($declared -ne $env:AGENT_MODEL) {
+            Write-Host "::error title=Baseline is for another model::$meta is for '$declared' but this lane runs '$env:AGENT_MODEL'. Scores from two models are not comparable; use the baseline directory captured on $env:AGENT_MODEL."
+            exit 1
+          }
+          Write-Host "Baseline directory $env:BASELINE_DIR is for $declared."
+
+      # Drives every scenario as well as judging it, so it must be the model the
+      # baseline was captured under. Same step name as eval_flagship.yml:
+      # tests/unit/test_eval_tag_gate.py requires it before any use.
+      - name: Resolve the eval driver model
+        run: |
+          $model = $env:EVAL_MODEL_OVERRIDE
+          if (-not $model) {
+            $meta = Join-Path $env:BASELINE_DIR 'meta.json'
+            $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
+            if (-not $model) {
+              Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: set eval_model in $meta, or pass the eval-model input."
+              exit 1
+            }
+          }
+          "EVAL_MODEL=$model" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          Write-Host "Eval driver and judge model: $model"
+          Write-Host "Agent model under test: $env:AGENT_MODEL"
+
+      # Re-derived from the categories, independently of the matrix, so a
+      # wiring mistake fails here instead of scoring badly.
+      - name: Check the lane environment matches its categories
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cats = @($env:EVAL_CATEGORIES -split '\s+' | Where-Object { $_ })
+          $needsMemory = $cats -contains 'memory'
+          $gaiaLane = @($cats | Where-Object { $_ -like 'gaia_*' }).Count -gt 0
+          if ($gaiaLane) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '1' }
+          } elseif ($needsMemory) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1'; GAIA_FIXTURES = '0' }
+          } else {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0' }
+          }
+          $wrong = @()
+          foreach ($name in $want.Keys) {
+            $have = [Environment]::GetEnvironmentVariable($name)
+            if ($null -eq $have) { $have = '<unset>' }
+            if ($have -ne $want[$name]) { $wrong += "$name is '$have' but should be '$($want[$name])'" }
+          }
+          if ($wrong.Count -gt 0) {
+            Write-Host "::error::Lane '$env:EVAL_LANE' runs [$env:EVAL_CATEGORIES] but its environment is wrong: $($wrong -join '; '). The values come from util/eval_lane_matrix.py; fix them there."
+            exit 1
+          }
+          Write-Host "Lane '$env:EVAL_LANE' environment is correct (memory lane: $needsMemory, gaia_* lane: $gaiaLane)."
+
+      - name: Setup Python Environment
+        id: venv
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          # Same set as eval_flagship.yml: the flagship hub packages register
+          # the `gaia` agent, and `mcp` runs the Agent UI MCP server.
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Check the venv interpreter
+        env:
+          SETUP_VENV_PY: ${{ steps.venv.outputs.python-path }}
+        run: |
+          if ($env:SETUP_VENV_PY -ne $env:VENV_PY) {
+            Write-Host "::error::setup-venv built '$env:SETUP_VENV_PY' but this job runs '$env:VENV_PY'. Point VENV_PY/VENV_GAIA in the job env at setup-venv's venv-name."
+            exit 1
+          }
+          foreach ($exe in @($env:VENV_PY, $env:VENV_GAIA)) {
+            if (-not (Test-Path $exe)) {
+              Write-Host "::error::$exe is missing - the venv install did not complete. See the Setup Python Environment step."
+              exit 1
+            }
+          }
+          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            exit 1
+          }
+
+      # `gaia eval agent` drives each scenario through `claude -p`.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (the eval's scenario driver)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server (version-matched, warmed)
+        timeout-minutes: 30
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -WarmModel "$env:AGENT_MODEL"
+          if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+
+      - name: Preflight - judge credential, baselines, Lemonade, models
+        timeout-minutes: 30
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          # Blank when the OAuth token is present: `--bare` (added only with a
+          # key) restricts auth to the key and would ignore the token.
+          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+
+          if (-not $env:CLAUDE_CODE_OAUTH_TOKEN -and -not $env:ANTHROPIC_API_KEY) {
+            Write-Host "::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set. 'gaia eval agent' drives and scores every scenario through 'claude -p', so without one each scenario errors in seconds. Add either repository secret."
+            exit 1
+          }
+          # Accepted, not merely present (#3341); the classifier names who can fix a rejection.
+          $global:LASTEXITCODE = 0
+          $probe = (claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String)
+          $probeExit = $LASTEXITCODE
+          $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
+          Set-Content -Path $probeFile -Value $probe -Encoding UTF8
+          & $env:VENV_PY util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          # A category with no committed scorecard is reported, never assumed to
+          # pass; enforcing against nothing would be a pass by default.
+          $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          foreach ($category in $categories) {
+            $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
+            if (Test-Path $baseline) { Write-Host "baseline ok: $baseline"; continue }
+            if ($env:ENFORCE -eq 'true') {
+              Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Capture one from a run on this pool first, or run with enforce: false."
+              exit 1
+            }
+            Write-Host "::warning::${category}: NO BASELINE YET at $baseline. The category runs and uploads its scorecard; nothing compares it."
+          }
+
+          $global:LASTEXITCODE = 0
+          $probe = @(& $env:VENV_PY -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, MODELS, _get_lemonade_config; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(_get_lemonade_config()[2]); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
+          if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 4) {
+            Write-Host "::error::Could not resolve the Lemonade URL and embedder - the venv install is broken."
+            exit 1
+          }
+          $lemonadeUrl = $probe[-4]
+          $embeddingModel = $probe[-3]
+          $embeddingCheckpoint = $probe[-2]
+          $embeddingRecipe = $probe[-1]
+
+          try {
+            Invoke-RestMethod -Uri "$lemonadeUrl/health" -TimeoutSec 10 | Out-Null
+          } catch {
+            Write-Host "::error::Lemonade Server not reachable at $lemonadeUrl. The previous step should have started it; read its log."
+            exit 1
+          }
+          Write-Host "Lemonade reachable at $lemonadeUrl"
+
+          # Which machine produced the scorecard; evidence only, never fatal.
+          $ErrorActionPreference = "Continue"
+          & $env:VENV_PY -c "import json; from gaia.llm.lemonade_client import LemonadeClient; si = LemonadeClient().get_system_info(); print(json.dumps({k: v for k, v in si.items() if k != 'recipes'}, indent=2, default=str)[:2000])"
+          $global:LASTEXITCODE = 0
+          $ErrorActionPreference = "Stop"
+
+          # ensure-lemonade-running.ps1 only warns when its warm pull fails.
+          try {
+            $downloaded = @((Invoke-RestMethod -Uri "$lemonadeUrl/models" -TimeoutSec 60).data | ForEach-Object { $_.id })
+          } catch {
+            Write-Host "::error::Could not list downloaded models at $lemonadeUrl/models."
+            exit 1
+          }
+          if ($downloaded -notcontains $env:AGENT_MODEL) {
+            Write-Host "::error::$env:AGENT_MODEL is not downloaded on this runner (Lemonade has: $($downloaded -join ', ')). The warm pull in the previous step failed; its output says why."
+            exit 1
+          }
+
+          function Show-LemonadeTaskLog {
+            foreach ($f in @("C:\ProgramData\GaiaLemonadeServer\lemonade-task-stderr.log", "C:\ProgramData\GaiaLemonadeServer\lemonade-task-stdout.log")) {
+              if (Test-Path $f) {
+                Write-Host "--- $f (tail) ---"
+                Get-Content $f -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "$_" }
+              }
+            }
+          }
+
+          # Downloaded is not loadable: load and serve the model under test.
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $chatOut = & $env:VENV_PY tests/ci_lemonade_check.py --model $env:AGENT_MODEL --chat 2>&1
+          $chatCode = $LASTEXITCODE
+          $chatOut | ForEach-Object { Write-Host "$_" }
+          if ($chatCode -ne 0 -or -not ($chatOut -match '\[ci\] chat OK')) {
+            Write-Host "::error::$env:AGENT_MODEL is downloaded but llama-server cannot load and serve it on this runner, so every category would fail. The Lemonade task log follows."
+            Show-LemonadeTaskLog
+            exit 1
+          }
+
+          # The RAG categories answer out of the embedder's chunks. Loaded with
+          # the flag production uses (gaia/rag/sdk.py), after the chat model is
+          # resident, as the eval runs it.
+          $global:LASTEXITCODE = 0
+          $embedOut = & $env:VENV_PY tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args "--ubatch-size 2048" 2>&1
+          $embedCode = $LASTEXITCODE
+          $embedOut | ForEach-Object { Write-Host "$_" }
+          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
+            Write-Host "::error::The RAG embedder $embeddingModel will not load beside $env:AGENT_MODEL on this runner. Document categories would score non-answers that read as a model regression, so the lane stops here. The Lemonade task log follows."
+            Show-LemonadeTaskLog
+            exit 1
+          }
+          Write-Host "Model under test and embedder both load and serve."
+
+      - name: Stage the gaia_* fixtures, skills and fixture hub
+        if: env.GAIA_FIXTURES == '1'
+        run: |
+          $template = Join-Path $env:RUNNER_TEMP "gaia-eval-homes\_staged"
+          if (Test-Path $template) { Remove-Item $template -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $template | Out-Null
+          & $env:VENV_PY tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE" --gaia-home $template
+          if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
+
+      - name: Run this lane's categories serially
+        # Its own limit, below the job's, so an overrun fails here and the
+        # collect, gate, compare and upload steps still run.
+        timeout-minutes: ${{ inputs.eval-timeout-minutes }}
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          # Not "Stop": the first stderr line of a native command would become a
+          # terminating error. Every failure is checked explicitly.
+          $ErrorActionPreference = "Continue"
+          $ProgressPreference = "SilentlyContinue"
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          New-Item -ItemType Directory -Force -Path eval-out | Out-Null
+
+          function Test-Backend {
+            try { Invoke-RestMethod -Uri "$env:BACKEND_URL/api/health" -TimeoutSec 5 | Out-Null; return $true }
+            catch { return $false }
+          }
+          if (Test-Backend) {
+            Write-Host "::error::$env:BACKEND_URL is already serving - a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run."
+            exit 1
+          }
+
+          # One backend per category, on a fresh GAIA home with the model pinned.
+          $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
+          $stagedHome = Join-Path $homesRoot "_staged"
+          New-Item -ItemType Directory -Force -Path $homesRoot | Out-Null
+
+          # The agent under test runs shell commands; only `claude -p` gets the
+          # judge's credentials.
+          $judgeCredentials = @{}
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+            $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
+          }
+          function Start-Isolated($argList, $cwd, $out, $err) {
+            foreach ($name in $judgeCredentials.Keys) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+            try {
+              return Start-Process -FilePath $env:VENV_PY -ArgumentList $argList `
+                -WorkingDirectory $cwd -RedirectStandardOutput $out -RedirectStandardError $err `
+                -NoNewWindow -PassThru
+            }
+            finally {
+              foreach ($name in $judgeCredentials.Keys) {
+                if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
+              }
+            }
+          }
+
+          function Stop-CategoryBackend($proc) {
+            & $env:VENV_GAIA daemon stop 2>&1 | ForEach-Object { Write-Host "$_" }
+            if ($proc -and -not $proc.HasExited) {
+              Write-Host "Stopping backend pid $($proc.Id) and its children..."
+              & taskkill /F /T /PID $proc.Id 2>&1 | Out-Null
+            }
+            foreach ($attempt in 1..30) {
+              if (-not (Test-Backend)) { return $true }
+              Start-Sleep -Seconds 1
+            }
+            return $false
+          }
+
+          $fixture = $null
+          $backend = $null
+          $extraArgs = @()
+          $backendCwd = "$PWD"
+          if ($env:GAIA_FIXTURES -eq '1') {
+            $backendCwd = Join-Path $env:USERPROFILE "gaia-eval"
+            $env:GAIA_HUB_URL = "http://127.0.0.1:8765/fixture_hub"
+            $env:GAIA_WEB_ALLOWED_HOSTS = "127.0.0.1"
+            $env:GAIA_AUTO_APPROVE_TOOLS = "1"
+            # The staged fake gh first on PATH: tool calls are auto-approved.
+            $env:PATH = (Join-Path $env:USERPROFILE ".gaia-eval-bin") + ";" + $env:PATH
+            $env:GAIA_EVAL_MAILBOX = Join-Path $PWD "tests/fixtures/gaia/email/eval_inbox.mbox"
+            if (-not (Test-Path (Join-Path $stagedHome "skills"))) {
+              Write-Host "::error::$stagedHome\skills is missing - the staging step did not write the template GAIA home."
+              exit 1
+            }
+            $fixture = Start-Isolated @("tests/fixtures/gaia/serve_fixtures.py","--port","8765") "$PWD" `
+              (Join-Path $PWD "eval-out\fixtures.log") (Join-Path $PWD "eval-out\fixtures.err.log")
+            if (-not $fixture) {
+              Write-Host "::error::Could not start tests/fixtures/gaia/serve_fixtures.py."
+              exit 1
+            }
+            $extraArgs = @('--exclude-tag', 'live', '--exclude-tag', 'local_blocked_win_shim')
+          }
+
+          try {
+            if ($fixture) {
+              $served = $false
+              foreach ($attempt in 1..6) {
+                if ($fixture.HasExited) { break }
+                try { Invoke-RestMethod -Uri "http://127.0.0.1:8765/atlas.html" -TimeoutSec 10 | Out-Null; $served = $true; break }
+                catch { Start-Sleep -Seconds 5 }
+              }
+              if (-not $served) {
+                Write-Host "::error::Fixture server not serving on port 8765 - see eval-out\fixtures*.log."
+                Get-Content (Join-Path $PWD "eval-out\fixtures.err.log") -ErrorAction SilentlyContinue
+                exit 1
+              }
+            }
+
+            $defaultAgent = (& $env:VENV_PY -c "from gaia.eval.config import DEFAULT_AGENT_TYPE; print(DEFAULT_AGENT_TYPE)" 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not $defaultAgent) {
+              Write-Host "::error::Could not read DEFAULT_AGENT_TYPE from gaia.eval.config - the venv install is broken. Output: $defaultAgent"
+              exit 1
+            }
+
+            # BOM-less appends, so GitHub renders the heading.
+            $summaryEnc = New-Object System.Text.UTF8Encoding($false)
+            function Add-Summary($line) {
+              if ($env:GITHUB_STEP_SUMMARY) {
+                [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
+              }
+            }
+            $swTotal = [Diagnostics.Stopwatch]::StartNew()
+            Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE``, ``$env:AGENT_MODEL`` on $env:COMPUTERNAME"
+            Add-Summary ""
+            Add-Summary "| category | minutes |"
+            Add-Summary "| --- | ---: |"
+
+            # Serial by construction: one Lemonade, one eval at a time (CLAUDE.md).
+            $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+            foreach ($category in $categories) {
+              Write-Host "=================================================================="
+              Write-Host "  gaia eval agent --category $category --agent-model $env:AGENT_MODEL"
+              Write-Host "=================================================================="
+              $swCat = [Diagnostics.Stopwatch]::StartNew()
+
+              $catHome = Join-Path $homesRoot $category
+              if (Test-Path $catHome) {
+                Write-Host "::error::$catHome exists before $category started. Every category must start on a GAIA home nothing has written to."
+                exit 1
+              }
+              New-Item -ItemType Directory -Force -Path $catHome | Out-Null
+              if ($env:GAIA_FIXTURES -eq '1') {
+                Copy-Item (Join-Path $stagedHome "skills") (Join-Path $catHome "skills") -Recurse -Force
+              }
+              $isoEnv = @(& $env:VENV_PY util/eval_gaia_home.py env --home $catHome)
+              if ($LASTEXITCODE -ne 0 -or $isoEnv.Count -eq 0) {
+                Write-Host "::error::util/eval_gaia_home.py env failed for $catHome; the output above says why."
+                exit 1
+              }
+              foreach ($line in $isoEnv) {
+                $kv = $line -split '=', 2
+                Set-Item "Env:\$($kv[0])" $kv[1]
+              }
+              & $env:VENV_PY util/eval_gaia_home.py check --home $catHome
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::error::$category would not start on an isolated, empty GAIA home (NOT ISOLATED lines above)."
+                exit 1
+              }
+              # The pin: every new session and every agent in this home resolves
+              # to the model under test, whatever this machine's hardware picks.
+              & $env:VENV_PY util/eval_gaia_home.py pin-model --home $catHome --model $env:AGENT_MODEL
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::error::Could not pin $env:AGENT_MODEL in $catHome (NOT PINNED lines above). Refusing to score whatever model the hardware default picks."
+                exit 1
+              }
+
+              $stub = 'tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py'
+              if ($category -eq 'gaia_mcp') {
+                & $env:VENV_PY $stub install
+                if ($LASTEXITCODE -ne 0) { Write-Host "::error::Staging the gaia_mcp stub servers failed; the output above says why."; exit 1 }
+              }
+
+              if (Test-Backend) {
+                Write-Host "::error::$env:BACKEND_URL is already serving before $category started - a stale GAIA backend."
+                exit 1
+              }
+              $outLog = Join-Path $PWD "eval-out\backend-$category.out.log"
+              $errLog = Join-Path $PWD "eval-out\backend-$category.err.log"
+              $backend = Start-Isolated @("-m","gaia.ui.server","--port","4200","--host","127.0.0.1") $backendCwd $outLog $errLog
+              if (-not $backend) {
+                Write-Host "::error::Could not start gaia.ui.server - the venv install is broken."
+                exit 1
+              }
+
+              Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
+              $ready = $false
+              foreach ($attempt in 1..120) {
+                if ($backend.HasExited) {
+                  Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
+                  Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                  exit 1
+                }
+                if (Test-Backend) { $ready = $true; break }
+                Start-Sleep -Seconds 5
+              }
+              if (-not $ready) {
+                Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+
+              try {
+                $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message)."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              $agentIds = @($agentList.agents | ForEach-Object { $_.id })
+              if ($agentIds -notcontains $defaultAgent) {
+                Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend (registered: $($agentIds -join ', ')), so every scenario would 422. Install its hub package in Setup Python Environment."
+                exit 1
+              }
+
+              if ($env:GAIA_MEMORY_DISABLED -eq '0') {
+                try {
+                  $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                    -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                    -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+                } catch {
+                  Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off."
+                  exit 1
+                }
+                if ($memory.memory_enabled -ne $true) {
+                  Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress))."
+                  exit 1
+                }
+              }
+
+              try {
+                $stats = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/memory/stats" -Headers @{ "X-Gaia-UI" = "1" } -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::GET $env:BACKEND_URL/api/memory/stats failed: $($_.Exception.Message). Without it there is no proof $category starts with empty memory."
+                exit 1
+              }
+              $held = [ordered]@{
+                knowledge = $stats.knowledge.total
+                procedures = $stats.procedures.total
+                conversation_turns = $stats.conversations.total_turns
+              }
+              $notEmpty = @($held.Keys | Where-Object { $held[$_] -ne 0 } | ForEach-Object { "$_=$($held[$_])" })
+              if ($notEmpty.Count -gt 0) {
+                Write-Host "::error::The backend's memory store is not empty at the start of $category ($($notEmpty -join ', '))."
+                exit 1
+              }
+              if (-not (Test-Path $env:GAIA_MEMORY_DB)) {
+                Write-Host "::error::The backend did not create $env:GAIA_MEMORY_DB, so its memory store is not $category's isolated GAIA home."
+                exit 1
+              }
+
+              $global:LASTEXITCODE = 0
+              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --agent-model "$env:AGENT_MODEL" @extraArgs 2>&1 |
+                ForEach-Object { Write-Host "$_"; "$_" } |
+                Out-File -FilePath "eval-out\$category.log" -Encoding utf8
+              $code = $LASTEXITCODE
+              if ($category -eq 'gaia_mcp') {
+                & $env:VENV_PY $stub remove
+                if ($LASTEXITCODE -ne 0) { Write-Host "::error::Removing the gaia_mcp stub servers failed; the output above says why."; exit 1 }
+              }
+
+              $stopped = Stop-CategoryBackend $backend
+              $backend = $null
+              $daemonLog = Join-Path $catHome "host\daemon.log"
+              if (Test-Path $daemonLog) { Copy-Item $daemonLog "eval-out\daemon-$category.log" -Force }
+              if (-not $stopped) {
+                Write-Host "::error::The backend for $category still answers on $env:BACKEND_URL after being stopped; the next category would talk to it."
+                exit 1
+              }
+              Remove-Item $catHome -Recurse -Force -ErrorAction SilentlyContinue
+              $swCat.Stop()
+
+              $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min)"
+              Add-Summary "| ``$category`` | $mins |"
+
+              if ($code -ne 0) {
+                # Never `exit $LASTEXITCODE`: a launch failure leaves it $null,
+                # which PowerShell turns into a green exit 0.
+                Write-Host "::error::gaia eval agent --category $category crashed with exit $code (a harness failure, not a regression verdict)."
+                exit 1
+              }
+            }
+
+            $swTotal.Stop()
+            $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
+            Write-Host "[TIMING] lane $env:EVAL_LANE, all $($categories.Count) categories: $totalMins min"
+            Add-Summary "| **total** | **$totalMins** |"
+            $timing = @{ lane = $env:EVAL_LANE; agent_model = $env:AGENT_MODEL; total_minutes = $totalMins; categories = $categories } | ConvertTo-Json -Compress
+            [System.IO.File]::WriteAllText("$PWD\eval-out\lane-timing.json", $timing, (New-Object System.Text.UTF8Encoding($false)))
+          }
+          finally {
+            if ($env:GAIA_FIXTURES -eq '1') {
+              & $env:VENV_PY tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
+            }
+            if ($backend) { Stop-CategoryBackend $backend | Out-Null }
+            if ($fixture -and -not $fixture.HasExited) {
+              Stop-Process -Id $fixture.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      # Its own always() step, so a step timeout still cleans up.
+      - name: Delete the per-category GAIA homes
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+          if ($env:GAIA_FIXTURES -eq '1' -and $env:VENV_PY -and (Test-Path $env:VENV_PY)) {
+            & $env:VENV_PY tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove 2>&1 | ForEach-Object { Write-Host "$_" }
+          }
+          $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
+          if (-not (Test-Path $homesRoot)) { Write-Host "No GAIA homes to delete."; exit 0 }
+          foreach ($dir in @(Get-ChildItem $homesRoot -Directory)) {
+            if (Test-Path (Join-Path $dir.FullName "host\instance.json")) {
+              $env:GAIA_HOME = $dir.FullName
+              $env:GAIA_DAEMON_HOME = Join-Path $dir.FullName "host"
+              & $env:VENV_GAIA daemon stop 2>&1 | ForEach-Object { Write-Host "$_" }
+            }
+          }
+          Remove-Item $homesRoot -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path $homesRoot) {
+            Write-Host "::warning::Could not fully delete $homesRoot; a process still holds a file in it."
+          }
+          exit 0
+
+      - name: Collect scorecards from the printed run directories
+        if: ${{ !cancelled() }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Collects only; a missing scorecard is judged once, by the integrity gate.
+          $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
+          $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          foreach ($category in $categories) {
+            $log = "eval-out\$category.log"
+            if (-not (Test-Path $log)) {
+              Write-Host "::${level}::No log for $category - the chain stopped before it ran."
+              continue
+            }
+            # The eval prints an absolute `Output: <run-dir>`; never glob by mtime.
+            $hit = Select-String -Path $log -Encoding UTF8 -Pattern '^Output:\s*(.+?)\s*$' | Select-Object -Last 1
+            $runDir = if ($hit) { $hit.Matches[0].Groups[1].Value } else { $null }
+            $scorecard = if ($runDir) { Join-Path $runDir "scorecard.json" } else { $null }
+            if (-not $runDir -or -not (Test-Path $scorecard)) {
+              $shown = if ($runDir) { $runDir } else { "<none>" }
+              Write-Host "::${level}::Could not resolve a scorecard for $category (parsed run dir: '$shown') - see eval-out\$category.log."
+              continue
+            }
+            New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
+            Copy-Item $scorecard "eval-out\$category\scorecard.json"
+            foreach ($name in @("summary.md", "results.xml")) {
+              $src = Join-Path $runDir $name
+              if (Test-Path $src) { Copy-Item $src "eval-out\$category\$name" }
+            }
+            $traces = Join-Path $runDir "traces"
+            if (Test-Path $traces) { Copy-Item $traces "eval-out\$category\traces" -Recurse -Force }
+            $recorded = (Get-Content -Raw "eval-out\$category\scorecard.json" | ConvertFrom-Json).config.agent_model
+            Write-Host "${category}: $runDir (agent model recorded: $recorded)"
+          }
+          $lemonadeLogs = "C:\ProgramData\GaiaLemonadeServer"
+          if (Test-Path $lemonadeLogs) {
+            New-Item -ItemType Directory -Force -Path "eval-out\lemonade" | Out-Null
+            Get-ChildItem -Path $lemonadeLogs -Filter "lemonade-task-*.log" -ErrorAction SilentlyContinue |
+              ForEach-Object { Copy-Item $_.FullName "eval-out\lemonade\$($_.Name)" -Force }
+          }
+
+      - name: Integrity gate - did we actually measure?
+        if: ${{ !cancelled() }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # `--compare` scores only scenarios on both sides; this asks whether
+          # there was a measurement at all (gaia.eval.integrity_gate).
+          $gateArgs = @("--baseline-dir", $env:BASELINE_DIR, "--results-dir", "eval-out")
+          foreach ($c in (($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ })) { $gateArgs += @("--category", $c) }
+          if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          $global:LASTEXITCODE = 0
+          & $env:VENV_PY -m gaia.eval.integrity_gate @gateArgs
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. The '${{ inputs.artifact-name }}' artifact carries the traces and logs."
+            exit 1
+          }
+
+      - name: Compare each category against its committed baseline
+        if: ${{ !cancelled() }}
+        run: |
+          $regressed = @()
+          $notComparable = @()
+          $noBaseline = @()
+          $failedCompare = $false
+          $summaryEnc = New-Object System.Text.UTF8Encoding($false)
+          function Add-Summary($line) {
+            if ($env:GITHUB_STEP_SUMMARY) {
+              [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
+            }
+          }
+
+          $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          foreach ($category in $categories) {
+            $current = "eval-out\$category\scorecard.json"
+            $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
+            Write-Host ""
+            Write-Host "=================================================================="
+            Write-Host "  ${category}: $baseline  ->  $current"
+            Write-Host "=================================================================="
+            if (-not (Test-Path $current)) {
+              Write-Host "::warning::${category}: no scorecard produced - nothing to compare (reported by the integrity gate)."
+              continue
+            }
+            if (-not (Test-Path $baseline)) {
+              $noBaseline += $category
+              continue
+            }
+            # 0 no regression, 2 regression, 3 measured with another model.
+            $global:LASTEXITCODE = 0
+            & $env:VENV_GAIA eval agent --compare "$baseline" "$current"
+            switch ($LASTEXITCODE) {
+              0 { Write-Host "${category}: no regression vs baseline." }
+              2 {
+                Write-Host "::warning::${category}: regression detected vs $baseline (see the diff above)."
+                $regressed += $category
+              }
+              3 {
+                Write-Host "::error::${category}: NOT COMPARABLE - the scorecard and $baseline were measured with a different agent model or eval model (the reason is printed above)."
+                $notComparable += $category
+              }
+              default {
+                Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (a harness/IO error, not a regression verdict)."
+                $failedCompare = $true
+              }
+            }
+          }
+
+          Add-Summary ""
+          Add-Summary "### Regression check, lane ``$env:EVAL_LANE`` (``$env:AGENT_MODEL``, enforce=$env:ENFORCE)"
+          Add-Summary ""
+          if ($noBaseline.Count -gt 0) {
+            # Visible on purpose: no baseline means no verdict, never a pass.
+            Write-Host "::warning::NO BASELINE YET for $($noBaseline -join ', ') in $env:BASELINE_DIR - NOT COMPARED, so this lane says nothing about regressions there. These scorecards are the candidates for that baseline (see its README.md)."
+            Add-Summary "**NO BASELINE YET - not compared, not a pass:** $($noBaseline -join ', '). The uploaded scorecards are the baseline candidates; ``$env:BASELINE_DIR/README.md`` says how to commit them."
+          }
+          if ($regressed.Count -gt 0) { Add-Summary "Regressed: $($regressed -join ', ')" }
+          if ($notComparable.Count -gt 0) { Add-Summary "Not comparable (different model): $($notComparable -join ', ')" }
+          $compared = @($categories | Where-Object { $noBaseline -notcontains $_ -and $notComparable -notcontains $_ -and (Test-Path "eval-out\$_\scorecard.json") })
+          if ($compared.Count -gt 0 -and $regressed.Count -eq 0) { Add-Summary "No regression in: $($compared -join ', ')" }
+
+          # A refused or failed compare is never a verdict; fatal regardless of enforce.
+          if ($failedCompare -or $notComparable.Count -gt 0) {
+            Write-Host "::error::One or more comparisons could not be made. A scorecard measured with another model is not evidence about this one; fix the pin or the baseline, not the compare."
+            exit 1
+          }
+          if ($regressed.Count -gt 0 -and $env:ENFORCE -eq "true") {
+            Write-Host "::error::Regressions in: $($regressed -join ' '). enforce=true - failing the build."
+            exit 1
+          }
+          # Do not re-export the last compare's exit 2 as the step's result.
+          $global:LASTEXITCODE = 0
+
+      # Scans every file that uploads; the artifact is public and unmasked.
+      - name: Refuse to upload a credential
+        if: always()
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(Get-ChildItem eval-out -Recurse -File -ErrorAction SilentlyContinue)
+          $secrets = @()
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($value) { $secrets += $value }
+          }
+          $leaked = @()
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file.FullName)) { continue }
+            $hit = $false
+            foreach ($value in $secrets) {
+              if (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet) { $hit = $true }
+            }
+            if (-not $hit) { continue }
+            $leaked += $file.FullName
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            foreach ($value in $secrets) { $text = $text.Replace($value, "***REDACTED***") }
+            [System.IO.File]::WriteAllText($file.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
+          }
+          if ($leaked.Count -gt 0) {
+            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the PUBLIC artifact: $($leaked -join ', '). They were redacted before upload; find what printed it, fix that, and rotate the credential."
+            exit 1
+          }
+          Write-Host "Scanned $($files.Count) file(s) under eval-out: no credential found."
+
+      - name: Record how this lane ended
+        if: always()
+        env:
+          RUNS_ON: ${{ inputs.runs-on }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "eval-out" | Out-Null
+          $status = @{
+            lane = $env:EVAL_LANE
+            job_status = "${{ job.status }}"
+            runner = $env:COMPUTERNAME
+            runner_labels = $env:RUNS_ON
+            agent_model = $env:AGENT_MODEL
+            eval_model = $env:EVAL_MODEL
+            baseline_dir = $env:BASELINE_DIR
+            enforce = ($env:ENFORCE -eq 'true')
+            memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
+          } | ConvertTo-Json -Compress
+          [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
+
+      # The machine is ephemeral; this artifact is the only copy.
+      - name: Upload this lane's scorecards, traces and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: eval-out
+          if-no-files-found: warn
+          retention-days: 14

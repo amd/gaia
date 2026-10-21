@@ -1,0 +1,151 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# The flagship scenario eval on the model most users run: Gemma-4-E4B-it-GGUF
+# (DEFAULT_MODEL_NAME, every PC too small for Qwen3.6-35B), on the Strix Point
+# pool. eval_flagship.yml covers Strix Halo; once this has its own baseline,
+# the Halo pool can move to Qwen3.6-35B-A3B, the model a big Halo actually
+# runs (#5505).
+#
+# The model is pinned, not left to the hardware default, and every scorecard
+# records it; `--compare` refuses a baseline captured on another model. The
+# lane itself is eval_scenario_lane.yml, which says how.
+#
+# WHY A SUBSET, AND WHY ONE LANE AT A TIME
+# ------------------------------------------------------------------------------
+# The Strix Point pool is about two machines, shared with the RAG retrieval
+# benchmark (eval_retrieval.yml, up to 8 h), the RAG integration tests
+# (test_rag.yml) and the C++ integration tests (build_cpp.yml), and the last
+# two run on PRs. So this workflow holds at most ONE of them: `max-parallel: 1`
+# on the lane matrix and one run at a time workflow-wide. The whole 29-category
+# suite (~26 machine-hours on Halo) does not fit that; the default is a smoke
+# set that does, about 90 minutes on one machine.
+#
+# Default categories, with their wall clock on Strix Halo in v0.25.1-rc2:
+#
+#   tool_selection     28.7 min  7 scenarios  the core agentic skill a ~4B model
+#                                             is most likely to lose
+#   context_retention  13.3 min  4 scenarios  multi-turn plus document Q&A, so
+#                                             the embedder co-resident with the
+#                                             chat model (the #1030 class)
+#   error_recovery     10.6 min  3 scenarios  tool failures handled honestly
+#                      ---------
+#                      52.6 min on Halo, ~70-80 min expected on Strix Point
+#                      plus ~10-15 min of setup on an ephemeral machine
+#
+# Next to add when there is room: adversarial (8.6 min, prompt injection),
+# then mcp_reliability (17.6). Each lane is ~10-15 min of setup on top of its
+# categories, so a dispatch naming memory or gaia_* categories gets extra lanes
+# that run one after another.
+#
+# BASELINE. tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/ has its
+# meta.json and no scorecards until a real run on this pool produces them
+# (README.md there says how). Until then every category reports NO BASELINE YET
+# and is not compared; that is never a pass.
+
+name: Agent Eval - flagship (Gemma, Strix Point)
+
+on:
+  # Dispatch only for now. Proposed for once a baseline is committed (not
+  # enabled - adding a consumer to this pool on every tag is the maintainer's
+  # call):
+  #
+  #   push:
+  #     tags: ['v*.*.*', 'v*.*.*-rc*']
+  #
+  # with the default smoke set, the eval-gate job below honouring `[skip eval]`,
+  # and a release-escalation job like eval_flagship.yml's. A final tag could
+  # run the full category list instead, if the pool grows.
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: 'Space-separated categories (each must be in eval/ci_lanes.json). Default is the ~90 min smoke set.'
+        required: false
+        default: 'tool_selection context_retention error_recovery'
+      enforce:
+        description: 'Fail the build on a regression or an incomplete run (false = report as ::warning::)'
+        required: false
+        type: boolean
+        default: false
+      eval_model:
+        description: "Driver and judge model. Blank = the baseline meta.json's eval_model"
+        required: false
+        default: ''
+
+# One run at a time, so two dispatches never hold both Strix Point machines.
+# The lanes' own groups are named after this workflow plus the lane, so this
+# group is never one a lane waits on.
+concurrency:
+  group: eval-flagship-gemma-stx
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Hosted and seconds long. A dispatch always runs; this is here so the tag
+  # trigger above can be enabled without restructuring.
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+
+  # Validates the request before anything reaches the pool: an unknown or
+  # screen-reading category fails here, and the subset is split into lanes by
+  # the environment each category needs.
+  lanes:
+    name: Resolve the lane matrix
+    needs: eval-gate
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Validate the categories and emit the matrix
+        id: build
+        env:
+          CATEGORIES: ${{ github.event.inputs.categories || 'tool_selection context_retention error_recovery' }}
+        run: python util/eval_lane_matrix.py --categories "$CATEGORIES" >> "$GITHUB_OUTPUT"
+
+  agent-eval:
+    name: Gemma on Strix Point
+    needs: [eval-gate, lanes]
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success'
+    strategy:
+      fail-fast: false
+      # The pool's other consumers include per-PR jobs; never take both machines.
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.lanes.outputs.matrix) }}
+    uses: ./.github/workflows/eval_scenario_lane.yml
+    with:
+      lane: ${{ matrix.lane }}
+      categories: ${{ matrix.categories }}
+      memory-disabled: ${{ matrix.memory_disabled }}
+      memory-admin: ${{ matrix.memory_admin }}
+      memory-mcp: ${{ matrix.memory_mcp }}
+      gaia-fixtures: ${{ matrix.gaia_fixtures }}
+      # `Windows` is required: the pool label also matches a Linux box.
+      runs-on: '["self-hosted", "Windows", "xsj-dispatch", "strix-point"]'
+      agent-model: Gemma-4-E4B-it-GGUF
+      baseline-dir: tests/fixtures/eval_baselines/gaia-flagship-gemma-stx
+      artifact-name: eval-gemma-stx-${{ matrix.lane }}
+      enforce: ${{ github.event.inputs.enforce == 'true' }}
+      eval-model: ${{ github.event.inputs.eval_model || '' }}
+      # Sized for the default set at up to ~2x its Halo time; a dispatch of a
+      # big category (memory is 131 min on Halo) should stay under it too.
+      eval-timeout-minutes: 300
+      job-timeout-minutes: 360
+    secrets: inherit

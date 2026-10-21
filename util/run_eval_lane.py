@@ -34,7 +34,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_gaia_home import env_for  # noqa: E402
+from eval_gaia_home import env_for, write_default_model  # noqa: E402
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
@@ -246,9 +246,7 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
 
 def write_agent_model(cat_home: Path, model: str) -> None:
     """Make *model* the agent's model in *cat_home*, as `gaia config set` would."""
-    (cat_home / "config.json").write_text(
-        json.dumps({"default_model": model}), encoding="utf-8"
-    )
+    write_default_model(cat_home, model)
 
 
 def _without_judge(env: dict) -> dict:
@@ -319,6 +317,11 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                     p["backend"],
                     "--model",
                     args.judge_model,
+                    *(
+                        ["--agent-model", args.agent_model]
+                        if getattr(args, "agent_model", None)
+                        else []
+                    ),
                     *p["extra_args"],
                 ],
                 cwd=REPO_ROOT,

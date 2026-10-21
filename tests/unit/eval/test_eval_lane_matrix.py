@@ -107,3 +107,78 @@ def test_main_prints_a_github_output_line(capsys):
     out = capsys.readouterr().out.strip()
     assert out.startswith("matrix=")
     assert json.loads(out[len("matrix=") :])["include"]
+
+
+# ---------------------------------------------------------------------------
+# --categories: a subset, regrouped by environment (eval_flagship_gemma_stx.yml)
+# ---------------------------------------------------------------------------
+
+
+def _subset(categories):
+    doc = json.loads((REPO_ROOT / "eval" / "ci_lanes.json").read_text("utf-8"))
+    on_disk = lane_matrix.categories_on_disk(REPO_ROOT / "eval" / "scenarios")
+    return lane_matrix.subset_matrix(doc, on_disk, "eval/ci_lanes.json", categories)
+
+
+def test_the_gemma_default_set_is_one_memory_off_lane():
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "eval_flagship_gemma_stx.yml"
+    ).read_text(encoding="utf-8")
+    import yaml
+
+    default = yaml.safe_load(workflow)[True]["workflow_dispatch"]["inputs"][
+        "categories"
+    ]["default"]
+    (lane,) = _subset(default.split())
+    assert lane["lane"] == "core"
+    assert lane["categories"] == default
+    assert lane["memory_disabled"] == "1" and lane["gaia_fixtures"] == "0"
+
+
+def test_memory_gets_its_own_lane_and_does_not_switch_memory_on_beside_it():
+    lanes = {lane["lane"]: lane for lane in _subset(["tool_selection", "memory"])}
+
+    assert lanes["memory"]["categories"] == "memory"
+    assert lanes["memory"]["memory_mcp"] == "1"
+    assert lanes["core"]["memory_disabled"] == "1"
+
+
+def test_gaia_categories_share_one_fixture_lane():
+    lanes = {lane["lane"]: lane for lane in _subset(["gaia_core", "gaia_shell"])}
+
+    assert list(lanes) == ["gaia"]
+    assert lanes["gaia"]["gaia_fixtures"] == "1"
+
+
+@pytest.mark.parametrize("category", sorted(lane_matrix.SCREEN_READING))
+def test_a_screen_reading_category_is_refused_with_its_reason(category):
+    with pytest.raises(lane_matrix.LaneMapError, match="public artifact"):
+        _subset(["tool_selection", category])
+
+
+def test_an_unknown_category_is_refused():
+    with pytest.raises(lane_matrix.LaneMapError, match="not in any lane"):
+        _subset(["tool_selecton"])
+
+
+@pytest.mark.parametrize("categories", [[], [""]])
+def test_an_empty_request_is_refused(categories):
+    with pytest.raises(lane_matrix.LaneMapError, match="No categories"):
+        _subset(categories)
+
+
+def test_a_repeated_category_runs_once():
+    (lane,) = _subset(["error_recovery", "error_recovery"])
+    assert lane["categories"] == "error_recovery"
+
+
+def test_the_cli_prints_a_matrix_for_a_subset(capsys):
+    assert lane_matrix.main(["--categories", "error_recovery"]) == 0
+    out = capsys.readouterr().out
+    matrix = json.loads(out.split("matrix=", 1)[1])
+    assert [lane["lane"] for lane in matrix["include"]] == ["core"]
+
+
+def test_the_cli_fails_on_a_bad_subset(capsys):
+    assert lane_matrix.main(["--categories", "vision"]) == 1
+    assert "::error::" in capsys.readouterr().err

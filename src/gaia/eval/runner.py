@@ -272,6 +272,99 @@ def _stamp_agent_provenance(
         )
 
 
+def _read_session_model(backend_url: str, session_id: str, timeout: float = 15.0):
+    """Return the model the backend says a turn in *session_id* runs.
+
+    ``effective_model`` is the backend's own resolution (custom override, agent
+    preference, device), so it names the model that answered rather than the
+    one the session was created with. Raises on any transport or parse failure.
+    """
+    url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json().get("effective_model")
+
+
+def _stamp_agent_model(
+    result: dict,
+    scenario_data: dict,
+    expected_model,
+    backend_url: str,
+    read_session_model=_read_session_model,
+) -> None:
+    """Record which local model the agent ran; with a pin, fail any other.
+
+    Same severities as :func:`_stamp_agent_provenance`. With no pin the
+    observation is only recorded, and :func:`run_agent_model` decides what the
+    scorecard may claim from it.
+    """
+    result["agent_model_requested"] = expected_model
+    result.setdefault("agent_model_observed", None)
+    if result.get("status") in _NO_MEASUREMENT_STATUSES:
+        return
+
+    scenario_id = result.get("scenario_id", scenario_data.get("id", "<unknown>"))
+
+    def _unverifiable(reason: str) -> None:
+        if not expected_model:
+            return
+        message = (
+            f"{scenario_id}: the agent model is pinned to '{expected_model}' but "
+            f"{reason}, so the model that answered cannot be verified."
+        )
+        if result.get("status") in ("PASS", "FAIL"):
+            result["status"] = "INFRA_ERROR"
+            result["error"] = message
+        else:
+            result.setdefault("provenance_warning", []).append(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+
+    session_id = result.get("session_id")
+    if not session_id:
+        _unverifiable("the eval driver returned no session_id")
+        return
+    try:
+        observed = read_session_model(backend_url, session_id)
+    except Exception as e:  # transport, HTTP status, or malformed body
+        _unverifiable(
+            f"session {session_id} could not be read back from {backend_url} ({e})"
+        )
+        return
+
+    result["agent_model_observed"] = observed
+    if expected_model and observed != expected_model:
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: the agent model is pinned to '{expected_model}' but "
+            f"session {session_id} ran '{observed}'. Set default_model to "
+            f"'{expected_model}' in the GAIA home the backend was started with "
+            "(gaia config set default_model ...); the score measures the wrong "
+            "model and is discarded."
+        )
+
+
+def run_agent_model(results: list, pinned_model=None):
+    """The one local model a run may claim it scored, or None if it cannot say.
+
+    A pin is the answer: a scenario that ran anything else was already turned
+    into INFRA_ERROR. Without a pin, every measured scenario must have been
+    observed on the same model; a gap or a second model means the scorecard
+    cannot be attributed to one model, and ``--compare`` refuses it.
+    """
+    if pinned_model:
+        return pinned_model
+    measured = [
+        r
+        for r in results
+        if r.get("status") not in _NO_MEASUREMENT_STATUSES
+        and r.get("status") not in SKIPPED_STATUSES
+    ]
+    observed = {r.get("agent_model_observed") for r in measured}
+    if len(observed) == 1:
+        return next(iter(observed))
+    return None
+
+
 INFRA_ERROR_ABORT_AFTER = 3
 
 # The driver writes root_cause in its own words, so the known harness failures
@@ -1702,6 +1795,7 @@ def run_scenario_subprocess(
     agent_type=None,
     attempt=None,
     scenario_backend=None,
+    agent_model=None,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict.
 
@@ -1953,6 +2047,7 @@ def run_scenario_subprocess(
 
     # Provenance: which agent answered, not which one the runner asked for.
     _stamp_agent_provenance(result, scenario_data, agent_type, backend_url)
+    _stamp_agent_model(result, scenario_data, agent_model, backend_url)
 
     # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
     # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
@@ -2278,27 +2373,92 @@ def run_fix_iteration(scorecard, run_dir, iteration):
         return {"iteration": iteration, "error": str(e), "fixes": []}
 
 
-def _warn_on_judge_mismatch(baseline, current):
-    """Print a loud banner when two scorecards were scored by different judges.
+#: Committed next to a baseline's scorecards; names what produced them.
+BASELINE_META = "meta.json"
 
-    Scores are the judge's opinion, so a baseline scored by one model and a run
-    scored by another are not comparable — every per-scenario delta below is
-    partly the judge changing its mind. Without this the diff reads as a clean
-    regression/improvement report and quietly misleads.
+
+class ScorecardMismatchError(ValueError):
+    """Two scorecards measured different things, so diffing them means nothing."""
+
+
+def baseline_identity(baseline_path, baseline: dict) -> dict:
+    """What a baseline was measured with: agent model, driver model, and source.
+
+    A committed baseline directory carries ``meta.json`` (``model`` is the local
+    model the agent ran, ``eval_model`` the Claude model that drove and judged),
+    and it outranks the scorecard, which older runs wrote without an agent
+    model. A loose scorecard answers from its own ``config``.
     """
-    baseline_judge = (baseline.get("config") or {}).get("model")
-    current_judge = (current.get("config") or {}).get("model")
-    if not baseline_judge or not current_judge or baseline_judge == current_judge:
-        return
+    meta_path = Path(baseline_path).parent / BASELINE_META
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise ScorecardMismatchError(
+                f"{meta_path} is not valid JSON ({e}), so the model the baseline "
+                "was captured under is unknown. Fix the file before comparing."
+            ) from e
+        if isinstance(meta, dict) and ("model" in meta or "eval_model" in meta):
+            return {
+                "agent_model": meta.get("model"),
+                "eval_model": meta.get("eval_model"),
+                "source": str(meta_path),
+            }
+    config = baseline.get("config") or {}
+    return {
+        "agent_model": config.get("agent_model"),
+        "eval_model": config.get("model"),
+        "source": str(baseline_path),
+    }
 
-    print("=" * 78)
-    print("WARNING: judge mismatch — these scorecards are not directly comparable.")
-    print(f"  baseline scored by: {baseline_judge}")
-    print(f"  current  scored by: {current_judge}")
-    print("Deltas below mix real behavior changes with the judge change. Replace the")
-    print("committed baseline from the next nightly on the Strix Halo pool, scored by")
-    print("the current judge, before treating any of them as a regression.")
-    print("=" * 78)
+
+def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
+    """Refuse to diff two scorecards measured with different models.
+
+    The scenario ids match whatever produced them, so without this a Gemma run
+    diffed against a Qwen baseline, or a run driven by a different Claude
+    model, reads as a clean list of regressions and improvements. Raises
+    :class:`ScorecardMismatchError`; an axis the baseline does not record is
+    not checked, because there is nothing to hold the run to.
+    """
+    want = baseline_identity(baseline_path, baseline)
+    config = current.get("config") or {}
+    checks = (
+        (
+            "agent model",
+            want["agent_model"],
+            config.get("agent_model"),
+            "Run the eval with --agent-model set to the baseline's model, on a "
+            "GAIA home whose default_model is that model.",
+        ),
+        (
+            "eval model (the Claude driver and judge)",
+            want["eval_model"],
+            config.get("model"),
+            "Re-run with --model set to the baseline's eval model.",
+        ),
+    )
+    problems = []
+    for what, expected, actual, remedy in checks:
+        if not expected or expected == actual:
+            continue
+        if not actual:
+            problems.append(
+                f"the baseline's {what} is '{expected}', and the current scorecard "
+                f"does not record which {what} it ran. {remedy}"
+            )
+        else:
+            problems.append(
+                f"the baseline's {what} is '{expected}' but the current run used "
+                f"'{actual}'. {remedy}"
+            )
+    if problems:
+        raise ScorecardMismatchError(
+            f"Not comparable with the baseline ({want['source']}): "
+            + " Also, ".join(problems)
+            + " To measure a different model, capture a baseline for it from a "
+            "real run and compare against that instead."
+        )
 
 
 def compare_scorecards(baseline_path, current_path):
@@ -2310,6 +2470,10 @@ def compare_scorecards(baseline_path, current_path):
 
     Returns:
         dict with keys: improved, regressed, unchanged, only_in_baseline, only_in_current
+
+    Raises:
+        ScorecardMismatchError: the two were measured with a different agent
+            model or eval model (see :func:`check_comparable`).
     """
     baseline_path = Path(baseline_path)
     current_path = Path(current_path)
@@ -2322,7 +2486,7 @@ def compare_scorecards(baseline_path, current_path):
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     current = json.loads(current_path.read_text(encoding="utf-8"))
 
-    _warn_on_judge_mismatch(baseline, current)
+    check_comparable(baseline_path, baseline, current)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -2612,6 +2776,7 @@ class AgentEvalRunner:
         # agent, so a null default would silently disarm the provenance check.
         agent_type=DEFAULT_AGENT_TYPE,
         iterations=1,
+        agent_model=None,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -2629,6 +2794,8 @@ class AgentEvalRunner:
         self.iterations = int(iterations)
         self.output_format = output_format
         self.agent_type = agent_type
+        # The local model the agent must run; None records what it ran instead.
+        self.agent_model = agent_model
 
     def _print_summary(self, scorecard, run_id, run_dir):
         """Print a one-block eval summary to stdout."""
@@ -2743,6 +2910,8 @@ class AgentEvalRunner:
         print(f"[INFO] Found {len(scenarios)} scenario(s)")
         if self.agent_type:
             print(f"[INFO] Targeting agent_type='{self.agent_type}'")
+        if self.agent_model:
+            print(f"[INFO] Agent model pinned to '{self.agent_model}'")
 
         # Pre-flight
         errors = preflight_check(self.backend_url, scenarios=scenarios)
@@ -2851,6 +3020,7 @@ class AgentEvalRunner:
                         # agent_type is rejected at load time, never honoured.
                         agent_type=self.agent_type,
                         attempt=(attempt_idx if self.iterations > 1 else None),
+                        agent_model=self.agent_model,
                     )
                 )
                 if attempts[-1].get("backend_not_idle"):
@@ -2905,6 +3075,9 @@ class AgentEvalRunner:
             "model": self.model,
             "budget_per_scenario_usd": float(self.budget),
             "agent_type": self.agent_type,
+            # The local model under test. `model` above is the Claude driver
+            # and judge; --compare refuses a baseline that differs in either.
+            "agent_model": run_agent_model(results, self.agent_model),
         }
         scorecard = aggregate_scorecard(results, run_id, run_dir, config)
 
@@ -2988,6 +3161,7 @@ class AgentEvalRunner:
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
                     agent_type=self.agent_type,
+                    agent_model=self.agent_model,
                 )
                 rerun_results.append(result)
                 if result.get("backend_not_idle"):
