@@ -183,73 +183,206 @@ def _thresholds(tmp_path, rows):
     return t
 
 
-class TestJourney:
-    def test_phase_records_status_time_and_exit_code(self, results):
-        assert (
-            _journey(
-                "phase",
-                "--results",
-                str(results),
-                "--phase",
-                "install",
-                "--",
-                sys.executable,
-                "-c",
-                "pass",
-            ).returncode
-            == 0
-        )
-        rc = _journey(
-            "phase",
-            "--results",
-            str(results),
-            "--phase",
-            "launch",
-            "--",
-            sys.executable,
-            "-c",
-            "raise SystemExit(7)",
-        ).returncode
-        assert rc == 7
-        phases = json.loads(results.read_text())["phases"]
-        assert (
-            phases["install"]["status"] == "pass" and phases["install"]["seconds"] >= 0
-        )
-        assert phases["launch"] == {
-            **phases["launch"],
-            "status": "fail",
-            "exit_code": 7,
-        }
+def _phase_script(tmp_path, behaviours):
+    """A stand-in phase command: per phase, (exit code, output, finding or None)."""
+    script = tmp_path / "phase.py"
+    script.write_text(
+        "import json, os, subprocess, sys\n"
+        f"B = {behaviours!r}\n"
+        "code, out, finding = B.get(sys.argv[1], (0, '', None))\n"
+        "print(out)\n"
+        "if finding:\n"
+        f"    subprocess.check_call([sys.executable, {str(HEADLESS / 'journey.py')!r}, 'finding',\n"
+        "        '--results', os.environ['RESULTS'], '--phase', sys.argv[1],\n"
+        "        '--known', os.environ['KNOWN'], '--text', finding])\n"
+        "sys.exit(code)\n",
+        encoding="utf-8",
+    )
+    return [sys.executable, str(script), "{phase}"]
 
-    def test_finish_fails_a_row_with_a_failed_phase_and_marks_the_rest_skipped(
+
+def _known(tmp_path, entries):
+    k = tmp_path / "known.json"
+    k.write_text(json.dumps({"entries": entries}))
+    return k
+
+
+def _run(results, tmp_path, phases, behaviours, known=(), thresholds=None, skip=()):
+    k = _known(tmp_path, list(known))
+    env = {k_: v for k_, v in os.environ.items() if k_ != "GITHUB_STEP_SUMMARY"}
+    env.update(RESULTS=str(results), KNOWN=str(k))
+    args = [
+        sys.executable,
+        str(HEADLESS / "journey.py"),
+        "run",
+        "--results",
+        str(results),
+        "--phases",
+        " ".join(phases),
+        "--known",
+        str(k),
+        "--thresholds",
+        str(thresholds or _thresholds(tmp_path, {})),
+    ]
+    for s in skip:
+        args += ["--skip", s]
+    args += ["--", *_phase_script(tmp_path, behaviours)]
+    out = subprocess.run(args, capture_output=True, text=True, env=env)
+    return out, json.loads(results.read_text())
+
+
+class TestJourney:
+    def test_run_times_each_phase_and_stops_at_the_first_failure(
         self, results, tmp_path
     ):
-        _journey(
-            "phase",
-            "--results",
-            str(results),
-            "--phase",
-            "install",
-            "--",
-            sys.executable,
-            "-c",
-            "raise SystemExit(1)",
-        )
-        out = _journey(
-            "finish",
-            "--results",
-            str(results),
-            "--thresholds",
-            str(_thresholds(tmp_path, {})),
-            "--expect",
-            "install",
-            "uninstall",
+        out, data = _run(
+            results,
+            tmp_path,
+            ["install", "launch", "health"],
+            {"launch": (7, "boom", None)},
         )
         assert out.returncode == 1
-        assert (
-            json.loads(results.read_text())["phases"]["uninstall"]["status"]
-            == "skipped"
+        p = data["phases"]
+        assert p["install"]["status"] == "pass" and p["install"]["seconds"] >= 0
+        assert p["launch"]["status"] == "fail" and p["launch"]["exit_code"] == 7
+        assert p["health"]["status"] == "skipped"
+
+    def test_a_known_failure_shows_its_issue_and_the_journey_continues(
+        self, results, tmp_path
+    ):
+        known = [
+            {
+                "issue": 1234,
+                "rows": ["demo-row"],
+                "phase": "health",
+                "kind": "failure",
+                "signature": "GLIBC_2.38' not found",
+            }
+        ]
+        out, data = _run(
+            results,
+            tmp_path,
+            ["health", "uninstall"],
+            {"health": (1, "version `GLIBC_2.38' not found", None)},
+            known,
         )
+        assert out.returncode == 0, out.stdout
+        assert data["phases"]["health"] == {
+            **data["phases"]["health"],
+            "status": "known",
+            "issue": 1234,
+        }
+        assert data["phases"]["uninstall"]["status"] == "pass"
+        assert "known #1234" in out.stdout
+
+    def test_a_known_entry_does_not_excuse_a_different_failure(self, results, tmp_path):
+        known = [
+            {
+                "issue": 1234,
+                "rows": ["demo-row"],
+                "phase": "health",
+                "kind": "failure",
+                "signature": "GLIBC_2.38' not found",
+            }
+        ]
+        out, data = _run(
+            results,
+            tmp_path,
+            ["health"],
+            {"health": (1, "something else", None)},
+            known,
+        )
+        assert out.returncode == 1
+        assert data["phases"]["health"]["status"] == "fail"
+
+    def test_a_known_bug_that_stops_reproducing_fails_the_row(self, results, tmp_path):
+        known = [
+            {
+                "issue": 1234,
+                "rows": ["demo-row"],
+                "phase": "health",
+                "kind": "failure",
+                "signature": "GLIBC_2.38' not found",
+            }
+        ]
+        out, _ = _run(results, tmp_path, ["health"], {}, known)
+        assert out.returncode == 1
+        assert "known bug #1234 no longer reproduces" in out.stdout
+
+    def test_a_blocking_known_failure_skips_the_rest_without_failing(
+        self, results, tmp_path
+    ):
+        known = [
+            {
+                "issue": 99,
+                "rows": ["demo-row"],
+                "phase": "install",
+                "kind": "failure",
+                "signature": "Failed to build `cryptography",
+                "blocks": True,
+            }
+        ]
+        out, data = _run(
+            results,
+            tmp_path,
+            ["install", "launch"],
+            {"install": (1, "error: Failed to build `cryptography==50.0.2`", None)},
+            known,
+        )
+        assert out.returncode == 0, out.stdout
+        assert data["phases"]["launch"] == {
+            **data["phases"]["launch"],
+            "status": "skipped",
+            "issue": 99,
+        }
+
+    def test_a_new_finding_fails_the_row_but_not_the_phases_after_it(
+        self, results, tmp_path
+    ):
+        out, data = _run(
+            results,
+            tmp_path,
+            ["install", "launch"],
+            {"install": (0, "", "gaia-desktop is not on PATH")},
+        )
+        assert out.returncode == 1
+        assert data["phases"]["launch"]["status"] == "pass"
+        assert data["findings"] == ["gaia-desktop is not on PATH"]
+
+    def test_a_known_finding_is_reported_and_does_not_fail(self, results, tmp_path):
+        known = [
+            {
+                "issue": 5,
+                "rows": ["demo-row"],
+                "phase": "install",
+                "kind": "finding",
+                "signature": "not on PATH",
+            }
+        ]
+        out, data = _run(
+            results,
+            tmp_path,
+            ["install"],
+            {"install": (0, "", "`gaia-desktop` is not on PATH")},
+            known,
+        )
+        assert out.returncode == 0, out.stdout
+        assert data.get("findings") is None
+        assert data["known_findings"][0]["issue"] == 5
+
+    def test_skip_records_not_applicable(self, results, tmp_path):
+        out, data = _run(
+            results,
+            tmp_path,
+            ["download", "install"],
+            {},
+            skip=["download=rebuilt in this run"],
+        )
+        assert out.returncode == 0
+        assert data["phases"]["download"] == {
+            "status": "n/a",
+            "reason": "rebuilt in this run",
+        }
 
     def test_a_phase_over_its_threshold_fails_naming_row_phase_and_numbers(
         self, results, tmp_path
@@ -279,7 +412,7 @@ class TestJourney:
         assert out.returncode == 0
         assert "::warning::demo-row / install: no threshold yet" in out.stdout
 
-    def test_download_is_never_gated(self, tmp_path):
+    def test_download_is_never_gated(self):
         r = {"row": "x", "phases": {"download": {"status": "pass", "seconds": 999.0}}}
         t = {
             "gated_metrics": ["install"],
@@ -292,7 +425,7 @@ class TestJourney:
             "phases": {
                 "launch": {"status": "pass", "seconds": 10.0},
                 "health": {"status": "pass", "seconds": 50.0},
-                "install": {"status": "fail", "seconds": 3.0},
+                "install": {"status": "known", "seconds": 3.0},
             }
         }
         assert journey.metrics_of(r) == {"launch_to_healthy": 60.0}
@@ -336,6 +469,23 @@ class TestJourney:
         assert out.returncode == 1
         assert "| `a` |" in out.stdout and "| `b` |" in out.stdout
         assert len(json.loads((tmp_path / "all.json").read_text())["results"]) == 2
+
+
+class TestKnownFailuresFile:
+    def test_every_entry_names_an_issue_a_row_a_phase_and_a_signature(self):
+        data = json.loads(
+            (HEADLESS / "known_failures.json").read_text(encoding="utf-8")
+        )
+        rows = _workflow_rows()
+        for e in data["entries"]:
+            assert isinstance(e["issue"], int) and e["issue"] > 0
+            assert e["phase"] in journey.PHASES and e["kind"] in ("failure", "finding")
+            assert e["signature"].strip()
+            for row in e["rows"]:
+                assert row in rows, f"#{e['issue']} names unknown row {row}"
+                assert (
+                    e["phase"] in rows[row]["phases"].split()
+                ), f"{row} has no {e['phase']} phase"
 
 
 # ── the fake model server ────────────────────────────────────────────────────

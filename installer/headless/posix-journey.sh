@@ -35,7 +35,10 @@ die() { echo "::error::${ROW:-journey} ${STEP}: $*" >&2; exit 1; }
 # runner's Python for the helpers.
 PYTHON="$(command -v "${PYTHON:-python3}")" || die "no Python for the journey helpers"
 # A defect that fails the row without stopping its later phases.
-finding() { "${PYTHON}" "${JOURNEY}" finding --results "${RESULTS:?RESULTS is required}" --text "$*"; }
+finding() {
+  "${PYTHON}" "${JOURNEY}" finding --results "${RESULTS:?RESULTS is required}" --phase "${STEP}" \
+    --known "${HERE}/known_failures.json" --text "$*"
+}
 
 # ── Safety: CI runners only, and only inside a sandbox under RUNNER_TEMP ────
 [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "${CI:-}" = "true" ] \

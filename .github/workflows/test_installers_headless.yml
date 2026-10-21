@@ -43,6 +43,11 @@
 # file). To refresh the thresholds from the last N runs:
 #   python installer/headless/propose_thresholds.py --runs 5 --write
 #
+# A failure that is a filed, open installer bug is listed in
+# installer/headless/known_failures.json (issue + output signature). It shows as
+# "known #N" in the table instead of failing the run, and fails it again as soon
+# as it stops reproducing, so the entry goes away with the fix.
+#
 # Triggers:
 #   workflow_dispatch  any release; the default is the newest pre-release, or a
 #                      final that is newer than it
@@ -300,11 +305,9 @@ jobs:
           J=installer/headless/journey.py
           python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "Windows x64" \
             --installer "${KIND}" --release "$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")" --source release
-          for phase in ${PHASES}; do
-            python "$J" phase --results "$R" --phase "${phase}" -- \
-              pwsh -NoProfile -File installer/headless/windows-journey.ps1 -Step "${phase}" || break
-          done
-          python "$J" finish --results "$R" --thresholds installer/install_time_thresholds.json --expect ${PHASES}
+          python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" \
+            --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
+            -- pwsh -NoProfile -File installer/headless/windows-journey.ps1 -Step '{phase}'
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -316,7 +319,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\failure-logs" | Out-Null
-          Copy-Item "$env:RUNNER_TEMP\journey\logs\*" "$env:RUNNER_TEMP\failure-logs" -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\journey\logs\*" "$env:RUNNER_TEMP\failure-logs" -Recurse -ErrorAction SilentlyContinue
           foreach ($h in "$env:USERPROFILE\.gaia", "$env:RUNNER_TEMP\journey\home\.gaia") {
             Get-ChildItem $h -Filter *.log -Recurse -ErrorAction SilentlyContinue | Copy-Item -Destination "$env:RUNNER_TEMP\failure-logs" -ErrorAction SilentlyContinue
           }
@@ -420,14 +423,13 @@ jobs:
           if [ "${KIND}" = tui-deb-upgrade ]; then
             python "$J" note --results "$R" --text "Upgrades from $(ls "${PREV_PKG_DIR}") ($(python -c "import json;print(json.load(open('${RELEASE_JSON}'))['prev_tag'])"); a previous release with no .deb is rebuilt from its own gaia-tui)."
           fi
-          for phase in ${PHASES}; do
-            if [ "${phase}" = download ] && [ "${source}" != release ]; then
-              python "$J" skip --results "$R" --phase download --reason "rebuilt in this run; the release publishes no such package"
-              continue
-            fi
-            python "$J" phase --results "$R" --phase "${phase}" -- bash installer/headless/posix-journey.sh "${phase}" || break
-          done
-          python "$J" finish --results "$R" --thresholds installer/install_time_thresholds.json --expect ${PHASES}
+          skip=()
+          if [ "${source}" != release ]; then
+            skip=(--skip "download=rebuilt in this run; the release publishes no such package")
+          fi
+          python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" ${skip[@]+"${skip[@]}"} \
+            --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
+            -- bash installer/headless/posix-journey.sh '{phase}'
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -464,7 +466,10 @@ jobs:
           path: results
           merge-multiple: true
       - name: Table and gate
-        run: python installer/headless/journey.py summarize --dir results --thresholds installer/install_time_thresholds.json --out install-timings.json
+        run: >-
+          python installer/headless/journey.py summarize --dir results
+          --known installer/headless/known_failures.json
+          --thresholds installer/install_time_thresholds.json --out install-timings.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
