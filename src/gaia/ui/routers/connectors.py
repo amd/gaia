@@ -16,6 +16,7 @@ Exception → HTTP mapping:
 - ``AuthRequiredError(CONNECTION_MISSING_SCOPES)`` → 403 + missing_scopes
 - ``AuthRequiredError(REAUTH_REQUIRED)``           → 401
 - ``ConnectionRevokedError``                       → 401
+- ``ConnectionBusyError``                          → 503 + Retry-After
 - ``ScopeMismatchError``                           → 403
 - ``ConfigurationError``                           → 503
 - ``FlowInProgressError``                          → 409

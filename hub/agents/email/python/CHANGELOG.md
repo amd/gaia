@@ -17,10 +17,13 @@ contract version is tracked separately as
   with "being saved by another GAIA operation right now. Retry in a moment."
   The calendar pick raises `ConnectionBusyError` instead of asking for a
   calendar grant, and `GET /v1/email/connectors` adds a per-provider `busy`
-  flag so a client knows `can_send: false` is not final. The REST routes keep
-  their status codes: a busy connection arrives as a `502` whose detail says
-  it is being saved by another GAIA operation and to retry, so treat that 502 as
-  transient.
+  flag so a client knows `can_send: false` is not final. A mailbox route that
+  hits a busy connection used to answer `403`, as if the account needed
+  reconnecting; it now answers `502` with a detail saying the connection is
+  being saved by another GAIA operation, so treat that 502 as transient and
+  retry. The agent routes answer `503` with `Retry-After`. A calendar that was
+  busy when a session started now works once the save finishes, instead of
+  staying unavailable for the whole session.
 
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`

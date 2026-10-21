@@ -593,6 +593,9 @@ async def test_a_forward_that_fails_halfway_keeps_the_existing_connection(
         _forward_with_failing_connection_write(monkeypatch)
 
     assert peek_provider_credentials("google")["client_id"] == OLD_CLIENT
+    # This process must not keep the forwarded client it was halfway to using.
+    cached = _registry.get("google")
+    assert cached is None or cached.client_id == OLD_CLIENT
     _registry.clear()  # any process, starting fresh
     assert [c["provider"] for c in list_connections()] == ["google"]
     respx.post(TOKEN_URL).mock(
@@ -639,7 +642,9 @@ def test_the_startup_sweep_leaves_a_busy_connection_in_place(busy_mismatch, capl
         tripwire_check()
 
     assert _stored_refresh_token() == "forwarded-refresh"
-    assert "being saved by another GAIA operation" in caplog.text
+    # Reported as a busy connection, not as a failed check or a cleared one.
+    assert "being saved by another GAIA operation; left in place" in caplog.text
+    assert "check failed" not in caplog.text
     assert "cleared by tripwire" not in caplog.text
 
 

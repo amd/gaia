@@ -437,6 +437,9 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   `.ready` / read `.hint`. `POST /v1/email/init` streams a model-pull (no wrapper yet).
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't
   pulled. It is not a bug in this package.
+- **HTTP 502 saying the connection "is being saved by another GAIA operation"** →
+  transient: another GAIA process or request is mid-save on the mailbox
+  connection. Retry shortly; don't send the user to reconnect.
 - **Addresses are objects, not strings.** `to` (and `triage`'s `from` / `principal`)
   are `{ email, name? }`; `to` is a non-empty array of them. A plain string → 422.
 - **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it

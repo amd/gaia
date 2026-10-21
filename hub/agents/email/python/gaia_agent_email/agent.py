@@ -95,7 +95,7 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import strip_verification_scope
 from gaia.agents.registry import get_embedding_model_for_device
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectionBusyError, ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.connectors.providers.microsoft import (
@@ -154,13 +154,33 @@ class _UnavailableCalendarBackend:
     any actual calendar operation raises the deferred, actionable error rather
     than silently doing the wrong thing. ``detect_meeting_request`` touches no
     backend, so it keeps working.
+
+    With ``resolve``, every use first tries to resolve the backend again and,
+    once that works, delegates to it: the calendar tools capture this object
+    for a session that can last hours, and a connection that was busy or not
+    yet connected at construction should not break calendar use until restart.
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(
+        self, message: str, resolve: Optional[Callable[[], Any]] = None
+    ) -> None:
         self._message = message
+        self._resolve = resolve
+        self._backend: Any = None
 
     def __getattr__(self, name: str):
-        raise ConfigurationError(self._message)
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if self._backend is None:
+            if self._resolve is None:
+                raise ConfigurationError(self._message)
+            try:
+                self._backend = self._resolve()
+            except ConnectionBusyError:
+                raise
+            except (ConfigurationError, ConnectorsError) as exc:
+                raise ConfigurationError(str(exc)) from exc
+        return getattr(self._backend, name)
 
 
 class _UnavailableMailBackend:
@@ -850,7 +870,9 @@ class EmailTriageAgent(
         try:
             self._calendar = config.resolve_calendar_backend()
         except (ConfigurationError, ConnectorsError) as exc:
-            self._calendar = _UnavailableCalendarBackend(str(exc))
+            self._calendar = _UnavailableCalendarBackend(
+                str(exc), resolve=config.resolve_calendar_backend
+            )
 
         # I3 — batch-organize counters. Reset per process_query() call by
         # ``_reset_organize_counter``. Per-turn isolation is sufficient

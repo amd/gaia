@@ -269,17 +269,6 @@ class ConnectionForwarder:
             token, expires_at = self._mint(
                 provider=provider, scopes=required, agent_id=grant_agent_id
             )
-        except ConnectionBusyError as e:
-            # Another GAIA operation is mid-save: the connection is not known to be
-            # gone, so the sidecar keeps its forward until the next refresh.
-            logger.warning(
-                "forward-out: '%s' for agent '%s' is busy (%s); retaining any "
-                "existing forward for the next refresh",
-                provider,
-                agent_id,
-                e,
-            )
-            raise
         except (AuthRequiredError, ConnectionRevokedError, ConfigurationError) as e:
             # A revoked / not-connected mint is loud here; also withdraw any
             # stale token already on the sidecar so it cannot keep running on it.
@@ -301,9 +290,10 @@ class ConnectionForwarder:
                 )
             raise
         except Exception as e:
-            # An unclassified failure must not turn a short-lived network blip
-            # into a mailbox outage by withdrawing a still-valid forward. The
-            # refresh loop will retry on its next tick.
+            # An unclassified failure — a network blip, or a connection another
+            # GAIA operation is mid-save on (ConnectionBusyError) — must not
+            # turn into a mailbox outage by withdrawing a still-valid forward.
+            # The refresh loop will retry on its next tick.
             logger.warning(
                 "forward-out: unclassified mint failure for '%s' on agent '%s' "
                 "(%s); retaining any existing forward for the next refresh",
