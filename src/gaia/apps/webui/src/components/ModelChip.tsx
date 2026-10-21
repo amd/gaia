@@ -10,7 +10,8 @@ import { useChatStore } from '../stores/chatStore';
 import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
-import { STATE_LABELS, isDownloading, modelMetaLine, modelState } from './modelMeta';
+import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
+import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
 import type { ProviderInfo, ProviderModel } from '../types';
 
@@ -21,6 +22,20 @@ interface ProviderModels {
 }
 
 const DOWNLOAD_POLL_MS = 2000;
+// How many polls a picked model may show no download before the pick is given up.
+const PICK_START_POLLS = 5;
+
+/** What the info bubble lists for *m*: where it runs, size, speed, rank, price. */
+function modelDetails(m: ProviderModel, remote: boolean): string[] {
+    const rank = m.rank ? `#${m.rank} ${m.note ?? ''}`.trim() : null;
+    if (remote) return [rank, formatPrice(m.price)].filter((x): x is string => !!x);
+    return [
+        placementText(m.placement),
+        m.size_gb ? `${m.size_gb} GB` : null,
+        m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s on this PC` : null,
+        rank,
+    ].filter((x): x is string => !!x);
+}
 
 /** Loaded (green dot), downloaded, or a download button — always with a text label. */
 function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () => void; busy: boolean }) {
@@ -80,6 +95,8 @@ export function ModelChip() {
     const [requestsPending, setRequestsPending] = useState(0);
     // The switch after a download failed, possibly with the list closed: say so on the chip.
     const [autoSwitchError, setAutoSwitchError] = useState<string | null>(null);
+    // Polls that found the picked model neither downloading nor downloaded.
+    const pollsWithoutProgress = useRef(0);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -170,11 +187,26 @@ export function ModelChip() {
         // Wait out the download request itself; until it answers, the row still reads "not downloaded".
         if (!pickAfterDownload || !groups || requestsPending > 0) return;
         const m = groups.flatMap((g) => g.models).find((x) => x.id === pickAfterDownload.model);
-        if (!m || isDownloading(m)) return;
-        setPickAfterDownload(null);
-        // Downloaded now: use it, as the click asked. A failed download keeps its error showing.
-        if (modelState(m) === 'not_downloaded') return;
+        if (!m) return;
+        if (isDownloading(m)) {
+            pollsWithoutProgress.current = 0;
+            return;
+        }
         const { model, provider } = pickAfterDownload;
+        const progress = m.download_progress;
+        if (progress?.state === 'error') {
+            setPickAfterDownload(null);
+            setAutoSwitchError(`Downloading ${displayModelName(model)} failed: ${progress.message ?? 'no reason given'}`);
+            return;
+        }
+        // The model list can lag the finished download by a poll; "complete" already means downloaded.
+        if (progress?.state !== 'complete' && modelState(m) === 'not_downloaded') {
+            if (++pollsWithoutProgress.current < PICK_START_POLLS) return;
+            setPickAfterDownload(null);
+            setAutoSwitchError(`The download of ${displayModelName(model)} never started. Try the download button again.`);
+            return;
+        }
+        setPickAfterDownload(null);
         void choose(model, provider).then((failed) => {
             if (failed) setAutoSwitchError(`${displayModelName(model)} downloaded, but switching to it failed: ${failed}`);
         });
@@ -254,9 +286,8 @@ export function ModelChip() {
                         {models.map((m) => {
                             const current = (queued ?? active?.model) === m.id;
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
-                            const note = provider.remote
-                                ? [m.rank ? `#${m.rank} ${m.note}` : null, formatPrice(m.price)].filter(Boolean).join(' · ')
-                                : [modelMetaLine(m), m.rank ? `#${m.rank} ${m.note}` : null].filter(Boolean).join(' · ');
+                            const modelName = m.display_name ?? displayModelName(m.id);
+                            const details = modelDetails(m, provider.remote);
                             return (
                                 <div key={m.id} className="popover-row">
                                     <button
@@ -268,24 +299,35 @@ export function ModelChip() {
                                                 setPickAfterDownload(null);
                                                 return void choose(m.id, provider);
                                             }
+                                            pollsWithoutProgress.current = 0;
+                                            setAutoSwitchError(null);
                                             setPickAfterDownload({ model: m.id, provider });
                                             void download(m.id);
                                         }}
                                         disabled={switching !== null || isDownloading(m)}
                                         aria-current={current ? 'true' : undefined}
-                                        title={m.placement?.warning ?? m.id}
                                     >
                                         <span className="popover-item-check" aria-hidden="true">
                                             {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
                                         </span>
                                         <span className="popover-item-body">
-                                            <span className="popover-item-title">{m.display_name ?? displayModelName(m.id)}</span>
-                                            {note && <span className="popover-item-note">{note}</span>}
-                                            {m.placement?.warning && (
-                                                <span className="popover-item-note is-warning">{m.placement.warning}</span>
-                                            )}
+                                            <span className="popover-item-title">{modelName}</span>
                                         </span>
                                     </button>
+                                    <InfoBubble label={`About ${modelName}`} warning={!!m.placement?.warning}>
+                                        <div className="info-bubble-title">{modelName}</div>
+                                        {details.length > 0 && (
+                                            <ul className="info-bubble-lines">
+                                                {details.map((d) => <li key={d}>{d}</li>)}
+                                            </ul>
+                                        )}
+                                        {m.placement?.warning && (
+                                            <ul className="info-bubble-lines">
+                                                <li className="is-warning">{m.placement.warning}</li>
+                                            </ul>
+                                        )}
+                                        <div className="info-bubble-id">{m.id}</div>
+                                    </InfoBubble>
                                     {!provider.remote && (
                                         <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
                                     )}

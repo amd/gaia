@@ -149,7 +149,7 @@ describe('ModelChip', () => {
         });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /Qwen3-8B-GGUF/ }));
+        fireEvent.click(await within(dialog).findByRole('button', { name: /^Qwen3-8B-GGUF/ }));
 
         expect(await screen.findByRole('button', { name: /Qwen3-8B-GGUF · Local/ })).toBeInTheDocument();
         expect(mockedApi.listSessions).toHaveBeenCalledTimes(1);
@@ -159,7 +159,7 @@ describe('ModelChip', () => {
         mockedApi.listSessions.mockRejectedValue(new Error('backend restarting'));
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /kimi-k2/ }));
+        fireEvent.click(await within(dialog).findByRole('button', { name: /^kimi-k2/ }));
         fireEvent.click(within(dialog).getByRole('button', { name: 'Use kimi-k2' }));
 
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -174,15 +174,15 @@ describe('ModelChip', () => {
         expect(within(dialog).getByText('Local')).toBeInTheDocument();
         expect(within(dialog).queryByText('AMD LLM Gateway')).not.toBeInTheDocument();
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('amd');
-        expect(within(dialog).getByRole('button', { name: /kimi-k2/ })).toBeInTheDocument();
-        expect(within(dialog).getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ })).toHaveAttribute('aria-current', 'true');
+        expect(within(dialog).getByRole('button', { name: /^kimi-k2/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: /^Gemma-4-E4B-it-GGUF/ })).toHaveAttribute('aria-current', 'true');
         expect(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' })).toBeInTheDocument();
     });
 
     it('asks before moving a local chat to a cloud model, then switches', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /kimi-k2/ }));
+        fireEvent.click(await within(dialog).findByRole('button', { name: /^kimi-k2/ }));
 
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
         expect(within(dialog).getByRole('alert')).toHaveTextContent('Chat history is sent to Fireworks AI.');
@@ -200,7 +200,7 @@ describe('ModelChip', () => {
         mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /Qwen3-8B-GGUF/ }));
+        fireEvent.click(await within(dialog).findByRole('button', { name: /^Qwen3-8B-GGUF/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
     });
 
@@ -220,6 +220,62 @@ describe('ModelChip', () => {
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
     });
+
+    it('keeps the pick while the download starts, and when the list lags its finish', async () => {
+        // As the server does it: 202 before any progress, then progress, then
+        // "complete" one poll before the list says downloaded.
+        const steps: Partial<ProviderModel>[] = [
+            { downloaded: false },
+            { downloaded: false },
+            { downloaded: false, download_progress: { state: 'downloading', percent: 40 } as never },
+            { downloaded: false, download_progress: { state: 'complete', percent: 100 } as never },
+        ];
+        let calls = 0;
+        mockedApi.listProviderModels.mockImplementation(async (id) => {
+            if (id !== 'local') return { provider: id, models: [] };
+            const qwen = steps[Math.min(calls++, steps.length - 1)];
+            return { provider: id, models: [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', qwen)] };
+        });
+        mockedApi.downloadModel.mockResolvedValue({ status: 'downloading', model: 'Qwen3-8B-GGUF' });
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'), { timeout: 9000 });
+    }, 12000);
+
+    it('a download the server reports as failed drops the pick and says why', async () => {
+        let qwen: Partial<ProviderModel> = { downloaded: false };
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', qwen)] : [],
+        }));
+        mockedApi.downloadModel.mockImplementation(async () => {
+            qwen = { downloaded: false, download_progress: { state: 'error', percent: 0, message: 'No space left on device' } as never };
+            return { status: 'downloading', model: 'Qwen3-8B-GGUF' };
+        });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(/Downloading Qwen3-8B-GGUF failed: No space left on device/);
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('a download that never starts is given up, visibly', async () => {
+        mockedApi.downloadModel.mockResolvedValue({ status: 'downloading', model: 'Qwen3-8B-GGUF' });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        expect(await within(dialog).findByRole('alert', {}, { timeout: 13000 }))
+            .toHaveTextContent(/download of Qwen3-8B-GGUF never started/);
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    }, 16000);
 
     it('a model picked while another downloads is not undone when the download finishes', async () => {
         let qwen: Partial<ProviderModel> = { downloaded: false };
@@ -282,7 +338,7 @@ describe('ModelChip', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(await within(dialog).findByRole('button', { name: /Gemma-4-E4B-it-GGUF/ }));
+        fireEvent.click(await within(dialog).findByRole('button', { name: /^Gemma-4-E4B-it-GGUF/ }));
         expect(await within(dialog).findByRole('alert')).toHaveTextContent('Model failed to load');
     });
 
