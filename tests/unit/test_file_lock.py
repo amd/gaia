@@ -464,7 +464,10 @@ def test_a_busy_lock_keeps_its_throughput(tmp_path):
         worker.join()
     # A median, so one antivirus or GC stall on a shared runner cannot fail it.
     typical = statistics.median(durations)
-    assert typical < 0.008, f"{typical * 1000:.1f} ms per turn"
+    # macOS CI runners overshoot short sleeps (24-28 ms measured there, ~3 ms on
+    # Linux); a 20 ms poll would still be ~60 ms, so the bound still catches it.
+    limit = 0.040 if sys.platform == "darwin" else 0.008
+    assert typical < limit, f"{typical * 1000:.1f} ms per turn"
     assert _queue_files(target) == []
 
 
