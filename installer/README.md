@@ -112,7 +112,7 @@ npm run package:win      # or :mac / :linux
 
 | Script | Purpose |
 |---|---|
-| `bump-ui-version.mjs` | Sync `src/gaia/apps/webui/package.json` with `src/gaia/version.py`. Run with `--check` in CI. |
+| `bump-ui-version.mjs` | Sync `src/gaia/apps/webui/package.json` with `src/gaia/version.py`. `python util/release_versions.py --stamp` does the same and stamps every other version field too; prefer it for a release bump. |
 | `release-ui.mjs` | Release helper that tags and publishes a new Agent UI version. |
 
 Typical usage:

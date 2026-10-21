@@ -2808,11 +2808,11 @@ The npm package includes:
 The package version is sourced from `src/gaia/version.py` (single source of truth for all of GAIA):
 
 ```bash
-# Check version consistency (package.json matches version.py)
-node installer/version/bump-ui-version.mjs --check
+# Check every version field, package.json included, matches its source (lint runs this)
+python util/release_versions.py --check
 
-# Sync package.json to version.py
-node installer/version/bump-ui-version.mjs
+# Sync package.json, and every other version field, to version.py
+python util/release_versions.py --stamp
 
 # Full release (sync, commit, tag, push)
 node installer/version/release-ui.mjs
