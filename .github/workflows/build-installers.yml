@@ -58,6 +58,20 @@ on:
         required: false
         type: boolean
         default: false
+      # The release-train dry run builds its own commit twice in one run (a
+      # release candidate and its final-stamped twin) under tags that don't
+      # exist yet. Both default to empty, which is exactly what every other
+      # caller gets.
+      ref:
+        description: 'Commit to build, when `tag` names a version rather than an existing tag. Empty (the default) checks out the tag, or the caller''s ref.'
+        required: false
+        type: string
+        default: ''
+      artifact_prefix:
+        description: 'Prefix for every artifact this uploads or reads. Empty (the default) keeps today''s names.'
+        required: false
+        type: string
+        default: ''
     # Explicit secret declarations. Callers (publish.yml) must forward
     # each one explicitly via `secrets:` — we intentionally do NOT use
     # `secrets: inherit` on the caller side so forks / PRs can't leak
@@ -129,7 +143,7 @@ concurrency:
   # push on stale builds. Tag/release runs and manual dispatches must
   # NOT cancel — a mid-build cancel on a release tag leaves the draft
   # release in a partial state.
-  group: build-installers-${{ github.workflow }}-${{ github.ref }}
+  group: build-installers-${{ github.workflow }}-${{ github.ref }}${{ inputs.artifact_prefix }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -193,7 +207,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history for any version calculations
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
 
       # A vX.Y.Z-rcN tag builds X.Y.Z-rc.N installers (and an X.Y.ZrcN wheel)
       # from a tree committed at X.Y.Z. Never runs for a final or a PR build.
@@ -525,7 +539,7 @@ jobs:
         id: upload-artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.platform }}-installer
+          name: ${{ inputs.artifact_prefix }}${{ matrix.platform }}-installer
           path: ${{ matrix.artifacts }}
           retention-days: 14
           if-no-files-found: error
@@ -587,7 +601,7 @@ jobs:
         if: matrix.platform == 'linux' && steps.build-wheel.outputs.path != ''
         uses: actions/upload-artifact@v7
         with:
-          name: gaia-wheel
+          name: ${{ inputs.artifact_prefix }}gaia-wheel
           path: /tmp/gaia-wheel/*.whl
           retention-days: 14
 
@@ -609,9 +623,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/artifacts
+          pattern: ${{ inputs.artifact_prefix != '' && format('{0}*', inputs.artifact_prefix) || '' }}
 
       - name: Validate artifact structure and sizes
         shell: bash
+        env:
+          PREFIX: ${{ inputs.artifact_prefix }}
         run: |
           set -euo pipefail
           ARTIFACTS="${RUNNER_TEMP}/artifacts"
@@ -622,7 +639,7 @@ jobs:
           echo ""
 
           # ── Windows artifacts ──────────────────────────────────────
-          WIN_DIR="${ARTIFACTS}/windows-installer"
+          WIN_DIR="${ARTIFACTS}/${PREFIX}windows-installer"
           if [ -d "${WIN_DIR}" ]; then
             echo "--- Windows ---"
             EXE=$(find "${WIN_DIR}" -maxdepth 1 -name "*.exe" | head -n1)
@@ -659,7 +676,7 @@ jobs:
           fi
 
           # ── macOS artifacts ────────────────────────────────────────
-          MAC_DIR="${ARTIFACTS}/macos-installer"
+          MAC_DIR="${ARTIFACTS}/${PREFIX}macos-installer"
           if [ -d "${MAC_DIR}" ]; then
             echo "--- macOS ---"
             DMG=$(find "${MAC_DIR}" -maxdepth 1 -name "*.dmg" | head -n1)
@@ -683,7 +700,7 @@ jobs:
           fi
 
           # ── Linux artifacts ────────────────────────────────────────
-          LINUX_DIR="${ARTIFACTS}/linux-installer"
+          LINUX_DIR="${ARTIFACTS}/${PREFIX}linux-installer"
           if [ -d "${LINUX_DIR}" ]; then
             echo "--- Linux ---"
             APPIMAGE=$(find "${LINUX_DIR}" -maxdepth 1 -name "*.AppImage" | head -n1)
@@ -719,7 +736,7 @@ jobs:
           fi
 
           # ── Python wheel (if present) ──────────────────────────────
-          WHEEL_DIR="${ARTIFACTS}/gaia-wheel"
+          WHEEL_DIR="${ARTIFACTS}/${PREFIX}gaia-wheel"
           if [ -d "${WHEEL_DIR}" ]; then
             echo "--- Python wheel ---"
             WHL=$(find "${WHEEL_DIR}" -maxdepth 1 -name "*.whl" | head -n1)
@@ -770,7 +787,7 @@ jobs:
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: linux-installer
+          name: ${{ inputs.artifact_prefix }}linux-installer
           path: ${{ runner.temp }}/linux-installer
 
       - name: Locate AppImage
@@ -816,7 +833,7 @@ jobs:
       - name: Download macOS installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: macos-installer  # ${{ matrix.platform }}-installer with platform=macos
+          name: ${{ inputs.artifact_prefix }}macos-installer  # ${{ matrix.platform }}-installer with platform=macos
           path: ${{ runner.temp }}/macos-installer
 
       - name: Locate DMG
@@ -846,7 +863,7 @@ jobs:
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: linux-installer
+          name: ${{ inputs.artifact_prefix }}linux-installer
           path: ${{ runner.temp }}/linux-installer
 
       # Download the Python wheel built alongside the installer so the
@@ -858,7 +875,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: gaia-wheel
+          name: ${{ inputs.artifact_prefix }}gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
 
       - name: Locate Python wheel
@@ -1107,7 +1124,7 @@ jobs:
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: linux-installer
+          name: ${{ inputs.artifact_prefix }}linux-installer
           path: ${{ runner.temp }}/linux-installer
 
       - name: Download Python wheel
@@ -1115,7 +1132,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: gaia-wheel
+          name: ${{ inputs.artifact_prefix }}gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
 
       - name: Locate Python wheel
@@ -1233,7 +1250,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: custom-agent-mcp-harness-${{ matrix.os }}
+          name: ${{ inputs.artifact_prefix }}custom-agent-mcp-harness-${{ matrix.os }}
           path: ${{ runner.temp }}/gaia-installer-agent-harness
           if-no-files-found: ignore
 
@@ -1289,7 +1306,7 @@ jobs:
       - name: Download installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: ${{ matrix.platform }}-installer
+          name: ${{ inputs.artifact_prefix }}${{ matrix.platform }}-installer
           path: release-assets
       - name: Upload to GitHub Release (draft)
         uses: softprops/action-gh-release@v3

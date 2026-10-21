@@ -1,0 +1,499 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Release-train dry run (Phase 2 of docs/plans/release-train.mdx, #5172).
+#
+# Builds every first-party artifact of the commit it is dispatched on, the way
+# the release train will: once as a release candidate, and once more as the
+# final-stamped twin a final would promote. Then it verifies them and writes the
+# manifest of what a real train would publish, and where. It publishes nothing:
+#
+#   - workflow_dispatch only, so nothing a contributor pushes can start it;
+#   - no environment, no secret, and every job's token is read-only, except the
+#     Agent UI installer jobs, which build-installers.yml forces to declare
+#     contents: write and id-token: write (see below);
+#   - it only ever builds its own commit. Checking out another ref would run that
+#     code with this branch's cache scope, which later release builds restore;
+#   - tests/unit/test_release_train_dryrun_workflow.py fails if a publish step, a
+#     secret, an environment, a write permission or a foreign checkout appears.
+#
+# The builds are the release's own reusable workflows. `artifact_prefix` (rc- /
+# final-) keeps the two builds' artifacts apart; it defaults to empty, which is
+# what publish.yml, release_components.yml and the PR gates still get.
+#
+# Run it:  gh workflow run release_train_dryrun.yml --ref main -f rc_tag=v0.25.1-rc3
+
+name: Release train dry run
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: 'The release candidate to build this commit as (vX.Y.Z-rcN; X.Y.Z must match src/gaia/version.py). Its twin is vX.Y.Z.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rc_tag: ${{ steps.plan.outputs.rc_tag }}
+      final_tag: ${{ steps.plan.outputs.final_tag }}
+      base_version: ${{ steps.plan.outputs.base_version }}
+      rc_npm: ${{ steps.plan.outputs.rc_npm }}
+      rc_pep440: ${{ steps.plan.outputs.rc_pep440 }}
+      agent_version: ${{ steps.plan.outputs.agent_version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Check the tag against the tree
+        id: plan
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          echo "Building ${GITHUB_REF_NAME} = ${GITHUB_SHA}"
+          python3 util/release_train.py plan --tag "${RC_TAG}" --target . | tee -a "$GITHUB_OUTPUT"
+
+      # Phase 1's single version source: every generated version field must
+      # already agree with src/gaia/version.py before anything is stamped.
+      - name: Check every version field against its source
+        run: python3 util/release_versions.py --check
+
+  # ── Core wheel + sdist and the @amd-gaia/agent-ui tarball ──────────────────
+  # Same steps as publish.yml's build-npm and build-pypi, which can't be called
+  # from here: the wheel ships the very React bundle the npm tarball does.
+  core-dist:
+    name: Core packages (${{ matrix.flavor }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [rc, final]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Stamp the release-candidate version
+        if: matrix.flavor == 'rc'
+        run: python3 util/release_versions.py --stamp "${{ needs.plan.outputs.rc_tag }}"
+
+      - name: Build the frontend
+        working-directory: src/gaia/apps/webui
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          test -f dist/index.html || { echo "::error::dist/index.html was not built"; exit 1; }
+          node --check bin/gaia-ui.cjs
+
+      - name: Check the bundle carries the version
+        run: |
+          set -euo pipefail
+          PY_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
+          ESCAPED=$(echo "$PY_VERSION" | sed 's/\./\\./g')
+          if ! grep -rqE "[\"'\`]${ESCAPED}[\"'\`]" src/gaia/apps/webui/dist/assets/*.js; then
+            echo "::error::${PY_VERSION} is not a quoted literal in any dist/assets/*.js"
+            exit 1
+          fi
+          echo "bundle reports ${PY_VERSION}"
+
+      - name: Build the wheel and sdist
+        run: |
+          set -euo pipefail
+          python util/verify_wheel_dist.py src/gaia/apps/webui/dist
+          python -m pip install build twine
+          python -m build
+          python util/verify_wheel_dist.py --wheel "$(ls dist/*.whl)"
+          twine check dist/*
+
+      # --ignore-scripts: the bundle is built above; npm publish runs the same way.
+      - name: Pack @amd-gaia/agent-ui
+        working-directory: src/gaia/apps/webui
+        run: npm pack --ignore-scripts --pack-destination ../../../../dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.flavor }}-core-dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # What publish.yml's post-publish smoke proves after PyPI, proved here on the
+  # local files, on a runner that didn't build them.
+  core-smoke:
+    name: Core smoke (${{ matrix.flavor }}, ${{ matrix.os }})
+    needs: [plan, core-dist]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [rc, final]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.flavor }}-core-dist
+          path: dist
+
+      - name: Install the wheel into a clean venv
+        env:
+          WANT: ${{ matrix.flavor == 'rc' && needs.plan.outputs.rc_pep440 || needs.plan.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/venv"
+          BIN="${RUNNER_TEMP}/venv/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)"
+          "${BIN}/python" -m pip install --quiet "dist/amd_gaia-${WANT}-py3-none-any.whl"
+          got="$("${BIN}/gaia" --version)"
+          echo "gaia --version: ${got}"
+          echo "${got}" | grep -qF "${WANT}" || { echo "::error::gaia --version does not report ${WANT}"; exit 1; }
+          "${BIN}/gaia" --help > /dev/null
+          "${BIN}/gaia-mcp" --help > /dev/null
+          meta="$("${BIN}/python" -c "from importlib.metadata import version; print(version('amd-gaia'))")"
+          [ "${meta}" = "${WANT}" ] || { echo "::error::installed amd-gaia is ${meta}, expected ${WANT}"; exit 1; }
+
+      - name: Install the npm tarball into a clean prefix
+        env:
+          WANT: ${{ matrix.flavor == 'rc' && needs.plan.outputs.rc_npm || needs.plan.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/npm-prefix"
+          npm install --global --prefix "${prefix}" --ignore-scripts "./dist/amd-gaia-agent-ui-${WANT}.tgz"
+          pkg="$(find "${prefix}" -path '*node_modules/@amd-gaia/agent-ui/package.json' | head -n1)"
+          [ -n "${pkg}" ] || { echo "::error::@amd-gaia/agent-ui did not install"; exit 1; }
+          got="$(node -p "require(process.argv[1]).version" "${pkg}")"
+          [ "${got}" = "${WANT}" ] || { echo "::error::installed @amd-gaia/agent-ui is ${got}, expected ${WANT}"; exit 1; }
+          node --check "$(dirname "${pkg}")/bin/gaia-ui.cjs"
+
+  # ── The flagship agent: one frozen build serves both flavors ───────────────
+  # The sidecar embeds the agent's own version, not core's, and nothing stamps
+  # it for an RC today, so a twin would be the same build twice.
+  sidecar:
+    name: Flagship sidecar
+    needs: plan
+    uses: ./.github/workflows/build_flagship_sidecar.yml
+
+  flagship-npm-tests:
+    name: Flagship npm tests
+    needs: plan
+    uses: ./.github/workflows/test_agent_gaia_npm.yml
+
+  # ── Agent UI installers ─────────────────────────────────────────────────────
+  # The two write grants are build-installers.yml's, not this workflow's:
+  # GitHub refuses to start a reusable workflow whose jobs declare more than the
+  # caller grants, and that file declares id-token: write (SignPath) and
+  # contents: write (its publish_to_release job). Nothing here can reach either:
+  # publish_to_release is false, no signing secret is passed, and no secret
+  # exists for SignPath. The unit test pins all three.
+  #
+  # `tag` names the version to stamp, which isn't a tag yet, so `ref` keeps the
+  # checkout on this commit.
+  ui-rc:
+    name: Agent UI installers (rc)
+    needs: plan
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/build-installers.yml
+    with:
+      tag: ${{ needs.plan.outputs.rc_tag }}
+      ref: ${{ github.sha }}
+      artifact_prefix: rc-
+      publish_to_release: false
+
+  ui-final:
+    name: Agent UI installers (final)
+    needs: plan
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/build-installers.yml
+    with:
+      tag: ${{ needs.plan.outputs.final_tag }}
+      ref: ${{ github.sha }}
+      artifact_prefix: final-
+      publish_to_release: false
+
+  # ── Terminal binaries and installers ───────────────────────────────────────
+  # An rpm Version can't carry -rc.N, so the candidate builds the binaries only.
+  tui-rc:
+    name: Terminal (rc)
+    needs: plan
+    uses: ./.github/workflows/tui_installers.yml
+    with:
+      version: ${{ needs.plan.outputs.rc_npm }}
+      installers: false
+      artifact_prefix: rc-
+
+  tui-final:
+    name: Terminal (final)
+    needs: [plan, sidecar]
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.sidecar.result == 'success'
+    uses: ./.github/workflows/tui_installers.yml
+    with:
+      version: ${{ needs.plan.outputs.base_version }}
+      sidecar: artifact
+      artifact_prefix: final-
+
+  # Go builds with -trimpath and the commit's date are reproducible, which is
+  # what lets a final promote the candidate's twins without trusting one runner.
+  # Rebuild one target and compare.
+  tui-reproducible:
+    name: Terminal build is reproducible
+    needs: [plan, tui-rc]
+    if: >-
+      !cancelled() &&
+      needs.tui-rc.outputs.binaries_ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache: false
+
+      # Outside the checkout: Go stamps vcs.modified=true into a binary built
+      # from a tree with untracked files, which would differ for that alone.
+      - uses: actions/download-artifact@v8
+        with:
+          name: rc-tui-binaries
+          path: ${{ runner.temp }}/built
+
+      - name: Rebuild linux-x64 and compare
+        env:
+          VERSION: ${{ needs.plan.outputs.rc_npm }}
+        run: |
+          set -euo pipefail
+          PKG=github.com/amd/gaia/tui/internal/cli
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
+          tui/scripts/gen-winres.sh --version "${VERSION}"
+          (cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
+            -o "${RUNNER_TEMP}/rebuilt" ./cmd/gaia)
+          a="$(sha256sum "${RUNNER_TEMP}/built/gaia-linux-x64" | cut -d' ' -f1)"
+          b="$(sha256sum "${RUNNER_TEMP}/rebuilt" | cut -d' ' -f1)"
+          echo "built   ${a}"
+          echo "rebuilt ${b}"
+          if [ "${a}" != "${b}" ]; then
+            go version -m "${RUNNER_TEMP}/built/gaia-linux-x64"
+            go version -m "${RUNNER_TEMP}/rebuilt"
+            echo "::error::gaia-linux-x64 is not reproducible: a second build of the same commit differs."
+            exit 1
+          fi
+
+  # ── The combined Windows setup, embedding this run's own builds ────────────
+  setup-rc:
+    name: Windows setup (rc)
+    needs: [plan, ui-rc, tui-rc, sidecar]
+    if: >-
+      !cancelled() &&
+      needs.ui-rc.result == 'success' &&
+      needs.tui-rc.outputs.binaries_ok == 'true' &&
+      needs.sidecar.result == 'success'
+    permissions:
+      contents: read
+      actions: read   # windows_setup.yml declares it for its publish-run source
+    uses: ./.github/workflows/windows_setup.yml
+    with:
+      version: ${{ needs.plan.outputs.rc_npm }}
+      sidecar: artifact
+      agent_ui_artifact: rc-windows-installer
+      artifact_prefix: rc-
+
+  setup-final:
+    name: Windows setup (final)
+    needs: [plan, ui-final, tui-final, sidecar]
+    if: >-
+      !cancelled() &&
+      needs.ui-final.result == 'success' &&
+      needs.tui-final.outputs.binaries_ok == 'true' &&
+      needs.sidecar.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_setup.yml
+    with:
+      version: ${{ needs.plan.outputs.base_version }}
+      sidecar: artifact
+      agent_ui_artifact: final-windows-installer
+      artifact_prefix: final-
+
+  # ── The lock, generated from this run instead of committed ─────────────────
+  lock:
+    name: Generate the flagship lock and npm package
+    needs: [plan, sidecar, tui-final]
+    if: >-
+      !cancelled() &&
+      needs.sidecar.result == 'success' &&
+      needs.tui-final.outputs.binaries_ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: gaia-agent-*
+          path: ${{ runner.temp }}/art
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: final-tui-binaries
+          path: ${{ runner.temp }}/art/final-tui-binaries
+
+      - name: Generate binaries.lock.json
+        run: |
+          set -euo pipefail
+          python3 util/release_train.py lock --target . --sidecars "${RUNNER_TEMP}/art" \
+            --tui "${RUNNER_TEMP}/art/final-tui-binaries" \
+            --tui-version "${{ needs.plan.outputs.base_version }}" \
+            --out "${RUNNER_TEMP}/flagship/binaries.lock.json"
+
+      # What publish.yml attaches to an RC so its core installs this flagship.
+      - name: Assemble the candidate's flagship manifest
+        run: |
+          set -euo pipefail
+          python3 util/flagship_rc_assets.py release --artifacts "${RUNNER_TEMP}/art" \
+            --tag "${{ needs.plan.outputs.rc_tag }}" --commit "${GITHUB_SHA}" \
+            --out "${RUNNER_TEMP}/rc-assets-full"
+          mkdir -p "${RUNNER_TEMP}/flagship/rc-assets"
+          cp "${RUNNER_TEMP}/rc-assets-full/gaia-agent-release.json" \
+            "${RUNNER_TEMP}/rc-assets-full/gaia-agent.yaml" "${RUNNER_TEMP}/flagship/rc-assets/"
+
+      - name: Pack the flagship npm package with that lock
+        working-directory: hub/agents/gaia/npm
+        run: |
+          set -euo pipefail
+          cp "${RUNNER_TEMP}/flagship/binaries.lock.json" binaries.lock.json
+          npm ci
+          npm run build
+          npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/flagship"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flagship-npm
+          path: ${{ runner.temp }}/flagship/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Verify: checksums, version stamps, lock, twin-diff, manifest ───────────
+  verify:
+    name: Verify and write the manifest
+    needs:
+      - plan
+      - core-dist
+      - core-smoke
+      - sidecar
+      - flagship-npm-tests
+      - ui-rc
+      - ui-final
+      - tui-rc
+      - tui-final
+      - tui-reproducible
+      - setup-rc
+      - setup-final
+      - lock
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/art
+
+      - name: Verify
+        run: |
+          set -euo pipefail
+          rc=0
+          python3 util/release_train.py verify --art "${RUNNER_TEMP}/art" --target . \
+            --tag "${{ needs.plan.outputs.rc_tag }}" --sha "${GITHUB_SHA}" \
+            --flagship "${RUNNER_TEMP}/art/flagship-npm" --out "${RUNNER_TEMP}/out" || rc=$?
+          cat "${RUNNER_TEMP}/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "${rc}"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-train-manifest
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 30
+
+      # Each build's own smoke tests gate here: an artifact that exists but
+      # failed its clean-runner install is not one a train would publish.
+      - name: Every build and smoke job passed
+        if: always()
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          needs = json.loads(os.environ["NEEDS"])
+          rows = [(job, v["result"]) for job, v in sorted(needs.items())]
+          failed = [job for job, result in rows if result != "success"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("\n### Build and smoke jobs\n\n| Job | Result |\n|---|---|\n")
+              for job, result in rows:
+                  fh.write(f"| {job} | {result} |\n")
+          for job in failed:
+              print(f"::error::{job} did not succeed ({needs[job]['result']}).")
+          raise SystemExit(1 if failed else 0)
+          PY
