@@ -73,14 +73,59 @@ def test_a_section_after_the_references_is_not_read():
     assert max(check_glibc.glibc_requirements(text)) == (2, 34)
 
 
+def test_dt_relr_counts_as_glibc_2_36():
+    # Packed relocations need a 2.36 loader but carry no numeric version.
+    text = OBJDUMP.replace("GLIBC_2.27", "GLIBC_ABI_DT_RELR")
+    assert max(check_glibc.glibc_requirements(text)) == (2, 36)
+
+
 def test_versions_compare_numerically_not_as_text():
     # "2.4" > "2.34" as strings; a text compare would pass a 2.40 requirement.
     assert check_glibc.parse_version("2.40") > check_glibc.parse_version("2.34")
     assert check_glibc.parse_version("2.2.5") < check_glibc.parse_version("2.17")
 
 
-def _scan_result(monkeypatch, newest):
-    monkeypatch.setattr(check_glibc, "scan", lambda binary: newest)
+# `objdump -T` rows: plain and hidden (parenthesised) versions, and a defined
+# symbol that must not count as an import.
+OBJDUMP_T = """
+0000000000000000      DF *UND*	0000000000000000  GLIBC_2.2.5 free
+0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.35) _dl_find_object
+0000000000000000      DF *UND*	0000000000000000  GLIBC_2.38 __isoc23_strtol
+0000000000012340 g    DF .text	0000000000000042  GLIBC_2.99 not_an_import
+"""
+
+
+def test_reads_each_imported_glibc_symbol_with_its_version():
+    assert check_glibc.glibc_symbols(OBJDUMP_T) == {
+        ((2, 2, 5), "free"),
+        ((2, 35), "_dl_find_object"),
+        ((2, 38), "__isoc23_strtol"),
+    }
+
+
+def test_rhel9_backport_is_allowed_and_nothing_else_above_the_floor():
+    needed = {(2, 2, 5), (2, 35), (2, 38)}
+    symbols = check_glibc.glibc_symbols(OBJDUMP_T)
+    assert check_glibc.too_new(needed, symbols, (2, 34)) == [
+        ((2, 38), "__isoc23_strtol")
+    ]
+
+
+def test_a_backport_name_at_another_version_is_not_allowed():
+    symbols = {((2, 36), "_dl_find_object")}
+    assert check_glibc.too_new({(2, 36)}, symbols, (2, 34)) == [
+        ((2, 36), "_dl_find_object")
+    ]
+
+
+def test_a_version_need_with_no_symbol_is_reported_not_waved_through():
+    assert check_glibc.too_new({(2, 36)}, set(), (2, 34)) == [((2, 36), "<no symbol>")]
+
+
+def _scan_result(monkeypatch, newest, offenders=None):
+    monkeypatch.setattr(
+        check_glibc, "scan", lambda binary, floor: (newest, offenders or {})
+    )
 
 
 def test_passes_at_the_floor(monkeypatch, capsys):
@@ -92,16 +137,16 @@ def test_passes_at_the_floor(monkeypatch, capsys):
 def test_fails_and_names_each_file_and_who_is_locked_out(monkeypatch, capsys):
     _scan_result(
         monkeypatch,
+        {"libpython3.12.so.1.0": (2, 38), "numpy/_core/x.so": (2, 36)},
         {
-            "<bootloader>": (2, 17),
-            "libpython3.12.so.1.0": (2, 38),
-            "numpy/_core/x.so": (2, 35),
+            "libpython3.12.so.1.0": [((2, 38), "__isoc23_strtol")],
+            "numpy/_core/x.so": [((2, 36), "<no symbol>")],
         },
     )
     assert check_glibc.main(["gaia-agent", "--max", "2.34"]) == 1
     err = capsys.readouterr().err
-    assert "GLIBC_2.38  libpython3.12.so.1.0" in err
-    assert "GLIBC_2.35  numpy/_core/x.so" in err
+    assert "libpython3.12.so.1.0: __isoc23_strtol@GLIBC_2.38" in err
+    assert "numpy/_core/x.so: <no symbol>@GLIBC_2.36" in err
     for distro in ("RHEL / Rocky 9", "Ubuntu 22.04", "Debian 12"):
         assert distro in err
 
@@ -113,10 +158,17 @@ def test_an_empty_scan_is_not_a_pass(monkeypatch):
 
 def test_an_archive_without_libpython_is_not_scanned(monkeypatch, tmp_path):
     binary = tmp_path / "gaia-agent"
-    binary.write_bytes(b"\x7fELF")
+    binary.write_bytes(b"ELF")
     monkeypatch.setattr(check_glibc, "bundled_elf_files", lambda b, into: [])
     with pytest.raises(RuntimeError, match="no libpython3"):
-        check_glibc.scan(binary)
+        check_glibc.scan(binary, (2, 34))
+
+
+def test_every_backport_is_within_the_oldest_non_rhel_target():
+    oldest_other = min(
+        v for d, v in check_glibc.DISTRO_GLIBC.items() if not d.startswith("RHEL")
+    )
+    assert all(v <= oldest_other for v, _ in check_glibc.RHEL9_BACKPORTS)
 
 
 def test_the_workflow_floor_reaches_every_supported_distro():
