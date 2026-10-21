@@ -15,6 +15,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
 from gaia.agents.base.tools import get_tool_display_name
+from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
 
@@ -505,6 +506,10 @@ class OutputHandler(ABC):
         wall clock, which includes tool time and agent overhead.
         """
         ...
+
+    def mark_turn_failed(self) -> None:
+        """The next :meth:`print_final_answer` ends a turn a model failure cut
+        short, so a console can report the turn as failed. Optional — no-op."""
 
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]
@@ -1500,6 +1505,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         # Handle None error messages
         if error_message is None:
             error_message = "Unknown error occurred (received None)"
+        error_message = surface_wording(str(error_message), "cli")
 
         if self.rich_available:
             self.console.print(
@@ -1795,6 +1801,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             ttft_seconds: Not used here (CLI stats table is out of scope for #2899)
             tok_per_s: Not used here (CLI stats table is out of scope for #2899)
         """
+        answer = surface_wording(answer, "cli")
         if self.rich_available:
             self.console.print()  # Add newline before
             self.console.print(

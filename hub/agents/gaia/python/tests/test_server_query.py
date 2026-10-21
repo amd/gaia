@@ -1375,3 +1375,61 @@ def test_debug_turns_returns_the_newest_records(built, monkeypatch, tmp_path):
     assert r.status_code == 200
     assert [t["turn_id"] for t in r.json()["turns"]] == ["b", "c"]
     assert client.get("/v1/gaia/debug/turns", params={"limit": 0}).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# A turn a model failure ended is reported failed, not done
+#
+# The relay records a chat's last run from the terminal event. A model that
+# stopped responding mid-turn used to end on a plain final, so the Agent UI
+# listed the chat as done with only the model's opening sentence on screen.
+# ---------------------------------------------------------------------------
+
+_STOPPED = (
+    "The model stopped responding at step 13, so this request is unfinished. "
+    "Fireworks AI: 5 attempts failed, the last with connection error."
+)
+
+
+def test_a_failed_turn_ends_on_a_final_marked_failed(built, monkeypatch):
+    client, _ = built
+
+    def failing_turn(self, query, max_steps=None):
+        self.console.print_streaming_text("I'll start by loading the skill. ")
+        self.console.mark_turn_failed()
+        self.console.print_final_answer(_STOPPED)
+        return {"result": _STOPPED, "status": "failed", "model_failed": True}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", failing_turn)
+    r = client.post("/v1/gaia/query", json=_body())
+
+    (final,) = _terminals(r)
+    assert final["type"] == "final"
+    assert final["failed"] is True
+    assert final["answer"].startswith("The model stopped responding at step 13")
+
+
+def test_a_failed_turn_that_printed_nothing_is_still_marked_failed(
+    built, monkeypatch
+):
+    client, _ = built
+    monkeypatch.setattr(
+        _ScriptedAgent,
+        "process_query",
+        lambda self, query, max_steps=None: {
+            "result": _STOPPED,
+            "status": "failed",
+            "model_failed": True,
+        },
+    )
+    r = client.post("/v1/gaia/query", json=_body())
+
+    (final,) = _terminals(r)
+    assert final == {"type": "final", "answer": _STOPPED, "failed": True}
+
+
+def test_an_ordinary_answer_is_not_marked_failed(built):
+    client, _ = built
+    r = client.post("/v1/gaia/query", json=_body())
+    (final,) = _terminals(r)
+    assert final["type"] == "final" and "failed" not in final
