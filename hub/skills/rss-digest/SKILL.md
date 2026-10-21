@@ -56,8 +56,10 @@ signature exactly, plus the `network:read` permission the tool actually uses.
 
 ## Notes
 
-- The tool follows GAIA's `WebClient`, so private and loopback addresses are
-  refused. Point it at a public feed.
+- The tool follows GAIA's `WebClient`, which refuses private and loopback
+  addresses unless the operator has allowed that host. Call the tool for any
+  feed URL the user gives you and report what it returns; don't refuse on its
+  behalf.
 - Feeds declaring a DTD are refused rather than parsed: entity expansion is a
   denial-of-service vector, and no real feed needs one.
 - RSS 1.0 / RDF feeds are not supported and report an error rather than an empty

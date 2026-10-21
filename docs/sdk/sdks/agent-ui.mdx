@@ -2580,7 +2580,8 @@ CREATE TABLE documents (
     indexed_at TEXT,
     last_accessed_at TEXT,
     indexing_status TEXT DEFAULT 'complete',  -- pending | indexing | complete | failed | cancelled
-    file_mtime REAL                          -- file modification time (Unix epoch)
+    file_mtime REAL,                         -- file modification time (Unix epoch)
+    indexing_owner TEXT                      -- server process indexing it, while pending/indexing
 );
 
 -- Sessions (conversations)
@@ -2620,13 +2621,27 @@ CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- A chat or scheduled turn that has started and not yet saved its reply, one
+-- row per question, written with the question. Saving the reply deletes it in
+-- the same transaction. A row whose owner has exited becomes the reply "This
+-- answer was interrupted when GAIA closed."
+CREATE TABLE unfinished_turns (
+    question_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    owner TEXT NOT NULL,                       -- server process running the turn
+    started_at TEXT NOT NULL,
+    partial_content TEXT NOT NULL DEFAULT '',  -- cleaned reply so far, saved every 2 s
+    tools_run TEXT NOT NULL DEFAULT '[]',      -- tools the turn had started
+    updated_at TEXT
+);
 ```
 
 **SQLite settings:** Foreign keys enabled, WAL journal mode for concurrent reads.
 
 <Note>
-The `indexing_status`, `file_mtime`, `agent_steps`, and `inference_stats`
-columns (plus the `settings` table) are added via migrations for databases
+The `indexing_status`, `file_mtime`, `indexing_owner`, `agent_steps`, and
+`inference_stats` columns (plus the `settings` table) are added via migrations for databases
 created before these existed. New databases include them in the initial schema.
 </Note>
 

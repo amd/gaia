@@ -24,6 +24,8 @@ from gaia.agents.tools.document_text import (
     index_only_error,
     read_budget,
     read_document,
+    text_page_notes,
+    with_small_limit_warning,
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
@@ -274,6 +276,8 @@ def _function_span(node, lines: list) -> tuple:
 
 #: Lines one ranged read returns at most.
 MAX_READ_LINES = 400
+#: Lines a past-the-end read is pointed at instead: the end of the file.
+TAIL_LINES = 50
 
 
 def _line_window(
@@ -287,8 +291,17 @@ def _line_window(
     if total == 0:
         return {"content": "", "start_line": 1, "end_line": 0, "total_lines": 0}
     if start > total:
+        tail = max(1, total - TAIL_LINES + 1)
         return {
-            "error": f"start_line {start} is past the end: the file has {total} lines."
+            "error": (
+                f"start_line {start} is past the end: the file has {total} lines "
+                f"(1-{total}). Use a start_line from 1 to {total}; for the last "
+                f"{total - tail + 1} lines, start_line={tail}."
+            ),
+            "total_lines": total,
+            "suggested_start_line": tail,
+            # The error says exactly how to fix the call: a retry is a correction.
+            "correctable": True,
         }
     end = total if end_line is None else min(end_line, total)
     if end < start:
@@ -310,6 +323,10 @@ def _line_window(
     }
     if end < total:
         window["next_start_line"] = end + 1
+        window["note"] = (
+            f"Partial: lines {start}-{end} of {total}. Continue with "
+            f"start_line={end + 1} if you need the rest."
+        )
     return window
 
 
@@ -441,7 +458,7 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
+                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis. For lines use start_line/end_line.
                 start_line: First line to return (1-based); the result is line-numbered.
                 end_line: Last line to return, inclusive (at most 400 lines per read).
 
@@ -497,7 +514,9 @@ class FileIOToolsMixin:
                     return {"status": "success", "file_path": file_path, **page}
 
                 if is_document:
-                    return read_document(self, file_path, offset, limit)
+                    return with_small_limit_warning(
+                        read_document(self, file_path, offset, limit), limit
+                    )
 
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
@@ -509,7 +528,14 @@ class FileIOToolsMixin:
                         encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
-                    return {"status": "success", "file_path": file_path, **page}
+                    return with_small_limit_warning(
+                        {
+                            "status": "success",
+                            "file_path": file_path,
+                            **text_page_notes(page, os.path.getsize(file_path)),
+                        },
+                        limit,
+                    )
 
                 # Read file content
                 try:

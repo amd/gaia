@@ -47,20 +47,23 @@ export type PermissionDecision = 'allow' | 'always' | 'deny';
 /** The prompt raised when a tool reaches outside the chat's files (security.py). */
 export const PATH_ACCESS_TOOL = 'allow_path_access';
 
-function pathAccessArgs(args: unknown): { target: string; kind: unknown } {
+function pathAccessArgs(args: unknown): { target: string | null; kind: unknown } {
   const { path, kind } = (args ?? {}) as { path?: unknown; kind?: unknown };
-  return { target: String(path ?? 'a file'), kind };
+  return { target: typeof path === 'string' && path.trim() ? path : null, kind };
 }
 
 /**
  * The question a path-access prompt asks. `kind` is the agent's: it omits it only
- * when nothing exists at the path yet. `followUp` means it backs a call just allowed.
+ * when nothing exists at the path yet, so a prompt that names no path at all
+ * says nothing about whether it exists. `followUp` means it backs a call just allowed.
  */
 export function pathAccessQuestion(args: unknown, followUp = false): string {
   const { target, kind } = pathAccessArgs(args);
-  const what = kind === 'folder'
-    ? `the folder ${target} and everything in it`
-    : kind === 'file' ? `the file ${target}` : `${target}, which doesn't exist yet`;
+  const what = !target
+    ? 'a file or folder outside this chat'
+    : kind === 'folder'
+      ? `the folder ${target} and everything in it`
+      : kind === 'file' ? `the file ${target}` : `${target}, which doesn't exist yet`;
   return followUp
     ? `To do what you just allowed, GAIA also needs ${what}. This chat can't reach it yet. Allow it for this chat?`
     : `GAIA wants to use ${what}. This chat can't reach it yet. Allow it for this chat?`;
