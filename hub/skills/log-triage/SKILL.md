@@ -111,7 +111,7 @@ Then:
 - **Narrow when it helps.** `glob="*.log"` for a mixed folder, `bucket="1min"`
   for a short incident, `entity_regex` for the id the user asked about,
   `output_path` (a new `.json` for full detail, `.csv` for the entity list,
-  inside a folder that holds the logs) when the user wants the full list.
+  in a folder you may write) when the user wants the full list.
 
 ## Lists of anomalous entities
 

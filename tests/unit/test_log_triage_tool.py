@@ -15,12 +15,29 @@ import json
 import random
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from tests.unit.log_triage_scenarios import TOOLS_PATH, load_tools
+from gaia.security import PathValidator
+from tests.unit.log_triage_scenarios import TOOLS_PATH, bound, load_tools
 
 lt = load_tools()
+
+
+@pytest.fixture(autouse=True)
+def _skill_call():
+    """Every engine call runs inside a bound skill call, as under the agent."""
+    with bound():
+        yield
+
+
+def _scoped(*allowed: Path):
+    """A host whose allowed folders are *allowed*; out-of-scope asks get "no"."""
+    validator = PathValidator(allowed_paths=[str(a) for a in allowed])
+    validator.set_access_prompt(lambda path: False)
+    return bound(SimpleNamespace(path_validator=validator))
+
 
 T0 = datetime(2025, 3, 4, 0, 0, 0, tzinfo=timezone.utc).timestamp()
 
@@ -664,42 +681,52 @@ def test_tool_writes_json_and_csv_beside_the_logs_and_never_overwrites(tmp_path)
 
 @pytest.mark.parametrize(
     "name,needle",
-    [
-        ("notes.txt", ".json"),
-        ("a.log", "input logs"),
-        ("../outside.json", "inside a folder"),
-    ],
+    [("notes.txt", ".json"), ("a.log", "input logs")],
 )
 def test_tool_refuses_bad_output_paths(tmp_path, name, needle):
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    _steady(logs / "a.log", hours=1)
-    target = logs / name
-    if name == "a.log":
-        target = logs / "a.log"
-    out = _call(paths=[str(logs)], output_path=str(target))
+    _steady(tmp_path / "a.log", hours=1)
+    out = _call(paths=[str(tmp_path)], output_path=str(tmp_path / name))
     assert out["status"] == "success"
     assert not out["output"]["written"] and needle in out["output"]["error"]
+
+
+def test_tool_reads_and_writes_only_inside_the_agents_folders(tmp_path):
+    logs = tmp_path / "logs"
+    other = tmp_path / "other"
+    logs.mkdir()
+    other.mkdir()
+    _steady(logs / "a.log", hours=1)
+    _steady(other / "b.log", hours=1)
+    with _scoped(logs):
+        out = _call(paths=[str(logs), str(other)], output_path=str(other / "t.json"))
+        assert [f["file"] for f in out["coverage"]["files"]] == ["a.log"]
+        assert any(Path(s["file"]).name == "other" for s in out["coverage"]["skipped"])
+        assert not out["output"]["written"]
+        assert not (other / "t.json").exists()
+        refused = _call(paths=[str(other / "b.log")])
+        assert refused["status"] == "error"
+        inside = _call(paths=[str(logs)], output_path=str(logs / "t.json"))
+        assert inside["output"]["written"], inside["output"]
 
 
 def test_tool_refuses_secret_files(tmp_path):
     secret = tmp_path / ".env"
     secret.write_text("TOKEN=x\n", encoding="utf-8")
-    out = _call(paths=[str(secret)])
+    with _scoped(tmp_path):
+        out = _call(paths=[str(secret)])
     assert out["status"] == "error" and "blocked" in out["error"].lower()
 
 
-def test_tool_honours_gaia_allowed_paths(tmp_path, monkeypatch):
-    inside = tmp_path / "in"
-    outside = tmp_path / "out"
-    inside.mkdir()
-    outside.mkdir()
-    _steady(outside / "a.log", hours=1)
-    monkeypatch.setenv("GAIA_ALLOWED_PATHS", str(inside))
-    monkeypatch.setattr(lt, "_SCOPE_VALIDATOR", None)
-    out = _call(paths=[str(outside / "a.log")])
-    assert out["status"] == "error" and "GAIA_ALLOWED_PATHS" in out["error"]
-    monkeypatch.setattr(lt, "_SCOPE_VALIDATOR", None)
+def test_engine_refuses_to_run_outside_a_skill_call(tmp_path):
+    from gaia.skills.context import _ACTIVE, SkillContextError
+
+    path = _steady(tmp_path / "a.log", hours=1)
+    token = _ACTIVE.set(None)
+    try:
+        with pytest.raises(SkillContextError):
+            lt.triage([str(path)])
+    finally:
+        _ACTIVE.reset(token)
 
 
 def test_skill_manifest_declares_the_tool_and_it_registers():

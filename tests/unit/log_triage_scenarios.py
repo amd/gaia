@@ -28,6 +28,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +45,19 @@ def load_tools():
     sys.modules[_MODULE_NAME] = module
     spec.loader.exec_module(module)
     return module
+
+
+def bound(agent: object = None):
+    """Run the engine as the agent would: inside a bound skill tool call.
+
+    The default host has no path validator, which the scope checks treat as
+    library use with no sandbox declared; pass an object with a
+    ``path_validator`` to exercise the real allowed-folders checks.
+    """
+    from gaia.skills import context as skill_context
+
+    skill = SimpleNamespace(name="log-triage", parsed_permissions=lambda: [])
+    return skill_context.bind(agent if agent is not None else SimpleNamespace(), skill)
 
 
 # ---------------------------------------------------------------------------
@@ -1033,7 +1047,8 @@ def score(sc: Scenario, result, tolerance_s: float = 60.0) -> Score:
 def run(sc: Scenario):
     tools = load_tools()
     opts = tools.TriageOptions(**sc.options)
-    return tools.triage([str(p) for p in sc.files], opts)
+    with bound():
+        return tools.triage([str(p) for p in sc.files], opts)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual report

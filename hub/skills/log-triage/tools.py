@@ -52,6 +52,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
+from gaia.skills import context as skill_context
+from gaia.skills.errors import SkillPermissionError
 
 log = get_logger(__name__)
 
@@ -1196,9 +1198,27 @@ def _group_value(m: "re.Match[str]", name: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+class _OwningGzip(gzip.GzipFile):
+    """A GzipFile that also closes the file it reads from."""
+
+    def close(self) -> None:
+        inner = self.fileobj
+        try:
+            super().close()
+        finally:
+            if inner is not None:
+                inner.close()
+
+
 def _open_text(path: Path) -> io.TextIOBase:
-    """Open a log for streaming text: gzip, UTF-16 and BOMs handled."""
-    raw = gzip.open(path, "rb") if path.suffix.lower() == ".gz" else open(path, "rb")
+    """Open a log for streaming text: gzip, UTF-16 and BOMs handled.
+
+    Every read goes through :func:`gaia.skills.context.open_read`, so the
+    agent's allowed folders and secret-file refusals apply to each file.
+    """
+    raw: Any = skill_context.open_read(path)
+    if path.suffix.lower() == ".gz":
+        raw = _OwningGzip(fileobj=raw, mode="rb")
     head = raw.peek(4)[:4] if hasattr(raw, "peek") else b""
     if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
         encoding = "utf-16"
@@ -1211,9 +1231,10 @@ def _open_text(path: Path) -> io.TextIOBase:
 
 def _is_binary(path: Path) -> bool:
     if path.suffix.lower() == ".gz":
+        skill_context.check_read(path)
         return False
     try:
-        with open(path, "rb") as f:
+        with skill_context.open_read(path) as f:
             chunk = f.read(8192)
     except OSError:
         return False
@@ -1235,7 +1256,7 @@ def _sample_lines(path: Path) -> List[str]:
         return [ln.rstrip("\r\n") for ln in lines]
     size = path.stat().st_size
     if size > 4 * SAMPLE_TAIL_BYTES:
-        with open(path, "rb") as f:
+        with skill_context.open_read(path) as f:
             for offset in (size // 2, max(0, size - SAMPLE_TAIL_BYTES)):
                 f.seek(offset)
                 chunk = f.read(
@@ -2405,12 +2426,13 @@ def build_entities(an: Analyzer, anomalies: List[_Tpl]) -> Dict[str, Any]:
 
 
 def resolve_inputs(
-    paths: Sequence[str],
-    glob_pattern: Optional[str],
-    can_read: Callable[[Path], bool] = lambda p: True,
-    exclude: Sequence[Path] = (),
+    paths: Sequence[str], glob_pattern: Optional[str]
 ) -> Tuple[List[Path], List[Dict[str, str]]]:
     """Expand folders and globs into a sorted, de-duplicated file list.
+
+    Folders are listed with :func:`gaia.skills.context.list_readable` and
+    files checked with :func:`gaia.skills.context.check_read`, so nothing
+    outside the agent's allowed folders is ever opened.
 
     Returns:
         ``(files, skipped)`` where ``skipped`` names each file left out and why.
@@ -2418,7 +2440,6 @@ def resolve_inputs(
     files: List[Path] = []
     skipped: List[Dict[str, str]] = []
     seen = set()
-    excluded = {os.path.normcase(str(p.resolve())) for p in exclude}
     patterns = [g.strip() for g in re.split(r"[;,]", glob_pattern or "") if g.strip()]
 
     def wanted(path: Path, root: Optional[Path]) -> bool:
@@ -2433,7 +2454,7 @@ def resolve_inputs(
 
     def add(path: Path, explicit: bool) -> None:
         key = os.path.normcase(str(path.resolve()))
-        if key in seen or key in excluded:
+        if key in seen:
             return
         seen.add(key)
         if not explicit and path.suffix.lower() in NON_LOG_SUFFIXES:
@@ -2441,38 +2462,40 @@ def resolve_inputs(
                 {"file": str(path), "reason": f"{path.suffix} is not a log format"}
             )
             return
-        if not can_read(path):
-            skipped.append({"file": str(path), "reason": "outside the allowed folders"})
-            return
-        if _is_binary(path):
-            skipped.append({"file": str(path), "reason": "binary content"})
-            return
-        if _is_own_output(path):
-            skipped.append(
-                {"file": str(path), "reason": "an earlier triage_logs output"}
-            )
+        try:
+            if _is_binary(path):
+                skipped.append({"file": str(path), "reason": "binary content"})
+                return
+            if _is_own_output(path):
+                skipped.append(
+                    {"file": str(path), "reason": "an earlier triage_logs output"}
+                )
+                return
+        except SkillPermissionError as exc:
+            skipped.append({"file": str(path), "reason": str(exc)})
             return
         files.append(path)
+
+    def listed(root: Path, recursive: bool) -> List[Path]:
+        try:
+            return skill_context.list_readable(root, recursive=recursive)
+        except SkillPermissionError as exc:
+            skipped.append({"file": str(root), "reason": str(exc)})
+            return []
 
     for raw in paths:
         p = Path(os.path.expanduser(str(raw).strip().strip('"')))
         if p.is_dir():
-            for dirpath, dirnames, filenames in os.walk(p):
-                dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-                for name in sorted(filenames):
-                    fp = Path(dirpath) / name
-                    if name.startswith(".") or not wanted(fp, p):
-                        continue
+            for fp in listed(p, True):
+                if wanted(fp, p):
                     add(fp, explicit=False)
         elif p.is_file():
             add(p, explicit=True)
         else:
             parent = p.parent if str(p.parent) not in ("", ".") else Path(".")
             if any(ch in p.name for ch in "*?[") and parent.is_dir():
-                for fp in sorted(parent.iterdir()):
-                    if fp.is_file() and fnmatch.fnmatch(
-                        fp.name.lower(), p.name.lower()
-                    ):
+                for fp in listed(parent, False):
+                    if fnmatch.fnmatch(fp.name.lower(), p.name.lower()):
                         add(fp, explicit=False)
             else:
                 skipped.append({"file": str(p), "reason": "not found"})
@@ -2483,8 +2506,8 @@ def _is_own_output(path: Path) -> bool:
     if path.suffix.lower() not in (".json", ".csv"):
         return False
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            head = f.read(200)
+        with skill_context.open_read(path) as f:
+            head = f.read(200).decode("utf-8", errors="replace")
     except OSError:
         return False
     return OUTPUT_MARKER in head
@@ -2500,20 +2523,19 @@ def _short(text: str, limit: int = OUT_TEMPLATE_CHARS) -> str:
 
 
 def triage(
-    paths: Sequence[str],
-    options: Optional[TriageOptions] = None,
-    *,
-    can_read: Callable[[Path], bool] = lambda p: True,
-    exclude: Sequence[Path] = (),
+    paths: Sequence[str], options: Optional[TriageOptions] = None
 ) -> "TriageResult":
     """Run the whole triage over ``paths`` (files and/or folders).
+
+    Must run inside a skill tool call (or a :func:`gaia.skills.context.bind`
+    block): every file is opened through the skill context.
 
     Raises:
         ValueError: an option (regex, bucket) is invalid.
     """
     options = options or TriageOptions()
     an = Analyzer(options)
-    files, skipped = resolve_inputs(paths, options.glob, can_read, exclude)
+    files, skipped = resolve_inputs(paths, options.glob)
     not_processed: List[str] = []
     if len(files) > MAX_FILES:
         not_processed = [str(p) for p in files[MAX_FILES:]]
@@ -3034,9 +3056,8 @@ class TriageResult:
 
     def write(self, path: Path) -> Dict[str, Any]:
         """Write the full detail (``.json``) or the entity list (``.csv``)."""
-        path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix.lower() == ".csv":
-            with open(path, "w", encoding="utf-8", newline="") as f:
+            with skill_context.open_write(path, newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(
                     [
@@ -3058,7 +3079,7 @@ class TriageResult:
                 "kind": "entity list (CSV)",
             }
         payload = self.full()
-        with open(path, "w", encoding="utf-8") as f:
+        with skill_context.open_write(path) as f:
             json.dump(payload, f, indent=1, ensure_ascii=False, default=str)
         return {
             "path": str(path),
@@ -3077,37 +3098,9 @@ def _fmt_offset(seconds: int) -> str:
 # The tool
 # ---------------------------------------------------------------------------
 
-_SCOPE_VALIDATOR: Any = None
 
-
-def _scope_validator() -> Any:
-    """A validator for the checks that need no session: secrets and env scope.
-
-    A skill's tool is a module-level function, so it cannot see the session's
-    allowed folders the agent's own file tools check. What it can enforce
-    without them: ``GAIA_ALLOWED_PATHS``, the secret-file and credential-folder
-    refusals on reads, and the blocked-folder refusals on writes. The single
-    output file is further confined to a folder holding the logs (below).
-    """
-    global _SCOPE_VALIDATOR
-    if _SCOPE_VALIDATOR is None:
-        from gaia.security import PathValidator
-
-        _SCOPE_VALIDATOR = PathValidator(allowed_paths=[])
-    return _SCOPE_VALIDATOR
-
-
-def _read_refusal(path: Path) -> Optional[str]:
-    validator = _scope_validator()
-    if not validator.in_env_scope(str(path)):
-        return f"'{path}' is outside GAIA_ALLOWED_PATHS."
-    blocked, reason = validator.is_read_blocked(str(path))
-    return reason if blocked else None
-
-
-def _write_refusal(
-    out: Path, inputs: Sequence[Path], roots: Sequence[Path]
-) -> Optional[str]:
+def _output_refusal(out: Path, inputs: Sequence[Path]) -> Optional[str]:
+    """Why the output file may not be written, before the scope check."""
     resolved = out.resolve()
     if any(resolved == p.resolve() for p in inputs):
         return (
@@ -3120,27 +3113,10 @@ def _write_refusal(
         )
     if out.suffix.lower() not in (".json", ".csv"):
         return (
-            f"output_path must end in .json (full detail) or .csv (anomalous-entity list); "
-            f"got '{out.name}'."
+            "output_path must end in .json (full detail) or .csv (anomalous-entity "
+            f"list); got '{out.name}'."
         )
-    if not any(_within(resolved, r) for r in roots):
-        return (
-            f"output_path must be inside a folder that holds the logs ("
-            f"{', '.join(str(r) for r in roots[:3])}); '{out}' is not."
-        )
-    validator = _scope_validator()
-    if not validator.in_env_scope(str(resolved)):
-        return f"'{out}' is outside GAIA_ALLOWED_PATHS."
-    blocked, reason = validator.is_write_blocked(str(resolved))
-    return reason if blocked else None
-
-
-def _within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
+    return None
 
 
 @tool(timeout=DEFAULT_TIME_BUDGET_S + 120, display_label="Triaging logs")
@@ -3157,15 +3133,11 @@ def triage_logs(
 ) -> dict:
     """Find what went wrong in log files: call this first for any log question.
 
-    Reads every file over its full range (read-only, streaming, any size),
-    auto-detects the format, groups lines into templates and separates the
-    steady BASELINE (routine even when it says ERROR or FATAL) from ANOMALY
-    templates (new, short-lived, spiking, escalating or hitting many hosts).
-    Returns coverage per file, the top anomalies with exact first/last
-    timestamps and file:line, bursts with start/end and the templates found
-    only there, a cross-file timeline, the baseline summary, anomalous
-    entities, consistency checks and warnings. Quote its numbers; then
-    read_file around the first burst line for the cause.
+    Reads every file in full (read-only, any size), detects the format and
+    separates steady BASELINE templates (routine even at ERROR/FATAL) from
+    ANOMALY ones. Returns coverage, top anomalies and bursts with exact
+    timestamps and file:line, baseline, entities, checks and warnings.
+    Quote its numbers, then read_file before the first burst line.
 
     Args:
         paths: Log files and/or folders (folders are walked recursively).
@@ -3180,7 +3152,7 @@ def triage_logs(
             automatically from the range when empty.
         top_n: How many anomalies to return (1-50).
         output_path: Optional new .json (full detail) or .csv (anomalous
-            entity list) file, inside a folder that holds the logs.
+            entity list) file in a folder the agent may write.
     """
     if isinstance(paths, str):
         paths = [p for p in re.split(r"[\n;]", paths) if p.strip()]
@@ -3189,14 +3161,6 @@ def triage_logs(
             "status": "error",
             "error": "paths is empty: give log files or a folder.",
         }
-    roots: List[Path] = []
-    for raw in paths:
-        p = Path(os.path.expanduser(str(raw).strip().strip('"')))
-        refusal = _read_refusal(p)
-        if refusal:
-            return {"status": "error", "error": refusal}
-        roots.append(p if p.is_dir() else p.parent)
-    out: Optional[Path] = None
     options = TriageOptions(
         glob=glob or None,
         timestamp_regex=timestamp_regex or None,
@@ -3207,14 +3171,7 @@ def triage_logs(
         top_n=top_n,
     )
     try:
-        if output_path:
-            out = Path(os.path.expanduser(output_path.strip().strip('"')))
-        result = triage(
-            paths,
-            options,
-            can_read=lambda fp: _read_refusal(fp) is None,
-            exclude=[],
-        )
+        result = triage(paths, options)
     except ValueError as exc:
         return {"status": "error", "error": str(exc)}
     if not result.an.files:
@@ -3227,14 +3184,16 @@ def triage_logs(
             + (f" ({reasons})." if reasons else "."),
         }
     compact = result.compact(top_n)
-    if out is not None:
-        inputs = [Path(f.path) for f in result.an.files]
-        refusal = _write_refusal(out, inputs, roots)
+    if output_path:
+        out = Path(os.path.expanduser(output_path.strip().strip('"')))
+        refusal = _output_refusal(out, [Path(f.path) for f in result.an.files])
         if refusal:
             compact["output"] = {"written": False, "error": refusal}
         else:
             try:
                 compact["output"] = {"written": True, **result.write(out)}
+            except SkillPermissionError as exc:
+                compact["output"] = {"written": False, "error": str(exc)}
             except OSError as exc:
                 log.error("triage_logs could not write %s: %s", out, exc)
                 compact["output"] = {

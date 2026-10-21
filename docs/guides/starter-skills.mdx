@@ -134,15 +134,23 @@ everything the user asked for.
 
 ### log-triage
 
-Finds the incident in a log rather than the noise. It parses every file over its
-full time range, groups messages into templates, ranks them by severity, hosts
-hit and rarity instead of volume, finds bursts, and reports exact first and last
-timestamps, with routine baseline messages kept apart from anomalies.
+Finds the incident in a log rather than the noise. Its `triage_logs` tool
+(registered as `log-triage/triage_logs`) streams every file over its full time
+range, detects the format (JSON lines, syslog, Apache/Nginx, glog, `key=value`,
+timestamp-led lines with stack traces), groups messages into templates, keeps
+steady baseline templates apart from anomalies, finds bursts with exact first
+and last timestamps, compares each burst with the quiet window before it,
+measures clock offsets between files, and lists the hosts and ids an anomaly
+hit. The model then reads around the first burst line and writes a blameless
+postmortem.
 
-- **Demonstrates** — whole-file analysis with pandas in `run_python` instead of
-  reading a large file into the conversation.
-- **Consumes** — `list_files`, `read_file`, `run_python`.
-- **Configure** — one or more log files; fit the line pattern to their format.
+- **Demonstrates** — a skill shipping a deterministic tool for work small models
+  do unreliably from instructions, reading the user's files only through
+  `gaia.skills.context` (`open_read`, `list_readable`, `open_write`).
+- **Provides** — `triage_logs`. **Consumes** — `list_files`, `read_file`, and
+  `run_python` for the manual fallback.
+- **Configure** — one or more log files or folders; `timestamp_regex`,
+  `host_regex` and `entity_regex` when a format is unusual.
 
 ### meeting-actions
 
@@ -241,8 +249,8 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 ### rss-digest
 
-The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
-function, declared in `metadata.gaia.tools` and registered as
+A **tool-providing** skill, like `log-triage`: it ships a `tools.py` with a
+`fetch_rss` function, declared in `metadata.gaia.tools` and registered as
 `rss-digest/fetch_rss`.
 
 - **Demonstrates** — a skill contributing its own `@tool`. The loader compares
@@ -304,8 +312,8 @@ gaia skill info gpu-restock-watch
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).
-  `tools_required` names registry tools it *consumes*. Only `rss-digest` uses
-  the former.
+  `tools_required` names registry tools it *consumes*. `rss-digest` and
+  `log-triage` use the former.
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.
