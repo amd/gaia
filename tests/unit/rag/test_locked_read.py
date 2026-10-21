@@ -248,3 +248,118 @@ def test_a_real_lock_on_an_office_file_is_reported_as_file_locked(
             holder.seek(offset)
             msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, length)
     assert result["error_type"] == "file_locked", result.get("error")
+
+
+def _wrapped(outer, inner, how):
+    try:
+        try:
+            raise inner
+        except BaseException as caught:
+            if how == "cause":
+                raise outer from caught
+            raise outer
+    except BaseException as error:
+        return error
+
+
+@pytest.mark.parametrize("how", ["cause", "context"])
+def test_a_lock_a_parser_wrapped_is_still_reported_as_file_locked(
+    windows, rag, doc, how
+):
+    """python-docx and python-pptx re-raise the OS error as their own."""
+    error = _wrapped(ValueError("File is not a zip file"), _eacces(), how)
+    with patch.object(rag, "_extract_text_from_file", side_effect=error):
+        result = rag.index_document(str(doc))
+    assert result["error_type"] == "file_locked"
+
+
+def test_a_wrapped_error_with_no_lock_in_its_chain_is_a_plain_failure(
+    windows, rag, doc
+):
+    error = _wrapped(ValueError("bad zip"), OSError("disk on fire"), "cause")
+    with patch.object(rag, "_extract_text_from_file", side_effect=error):
+        result = rag.index_document(str(doc))
+    assert "error_type" not in result
+    assert result["error"] == "bad zip"
+
+
+def _make_any(ext, path):
+    if ext in (".docx", ".pptx"):
+        _make(ext[1:], path)
+    elif ext == ".pdf":
+        pypdf = pytest.importorskip("pypdf")
+        writer = pypdf.PdfWriter()
+        for _ in range(20):
+            writer.add_blank_page(612, 792)
+        writer.write(str(path))
+    elif ext == ".xlsx":
+        openpyxl = pytest.importorskip("openpyxl")
+        book = openpyxl.Workbook()
+        for i in range(2000):
+            book.active.append([i, f"row {i}" * 5])
+        book.save(path)
+    elif ext == ".csv":
+        path.write_text("a,b\n" + "".join(f"{i},x{i}\n" for i in range(20000)))
+    elif ext == ".json":
+        path.write_text('{"k": [' + ",".join(str(i) for i in range(20000)) + "]}")
+    else:
+        path.write_bytes(b"v2 " * 40000)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows mandatory locks")
+@pytest.mark.parametrize(
+    "ext", [".txt", ".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".json"]
+)
+@pytest.mark.parametrize("span", ["whole", "partial"])
+def test_a_lock_taken_after_the_hash_read_is_reported_as_file_locked(
+    rag, tmp_path, ext, span, caplog
+):
+    """The race the hash-read check can't see: the lock lands before parsing."""
+    import msvcrt
+
+    doc = tmp_path / f"doc{ext}"
+    _make_any(ext, doc)
+    size = os.path.getsize(doc)
+    offset, length = (0, size) if span == "whole" else (size // 3, max(1, size // 10))
+    real_key = rag._content_key
+    holder = []
+
+    def _key_then_lock(path, raise_locked=False):
+        key = real_key(path, raise_locked=raise_locked)
+        if not holder:
+            handle = open(doc, "r+b")
+            handle.seek(offset)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, length)
+            holder.append(handle)
+        return key
+
+    try:
+        with (
+            patch.object(rag, "_content_key", side_effect=_key_then_lock),
+            caplog.at_level("WARNING"),
+        ):
+            result = rag.index_document(str(doc))
+    finally:
+        for handle in holder:
+            handle.seek(offset)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, length)
+            handle.close()
+    assert result["error_type"] == "file_locked", result.get("error")
+    errors = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelname == "ERROR" and r.name.startswith("gaia.rag")
+    ]
+    assert errors == []
+
+
+def test_a_stop_raised_while_a_lock_was_being_handled_is_not_reported_as_locked(
+    windows, rag, doc
+):
+    """A cancelled index must stay cancelled, not become a lock to retry."""
+    from gaia.rag.sdk import IndexingStopped
+
+    stopped = _wrapped(IndexingStopped("stopped"), _eacces(), "context")
+    with patch.object(rag, "_extract_text_from_file", side_effect=stopped):
+        with pytest.raises(IndexingStopped):
+            rag.index_document(str(doc))

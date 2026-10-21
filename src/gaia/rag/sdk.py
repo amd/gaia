@@ -331,6 +331,17 @@ class RAGResponse:
     query_metadata: Optional[Dict[str, Any]] = None  # Query-level metadata
 
 
+def _locked_cause(error: Optional[BaseException]) -> Optional[BaseException]:
+    """The lock in *error*'s chain, if any; parsers wrap the OS error they hit."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if held_by_another_program(error):
+            return error
+        seen.add(id(error))
+        error = error.__cause__ or error.__context__
+    return None
+
+
 class RAGSDK:
     """
     Simple RAG SDK for document Q&A (PDF, TXT, MD, RST, LOG, CSV, JSON, XLSX,
@@ -474,6 +485,10 @@ class RAGSDK:
                     + "\n"
                 )
             raise ImportError(error_msg)
+
+    def _read_failure_log(self, error: BaseException) -> Callable[..., None]:
+        """A warning for a lock, which the caller may retry; an error otherwise."""
+        return self.log.warning if _locked_cause(error) else self.log.error
 
     def _safe_open(self, file_path: str, mode="rb"):
         """
@@ -1419,7 +1434,7 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            self._read_failure_log(e)(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
             raise ValueError(msg) from e
 
         try:
@@ -1434,7 +1449,7 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
+            self._read_failure_log(e)(f"Corrupted PPTX {pptx_path}: {e}")
             raise ValueError(msg) from e
 
         try:
@@ -1915,8 +1930,7 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            log = self.log.warning if held_by_another_program(e) else self.log.error
-            log(f"Error reading text file {file_path}: {e}")
+            self._read_failure_log(e)(f"Error reading text file {file_path}: {e}")
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -1977,7 +1991,7 @@ These positions indicate where to split the text."""
                 "  3. Try opening and re-saving in a text editor"
             )
         except Exception as e:
-            self.log.error(f"Error reading CSV {csv_path}: {e}")
+            self._read_failure_log(e)(f"Error reading CSV {csv_path}: {e}")
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
@@ -2020,7 +2034,7 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from JSON")
             return text
         except Exception as e:
-            self.log.error(f"Error reading JSON {json_path}: {e}")
+            self._read_failure_log(e)(f"Error reading JSON {json_path}: {e}")
             raise
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
@@ -2080,7 +2094,7 @@ These positions indicate where to split the text."""
             )
             return text
         except Exception as e:
-            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            self._read_failure_log(e)(f"Error reading Excel file {xlsx_path}: {e}")
             raise
 
     def _extract_text_from_docx(self, docx_path: str) -> str:
@@ -2101,7 +2115,7 @@ These positions indicate where to split the text."""
         try:
             text = extract_docx_text(docx_path)
         except (ImportError, ValueError) as e:
-            self.log.error(f"Error reading Word file {docx_path}: {e}")
+            self._read_failure_log(e)(f"Error reading Word file {docx_path}: {e}")
             raise
 
         if self.config.show_stats:
@@ -3243,10 +3257,13 @@ These positions indicate where to split the text."""
             # Extract text based on file type
             try:
                 text, file_metadata = self._extract_text_from_file(file_path)
-            except PermissionError as e:
+            except IndexingStopped:
+                raise
+            except Exception as e:
                 # Only the document's own read: a cache write can fail with EACCES too.
-                if held_by_another_program(e):
-                    return self._document_locked(stats, file_path, e)
+                locked = _locked_cause(e)
+                if locked is not None:
+                    return self._document_locked(stats, file_path, locked)
                 raise
 
             # Store metadata in stats if available (for PDFs)
