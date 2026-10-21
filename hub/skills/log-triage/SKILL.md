@@ -110,24 +110,32 @@ Then:
   that cross-file order inside that offset is uncertain.
 - **Narrow when it helps.** `glob="*.log"` for a mixed folder, `bucket="1min"`
   for a short incident, `entity_regex` for the id the user asked about,
-  `output_path` (a new `.json` for full detail, `.csv` for the entity list,
-  in a folder you may write) when the user wants the full list.
+  `output_path` (a new `.csv` or `.txt` for the entity list, `.json` for full
+  detail, in a folder you may write) when the user wants the full list.
 
 ## Lists of anomalous entities
 
-When the user asks for a list of bad items (blocks, hosts, users, requests,
-sessions, jobs), use `entities` from the result. It is built only from anomaly
-templates, inside each anomaly's own window, never from baseline errors.
+When the user asks for a list of bad items (blocks, requests, sessions, jobs,
+backends), **deliver the list from `triage_logs` output; do not rebuild it by
+hand.** `entities` is built only from anomaly templates, inside each anomaly's
+own window, never from baseline errors.
 
-- Pin `entity_regex` to the id the user means (`"(blk_-?[0-9]+)"`,
-  `"(req-[0-9a-f]+)"`); the default finds request, session, job, block, node
-  and host style ids and `key=value` ids.
-- Report how many entities exist (`total`), how many are flagged, and which
-  template put each group on the list (`by_template`). For more than the
-  sample, write the CSV with `output_path` and say where it is.
-- If a warning says a template was left out because it covers most entities,
-  or that a large share is flagged, the rule matches the baseline: say so and
-  do not present that list as the anomaly.
+- `entities.list` is the ready list (up to 150 ids). For a longer one, call
+  again with `output_path="<folder>/anomalous_entities.csv"` (or `.txt`, one
+  id per line) and give the user that file. Say how many were flagged out of
+  `total` (`share`) and which template put each group there (`by_template`).
+- `kinds_used` says which id pattern the tool learned from the data (for
+  example `blk_N` with `regex` `(blk_-?\d+)`), and `kinds_skipped` why other
+  id-shaped tokens (peers, users, client addresses) were left out. If the user
+  means a different id, call again with `entity_regex` set to that kind's
+  `regex`.
+- If `narrowed` is present, the broad anomaly templates were left out because
+  they matched the baseline; the list comes from the narrower ones. Say so.
+  A warning that most entities are flagged means the list is not the
+  anomaly: report that instead of the list.
+- If you must build a list yourself, use only the anomaly templates the tool
+  lists (their `id`s and `template` text), never every WARN or ERROR line,
+  and check your share against the tool's.
 
 ## Report shape: a blameless postmortem
 
@@ -139,7 +147,9 @@ Describe systems and events, not people. In this order:
 3. **Detection** — the first signal and when it appeared (`first` of the
    earliest anomaly, the burst `first_line`), and what would have caught it.
 4. **Timeline** — UTC when `times_in` says so; the lines before the first
-   anomaly, then the sequence across files (`timeline`).
+   anomaly, then the sequence across files. Use the `timeline` entries and
+   each burst's `start` and `end` exactly as the tool printed them (same
+   digits, same milliseconds); never round, re-derive or estimate them.
 5. **Contributing factors** — plural. The trigger and what let it spread or
    last, each with its evidence, worded as likely unless the log states it.
    Name symptoms as symptoms.

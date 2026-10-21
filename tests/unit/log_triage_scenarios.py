@@ -264,7 +264,7 @@ def hardware_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
                 kind="job_aborted",
             )
         )
-        entities |= {job, node}
+        entities.add(job)  # nodes show up as hosts
         last = max(last, ts)
     paths, planted = _write(tmp, events)
     return Scenario("hardware_fault_burst", paths, planted, [(first, last)], entities)

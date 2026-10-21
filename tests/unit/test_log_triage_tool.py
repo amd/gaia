@@ -505,23 +505,40 @@ def test_entities_come_only_from_the_anomaly_window(tmp_path):
     assert not any(e.startswith("req-") for e in flagged)
 
 
-def test_flagging_most_entities_triggers_the_baseline_warning(tmp_path):
+def _lease_log(tmp_path, *, narrow: bool):
+    """300 jobs open routinely; one short template touches 200 of them, and
+    (when ``narrow``) another touches 6 jobs only."""
     rng = random.Random(3)
     lines = []
     for i in range(300):
-        ts = T0 + i * 60
-        lines.append(f"{_iso(ts)} h-{i % 4} INFO opened job-{i}")
+        lines.append(f"{_iso(T0 + i * 60)} h-{i % 4} INFO opened job-{i}")
     burst_t = T0 + 200 * 60
-    for i in range(200):  # one short template that touches most jobs
+    for i in range(200):
         lines.append(
             f"{_iso(burst_t + i * 0.5)} h-{rng.randint(0, 3)} ERROR job-{i} lost lease"
         )
+    if narrow:
+        for i in range(6):
+            lines.append(
+                f"{_iso(burst_t + 30 + i)} h-1 FATAL job-{250 + i} corrupted checkpoint"
+            )
     lines.sort()
-    res = lt.triage([str(_write(tmp_path / "a.log", lines))])
-    assert res.entities[
-        "dropped_templates"
-    ], "a template covering most entities must be left out"
-    assert any("describes the baseline" in w for w in res.warnings)
+    return lt.triage([str(_write(tmp_path / "a.log", lines))])
+
+
+def test_a_broad_anomaly_template_is_left_out_of_the_entity_list(tmp_path):
+    res = _lease_log(tmp_path, narrow=True)
+    assert res.entities["dropped_templates"], "the broad template must be left out"
+    assert set(res.entities["flagged"]) == {f"job-{250 + i}" for i in range(6)}
+    view = res.compact()["entities"]
+    assert "describe the baseline" in view["narrowed"]
+    assert view["list"] == sorted(f"job-{250 + i}" for i in range(6))
+
+
+def test_a_list_that_is_mostly_baseline_says_so(tmp_path):
+    res = _lease_log(tmp_path, narrow=False)
+    assert len(res.entities["flagged"]) == 200
+    assert any("small minority" in w for w in res.warnings)
 
 
 def test_counts_add_up(tmp_path):
@@ -681,7 +698,7 @@ def test_tool_writes_json_and_csv_beside_the_logs_and_never_overwrites(tmp_path)
 
 @pytest.mark.parametrize(
     "name,needle",
-    [("notes.txt", ".json"), ("a.log", "input logs")],
+    [("notes.md", ".json"), ("a.log", "input logs")],
 )
 def test_tool_refuses_bad_output_paths(tmp_path, name, needle):
     _steady(tmp_path / "a.log", hours=1)

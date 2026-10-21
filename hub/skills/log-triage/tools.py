@@ -69,6 +69,9 @@ MAX_CELL_HOSTS = 32
 MAX_ENTITIES_PER_TEMPLATE = 20_000
 MAX_ENTITIES_TOTAL = 200_000
 MAX_ENTITY_BUCKET_PAIRS = 3_000_000
+MAX_ENTITY_KINDS = 300
+#: Entity lists up to this long ride inline in the compact result.
+OUT_ENTITY_LIST = 150
 MAX_LINE_CHARS = 8_192
 MAX_MESSAGE_CHARS = 1_500
 TARGET_BUCKETS = 720
@@ -532,52 +535,110 @@ def exception_class(text: str) -> Optional[str]:
 # Entities
 # ---------------------------------------------------------------------------
 
-_ENTITY_PREFIXES = (
-    "req|request|txn|trans|transaction|trace|span|sess|session|job|task|order|blk|"
-    "block|container|ctr|pod|vm|disk|vol|volume|conn|connection|user|uid|acct|"
-    "account|tenant|device|dev|msg|batch|run|build|ticket|case|invoice|payment|cart|"
-    "query|worker|node|host|server|srv|instance|shard|partition|chunk|app|client"
-)
 _ENTITY_KEYS = (
     "request_id|req_id|requestid|trace_id|traceid|span_id|session_id|sessionid|"
     "user_id|userid|user|username|job_id|jobid|task_id|taskid|order_id|block_id|"
     "blk_id|container_id|pod|upstream|upstream_addr|client_id|account_id|tenant|"
     "tenant_id|device_id|txn_id|transaction_id|correlation_id|correlationid|node_id|"
-    "instance_id|host_id|shard|partition"
+    "instance_id|host_id|shard|partition|session|sess|token|trace|request|req|txn|"
+    "transaction|job|task|order|block|blk|container|device|account|correlation"
 )
-_PREFIX_SET = frozenset(_ENTITY_PREFIXES.split("|"))
 _KEY_SET = frozenset(_ENTITY_KEYS.split("|"))
-_ID_CANDIDATE = re.compile(r"(?<![\w-])([A-Za-z]{2,12})([-_:#])(-?[A-Za-z0-9][\w.-]*)")
 _KV_CANDIDATE = re.compile(
     r"(?<![\w.])([A-Za-z][\w.]{0,30}?)\s*[=:]\s*\"?([^\s\",;}\])]+)"
 )
 _UUID_RE = re.compile(
     r"\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
 )
+_IP_PORT_RE = re.compile(r"(?<![\w.:])(\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})(?![\w.:])")
+_IP_RE = re.compile(r"(?<![\w.:])(\d{1,3}(?:\.\d{1,3}){3})(?![\w.:])")
+#: word + separator + id with a digit: blk_-1234, job-17, req-a3f9c2d1, sess:x9k2.
+_PREFIXED_ID_RE = re.compile(
+    r"(?<![\w.-])([A-Za-z]{1,16})([-_:#])(-?)([A-Za-z0-9]*\d[A-Za-z0-9]*)(?![\w-])"
+)
+_HEX_ID_RE = re.compile(
+    r"(?<![\w.:-])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)([0-9a-f]{8,})(?![\w.:-])"
+)
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+_SHAPE_RE = {"N": r"\d+", "H": r"[0-9a-fA-F]+", "A": r"[A-Za-z0-9]+"}
+#: Regex text reported for the fixed id kinds.
+FIXED_KIND_REGEX = {
+    "uuid": r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    "ip:port": r"\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}",
+    "ip": r"\d{1,3}(?:\.\d{1,3}){3}",
+    "hex": r"[0-9a-f]{8,}",
+}
 
 
-def default_entities(text: str, *, kv_only: bool = False) -> List[str]:
-    """Ids worth listing: ``req-1a2b``/``job_17``/``node-07`` style tokens,
-    ``request_id=...``/``user: ...`` style fields, and UUIDs."""
-    found: List[str] = []
-    if not kv_only and ("-" in text or "_" in text or ":" in text or "#" in text):
-        for m in _ID_CANDIDATE.finditer(text):
-            rest = m.group(3).rstrip(".-")
-            if m.group(1).lower() in _PREFIX_SET and any(c.isdigit() for c in rest):
-                value = m.group(1) + m.group(2) + rest
-                if value not in found:
-                    found.append(value)
+def _id_shape(token: str) -> str:
+    if token.isdigit():
+        return "N"
+    if all(c in _HEX_CHARS for c in token):
+        return "H"
+    return "A"
+
+
+def auto_entities(text: str, *, kv_only: bool = False) -> List[Tuple[str, str]]:
+    """Every id-shaped token in ``text`` with the kind of id it is.
+
+    Kinds are learned from the token's shape, not a fixed vocabulary:
+    ``blk_N`` / ``req-H`` / ``sess:A`` (a word, a separator and an id with a
+    digit, keyed by the word), ``request_id=`` (an id-named field), ``uuid``,
+    ``hex``, ``ip:port`` and ``ip``. Which kinds name the anomalous entities
+    is decided after the whole log is read (:func:`build_entities`).
+    """
+    found: List[Tuple[str, str]] = []
+    seen: set = set()
+
+    def add(value: str, kind: str) -> None:
+        value = value.rstrip(".,;:")[:120]
+        if value and value not in seen:
+            seen.add(value)
+            found.append((value, kind))
+
     if "=" in text or ":" in text:
         for m in _KV_CANDIDATE.finditer(text):
-            if m.group(1).lower() in _KEY_SET:
-                value = m.group(2).rstrip(".,;:")
-                if value and value not in found:
-                    found.append(value)
-    if not kv_only and text.count("-") >= 4:
+            key = m.group(1).lower()
+            if (
+                key in _KEY_SET
+                or key.endswith("_id")
+                or key.endswith("id")
+                and len(key) > 3
+            ):
+                add(m.group(2), f"{key}=")
+    if kv_only:
+        return found
+    if text.count("-") >= 4:
         for m in _UUID_RE.finditer(text):
-            if m.group(1) not in found:
-                found.append(m.group(1))
+            add(m.group(1).lower(), "uuid")
+    if "." in text:
+        if ":" in text:
+            for m in _IP_PORT_RE.finditer(text):
+                add(m.group(1), "ip:port")
+        for m in _IP_RE.finditer(text):
+            add(m.group(1), "ip")
+    if "-" in text or "_" in text or ":" in text or "#" in text:
+        for m in _PREFIXED_ID_RE.finditer(text):
+            prefix, sep, neg, ident = m.groups()
+            add(m.group(0), f"{prefix.lower()}{sep}{_id_shape(ident)}")
+    for m in _HEX_ID_RE.finditer(text):
+        add(m.group(1), "hex")
     return found
+
+
+def kind_regex(kind: str, examples: Sequence[str] = ()) -> str:
+    """A regex for an id kind, to pass back as ``entity_regex``."""
+    if kind in FIXED_KIND_REGEX:
+        return f"({FIXED_KIND_REGEX[kind]})"
+    if kind.endswith("="):
+        return rf"{re.escape(kind[:-1])}\s*[=:]\s*\"?([^\s\",;}}\])]+)"
+    if kind == "entity_regex":
+        return ""
+    prefix, sep, shape = kind[:-2], kind[-2], kind[-1]
+    sample = next((e for e in examples if e.lower().startswith(prefix)), "")
+    word = sample[: len(prefix)] if sample else prefix
+    negative = any(e[len(prefix) + 1 : len(prefix) + 2] == "-" for e in examples)
+    return f"({re.escape(word)}{sep}{'-?' if negative else ''}{_SHAPE_RE[shape]})"
 
 
 _ID_KEY_RE = re.compile(r"^(?:" + _ENTITY_KEYS + r")$|(?:_id|Id|ID)$", re.I)
@@ -631,7 +692,7 @@ class Rec:
         self.host: Optional[str] = None
         self.msg = ""
         self.prefix = ""
-        self.ents: List[str] = []
+        self.ents: List[Tuple[str, str]] = []
         self.exc: Optional[str] = None
         self.ts_kind: Optional[str] = None
 
@@ -794,8 +855,8 @@ def _apply_mapping(flat: Dict[str, Any], ctx: FileContext, rec: Rec) -> Rec:
         leaf = key.rsplit(".", 1)[-1]
         if _ID_KEY_RE.search(leaf) and key not in _SERVICE_KEYS:
             text = str(value)[:120]
-            if text not in rec.ents:
-                rec.ents.append(text)
+            if all(text != v for v, _ in rec.ents):
+                rec.ents.append((text, f"{leaf}="))
     return rec
 
 
@@ -968,7 +1029,7 @@ def _parse_access(line: str, ctx: FileContext) -> Optional[Rec]:
     else:
         rec.msg = f"<malformed request> {status}"
     rec.prefix = ""
-    rec.ents = default_entities(m.group("rest"), kv_only=True)
+    rec.ents = auto_entities(m.group("rest"), kv_only=True)
     rec.exc = None
     # The masked path is the template; masking must not touch it again.
     rec.msg = "\x00" + rec.msg
@@ -1535,6 +1596,10 @@ class Analyzer:
         # None when there is only one file.
         self.all_ents: Dict[str, Optional[list]] = {}
         self.multi_file = False
+        # entity -> kind (see auto_entities); kind -> a few example values.
+        self.ent_kind: Dict[str, str] = {}
+        self.kinds: Dict[str, List[str]] = {}
+        self.kinds_capped = False
         self.ents_capped = False
         self.ent_pairs = 0
         self.ent_pairs_capped = False
@@ -1786,25 +1851,33 @@ class Analyzer:
             self.hosts[host] = [1, None, None]
         # Entities.
         if self.custom_entities:
-            ents = _regex_entities(self.entity_patterns, line)
+            ents = [
+                (e, "entity_regex") for e in _regex_entities(self.entity_patterns, line)
+            ]
         else:
             ents = list(rec.ents)
             if not msg.startswith("\x00"):
-                for e in default_entities(msg):
-                    if e not in ents:
-                        ents.append(e)
+                known = {v for v, _ in ents}
+                ents.extend(p for p in auto_entities(msg) if p[0] not in known)
         if ents:
             mark = bucket if bucket is not None else -(10**9)
-            for e in ents:
+            for e, kind in ents:
                 e = e[:120]
                 seen = self.all_ents.get(e, False)
                 if seen is False:
+                    if kind not in self.kinds and len(self.kinds) >= MAX_ENTITY_KINDS:
+                        self.kinds_capped = True
+                        continue
                     if len(self.all_ents) < MAX_ENTITIES_TOTAL:
                         self.all_ents[e] = (
                             [(ctx.idx, ts)]
                             if self.multi_file and ts is not None
                             else None
                         )
+                        self.ent_kind[e] = kind
+                        examples = self.kinds.setdefault(kind, [])
+                        if len(examples) < 5:
+                            examples.append(e)
                     else:
                         self.ents_capped = True
                 elif seen is not None and ts is not None and len(seen) < 4:
@@ -2358,63 +2431,173 @@ def clock_check(an: Analyzer) -> List[Dict[str, Any]]:
     return out[:5]
 
 
+def _template_hits(tpl: _Tpl) -> List[str]:
+    window = _anomaly_window(tpl)
+    return [e for e, bset in tpl.ents.items() if window is None or bset & window]
+
+
 def build_entities(an: Analyzer, anomalies: List[_Tpl]) -> Dict[str, Any]:
-    """Entities from anomaly templates only, inside each anomaly's window."""
-    total = len(an.all_ents)
+    """The anomalous-entity list: ids from anomaly templates, in their windows.
+
+    Without ``entity_regex`` every id-shaped token was collected by kind
+    (:func:`auto_entities`). A kind names the anomalous entities when it
+    occurs in the anomaly templates and separates them from routine traffic:
+    either most of its values are untouched by anomalies, or the flagged ones
+    seldom appear in routine templates. Kinds that fail (client IPs, ports,
+    ids every request carries) are reported as skipped, with the reason.
+
+    If the list still covers most entities that routine templates also carry,
+    the broadest anomaly templates are left out one at a time and the list is
+    rebuilt from the narrower ones, saying which and why.
+    """
     anomaly_ids = {id(t) for t in anomalies}
     routine: set = set()
     for t in an.tpls.values():
         if id(t) not in anomaly_ids:
             routine.update(t.ents)
-    flagged: Dict[str, Dict[str, Any]] = {}
-    per_template: Dict[str, int] = {}
-    dropped: List[str] = []
-    for tpl in anomalies:
-        window = _anomaly_window(tpl)
-        hits = []
-        for e, bset in tpl.ents.items():
-            if window is None or bset & window:
-                hits.append(e)
-        if not hits:
-            continue
-        in_routine = sum(1 for e in hits if e in routine)
-        if (
-            total >= 20
-            and len(hits) / total > ENTITY_TEMPLATE_SHARE_DROP
-            and in_routine >= 0.5 * len(hits)
-        ):
-            dropped.append(tpl.tid)
-            continue
-        per_template[tpl.tid] = len(hits)
+    hits_by_tpl = {t.tid: _template_hits(t) for t in anomalies}
+    tpl_by_id = {t.tid: t for t in anomalies}
+    kind_total: Counter = Counter(an.ent_kind.values())
+
+    kind_flagged: Dict[str, set] = {}
+    kind_weight: Counter = Counter()
+    for tid, hits in hits_by_tpl.items():
+        kinds_here = set()
         for e in hits:
-            entry = flagged.setdefault(e, {"templates": []})
-            if tpl.tid not in entry["templates"] and len(entry["templates"]) < 5:
-                entry["templates"].append(tpl.tid)
-    warnings = []
-    if dropped:
-        warnings.append(
-            f"left template(s) {', '.join(dropped)} out of the entity list: each covers more "
-            f"than half of all {total} entities, most of which also appear in routine templates, so "
-            "it describes the baseline, not an anomaly."
+            k = an.ent_kind.get(e)
+            if k is None:
+                continue
+            kind_flagged.setdefault(k, set()).add(e)
+            kinds_here.add(k)
+        for k in kinds_here:
+            kind_weight[k] += tpl_by_id[tid].count
+
+    def describe(k: str) -> Dict[str, Any]:
+        flagged_k = kind_flagged.get(k, set())
+        return {
+            "kind": k,
+            "regex": kind_regex(k, an.kinds.get(k, [])),
+            "total": kind_total[k],
+            "flagged": len(flagged_k),
+            "examples": sorted(flagged_k)[:3] or an.kinds.get(k, [])[:3],
+        }
+
+    used: List[str] = []
+    skipped: List[Dict[str, Any]] = []
+    separating: List[str] = []
+    exclusive: Dict[str, float] = {}
+    for k in kind_flagged:
+        flagged_k = kind_flagged[k]
+        share_k = len(flagged_k) / max(1, kind_total[k])
+        exclusive[k] = 1.0 - sum(1 for e in flagged_k if e in routine) / len(flagged_k)
+        if an.custom_entities or share_k <= 0.5 or exclusive[k] > 0.5:
+            separating.append(k)
+        else:
+            skipped.append(
+                {
+                    **describe(k),
+                    "why": f"anomalies touch {share_k:.0%} of its values and most of them "
+                    "also appear in routine templates, so it does not single anything out",
+                }
+            )
+    # The primary kind: in the most anomaly lines, then the one whose flagged
+    # values occur only in anomalies, then the rarer share, then cardinality.
+    separating.sort(
+        key=lambda k: (
+            -kind_weight[k],
+            -round(exclusive[k], 1),
+            len(kind_flagged[k]) / max(1, kind_total[k]),
+            -kind_total[k],
+            k,
         )
-    share = len(flagged) / total if total else 0.0
-    routine_share = (
-        sum(1 for e in flagged if e in routine) / len(flagged) if flagged else 0.0
     )
-    if total >= 20 and share > ENTITY_SHARE_WARN and routine_share >= 0.5:
+    if separating:
+        primary = separating[0]
+        used.append(primary)
+        for k in separating[1:]:
+            if kind_weight[k] >= 0.5 * kind_weight[primary] and exclusive[k] > 0.5:
+                used.append(k)
+            else:
+                why = (
+                    f"in fewer anomaly lines than {primary}"
+                    if kind_weight[k] < 0.5 * kind_weight[primary]
+                    else "its flagged values also appear in routine templates; "
+                    f"{primary} names the anomalous entities more precisely"
+                )
+                skipped.append({**describe(k), "why": why})
+    elif kind_flagged:
+        used.append(max(kind_flagged, key=lambda k: (kind_weight[k], k)))
+    used_set = set(used)
+    total = sum(kind_total[k] for k in used)
+
+    def collect(tids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+        flagged: Dict[str, Dict[str, Any]] = {}
+        for tid in tids:
+            for e in hits_by_tpl[tid]:
+                if an.ent_kind.get(e) not in used_set:
+                    continue
+                entry = flagged.setdefault(
+                    e, {"templates": [], "kind": an.ent_kind.get(e)}
+                )
+                if tid not in entry["templates"] and len(entry["templates"]) < 5:
+                    entry["templates"].append(tid)
+        return flagged
+
+    active = [tid for tid, hits in hits_by_tpl.items() if hits]
+    flagged = collect(active)
+    narrowed: List[str] = []
+
+    def routine_heavy(fl: Dict[str, Any]) -> bool:
+        if not fl or total < 20 or len(fl) / total <= ENTITY_SHARE_WARN:
+            return False
+        return sum(1 for e in fl if e in routine) >= 0.5 * len(fl)
+
+    while routine_heavy(flagged) and len(active) > 1:
+        broadest = max(
+            active,
+            key=lambda tid: (sum(1 for e in hits_by_tpl[tid] if e in flagged), tid),
+        )
+        active.remove(broadest)
+        narrowed.append(broadest)
+        flagged = collect(active)
+    per_template = {
+        tid: sum(1 for e in flagged if tid in flagged[e]["templates"]) for tid in active
+    }
+    per_template = {k: v for k, v in per_template.items() if v}
+    share = len(flagged) / total if total else 0.0
+    warnings = []
+    note = None
+    if narrowed:
+        note = (
+            f"left out {', '.join(narrowed)}: with them the list held most of the {total} "
+            "entities, and those also appear in routine templates, so they describe the "
+            "baseline. The list comes from the narrower anomaly templates."
+        )
+        warnings.append("entity list narrowed: " + note)
+    if routine_heavy(flagged):
         warnings.append(
-            f"{len(flagged)} of {total} entities ({share:.0%}) are flagged. Real anomalies are "
-            "usually a small minority; check that the anomaly templates are not routine."
+            f"{len(flagged)} of {total} entities ({share:.0%}) are flagged and most also "
+            "appear in routine templates. Real anomalies are usually a small minority; "
+            "check the anomaly templates or pass entity_regex."
         )
     if an.ents_capped or an.ent_pairs_capped or any(t.ents_capped for t in anomalies):
         warnings.append(
             "entity tracking hit its memory cap; the entity list may be incomplete."
         )
+    if an.kinds_capped:
+        warnings.append(
+            f"more than {MAX_ENTITY_KINDS} id shapes; rarer ones were not tracked."
+        )
     return {
+        "mode": "entity_regex" if an.custom_entities else "auto-detected",
+        "kinds_used": [describe(k) for k in used],
+        "kinds_skipped": skipped,
         "total": total,
+        "all_ids": len(an.all_ents),
         "flagged": flagged,
         "per_template": per_template,
-        "dropped_templates": dropped,
+        "dropped_templates": narrowed,
+        "narrowed": note,
         "share": share,
         "warnings": warnings,
     }
@@ -2844,22 +3027,41 @@ class TriageResult:
         }
 
     def _timeline(self) -> List[Dict[str, Any]]:
-        events = []
+        """First occurrences of anomalies per file, plus each burst's exact
+        start and end, in time order. Quote these timestamps verbatim."""
+        events: List[Tuple[float, int, Dict[str, Any]]] = []
+        for n, b in enumerate(self.bursts[:OUT_BURSTS], 1):
+            if b["start"] is None:
+                continue
+            first = self.loc(b["start_loc"]) or {}
+            events.append(
+                (
+                    b["start"],
+                    0,
+                    {"ts": self.ts(b["start"]), "event": f"burst {n} starts", **first},
+                )
+            )
+            events.append(
+                (b["end"], 2, {"ts": self.ts(b["end"]), "event": f"burst {n} ends"})
+            )
         for t in self.anomalies:
             for fidx, (ts, line) in t.file_first.items():
-                events.append((ts, self.an.files[fidx].name, line, t))
-        events.sort(key=lambda e: (e[0], e[1], e[2]))
-        return [
-            {
-                "ts": self.ts(ts),
-                "file": name,
-                "line": line,
-                "id": t.tid,
-                "severity": SEVERITY_NAMES[t.sev],
-                "template": _short(t.key, 80),
-            }
-            for ts, name, line, t in events[:OUT_TIMELINE]
-        ]
+                events.append(
+                    (
+                        ts,
+                        1,
+                        {
+                            "ts": self.ts(ts),
+                            "event": f"{t.tid} first seen",
+                            "file": self.an.files[fidx].name,
+                            "line": line,
+                            "severity": SEVERITY_NAMES[t.sev],
+                            "template": _short(t.key, 80),
+                        },
+                    )
+                )
+        events.sort(key=lambda e: (e[0], e[1]))
+        return [e[2] for e in events[:OUT_TIMELINE]]
 
     def _quiet_hosts(self) -> List[Dict[str, Any]]:
         an = self.an
@@ -2920,13 +3122,6 @@ class TriageResult:
         top_n = max(1, min(MAX_TOP_N, int(top_n)))
         files = self._files_view()
         baseline_lines = sum(t.count for t in self.baseline)
-        flagged = self.entities["flagged"]
-        ent_sample: Dict[str, List[str]] = {}
-        for e, v in sorted(flagged.items()):
-            for tid in v["templates"][:1]:
-                bucket = ent_sample.setdefault(tid, [])
-                if sum(len(x) for x in ent_sample.values()) < OUT_ENTITIES:
-                    bucket.append(e)
         result: Dict[str, Any] = {
             "status": "success",
             "headline": self._headline(),
@@ -2967,13 +3162,7 @@ class TriageResult:
             },
             "intermittent_templates": len(self.intermittent),
             "levels": dict(an.level_totals.most_common()),
-            "entities": {
-                "total": self.entities["total"],
-                "flagged": len(flagged),
-                "share": round(self.entities["share"], 4),
-                "by_template": self.entities["per_template"],
-                "sample_by_template": {k: v for k, v in ent_sample.items() if v},
-            },
+            "entities": self._entities_view(),
             "quiet_hosts": self._quiet_hosts(),
             "clock_offsets": self.clock,
             "checks": {
@@ -3001,6 +3190,31 @@ class TriageResult:
                 f"read_file around {first['file']}:{first['line']} to see the context of {self.anomalies[0].tid}."
             )
         return result
+
+    def _entities_view(self) -> Dict[str, Any]:
+        """The ready anomalous-entity list, with how it was built."""
+        ent = self.entities
+        flagged = sorted(ent["flagged"])
+        view: Dict[str, Any] = {
+            "mode": ent["mode"],
+            "kinds_used": ent["kinds_used"],
+            "kinds_skipped": ent["kinds_skipped"][:4],
+            "total": ent["total"],
+            "flagged": len(flagged),
+            "share": round(ent["share"], 4),
+            "by_template": ent["per_template"],
+        }
+        if ent["narrowed"]:
+            view["narrowed"] = ent["narrowed"]
+        if len(flagged) <= OUT_ENTITY_LIST:
+            view["list"] = flagged
+        else:
+            view["sample"] = flagged[:OUT_ENTITIES]
+            view["full_list"] = (
+                f"{len(flagged)} entities: call again with output_path='<folder>/"
+                "anomalous_entities.csv' (or .txt) to write all of them."
+            )
+        return view
 
     def _headline(self) -> str:
         an = self.an
@@ -3042,12 +3256,15 @@ class TriageResult:
             "bursts": [self._burst_view(b, full=True) for b in self.bursts],
             "burst_threshold": self.burst_stats,
             "entities": {
-                "total": self.entities["total"],
-                "flagged": [
-                    {"entity": e, "templates": v["templates"]}
+                **{
+                    k: v
+                    for k, v in self._entities_view().items()
+                    if k not in ("list", "sample", "full_list")
+                },
+                "list": [
+                    {"entity": e, "kind": v["kind"], "templates": v["templates"]}
                     for e, v in sorted(self.entities["flagged"].items())
                 ],
-                "dropped_templates": self.entities["dropped_templates"],
             },
             "levels": dict(self.an.level_totals),
             "checks": self.checks,
@@ -3055,13 +3272,23 @@ class TriageResult:
         }
 
     def write(self, path: Path) -> Dict[str, Any]:
-        """Write the full detail (``.json``) or the entity list (``.csv``)."""
+        """Write full detail (``.json``) or the entity list (``.csv`` / ``.txt``)."""
+        if path.suffix.lower() == ".txt":
+            with skill_context.open_write(path) as f:
+                for e in sorted(self.entities["flagged"]):
+                    f.write(e + "\n")
+            return {
+                "path": str(path),
+                "rows": len(self.entities["flagged"]),
+                "kind": "entity list (one per line)",
+            }
         if path.suffix.lower() == ".csv":
             with skill_context.open_write(path, newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(
                     [
                         "entity",
+                        "kind",
                         "templates",
                         "template_text",
                         "generator=" + OUTPUT_MARKER,
@@ -3072,7 +3299,7 @@ class TriageResult:
                     texts = " || ".join(
                         _short(by_id[i].key, 120) for i in v["templates"] if i in by_id
                     )
-                    writer.writerow([e, " ".join(v["templates"]), texts, ""])
+                    writer.writerow([e, v["kind"], " ".join(v["templates"]), texts, ""])
             return {
                 "path": str(path),
                 "rows": len(self.entities["flagged"]),
@@ -3111,10 +3338,10 @@ def _output_refusal(out: Path, inputs: Sequence[Path]) -> Optional[str]:
             f"'{out}' already exists: triage_logs never overwrites a file and never "
             "writes to its input logs. Pick a new name."
         )
-    if out.suffix.lower() not in (".json", ".csv"):
+    if out.suffix.lower() not in (".json", ".csv", ".txt"):
         return (
-            "output_path must end in .json (full detail) or .csv (anomalous-entity "
-            f"list); got '{out.name}'."
+            "output_path must end in .json (full detail), or .csv or .txt (the "
+            f"anomalous-entity list); got '{out.name}'."
         )
     return None
 
@@ -3147,12 +3374,12 @@ def triage_logs(
         level_regex: Optional regex whose (?P<level>...) or first group is the level.
         host_regex: Optional regex whose (?P<host>...) or first group is the host.
         entity_regex: Optional regex for the ids to list, e.g. "(blk_-?[0-9]+)";
-            default finds request/session/job/block/host-style ids.
+            by default the id kind is learned from the data.
         bucket: Optional time bucket such as "1min", "5min" or "1h"; chosen
             automatically from the range when empty.
         top_n: How many anomalies to return (1-50).
-        output_path: Optional new .json (full detail) or .csv (anomalous
-            entity list) file in a folder the agent may write.
+        output_path: Optional new file: .csv or .txt gets the full
+            anomalous-entity list, .json the full detail.
     """
     if isinstance(paths, str):
         paths = [p for p in re.split(r"[\n;]", paths) if p.strip()]
