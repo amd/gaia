@@ -8,6 +8,7 @@ This module provides a client for interacting with the Lemonade server's
 OpenAI-compatible API and additional functionality.
 """
 
+import atexit
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
@@ -2920,6 +2922,94 @@ def _check_disk_space(size_gb: float, free_bytes: int, path: str) -> bool:
     return True
 
 
+#: Bound at import so a test patching ``subprocess.Popen`` cannot make a mock
+#: pass for a process this client started.
+_REAL_POPEN = subprocess.Popen
+
+
+def _create_time(pid: int) -> Optional[float]:
+    """The OS start time of *pid*, or ``None`` when no such process exists."""
+    import psutil
+
+    try:
+        return psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return None
+
+
+@dataclass
+class OwnedServerProcess:
+    """A Lemonade server process one ``LemonadeClient`` started itself.
+
+    Only these are ever terminated: a server the client attached to, or a
+    pid that now belongs to some other program, never matches.
+    """
+
+    popen: subprocess.Popen
+    pid: int
+    create_time: float
+    #: The client that launched it; at exit its ``keep_alive`` is honoured.
+    owner: Optional["weakref.ref"] = None
+
+    @classmethod
+    def record(cls, proc: Any) -> Optional["OwnedServerProcess"]:
+        """Ownership of *proc*, or ``None`` when it is not a live real child."""
+        if not isinstance(proc, _REAL_POPEN) or not isinstance(proc.pid, int):
+            return None
+        started = _create_time(proc.pid)
+        if started is None or proc.poll() is not None:
+            return None
+        return cls(popen=proc, pid=proc.pid, create_time=started)
+
+    def is_alive(self) -> bool:
+        """Still running, and still the same process (not a reused pid)."""
+        if self.popen.poll() is not None:
+            return False
+        return _create_time(self.pid) == self.create_time
+
+    def kill_tree(self, log) -> None:
+        """Terminate the server and the backends it spawned (llama-server)."""
+        if not self.is_alive():
+            log.debug(f"Lemonade server PID {self.pid} already exited")
+            return
+        if sys.platform.startswith("win"):
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(self.pid), "/T"],
+                shell=False,
+                check=False,
+                **windows_hidden_popen_kwargs(),
+            )
+        else:
+            # It leads its own group, so its pid is the group id; never
+            # getpgid(), which can resolve to the caller's group.
+            # pylint: disable=no-member  # POSIX-only names, linted on Windows too
+            try:
+                os.killpg(self.pid, signal.SIGTERM)
+                try:
+                    self.popen.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    os.killpg(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                log.debug(f"Lemonade server group {self.pid} already gone")
+            except OSError as e:
+                log.warning(f"Could not signal group {self.pid} ({e}); killing PID")
+                self.popen.kill()
+        try:
+            self.popen.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log.warning(
+                f"Lemonade server PID {self.pid} did not exit within 5s; "
+                "stop it with `gaia kill`"
+            )
+
+    def stop_at_exit(self) -> None:
+        """atexit hook: stop the server unless its client asked to keep it."""
+        client = self.owner() if self.owner is not None else None
+        if client is not None and client.keep_alive:
+            return
+        self.kill_tree(get_logger(__name__))
+
+
 class LemonadeClient:
     """Client for interacting with the Lemonade server REST API."""
 
@@ -2965,7 +3055,9 @@ class LemonadeClient:
             port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
             base_url: Base URL for the Lemonade server (defaults to LEMONADE_BASE_URL env var)
             verbose: If False, reduce logging verbosity during initialization
-            keep_alive: If True, don't terminate server in __del__
+            keep_alive: If True, leave a server this client launched running
+                after ``close()`` and at interpreter exit. A client never
+                stops a server it did not launch, whatever this is set to.
             api_key: API key for an authenticated Lemonade server (defaults to
                 LEMONADE_API_KEY env var; ``None`` for unauthenticated)
             ctx_size_override: Pin every model load THIS client performs to this
@@ -3002,6 +3094,7 @@ class LemonadeClient:
         self.model = model
         self._model_metadata: Dict[str, Dict[str, Any]] = {}
         self.server_process = None
+        self._owned_server: Optional[OwnedServerProcess] = None
         self.log = get_logger(__name__)
         # Gateway models already announced as non-streaming, so the reason is
         # given once rather than before every answer.
@@ -3139,16 +3232,6 @@ class LemonadeClient:
                 self.log.debug(f"PID {pid} exited before GAIA could stop it")
                 continue
             self.log.info(f"Stopped {name} (PID {pid}) listening on port {self.port}")
-
-    def _stop_lemonade_listeners(self) -> List[Tuple[int, str]]:
-        """Kill the stoppable processes listening on this client's port.
-
-        Returns the ``(pid, name)`` listeners left running because GAIA may not
-        terminate them. Never kills the calling process.
-        """
-        stoppable, foreign = self._classify_port_listeners()
-        self._stop_listeners(stoppable)
-        return foreign
 
     def current_base_url(self) -> str:
         """Where this client sends requests now.
@@ -3616,8 +3699,7 @@ class LemonadeClient:
                 **session,
             )
         elif background == "silent":
-            # Run in background with subprocess
-            self._log_file = open("lemonade.log", "w", encoding="utf-8")
+            self._log_file = self._open_server_log(spec.argv)
             try:
                 self.server_process = subprocess.Popen(
                     spec.argv,
@@ -3673,6 +3755,11 @@ class LemonadeClient:
             output_thread = Thread(target=print_output, daemon=True)
             output_thread.start()
 
+        self._owned_server = OwnedServerProcess.record(self.server_process)
+        if self._owned_server is not None:
+            self._owned_server.owner = weakref.ref(self)
+            atexit.register(self._owned_server.stop_at_exit)
+
         # Wait for the server to start by checking port
         start_time = time.time()
         while True:
@@ -3690,93 +3777,69 @@ class LemonadeClient:
         time.sleep(5)
         self.log.info("Lemonade server started successfully")
 
-    def terminate_server(self):
-        """Terminate the Lemonade server process if it exists."""
-        if not self.server_process:
-            return
+    def _open_server_log(self, argv: List[str]):
+        """Open GAIA's Lemonade log for a silent launch, never one in the CWD."""
+        from gaia import config
+        from gaia.log_rotation import rotate_if_oversized
 
+        path = Path(config.GAIA_CONFIG_DIR) / "logs" / "lemonade.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self.log.info("Terminating Lemonade server...")
+            rotate_if_oversized(path)
+        except OSError as e:
+            self.log.warning(f"Could not rotate {path} ({e}); appending to it.")
+        handle = open(path, "a", encoding="utf-8", errors="replace")
+        handle.write(f"\n=== LemonadeClient start: {' '.join(argv)} ===\n")
+        handle.flush()
+        self.log.info(f"Lemonade server output: {path}")
+        return handle
 
-            # Handle different process types
-            if hasattr(self.server_process, "join"):
-                # Handle multiprocessing.Process objects
-                self.server_process.terminate()
-                self.server_process.join(timeout=5)
-            else:
-                # For subprocess.Popen
-                if sys.platform.startswith("win") and self.server_process.pid:
-                    # On Windows, use taskkill to ensure process tree is terminated
-                    subprocess.run(
-                        [
-                            "taskkill",
-                            "/F",
-                            "/PID",
-                            str(self.server_process.pid),
-                            "/T",
-                        ],
-                        shell=False,
-                        check=False,
-                        **windows_hidden_popen_kwargs(),
-                    )
-                elif self.server_process.pid:
-                    # The server leads its own group, so its pid is the group id;
-                    # never getpgid(), which can resolve to the caller's group.
-                    try:
-                        os.killpg(self.server_process.pid, signal.SIGTERM)
-                        # Wait a bit for graceful termination
-                        try:
-                            self.server_process.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            # Force kill if graceful termination failed
-                            os.killpg(self.server_process.pid, signal.SIGKILL)
-                    except (OSError, ProcessLookupError):
-                        # Process or process group doesn't exist, try individual kill
-                        try:
-                            self.server_process.kill()
-                        except ProcessLookupError:
-                            pass  # Process already terminated
-                else:
-                    # Fallback: try to kill normally
-                    self.server_process.kill()
-                # Wait for process to terminate
-                try:
-                    self.server_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.log.warning("Process did not terminate within timeout")
+    def terminate_server(self):
+        """Stop the Lemonade server this client launched, and nothing else.
 
-            # Close log file handle if it was opened for silent mode
-            if hasattr(self, "_log_file") and self._log_file:
-                try:
-                    self._log_file.close()
-                except Exception as exc:
-                    get_logger(__name__).warning(
-                        "Could not close Lemonade log file: %s", exc
+        A server the client attached to, or a ``server_process`` it did not
+        start itself, is left running: nothing is ever stopped by port.
+        """
+        owned, self._owned_server = self._owned_server, None
+        proc, self.server_process = self.server_process, None
+        try:
+            if owned is None or owned.popen is not proc:
+                if proc is not None:
+                    self.log.debug(
+                        "Not stopping the Lemonade server: this client did not "
+                        "launch it"
                     )
+                return
+            atexit.unregister(owned.stop_at_exit)
+            if not owned.is_alive():
+                # e.g. `systemctl --user start lemond` exits once the service runs.
+                self.log.info(
+                    f"Not stopping the Lemonade server: its launcher (PID "
+                    f"{owned.pid}) already exited, so the server is not this "
+                    "client's to stop. Stop it with `gaia kill` if you need to."
+                )
+                return
+            self.log.info(f"Terminating Lemonade server (PID {owned.pid})...")
+            owned.kill_tree(self.log)
+            self.log.info("Lemonade server terminated")
+        finally:
+            if self._log_file is not None:
+                self._log_file.close()
                 self._log_file = None
 
-            for pid, name in self._stop_lemonade_listeners():
-                self.log.warning(
-                    f"Left PID {pid} ({name or 'unknown process'}) running on "
-                    f"port {self.port}: GAIA will not stop it"
-                )
+    def close(self) -> None:
+        """Release this client: stops a server it launched unless ``keep_alive``."""
+        if self.keep_alive:
+            if self._owned_server is not None:
+                self.log.info("Leaving Lemonade server running: keep_alive=True")
+            return
+        self.terminate_server()
 
-            # Reset reference
-            self.server_process = None
-            self.log.info("Lemonade server terminated successfully")
-        except Exception as e:
-            self.log.error(f"Error terminating server process: {e}")
-            # Reset reference even on error
-            self.server_process = None
+    def __enter__(self) -> "LemonadeClient":
+        return self
 
-    def __del__(self):
-        """Cleanup server process on deletion."""
-        # Check if keep_alive attribute exists (might not if __init__ failed early)
-        if hasattr(self, "keep_alive") and not self.keep_alive:
-            self.terminate_server()
-        elif hasattr(self, "server_process") and self.server_process:
-            if hasattr(self, "log"):
-                self.log.info("Not terminating server because keep_alive=True")
+    def __exit__(self, *exc_info) -> None:
+        self.close()
 
     def _model_recipe(self, model_name: str) -> Optional[str]:
         """The catalog's recipe for *model_name* (``llamacpp``, ``flm``, ``cloud``…)."""
@@ -8512,7 +8575,8 @@ def create_lemonade_client(
                    - "terminal": Launch in a new terminal window (default)
                    - "silent": Run in background with output to log file
                    - "none": Run in foreground
-        keep_alive: If True, don't terminate server when client is deleted
+        keep_alive: If True, leave a server this client launched running
+                    after ``close()`` and at interpreter exit
         api_key: API key for an authenticated Lemonade server
                  (defaults to env var LEMONADE_API_KEY; ``None`` for unauthenticated)
         ctx_size_override: Instance-scoped exact-pin ctx override (#1892) —
