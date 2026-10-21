@@ -70,13 +70,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     );
 }
 
-/** Where the model answering this chat runs, from the same data as the model status popover. */
 /** Lemonade ids compare case-insensitively, with or without the ``user.`` prefix. */
 function sameModel(a: string, b: string): boolean {
     const norm = (id: string) => id.toLowerCase().replace(/^user\./, '');
     return norm(a) === norm(b);
 }
 
+/** Where the model answering this chat runs, from the same data as the model status popover. */
 function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const place = useInferencePlace();
     const active = useModelStore((s) => s.active);
@@ -134,6 +134,8 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
 
 function Folders({ sessionId }: { sessionId: string }) {
     const { env, error: loadError, change } = useSessionEnvironment(sessionId);
+    // Only the flagship's own default scope (your user folder) is known here.
+    const flagship = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.agent_type === 'gaia');
     const [picking, setPicking] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [busyPath, setBusyPath] = useState<string | null>(null);
@@ -192,8 +194,9 @@ function Folders({ sessionId }: { sessionId: string }) {
             {!env && !loadError && <span className="sp-meta">Checking…</span>}
             {env && !env.enforced && (
                 <span className="sp-meta">
-                    These folders are where GAIA starts, not a limit: it can also reach the rest of
-                    your user folder. In Ask mode it asks before it changes anything.
+                    {flagship
+                        ? 'These folders are where GAIA starts, not a limit: it can also reach the rest of your user folder. In Ask mode it asks before it changes anything.'
+                        : "These folders are where this chat's agent starts; it applies its own limits."}
                 </span>
             )}
             {loadError && <span className="sp-error">Couldn't read this chat's folders: {loadError}</span>}

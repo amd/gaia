@@ -221,6 +221,51 @@ describe('ModelChip', () => {
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
     });
 
+    it('a model picked while another downloads is not undone when the download finishes', async () => {
+        let qwen: Partial<ProviderModel> = { downloaded: false };
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF'), model('Phi-4-GGUF'), model('Qwen3-8B-GGUF', qwen)]
+                : [],
+        }));
+        mockedApi.downloadModel.mockImplementation(async () => {
+            qwen = { downloaded: false, download_progress: { state: 'downloading', percent: 40 } as never };
+            return {} as never;
+        });
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Phi-4-GGUF' });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+        // While Qwen downloads, the user picks Phi, which is already here.
+        fireEvent.click(await rowFor(dialog, /Phi/));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Phi-4-GGUF'));
+
+        qwen = { downloaded: true };
+        await new Promise((r) => setTimeout(r, 2300)); // one download poll
+        expect(mockedApi.selectModel).not.toHaveBeenCalledWith('Qwen3-8B-GGUF');
+    }, 10000);
+
+    it('a switch that fails after the download is shown on the chip', async () => {
+        let downloaded = false;
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', { downloaded })] : [],
+        }));
+        mockedApi.downloadModel.mockImplementation(async () => { downloaded = true; return {} as never; });
+        mockedApi.selectModel.mockRejectedValue(new Error('Not enough memory to load it'));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        await waitFor(() => expect(screen.getByLabelText('Model switch failed')).toBeInTheDocument());
+        const chip = screen.getByLabelText('Model switch failed').closest('button')!;
+        expect(chip.getAttribute('title')).toMatch(/downloaded, but switching to it failed: Not enough memory/);
+    });
+
     it('does not switch to a model whose download failed', async () => {
         mockedApi.downloadModel.mockRejectedValue(new Error('Disk full'));
         render(<ModelChip />);

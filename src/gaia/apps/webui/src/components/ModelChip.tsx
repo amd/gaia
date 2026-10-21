@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import * as api from '../services/api';
@@ -76,6 +76,10 @@ export function ModelChip() {
     const [downloading, setDownloading] = useState<string | null>(null);
     // A model picked from the list before it was downloaded: switch to it once it is.
     const [pickAfterDownload, setPickAfterDownload] = useState<{ model: string; provider: ProviderInfo } | null>(null);
+    // Download requests still waiting on an answer; until then a row still reads "not downloaded".
+    const [requestsPending, setRequestsPending] = useState(0);
+    // The switch after a download failed, possibly with the list closed: say so on the chip.
+    const [autoSwitchError, setAutoSwitchError] = useState<string | null>(null);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -119,6 +123,7 @@ export function ModelChip() {
 
     const download = useCallback(async (model: string) => {
         setDownloading(model);
+        setRequestsPending((n) => n + 1);
         setError(null);
         try {
             await api.downloadModel(model);
@@ -128,28 +133,34 @@ export function ModelChip() {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setDownloading(null);
+            setRequestsPending((n) => n - 1);
         }
     }, [load]);
 
-    const choose = useCallback(async (model: string, provider: ProviderInfo) => {
+    /** Switch to *model*; returns why it failed, or null. */
+    const choose = useCallback(async (model: string, provider: ProviderInfo): Promise<string | null> => {
         if (provider.remote && !active?.remote && pendingCloud?.model !== model) {
             setPendingCloud({ model, provider });
-            return;
+            return null;
         }
         setPendingCloud(null);
         if (turnRunning) {
             // The running reply keeps its model; this one starts with the next message.
             queue(model === active?.model ? null : model);
             setOpen(false);
-            return;
+            return null;
         }
         setSwitching(model);
         setError(null);
         try {
             await select(model);
+            setAutoSwitchError(null);
             setOpen(false);
+            return null;
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            return message;
         } finally {
             setSwitching(null);
         }
@@ -157,19 +168,25 @@ export function ModelChip() {
 
     useEffect(() => {
         // Wait out the download request itself; until it answers, the row still reads "not downloaded".
-        if (!pickAfterDownload || !groups || downloading !== null) return;
+        if (!pickAfterDownload || !groups || requestsPending > 0) return;
         const m = groups.flatMap((g) => g.models).find((x) => x.id === pickAfterDownload.model);
         if (!m || isDownloading(m)) return;
         setPickAfterDownload(null);
         // Downloaded now: use it, as the click asked. A failed download keeps its error showing.
-        if (modelState(m) !== 'not_downloaded') void choose(pickAfterDownload.model, pickAfterDownload.provider);
-    }, [groups, pickAfterDownload, downloading, choose]);
+        if (modelState(m) === 'not_downloaded') return;
+        const { model, provider } = pickAfterDownload;
+        void choose(model, provider).then((failed) => {
+            if (failed) setAutoSwitchError(`${displayModelName(model)} downloaded, but switching to it failed: ${failed}`);
+        });
+    }, [groups, pickAfterDownload, requestsPending, choose]);
 
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = chipModel ? displayModelName(chipModel) : 'Model';
     const label = `${name}${place ? ` · ${place.label}` : ''}`;
     const notDownloaded = active?.downloaded === false && chipModel === active.model;
-    const title = queueError
+    const title = autoSwitchError
+        ? autoSwitchError
+        : queueError
         ? queueError
         : queued
             ? `${displayModelName(queued)} is used from your next message.`
@@ -188,7 +205,7 @@ export function ModelChip() {
             <button
                 ref={anchor}
                 type="button"
-                className={`composer-chip${notDownloaded || queueError ? ' is-warning' : ''}`}
+                className={`composer-chip${notDownloaded || queueError || autoSwitchError ? ' is-warning' : ''}`}
                 onClick={() => setOpen((v) => !v)}
                 aria-haspopup="dialog"
                 aria-expanded={open}
@@ -198,6 +215,7 @@ export function ModelChip() {
                 <span className="composer-chip-label">{label}</span>
                 {queued && <span className="composer-chip-next">→ {displayModelName(queued)} next</span>}
                 {notDownloaded && <Download size={12} aria-label="Not downloaded" />}
+                {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
             <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Choose a model" align="end">
@@ -207,6 +225,7 @@ export function ModelChip() {
                         here is used from your next message.
                     </div>
                 )}
+                {autoSwitchError && <div className="popover-message is-error" role="alert">{autoSwitchError}</div>}
                 {queueError && <div className="popover-message is-error" role="alert">{queueError}</div>}
                 {error && <div className="popover-message is-error" role="alert">{error}</div>}
                 {!groups && !error && (
@@ -244,7 +263,11 @@ export function ModelChip() {
                                         type="button"
                                         className="popover-item"
                                         onClick={() => {
-                                            if (!needsDownload) return void choose(m.id, provider);
+                                            if (!needsDownload) {
+                                                // A pick made since outranks one waiting on a download.
+                                                setPickAfterDownload(null);
+                                                return void choose(m.id, provider);
+                                            }
                                             setPickAfterDownload({ model: m.id, provider });
                                             void download(m.id);
                                         }}

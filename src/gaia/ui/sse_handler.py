@@ -2212,7 +2212,10 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
-        self.set_relay_question(None)
+        with self._user_input_lock:
+            # A newer question may already be pending; only this one is answered.
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
 
     def set_relay_question(self, request_id: Optional[str]) -> None:

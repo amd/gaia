@@ -434,7 +434,11 @@ function App() {
         setSetup({ state: 'ready' });
         void checkSystemStatus();
         // Setup installs the agent; the list read at startup predates it.
-        loadAgents().catch((err) => log.api.warn('Agent list unavailable after setup', err));
+        loadAgents().catch((err) => {
+            // Unknown beats a stale "not installed"; a refused new chat still raises it.
+            setAgentsKnown(false);
+            log.api.warn('Agent list unavailable after setup', err);
+        });
         if (!first) return;
         if (first.needs_input) {
             setDraftText(first.prompt);

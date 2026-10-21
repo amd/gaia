@@ -124,15 +124,24 @@ describe('Can read and write', () => {
 
     it("says a separate agent isn't held to these settings, and offers no controls", async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
-        expect(screen.getByText(/rest of\s+your user folder/)).toBeInTheDocument();
+        expect(screen.getByText(/rest of your user folder/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
         expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toBeDisabled();
+    });
+
+    it("doesn't claim another agent's scope", async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
+        expect(screen.queryByText(/rest of your user folder/)).not.toBeInTheDocument();
     });
 
     it('offers no Remove for an attached document; it leaves through the document bar', async () => {

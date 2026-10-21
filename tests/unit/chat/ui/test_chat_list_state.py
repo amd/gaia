@@ -239,6 +239,18 @@ def test_answering_a_relayed_question_clears_it():
     assert h.waiting_on() is None
 
 
+def test_answering_an_older_question_leaves_a_newer_one_pending():
+    class _Proxy:
+        def respond_query(self, run_id, request_id, value):
+            pass
+
+    h = SSEOutputHandler()
+    h.active_relay_proxy, h.active_relay_run_id = _Proxy(), "run-1"
+    h.set_relay_question("q8")
+    assert h.resolve_relay_input("q7", "late answer")
+    assert h.waiting_on() == "question"
+
+
 class _SlowBackOnTheModel:
     """A turn slot whose way back onto the model waits until released."""
 
