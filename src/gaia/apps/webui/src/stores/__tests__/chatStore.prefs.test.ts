@@ -65,7 +65,7 @@ describe('UI preferences survive a blocked localStorage -- loudly', () => {
 
         const { useChatStore } = await import('../chatStore');
 
-        expect(useChatStore.getState().themePreference).toBe('dark');
+        expect(useChatStore.getState().themePreference).toBe('system');
         expect(useChatStore.getState().sidebarCollapsed).toBe(false);
         expect(warn, 'an unreadable preference was swallowed silently').toHaveBeenCalled();
         expect(warnings()).toMatch(/unreadable/);

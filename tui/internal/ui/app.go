@@ -194,6 +194,19 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 
 	if ctrl == nil {
 		p := tea.NewProgram(model, teaOptions()...)
+		// Bubble Tea quits on SIGINT/SIGTERM but not SIGHUP, so closing the
+		// terminal window skipped the Close above and orphaned the agent.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer func() {
+			signal.Stop(hup)
+			close(hup)
+		}()
+		go func() {
+			if _, ok := <-hup; ok {
+				p.Quit()
+			}
+		}()
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -220,7 +233,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// A deferred Stop covers a normal exit only; a signalled one has to remove
 	// the discovery file too, or it keeps advertising a pid, a port and a token.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer func() {
 		signal.Stop(sigs)
 		close(sigs)
@@ -354,7 +367,27 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, dev, logf)
+
+		// The agent leads its own process group on POSIX, so a terminal Ctrl+C
+		// never reaches it: left to the default disposition, this process died
+		// and the turn ran on. Trapped, it is stopped the way Esc stops it.
+		sigs := make(chan os.Signal, 2)
+		signal.Notify(sigs, interruptSignals...)
+		defer signal.Stop(sigs)
+		res := runOneShotInterruptible(ctx, c, query, os.Stdout, os.Stderr, dev, logf,
+			interruptOptions{
+				sigs:        sigs,
+				cancelGrace: interruptCancelGrace,
+				abandonWait: interruptAbandonWait,
+				release:     func() { signal.Stop(sigs) },
+			})
+		if res.Interrupted {
+			// Explicit, not left to the defer: a stop that could not end the
+			// agent must say so before the process exits.
+			if err := c.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Could not stop the agent, so it may still be running: %v\n", err)
+			}
+		}
 		return res.ExitCode, nil
 	}
 

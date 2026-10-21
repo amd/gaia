@@ -50,7 +50,7 @@ talk:
     - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.md', 'docs/sdk/agents/talk.md']
 
 # ---------------------------------------------------------------------------
-# Terminal Agent Hub: Go TUI, daemon supervisor, and the agent sidecar contract
+# GAIA Terminal UI: Go TUI, daemon supervisor, and the agent sidecar contract
 # (milestone #45). Kept with the src/gaia area rules above the hub-agent block.
 # ---------------------------------------------------------------------------
 

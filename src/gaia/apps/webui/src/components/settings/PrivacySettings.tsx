@@ -5,12 +5,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useInferencePlace } from '../../stores/modelStore';
+import { UndoHistorySettings } from './UndoHistorySettings';
 
 /** Where data lives and goes, and how to delete it. */
 export function PrivacySettings() {
     const sessions = useChatStore((s) => s.sessions);
     const removeSession = useChatStore((s) => s.removeSession);
     const place = useInferencePlace();
+    const dataDir = useChatStore((s) => s.systemStatus?.data_dir);
     const [confirm, setConfirm] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -47,10 +49,13 @@ export function PrivacySettings() {
                         ? 'Right now answers are generated on this PC too.'
                         : "GAIA can't tell right now whether answers are generated on this PC or by a cloud provider."}
             </p>
-            <div className="setting-row">
-                <span>Data folder</span>
-                <code className="setting-path">~/.gaia/chat/</code>
-            </div>
+            {dataDir && (
+                <div className="setting-row">
+                    <span>Data folder</span>
+                    <code className="setting-path">{dataDir}</code>
+                </div>
+            )}
+            <UndoHistorySettings />
             <div className="danger-divider" />
             <p className="danger-warning">Deletes every chat and its messages. Documents and memory are kept.</p>
             <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>

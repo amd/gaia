@@ -517,9 +517,12 @@ def test_agent_extract_lemonade_user_message_typed_in_cycle() -> None:
 # specific phrases is ALSO present (corroboration). A bare load failure must
 # classify as NOT corrupt and surface as an actionable error.
 
+import time
 from unittest.mock import patch
 
 from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_LOAD_RETRIES,
+    MODEL_LOAD_RETRY_BACKOFF,
     LemonadeClient,
     LemonadeClientError,
     ModelDownloadCancelledError,
@@ -623,10 +626,28 @@ class TestLoadModelCorruptRouting:
             "llama-server failed to start"
         )
 
+        # Swap only lemonade_client's ``time`` binding: patching ``time.sleep``
+        # also catches the log-file lock's poll on this same thread.
+        backoffs = []
+
+        class _ClientTime:
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+            @staticmethod
+            def sleep(seconds):
+                backoffs.append(seconds)
+
+        def _fail_load(*_args, **_kwargs):
+            # Another module sleeping on this thread (the log lock) isn't a backoff.
+            time.sleep(0)
+            raise send_error
+
         with (
-            patch.object(client, "_send_request", side_effect=send_error),
+            patch.object(client, "_send_request", side_effect=_fail_load),
             patch.object(client, "delete_model") as mock_delete,
             patch.object(client, "pull_model_stream") as mock_pull,
+            patch("gaia.llm.lemonade_client.time", _ClientTime()),
         ):
             with pytest.raises(LemonadeClientError) as exc_info:
                 client.load_model(
@@ -636,6 +657,12 @@ class TestLoadModelCorruptRouting:
         # The destructive repair path must NOT have been touched.
         mock_delete.assert_not_called()
         mock_pull.assert_not_called()
+
+        # It backed off on the escalating schedule before giving up.
+        assert backoffs == [
+            MODEL_LOAD_RETRY_BACKOFF * n
+            for n in range(1, DEFAULT_MODEL_LOAD_RETRIES + 1)
+        ]
 
         # Error must name what failed so the user can act on it.
         assert "Qwen3-Coder-30B-A3B-Instruct-GGUF" in str(exc_info.value)

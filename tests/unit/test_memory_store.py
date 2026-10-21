@@ -12,6 +12,7 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 """
 
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -1714,12 +1715,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists at the current version (v5, #887)."""
+        """schema_version table exists at the current version (v7, decayed_at)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 5
+            assert row[0] == 7
 
 
 # ===========================================================================
@@ -3269,35 +3270,37 @@ class TestSearchConfidenceBumpRollback:
 
     def test_confidence_bump_commit_failure_rolls_back_all_bumps(self, store):
         """If commit() fails after confidence bumps, all bumps must be rolled back."""
-        kid = store.store(
-            category="fact",
-            content="BumpRollback unique test entry xyz",
-            confidence=0.5,
-        )
+        kids = [
+            store.store(
+                category="fact",
+                content=f"BumpRollback entry {word} xyz",
+                confidence=0.5,
+            )
+            for word in ("alpha", "bravo", "charlie")
+        ]
+        real = store._conn
 
-        original_conf = store._conn.execute(
-            "SELECT confidence FROM knowledge WHERE id = ?", (kid,)
-        ).fetchone()[0]
+        class _FailingCommit:
+            """The real connection, except that commit() fails."""
 
-        # Inject a commit failure ONLY for the bump commit, not the initial store
-        commit_call_count = [0]
-        original_method = (
-            store._conn.commit.__func__
-            if hasattr(store._conn.commit, "__func__")
-            else None
-        )
+            def __getattr__(self, name):
+                return getattr(real, name)
 
-        # We can't monkey-patch sqlite3 commit, so instead we verify the
-        # try/except/rollback pattern is in place via source inspection
-        import inspect
+            def commit(self):
+                raise sqlite3.OperationalError("disk I/O error")
 
-        from gaia.agents.base.memory_store import MemoryStore
+        items = [store.get_item(k) for k in kids]
+        store._conn = _FailingCommit()
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                store.count_use(items)
+        finally:
+            store._conn = real
 
-        source = inspect.getsource(MemoryStore.search)
-        assert (
-            "rollback" in source
-        ), "search() must have rollback guard for confidence bumps"
-        assert "try" in source, "search() must wrap confidence bumps in try block"
+        rows = real.execute(
+            "SELECT confidence, use_count FROM knowledge WHERE id IN (?, ?, ?)", kids
+        ).fetchall()
+        assert rows == [(0.5, 0)] * 3
 
     def test_successful_confidence_bump_is_committed(self, store):
         """Normal search correctly bumps confidence and commits."""
@@ -3796,14 +3799,14 @@ class TestSchemaV2Migration:
         assert any(r["id"] == kid for r in results)
 
     def test_schema_version_is_current(self, store):
-        """A fresh database is stamped at the current schema version (v5, #887)."""
+        """A fresh database is stamped at the current schema version (v7, decayed_at)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 5
+        assert row[0] == 7
 
 
 # ===========================================================================
@@ -4898,7 +4901,7 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 5
+        assert _schema_version(db) == 7
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
         assert "synthesis_marks" in _table_names(db)
@@ -4946,7 +4949,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 5
+            assert _schema_version(db) == 7
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -4989,7 +4992,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 5
+            assert _schema_version(db) == 7
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")

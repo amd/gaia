@@ -277,6 +277,20 @@ def test_stop_during_the_cool_down_cancels_the_turn(agent):
     assert len(sent) == 2
 
 
+def test_stop_while_queued_for_the_model_cancels_instead_of_erroring(agent, caplog):
+    """Stop while the turn waits for the model slot is a stopped turn, not an
+    LLM failure in the log and the history."""
+    from gaia.daemon.broker_client import LeaseWaitCancelled
+
+    sent = _script(
+        agent, LeaseWaitCancelled("stopped while waiting for the model slot")
+    )
+    result = agent.process_query("Check the ledger", max_steps=10)
+    assert result["status"] == "cancelled"
+    assert len(sent) == 1
+    assert "Unexpected error calling LLM" not in caplog.text
+
+
 def test_stream_cut_after_partial_output_is_asked_again_cleanly(clean_registry):
     """The client never retries a stream that already produced text (that
     would duplicate it); the step is asked again and only the new reply
@@ -505,7 +519,7 @@ def _overflow(tagged: bool):
 
 
 @pytest.mark.parametrize("tagged", [False, True], ids=["plain", "tagged"])
-def test_context_overflow_path_is_unchanged(agent, tagged):
+def test_context_overflow_with_nothing_to_archive_is_not_retried(agent, tagged):
     sent = _script(agent, _overflow(tagged), _overflow(tagged))
     result = agent.process_query("Check the ledger", max_steps=5)
     # Nothing to put away, so no retry that would only be refused again (#2780).

@@ -66,6 +66,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "reasoning_effort": (
+        "gaia.agents.tools.reasoning_tools",
+        "ReasoningEffortToolsMixin",
+    ),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading
@@ -492,7 +496,7 @@ class AgentRegistration:
     # installed agent from claiming a built-in's AGENT_ID to inherit a
     # previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
-    # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
+    # Display metadata (category, tags, icon) served by /api/agents.
     # Hardcoded for builtins (lazy-import factories must not instantiate agents);
     # custom agents declare via class attributes (AGENT_CATEGORY, etc.).
     #: True only for the stand-in a binary (frozen-sidecar) install registers.

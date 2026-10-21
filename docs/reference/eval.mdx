@@ -7,14 +7,16 @@ icon: "flask-vial"
   **Source Code:** [`src/gaia/eval/`](https://github.com/amd/gaia/tree/main/src/gaia/eval)
 </Info>
 
-GAIA's live evaluation surface is six commands: `gaia eval sessions` (replay
+GAIA's live evaluation surface is these commands: `gaia eval sessions` (replay
 real Claude Code sessions), `gaia eval agent` (the scenario-based Agent UI
 benchmark), `gaia eval tasks` (the flagship's coding-task gate), `gaia eval
 code` (a code-editing benchmark scored by running the tests, not by a judge),
 `gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency),
 `gaia eval retrieval` (RAG retrieval quality, answer accuracy and scale on
-real documents), and `gaia eval retrieval --component code` (code search
-recall, scale and robustness on real repositories, no LLM).
+real documents), `gaia eval retrieval --component code` (code search
+recall, scale and robustness on real repositories, no LLM), and `gaia eval
+memory` (memory over months of chats: changing facts, forgets, lessons and
+planted content).
 The batch-experiment / ground-truth-generation / visualizer workflow this page
 used to document was removed in v0.18.0; git history has it if you need it.
 
@@ -129,7 +131,9 @@ The evals on the self-hosted AMD runners (`eval_flagship.yml`, `eval_retrieval.y
 schedule. The offline retrieval `pr` suite is the exception: it is part of the RAG
 tests in `test_rag.yml`. None of them blocks publishing. A flagship tag run compares
 with the committed baseline in report mode and, if it does not pass, files an issue
-named for the tag.
+named for the tag. The flagship agent release (`release_agent_gaia.yml`) runs a judged
+subset the same way: publishing does not wait for it, and a run that does not pass files
+an issue named for the release.
 
 To measure a branch before it is tagged:
 
@@ -269,6 +273,71 @@ with a different embedder, or one with the VLM on against one with it off.
 The baselines in `tests/fixtures/eval_baselines/rag-retrieval/` are unedited `results.json`
 files from real runs; `meta` names the machine. Replace one only with another real run's file,
 never by hand.
+
+## Memory Benchmark
+
+`gaia eval memory` asks whether memory lets the agent grow with someone over
+months: does it know what is true about them *now*, keep what they asked it to
+forget forgotten, avoid repeating a mistake, and keep other people's words out
+of what it believes about them?
+
+```bash
+gaia eval memory --suite pr                        # offline, deterministic, seconds
+gaia eval memory --suite pr --gate tests/fixtures/eval_baselines/memory-bench/pr.json
+gaia eval memory --suite full                      # the local model and real embedder
+gaia eval memory --list
+```
+
+### Scenarios
+
+Each scenario in [`src/gaia/eval/memory/scenarios/`](https://github.com/amd/gaia/tree/main/src/gaia/eval/memory/scenarios) is one person's chats over weeks or months:
+
+| Scenario | What it stresses |
+|---|---|
+| `maya_moves_and_changes_jobs` | A new job, a move across the country, a race swapped for another, a dog's surgery; weather lookups that must not become facts |
+| `sam_family_health` | An allergy outgrown, a diagnosis corrected, a diet changed, a child's age corrected; a sister's diet, a hypothetical and a friend's quoted text that are not the user's |
+| `chen_learns_project_quirks` | Tool mistakes that become lessons, a lesson replaced when the repository changes, a README that plants an instruction |
+| `priya_work_documents_and_forgetting` | Reports and email threads full of other people's first-person lines, a shared password, "forget everything about my manager" that old chats must not undo |
+| `alex_three_months_of_life` | Thirty-odd facts built up week by week; everyday requests that need the right older one |
+| `jordan_reminders_change` | Appointments rescheduled, cancelled, done, and mentioned in passing |
+
+### How a scenario runs
+
+The replay drives the real memory pipeline on a simulated clock, so months
+pass in seconds while consolidation age, forget ordering and reminder windows
+behave as they would. Each chat is a fresh agent on one shared database, as in
+the Agent UI: `init_memory`, the first message's upkeep (reconcile,
+consolidate, prune), then every turn through `MemoryMixin.process_query` —
+tool calls and the tool record, extraction, lessons, and the explicit
+`remember`, `update_memory` and `forget` calls the scenario says the agent
+made. Only the agent loop is stood in for: answers and tool calls come from the
+scenario, because what is measured is memory.
+
+Probes then check, at points in time:
+
+| Metric | Checks |
+|---|---|
+| Shown recall | What the agent is shown for a request — memory's system-prompt section plus the per-turn context — contains what it should |
+| Shown clean | It does not contain a stale value, a forgotten fact, or planted text |
+| Store accuracy | The database holds the current truth and nothing it shouldn't |
+| Answer accuracy | `full` only: the model's answer to the request uses it |
+
+### Suites and the gate
+
+`pr` stands in for the model with each scenario's scripted `extract` and
+`consolidation` answers, written as a plausible model would answer — including
+its mistakes, such as filing a document's figures as the user's — and hashes
+words into vectors instead of embedding them. It is deterministic, so CI gates
+on it check by check: a check that passes in
+`tests/fixtures/eval_baselines/memory-bench/pr.json` must still pass. When a
+change is intended, replace that file with the new run's `results.json` in the
+same PR. Checks that fail in the baseline are known gaps; fixing one shows up
+under **Fixed since the baseline**.
+
+`full` asks the local model to extract, consolidate and answer, with the real
+embedder. It measures what a real user gets, including what the model gets
+wrong, and is too noisy to gate on. It needs Lemonade and holds the
+[eval lock](#one-eval-at-a-time).
 
 ## Flagship Agent Tasks
 
@@ -475,10 +544,13 @@ subsets listed, with the reason for each instance, in
 `eval/tasks/swebench_subsets.json`. `smoke` is three fast tasks the agent solved
 on every measured run; it runs on pull requests that touch the agent loop, its
 tools or the coding skill. `hard` is ten tasks strong Claude agents rarely solve
-on the leaderboard; it runs nightly. The model is DeepSeek V4.1 Flash on
+on the leaderboard; it runs on manual dispatch (its nightly schedule is off
+while Fireworks does not serve the model). The model is DeepSeek V4.1 Flash on
 Fireworks through GAIA's embedded Lemonade, so the runner needs no GPU and needs
-the `FIREWORKS_API_KEY` repository secret. Results go to the job summary and an
-artifact. Nothing is gated until expectations are measured on that runner.
+the `FIREWORKS_API_KEY` repository secret. One request checks the model answers
+before any task starts, so a missing key or an unavailable model fails in
+seconds with the reason. Results go to the job summary and an artifact. Nothing
+is gated until expectations are measured on that runner.
 
 ### Keeping credentials out of published artifacts
 

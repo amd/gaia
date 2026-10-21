@@ -676,7 +676,7 @@ def check_workflow_triggers() -> CheckResult:
 
 
 def check_workflow_ancestor_skip() -> CheckResult:
-    """Warn on job `if:` conditions vulnerable to GitHub Actions' ancestor-skip gotcha."""
+    """Fail on job `if:` conditions vulnerable to GitHub Actions' ancestor-skip gotcha."""
     print("\nChecking workflow job conditions for ancestor-skip risk...")
     print("-" * 40)
 
@@ -690,7 +690,7 @@ def check_workflow_ancestor_skip() -> CheckResult:
             from check_workflow_ancestor_skip import run_check
         except ImportError as exc:
             print(f"[!] Could not import check_workflow_ancestor_skip.py: {exc}")
-            return CheckResult("Workflow Ancestor-Skip", False, True, 1, str(exc))
+            return CheckResult("Workflow Ancestor-Skip", False, False, 1, str(exc))
 
     exit_code = run_check()
 
@@ -698,13 +698,13 @@ def check_workflow_ancestor_skip() -> CheckResult:
         return CheckResult(
             "Workflow Ancestor-Skip",
             False,
-            True,
+            False,
             1,
             "See output above; each flagged job needs an explicit "
-            "!cancelled()/always() guard once triaged (#3929, #3922).",
+            "!cancelled()/always() guard (#3929, #3922).",
         )
 
-    return CheckResult("Workflow Ancestor-Skip", True, True, 0, "")
+    return CheckResult("Workflow Ancestor-Skip", True, False, 0, "")
 
 
 def check_test_lanes() -> CheckResult:
@@ -969,7 +969,7 @@ def main():
     parser.add_argument(
         "--workflow-ancestor-skip",
         action="store_true",
-        help="Warn on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
+        help="Fail on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
     )
     parser.add_argument(
         "--test-lanes",

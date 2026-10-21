@@ -23,7 +23,8 @@ from gaia.web.client import WebClient
 SNI_FRONTED_HOSTS = [
     "https://example.com",
     "https://github.com/amd/gaia",
-    "https://pypi.org/simple/",
+    # One project's index: the full /simple/ listing is ~47 MB, past the body cap.
+    "https://pypi.org/simple/amd-gaia/",
     "https://amd-gaia.ai",
 ]
 

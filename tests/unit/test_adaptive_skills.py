@@ -1553,6 +1553,7 @@ class _TaintProbeAgent:
     the bodies behind them do.
     """
 
+    internet_off = Agent.internet_off
     _execute_tool = Agent._execute_tool
     _resolve_tool_name = Agent._resolve_tool_name
     _policy_refusal = Agent._policy_refusal

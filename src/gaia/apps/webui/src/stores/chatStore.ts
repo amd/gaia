@@ -4,9 +4,11 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
 import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
+import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
 export type SettingsSection =
@@ -17,6 +19,7 @@ export type SettingsSection =
     | 'connectors'
     | 'memory'
     | 'privacy'
+    | 'notifications'
     | 'advanced';
 
 /**
@@ -26,6 +29,10 @@ export type SettingsSection =
  * preference is cosmetic, so the default stands in rather than failing the
  * whole store's construction -- but never without a trace.
  */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+    return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function readPref(key: string, fallback: string): string {
     if (typeof window === 'undefined') return fallback;
     try {
@@ -40,10 +47,27 @@ function readPref(key: string, fallback: string): string {
     }
 }
 
-/** The stored appearance; anything unrecognised reads as the dark default. */
+/** The stored appearance; nothing saved, or anything unrecognised, follows the OS. */
 function readThemePreference(): ThemePreference {
-    const v = readPref('gaia-chat-theme', 'dark');
-    return v === 'light' || v === 'system' ? v : 'dark';
+    const v = readPref('gaia-chat-theme', 'system');
+    return v === 'light' || v === 'dark' ? v : 'system';
+}
+
+/** The saved palette; anything unrecognised reads as the default look. */
+export function readPalette(): PaletteId {
+    const v = readPref('gaia-chat-palette', 'default');
+    return (PALETTE_IDS.has(v) ? v : 'default') as PaletteId;
+}
+
+/** The saved custom colors, or the starting pair when none or a broken value is saved. */
+export function readCustomColors(): CustomColors {
+    try {
+        const saved = JSON.parse(readPref('gaia-chat-custom-colors', 'null')) as Partial<CustomColors> | null;
+        if (saved && isHexColor(saved.accent) && isHexColor(saved.base)) return { accent: saved.accent, base: saved.base };
+    } catch (err) {
+        log.system.warn('Saved custom colors unreadable; starting from the default pair.', err);
+    }
+    return DEFAULT_CUSTOM;
 }
 
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
@@ -59,6 +83,18 @@ function writePref(key: string, value: string): void {
     }
 }
 
+const QUEUES_KEY = 'gaia-chat-message-queues';
+
+/** Queued messages saved before a reload; unreadable ones are reported, not guessed at. */
+function readQueues(): Record<string, QueuedMessage[]> {
+    try {
+        return restoreQueues(JSON.parse(readPref(QUEUES_KEY, '{}')));
+    } catch (err) {
+        log.system.warn('Saved queued messages unreadable; starting with none.', err);
+        return {};
+    }
+}
+
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
 export interface LiveQuestion {
     sessionId: string;
@@ -69,12 +105,6 @@ interface ChatState {
     /** Registered agents; Settings → Connectors grants scopes to them. */
     agents: AgentInfo[];
     setAgents: (agents: AgentInfo[]) => void;
-
-    // Device selection (CPU / GPU / NPU)
-    activeDevice: string;
-    setActiveDevice: (device: string) => void;
-    detectedDevices: string[];
-    setDetectedDevices: (devices: string[]) => void;
 
     // Sessions
     sessions: Session[];
@@ -94,6 +124,21 @@ interface ChatState {
      *  "still running" spinner on backgrounded sessions. */
     runningSessionIds: string[];
     setRunningSessions: (ids: string[]) => void;
+    /** Chats waiting in line for the model, first to run next first (#5226). */
+    queuedSessionIds: string[];
+    /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
+    awaitingBySession: Record<string, AwaitingUser>;
+    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
+    activeRunsAt: number;
+    /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
+    setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
+    /** Messages typed while a chat answered, by chat. Each goes out when that
+     *  chat's turn ends, open or not, and survives a reload. */
+    messageQueues: Record<string, QueuedMessage[]>;
+    updateQueue: (sessionId: string, fn: (items: QueuedMessage[]) => QueuedMessage[]) => void;
+    /** Chats whose queued message found the chat busy, waiting a moment before trying again. */
+    queueHolds: Record<string, boolean>;
+    setQueueHold: (sessionId: string, hold: boolean) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -125,7 +170,9 @@ interface ChatState {
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
-    setLiveStatus: (status: string | null) => void;
+    /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
+    livePhase: string | null;
+    setLiveStatus: (status: string | null, phase?: string | null) => void;
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
@@ -166,8 +213,12 @@ interface ChatState {
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
     draftPermissionMode: PermissionMode;
+    /** The user picked the draft mode on the chip; the configured default no longer moves it. */
+    draftPermissionModeChosen: boolean;
     /** The mode a new chat starts in: `full_access` in config, else ask. */
     defaultPermissionMode: PermissionMode;
+    /** The backend has answered with the configured default; until then it is a guess. */
+    defaultPermissionModeKnown: boolean;
     /** Library documents picked with no chat open; the next new chat starts with them. */
     draftDocumentIds: string[];
     sidebarOpen: boolean;
@@ -176,6 +227,11 @@ interface ChatState {
     /** A first message queued before its chat view mounted; ChatView sends it. */
     pendingPrompt: string | null;
     setThemePreference: (pref: ThemePreference) => void;
+    /** Color palette; `default` is the built-in warm gray look. */
+    palette: PaletteId;
+    customColors: CustomColors;
+    setPalette: (palette: PaletteId) => void;
+    setCustomColors: (colors: CustomColors) => void;
     /** Re-resolve a `system` preference after the OS appearance changed. */
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
@@ -184,9 +240,12 @@ interface ChatState {
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
+    /** The user's pick on the new-chat chip. */
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
+    /** After a chat is created: the next draft starts from the default again. */
+    resetDraftPermissionMode: () => void;
     addDraftDocuments: (ids: string[]) => void;
     removeDraftDocument: (id: string) => void;
     clearDraftDocuments: () => void;
@@ -201,15 +260,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
     setAgents: (agents) => set({ agents }),
 
-    // Device selection
-    activeDevice: readPref('gaia-active-device', 'gpu'),
-    setActiveDevice: (device) => {
-        writePref('gaia-active-device', device);
-        set({ activeDevice: device });
-    },
-    detectedDevices: ['gpu'],
-    setDetectedDevices: (devices) => set({ detectedDevices: devices }),
-
     // Sessions
     sessions: [],
     currentSessionId: null,
@@ -219,11 +269,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             // Reference-stable update: skip the set() when the running set is
             // unchanged so the polled refresh doesn't re-render the sidebar.
-            const prev = state.runningSessionIds;
-            if (prev.length === ids.length && prev.every((id) => ids.includes(id))) {
-                return state;
-            }
+            if (sameIds(state.runningSessionIds, ids)) return state;
             return { runningSessionIds: ids };
+        }),
+    queuedSessionIds: [],
+    awaitingBySession: {},
+    activeRunsAt: 0,
+    setActiveRuns: (runs, requestedAt) =>
+        set((state) => {
+            const next: Partial<ChatState> = { activeRunsAt: requestedAt };
+            if (!sameIds(state.runningSessionIds, runs.session_ids)) next.runningSessionIds = runs.session_ids;
+            if (state.queuedSessionIds.join() !== runs.queued.join()) next.queuedSessionIds = runs.queued;
+            if (JSON.stringify(state.awaitingBySession) !== JSON.stringify(runs.awaiting_user)) {
+                next.awaitingBySession = runs.awaiting_user;
+            }
+            return next;
+        }),
+    messageQueues: readQueues(),
+    updateQueue: (sessionId, fn) =>
+        set((state) => {
+            const before = state.messageQueues[sessionId] ?? [];
+            const after = fn(before);
+            if (after.length === before.length && after.every((m, i) => m === before[i])) return state;
+            const messageQueues = { ...state.messageQueues };
+            if (after.length) messageQueues[sessionId] = after;
+            else delete messageQueues[sessionId];
+            writePref(QUEUES_KEY, JSON.stringify(messageQueues));
+            return { messageQueues };
+        }),
+    queueHolds: {},
+    setQueueHold: (sessionId, hold) =>
+        set((state) => {
+            if (!!state.queueHolds[sessionId] === hold) return state;
+            const queueHolds = { ...state.queueHolds };
+            if (hold) queueHolds[sessionId] = true;
+            else delete queueHolds[sessionId];
+            return { queueHolds };
         }),
     setSessions: (sessions) =>
         set((state) => ({
@@ -237,12 +318,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
+    // The chat's queued messages go with it; the delete button says so first.
     removeSession: (id) =>
-        set((state) => ({
-            sessions: state.sessions.filter((s) => s.id !== id),
-            currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
-            messages: state.currentSessionId === id ? [] : state.messages,
-        })),
+        set((state) => {
+            const next: Partial<ChatState> = {
+                sessions: state.sessions.filter((s) => s.id !== id),
+                currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
+                messages: state.currentSessionId === id ? [] : state.messages,
+            };
+            if (state.messageQueues[id]) {
+                const messageQueues = { ...state.messageQueues };
+                delete messageQueues[id];
+                writePref(QUEUES_KEY, JSON.stringify(messageQueues));
+                next.messageQueues = messageQueues;
+            }
+            if (state.queueHolds[id]) {
+                const queueHolds = { ...state.queueHolds };
+                delete queueHolds[id];
+                next.queueHolds = queueHolds;
+            }
+            return next;
+        }),
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
@@ -276,7 +372,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -325,9 +421,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, awaitingUser: false }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
     liveStatus: null,
-    setLiveStatus: (status) => set({ liveStatus: status }),
+    livePhase: null,
+    setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
@@ -380,19 +477,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
+    draftPermissionModeChosen: false,
     defaultPermissionMode: 'ask',
+    defaultPermissionModeKnown: false,
     draftDocumentIds: [],
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
         applyTheme(theme);
+        applyPalette(get().palette, get().customColors, theme);
         set({ themePreference: pref, theme });
     },
     syncSystemTheme: () => {
         if (get().themePreference !== 'system') return;
         const theme = resolveTheme('system');
         applyTheme(theme);
+        applyPalette(get().palette, get().customColors, theme);
         set({ theme });
+    },
+    palette: readPalette(),
+    customColors: readCustomColors(),
+    setPalette: (palette) => {
+        writePref('gaia-chat-palette', palette);
+        applyPalette(palette, get().customColors, get().theme);
+        set({ palette });
+    },
+    setCustomColors: (colors) => {
+        writePref('gaia-chat-custom-colors', JSON.stringify(colors));
+        applyPalette('custom', colors, get().theme);
+        writePref('gaia-chat-palette', 'custom');
+        set({ customColors: colors, palette: 'custom' });
     },
     sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
     sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',
@@ -406,13 +520,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(show ? { showMemoryDashboard: true, showSchedules: false } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
         set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
-    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode }),
+    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode, draftPermissionModeChosen: true }),
     setDefaultPermissionMode: (mode) =>
         set((state) => ({
             defaultPermissionMode: mode,
+            defaultPermissionModeKnown: true,
+            // A pick the user made stays, even when it matches the old guess.
             draftPermissionMode:
-                state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
+                !state.draftPermissionModeChosen && state.draftPermissionMode === state.defaultPermissionMode
+                    ? mode
+                    : state.draftPermissionMode,
         })),
+    resetDraftPermissionMode: () =>
+        set((state) => ({ draftPermissionMode: state.defaultPermissionMode, draftPermissionModeChosen: false })),
     addDraftDocuments: (ids) =>
         set((state) => {
             const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));

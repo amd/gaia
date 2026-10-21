@@ -133,14 +133,28 @@ data: {"type": "error", "content": "error description"}
 
 ### Schema
 
-Four tables with foreign key relationships:
+The main tables, with foreign key relationships:
 
 ```sql
 documents          -- Global document library
 sessions           -- Chat conversations
 session_documents  -- Many-to-many attachment relationship
 messages           -- Conversation messages with optional RAG metadata
+unfinished_turns   -- Turns (chat or scheduled) that have not saved a reply yet
 ```
+
+Work in progress names the server process that owns it (`unfinished_turns.owner`,
+`documents.indexing_owner`): pid, start (on Linux the boot id and start tick,
+which a clock step cannot move) and a per-process token. A turn's row is keyed
+by its question and is only ever updated or closed by its owner, or by another
+server once that owner has exited; saving the reply deletes it in the same
+transaction. On startup, and every 30 s after, the server turns what an ended
+process left unfinished into something visible (`restart_recovery.py`): each
+row becomes a reply holding the cleaned text streamed so far, which tools the
+turn had started, and "This answer was interrupted when GAIA closed. Send again
+to retry."; each document still `pending` or `indexing` becomes `failed` with a
+Retry message. Work owned by a live process, including another server on the
+same database, is left alone.
 
 ### Configuration
 

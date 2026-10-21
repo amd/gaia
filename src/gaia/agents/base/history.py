@@ -152,10 +152,45 @@ def select_history(
         reporter.update(
             len(turns),
             max(len(turns) - 1, 0),
-            sum(count_tokens(json.dumps(t, ensure_ascii=False)) for t in turns),
+            sum(_turn_cost(t) for t in turns),
             on_cut,
         )
         return []
+    plan = _plan_history(turns, budget)
+    if plan.evicted or plan.unreplayable:
+        logger.warning(
+            "Context budget excluded %d older turn(s) and %d turn(s) larger than "
+            "the whole history budget; full evidence remains in the session "
+            "database (history budget: %d estimated tokens).",
+            plan.evicted,
+            plan.unreplayable,
+            budget,
+        )
+    reporter.update(
+        plan.evicted + plan.unreplayable,
+        plan.hidden_before_newest,
+        plan.hidden_tokens,
+        on_cut,
+    )
+    return [message for index, _ in plan.retained for message in turns[index]]
+
+
+def _turn_cost(turn: list[dict[str, Any]]) -> int:
+    return count_tokens(json.dumps(turn, ensure_ascii=False))
+
+
+@dataclass
+class _HistoryPlan:
+    """Which turns ``select_history`` replays, as ``(index, cost)`` pairs."""
+
+    retained: list[tuple[int, int]]
+    evicted: int
+    unreplayable: int
+    hidden_tokens: int
+    hidden_before_newest: int
+
+
+def _plan_history(turns: list[list[dict[str, Any]]], budget: int) -> _HistoryPlan:
     retained: deque = deque()
     used = 0
     evicted = 0
@@ -166,7 +201,7 @@ def select_history(
     for index, turn in enumerate(turns):
         if index == len(turns) - 1:
             hidden_before_newest = evicted + unreplayable
-        cost = count_tokens(json.dumps(turn, ensure_ascii=False))
+        cost = _turn_cost(turn)
         if cost > budget:
             hole = True
             unreplayable += 1
@@ -180,7 +215,7 @@ def select_history(
             retained.clear()
             used = 0
             hole = False
-        retained.append((turn, cost))
+        retained.append((index, cost))
         used += cost
         if used > budget:
             target = budget // 2
@@ -189,17 +224,9 @@ def select_history(
                 used -= removed
                 hidden_tokens += removed
                 evicted += 1
-    if evicted or unreplayable:
-        logger.warning(
-            "Context budget excluded %d older turn(s) and %d turn(s) larger than "
-            "the whole history budget; full evidence remains in the session "
-            "database (history budget: %d estimated tokens).",
-            evicted,
-            unreplayable,
-            budget,
-        )
-    reporter.update(evicted + unreplayable, hidden_before_newest, hidden_tokens, on_cut)
-    return [message for turn, _ in retained for message in turn]
+    return _HistoryPlan(
+        list(retained), evicted, unreplayable, hidden_tokens, hidden_before_newest
+    )
 
 
 def transcript_turns(messages: list[dict]) -> list[list[dict]]:
@@ -209,7 +236,12 @@ def transcript_turns(messages: list[dict]) -> list[list[dict]]:
     for message in messages:
         role = message.get("role")
         if role == "user":
-            pending = {"role": "user", "content": message["content"]}
+            # A message added mid-turn is saved as its own row; without a
+            # recorded turn (stopped, failed) it must not replace the question.
+            content = message["content"]
+            if pending is not None:
+                content = pending["content"] + "\n\n" + content
+            pending = {"role": "user", "content": content}
         elif role in ("assistant", "autonomous"):
             recorded = message.get("model_messages")
             if recorded is not None:
@@ -252,36 +284,43 @@ def text_tool_history(turns: list[list[dict]]) -> list[list[dict]]:
     return result
 
 
-def context_window(agent: Any) -> int:
-    """The window, in tokens, the agent's requests must fit in."""
-    from gaia.llm.lemonade_client import (
-        GPU_CTX_SIZE,
-        LemonadeClient,
-        cloud_model_provider,
-        resolve_ctx_size,
-    )
+def _is_cloud(agent: Any) -> bool:
+    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
 
     model = getattr(agent, "model_id", None)
     provider = getattr(getattr(agent, "chat", None), "llm_client", None)
     backend = getattr(provider, "_backend", None)
-    cloud = (
+    return bool(
         backend.cloud_model_provider(model)
         if isinstance(backend, LemonadeClient)
         else cloud_model_provider(model)
     )
+
+
+def context_window(agent: Any) -> int:
+    """The context window, in tokens, the agent's model is admitted with."""
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, resolve_ctx_size
+
     if getattr(agent, "_use_claude", False):
         from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 
-        ctx = CLAUDE_CTX_SIZE
-    elif cloud:
+        return CLAUDE_CTX_SIZE
+    if _is_cloud(agent):
         # Remote admission policy, not a claim about the provider's context ceiling.
-        ctx = GPU_CTX_SIZE
-    else:
-        ctx = resolve_ctx_size(
-            model=getattr(agent, "model_id", None),
-            device=getattr(agent, "device", None),
-        )
-    return ctx
+        return GPU_CTX_SIZE
+    return resolve_ctx_size(
+        model=getattr(agent, "model_id", None),
+        device=getattr(agent, "device", None),
+    )
+
+
+def _reply_reserve(agent: Any) -> int:
+    # A cloud model's 64K is an input budget: the reply is written into the
+    # provider's own, far larger window, so it takes nothing from history here.
+    if _is_cloud(agent) and not getattr(agent, "_use_claude", False):
+        return 0
+    config = getattr(getattr(agent, "chat", None), "config", None)
+    return getattr(config, "max_tokens", 8192)
 
 
 def history_budget(agent: Any, query: str) -> int:
@@ -290,9 +329,151 @@ def history_budget(agent: Any, query: str) -> int:
     prompt = getattr(agent, "system_prompt", "")
     tools = getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
-    config = getattr(getattr(agent, "chat", None), "config", None)
-    output = getattr(config, "max_tokens", 8192)
-    return min(ctx // 2, ctx - overhead - output - 2048)
+    return min(ctx // 2, ctx - overhead - _reply_reserve(agent) - 2048)
+
+
+#: Tools whose results are document text, so the meter can show what files cost.
+DOCUMENT_TOOLS = frozenset(
+    {
+        "query_documents",
+        "query_specific_file",
+        "search_indexed_chunks",
+        "summarize_document",
+        "dump_document",
+        "read_file",
+        "read_document",
+    }
+)
+
+#: History this full warns that the next turns will push the oldest out.
+HISTORY_WARN_FRACTION = 0.75
+
+_RECORDED_RESULT_PREFIX = "[Recorded tool result: "
+
+
+def _message_kind(message: dict[str, Any]) -> str:
+    """``documents``, ``tools`` or ``history`` for one replayed message."""
+    role = message.get("role")
+    if role == "tool":
+        return "documents" if message.get("name") in DOCUMENT_TOOLS else "tools"
+    if message.get("tool_calls"):
+        return "tools"
+    content = message.get("content")
+    if role == "user" and isinstance(content, str):
+        if content.startswith(_RECORDED_RESULT_PREFIX):
+            name = content[len(_RECORDED_RESULT_PREFIX) :].split("]", 1)[0]
+            return "documents" if name in DOCUMENT_TOOLS else "tools"
+    return "history"
+
+
+def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
+    for message in turn:
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, str) and content:
+            text = " ".join(content.split())
+            return text if len(text) <= limit else text[: limit - 1] + "…"
+    return "(a turn with no question text)"
+
+
+#: System-prompt fragments the context breakdown names on their own.
+_SKILL_FRAGMENTS = ("get_skill_catalog_system_prompt", "get_skills_system_prompt")
+_MEMORY_FRAGMENTS = ("get_memory_system_prompt",)
+
+
+def _fragments(agent: Any, prompt: str, methods: tuple) -> str:
+    """The composed prompt's fragments that *methods* produced, joined."""
+    origins = getattr(agent, "_mixin_prompt_origins", None) or {}
+    return "\n\n".join(
+        text for text, origin in origins.items() if origin in methods and text in prompt
+    )
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    """The text of one replayed message that reaches the model."""
+    parts = []
+    content = message.get("content")
+    if isinstance(content, str):
+        parts.append(content)
+    elif isinstance(content, list):
+        parts.extend(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("text")
+        )
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        parts.append(f"{function.get('name', '')} {function.get('arguments', '')}")
+    return "\n".join(p for p in parts if p)
+
+
+def context_usage(
+    agent: Any,
+    turns: list[list[dict[str, Any]]],
+    query: str = "",
+    count: Callable[[str], int] = count_tokens,
+) -> dict[str, Any]:
+    """What the next model call holds, by kind, and which turns go next.
+
+    Mirrors ``select_history`` without reporting a cut, so it can be asked as
+    often as the chat likes. Which turns are in view is decided with
+    ``count_tokens``, as ``select_history`` decides it; the sizes reported are
+    measured with *count*, which may be the loaded model's own tokenizer.
+
+    ``skills`` and ``memory`` are the parts of ``system`` those fragments
+    take; ``tool_definitions`` is the part of ``tools`` the schemas take, the
+    rest being tool calls and results replayed from earlier turns.
+    """
+    window = context_window(agent)
+    budget = history_budget(agent, query)
+    prompt = getattr(agent, "system_prompt", "") or ""
+    schemas = getattr(agent, "_openai_tools", None) or []
+    tool_definitions = count(json.dumps(schemas, ensure_ascii=False)) if schemas else 0
+    usage = {
+        "window": window,
+        "reply_reserve": _reply_reserve(agent),
+        "system": count(prompt),
+        "skills": count(_fragments(agent, prompt, _SKILL_FRAGMENTS)),
+        "memory": count(_fragments(agent, prompt, _MEMORY_FRAGMENTS)),
+        "tools": tool_definitions,
+        "tool_definitions": tool_definitions,
+        "documents": 0,
+        "history": 0,
+        "query": count(query) if query else 0,
+        "history_budget": max(budget, 0),
+        "history_used": 0,
+        "turns_in_view": 0,
+        "turns_hidden": len(turns),
+        "at_risk": [],
+        "at_risk_tokens": 0,
+    }
+    if budget > 0:
+        plan = _plan_history(turns, budget)
+        usage["turns_in_view"] = len(plan.retained)
+        usage["turns_hidden"] = plan.evicted + plan.unreplayable
+        texts: dict[str, list[str]] = {"documents": [], "tools": [], "history": []}
+        for index, cost in plan.retained:
+            usage["history_used"] += cost
+            for message in turns[index]:
+                texts[_message_kind(message)].append(_message_text(message))
+        # One count per kind: *count* may be a request to the model server.
+        for kind, parts in texts.items():
+            if parts:
+                usage[kind] += count("\n".join(parts))
+        if usage["history_used"] >= budget * HISTORY_WARN_FRACTION:
+            # Overflow evicts the oldest turns down to half the budget.
+            remaining = usage["history_used"]
+            for index, cost in plan.retained[:-1]:
+                if remaining <= budget // 2:
+                    break
+                remaining -= cost
+                usage["at_risk"].append(_turn_preview(turns[index]))
+                usage["at_risk_tokens"] += cost
+    usage["used"] = (
+        usage["system"]
+        + usage["tools"]
+        + usage["documents"]
+        + usage["history"]
+        + usage["query"]
+    )
+    return usage
 
 
 class SessionHistory(list):
@@ -324,16 +505,63 @@ class SessionHistory(list):
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
         )
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(turns)")}
+        if "owner" not in columns:
+            # The process running a stand-in turn (gaia.utils.process_owner);
+            # NULL once the turn is recorded.
+            self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
         self._db.commit()
         self._cuts = CutReporter()
+        self._pending: Optional[int] = None
+
+    def begin(self, messages: list[dict]) -> None:
+        """Save a stand-in for the turn now starting, so the transcript has it
+        even if the process is killed before the turn ends.
+
+        The next :meth:`record` replaces it; :meth:`discard_pending` drops it.
+        It is marked as this process's, so a process sharing the file leaves a
+        turn that is still running out of its model view.
+        """
+        from gaia.utils.process_owner import current_owner
+
+        with self._db:
+            cursor = self._db.execute(
+                "INSERT INTO turns(messages, owner) VALUES (?, ?)",
+                (json.dumps(messages, ensure_ascii=False), current_owner()),
+            )
+        self._pending = cursor.lastrowid
+
+    def keep_pending(self) -> None:
+        """Leave the stand-in as the turn's entry: it never finished."""
+        if self._pending is not None:
+            with self._db:
+                self._db.execute(
+                    "UPDATE turns SET owner = NULL WHERE id = ?", (self._pending,)
+                )
+        self._pending = None
+
+    def discard_pending(self) -> None:
+        """Drop the stand-in of a turn that ended without being recorded."""
+        if self._pending is None:
+            return
+        with self._db:
+            self._db.execute("DELETE FROM turns WHERE id = ?", (self._pending,))
+        self._pending = None
 
     def record(self, messages: list[dict]) -> None:
         """Persist a complete turn without modifying its native tool IDs."""
+        payload = json.dumps(messages, ensure_ascii=False)
         with self._db:
-            self._db.execute(
-                "INSERT INTO turns(messages) VALUES (?)",
-                (json.dumps(messages, ensure_ascii=False),),
-            )
+            replaced = 0
+            if self._pending is not None:
+                replaced = self._db.execute(
+                    "UPDATE turns SET messages = ?, owner = NULL WHERE id = ?",
+                    (payload, self._pending),
+                ).rowcount
+            if not replaced:
+                # No stand-in (or another process cleared the session since).
+                self._db.execute("INSERT INTO turns(messages) VALUES (?)", (payload,))
+        self._pending = None
 
     def prepare(
         self,
@@ -342,9 +570,16 @@ class SessionHistory(list):
         on_cut: Optional[Callable[[HistoryCut], None]] = None,
     ) -> None:
         """Rebuild the bounded view for the currently selected model."""
+        from gaia.utils.process_owner import owner_is_gone
+
+        # A running turn's stand-in, ours or another live process's, is for
+        # the transcript, not the model; a dead owner's never finished.
         turns = [
-            json.loads(row[0])
-            for row in self._db.execute("SELECT messages FROM turns ORDER BY id")
+            json.loads(messages)
+            for row_id, messages, owner in self._db.execute(
+                "SELECT id, messages, owner FROM turns ORDER BY id"
+            )
+            if row_id != self._pending and (owner is None or owner_is_gone(owner))
         ]
         if (
             hasattr(agent, "_uses_native_tool_calls")
@@ -364,6 +599,7 @@ class SessionHistory(list):
             self._db.execute("DELETE FROM turns")
         super().clear()
         self._cuts = CutReporter()
+        self._pending = None
 
     def close(self) -> None:
         self._db.close()

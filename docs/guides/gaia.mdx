@@ -51,7 +51,7 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
     This is the shipping entry point: it resolves your platform, fetches and SHA-256-verifies the agent binary and the terminal UI, starts the GAIA daemon plus the agent, and drops you at a chat prompt. A hash mismatch is a hard failure — there is no "continue anyway" path.
 
-    `@amd-gaia/gaia` is published on the [Agent Hub](https://amd-gaia.ai/hub), and the [terminal UI](/guides/terminal-hub) (`gaia tui`) now boots straight into this agent — there is nothing to browse or pick.
+    The [terminal UI](/guides/tui) (`gaia tui`) now boots straight into this agent — there is nothing to browse or pick.
   </Tab>
   <Tab title="From source">
     Run the agent from your own checkout, so prompt and tool edits take effect without a freeze-and-publish cycle.
@@ -209,7 +209,7 @@ That's the honest scope for a personal document agent — "ask questions about m
 
 Both are refused with a message naming the file and why. Edit such a file yourself if that's genuinely what you wanted.
 
-**Reaching outside the scope asks first.** When a tool needs a file or folder outside the allowed set, the TUI and Agent UI show the same approval dialog as a write, naming the path. The prompt waits 10 minutes, then counts as a no. Approving grants that one file, or that folder and everything inside it, until the chat's agent restarts — never saved, never "always", and each new path is asked about on its own. The grant is not read-only, but writing or editing is a gated action that still asks on its own. Paths that stay off limits whatever you answer are refused without a prompt: secrets, system and program directories, the system temp folder, a whole drive, your entire home folder, and any folder that contains one of those. Pre-approved tools (`GAIA_AUTO_APPROVE_TOOLS`) never answer this prompt; only full access does. The Agent UI scopes a chat to its attached documents, so this is how it reads or indexes a file you name in your own folders; one approval covers reading, indexing and querying it. A tool waiting on this question does not count the wait against its own time limit. Every file tool asks the same way — listing or searching a folder, indexing a document for Q&A, and choosing where a screenshot, transcript or export is saved.
+**Reaching outside the scope asks first.** When a tool needs a file or folder outside the allowed set, the TUI and Agent UI show the same approval dialog as a write, naming the path. The prompt waits 10 minutes, then counts as a no. Approving grants that one file, or that folder and everything inside it, until the chat's agent restarts — never saved, never "always", and each new path is asked about on its own. The grant is not read-only, but writing or editing is a gated action that still asks on its own. A file or folder that doesn't exist isn't asked about: the tool says it wasn't found, and names a file you already allowed or attached with the same name, if there is one. Paths that stay off limits whatever you answer are refused without a prompt: secrets, system and program directories, the system temp folder, a whole drive, your entire home folder, and any folder that contains one of those. Pre-approved tools (`GAIA_AUTO_APPROVE_TOOLS`) never answer this prompt; only full access does. The Agent UI scopes a chat to its attached documents, so this is how it reads or indexes a file you name in your own folders; one approval covers reading, indexing and querying it. A tool waiting on this question does not count the wait against its own time limit. Every file tool asks the same way — listing or searching a folder, indexing a document for Q&A, and choosing where a screenshot, transcript or export is saved.
 
 To narrow the scope for one run without code, set `GAIA_ALLOWED_PATHS` before the agent starts — see [Narrowing file access](/reference/cli#narrowing-file-access). It only narrows, refuses out-of-scope paths without prompting, and confines GAIA's tools but not code they run. Embedding the agent, you can construct it with an explicit list:
 
@@ -282,7 +282,7 @@ The full, **machine-readable** contract — every field, its type, and which are
 }
 ```
 
-Only **`query`**, **`run_id`**, and **`context`** are required; everything else (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is optional. A request missing any of the three, or sending an unrecognized field, is rejected with **422** before the agent ever runs — the model forbids extra fields (`additionalProperties: false`) rather than silently ignoring a typo.
+Only **`query`**, **`run_id`**, and **`context`** are required; everything else (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`, `documents`, `allowed_paths`) is optional. A request missing any of the three, or sending an unrecognized field, is rejected with **422** before the agent ever runs — the model forbids extra fields (`additionalProperties: false`) rather than silently ignoring a typo.
 
 - **`run_id` must be a UUID** (any version `uuid.UUID()` parses) — a plain string like `"my-run-1"` is a 422, not a warning. **You mint it**, not the server: cancellation (`POST /v1/gaia/query/{run_id}/cancel`) keys off it, so it has to exist before the request rather than arrive in the stream.
 - **`context` is pushed in the body**, never pulled, and must be present even when empty (`[]`) — omitting it is itself a 422. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
@@ -291,7 +291,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
 - **Confirmation-gated tools are answered over `POST /v1/gaia/query/{run_id}/tool_decision`** (contract >= 2.14) when there's a session to hold the grant and the caller declared it can answer — see [Tools that need your approval](#tools-that-need-your-approval).
 
-`/query` implements the shared canonical SSE contract (API version **2.17**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
+`/query` implements the shared canonical SSE contract (API version **2.18**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
 
 ### Authenticating your requests
 

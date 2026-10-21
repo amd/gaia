@@ -87,7 +87,8 @@ def _fake_transport(sent):
     """Stand in for the socket layer *below* PinnedIPAdapter, recording requests."""
 
     def send(adapter, request, **kwargs):
-        sent.append(request)
+        # Copy: PinnedIPAdapter restores the original URL once send returns.
+        sent.append(request.copy())
         resp = requests.Response()
         resp.status_code = 200
         resp.headers["Content-Type"] = "text/html; charset=utf-8"

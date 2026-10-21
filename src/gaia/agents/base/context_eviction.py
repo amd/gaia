@@ -78,6 +78,8 @@ _OUTCOME_CHARS = 100
 #: full-size under its original tool_call_id and must be judged fresh.
 _EVICTED_STUB_PREFIX = "[Not shown, put away to save context: "
 _SHORTENED_PREFIX = "[shortened to fit the context window: "
+#: Stubs written by earlier releases; still a stub, never archived again.
+_LEGACY_STUB_PREFIX = "[evicted: "
 
 #: Real tokenizers count well above this share of our (deliberately high)
 #: estimate; less is not a whole prompt, e.g. uncached tokens only.
@@ -289,7 +291,9 @@ def _is_error_result(text: str) -> bool:
 
 
 def is_stub(text: str) -> bool:
-    return text.startswith(_EVICTED_STUB_PREFIX) or text.startswith(_SHORTENED_PREFIX)
+    return text.startswith(
+        (_EVICTED_STUB_PREFIX, _SHORTENED_PREFIX, _LEGACY_STUB_PREFIX)
+    )
 
 
 def _archive(text: str, store) -> Tuple[str, str]:

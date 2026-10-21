@@ -114,6 +114,19 @@ class TestSystemStatus:
         assert "disk_space_gb" in data
         assert "version" in data
 
+    def test_system_status_names_the_real_data_folder(self, tmp_path):
+        """Privacy showed a hard-coded ~/.gaia/chat/, wrong under GAIA_HOME."""
+        db_file = tmp_path / "home" / "chat" / "gaia_chat.db"
+        data = (
+            TestClient(create_app(db_path=str(db_file)))
+            .get("/api/system/status")
+            .json()
+        )
+        assert data["data_dir"] == str(db_file.parent)
+
+    def test_system_status_reports_no_folder_for_an_in_memory_database(self, client):
+        assert client.get("/api/system/status").json()["data_dir"] is None
+
     def test_system_status_lemonade_field_is_boolean(self, client):
         """lemonade_running should be a boolean regardless of server state."""
         resp = client.get("/api/system/status")
@@ -1289,6 +1302,32 @@ class TestSessionEndpoints:
         assert resp.status_code == 200
         assert resp.json()["title"] == "Updated"
 
+    def test_create_rejects_title_over_cap(self, client):
+        """#5257: a title above the cap is a 422, not a stored 100K-char row."""
+        from gaia.ui.models import MAX_SESSION_TITLE_CHARS
+
+        resp = client.post(
+            "/api/sessions", json={"title": "x" * (MAX_SESSION_TITLE_CHARS + 1)}
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"] == ["body", "title"]
+
+    def test_create_accepts_title_at_cap(self, client):
+        from gaia.ui.models import MAX_SESSION_TITLE_CHARS
+
+        title = "x" * MAX_SESSION_TITLE_CHARS
+        resp = client.post("/api/sessions", json={"title": title})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == title
+
+    def test_rename_rejects_title_over_cap(self, client):
+        """#5257: the stress test renamed a chat to 100,000 characters."""
+        sid = client.post("/api/sessions", json={"title": "Original"}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"title": "x" * 100_000})
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"] == ["body", "title"]
+        assert client.get(f"/api/sessions/{sid}").json()["title"] == "Original"
+
     def test_create_with_explicit_title_pins_it(self, client):
         """#2165: a title passed by an API caller is explicit → pinned."""
         resp = client.post("/api/sessions", json={"title": "My Research Project"})
@@ -2131,6 +2170,49 @@ class TestSpaShellServing:
             or "agent ui" in r.text.lower()
             or "backend" in r.text.lower()
         )
+
+    def test_unknown_api_path_is_json_404_not_the_spa(self, tmp_path):
+        """#5257: a wrong /api path must not get index.html with a 200."""
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text('<div id="root"></div>')
+        client = TestClient(create_app(db_path=":memory:", webui_dist=str(dist)))
+
+        for method, path in [
+            ("get", "/api/no-such-endpoint"),
+            ("get", "/api/sessions/x/no-such-child"),
+            ("get", "/api"),
+            ("post", "/api/no-such-endpoint"),
+            ("delete", "/api/no-such-endpoint"),
+        ]:
+            r = client.request(method.upper(), path)
+            assert r.status_code == 404, (method, path, r.status_code)
+            assert r.headers["content-type"].startswith("application/json")
+            assert r.json() == {"detail": "Not Found"}
+
+    def test_unknown_api_path_is_404_without_a_build(self, tmp_path):
+        """The no-build fallback page must not answer /api paths either."""
+        app = create_app(db_path=":memory:", webui_dist=str(tmp_path / "none"))
+        r = TestClient(app).get("/api/no-such-endpoint")
+        assert r.status_code == 404
+        assert r.json() == {"detail": "Not Found"}
+
+    def test_wrong_method_on_real_api_path_is_405(self, client):
+        r = client.delete("/api/health")
+        assert r.status_code == 405
+        assert "GET" in r.headers["allow"]
+
+    def test_app_routes_near_api_prefix_still_get_the_spa(self, tmp_path):
+        """Only /api and /api/... are carved out; /apis or /settings are SPA routes."""
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text('<div id="root"></div>')
+        client = TestClient(create_app(db_path=":memory:", webui_dist=str(dist)))
+
+        for path in ("/settings", "/apis", "/apiary/x", "/chat/api/x"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert 'id="root"' in r.text
 
     def test_default_webui_dist_resolves_under_gaia_apps_webui(self):
         """The default dist/ path must resolve under the gaia.apps.webui package.

@@ -173,10 +173,8 @@ def run_sync(
         # only an alias for builtins.TimeoutError on 3.11+. Catch it by its
         # canonical name so the actionable error fires on every supported
         # Python (GAIA targets >=3.10).
-        # Best-effort cancel: run_coroutine_threadsafe's future cannot stop a
-        # coroutine already executing on the loop thread, so a truly-stuck op
-        # keeps running on the shared loop after we raise (bounded in practice
-        # by the inner httpx 10s timeout, well under the 30s default).
+        # Cancels the coroutine on the loop thread too. tokens.py lets a
+        # keyring write in flight finish before it releases its locks.
         future.cancel()
         raise ConnectorsError(
             f"Connector async operation timed out after {timeout}s. "

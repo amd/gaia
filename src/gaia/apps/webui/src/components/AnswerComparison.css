@@ -1,0 +1,138 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.answer-compare {
+    margin: 4px 0 16px;
+    padding: 10px 12px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+}
+
+.answer-compare-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.answer-compare-cols {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.compare-col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+}
+
+.compare-col h4 {
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compare-meta {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.compare-body {
+    flex: 1;
+    max-height: 420px;
+    overflow: auto;
+    font-size: 14px;
+}
+
+.compare-wait {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.compare-error {
+    color: var(--danger);
+    font-size: 13px;
+}
+
+.compare-keep {
+    align-self: flex-start;
+    padding: 5px 10px;
+    background: var(--accent-fill);
+    border-radius: var(--radius-md);
+    color: var(--accent-fill-text);
+    font-size: 13px;
+}
+
+.compare-keep:hover:not(:disabled) {
+    background: var(--accent-fill-hover);
+}
+
+.compare-keep:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.retry-menu {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    max-width: calc(100vw - 32px);
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 6px;
+    font-size: 13px;
+}
+
+.retry-menu-head {
+    padding: 4px 8px 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.retry-menu-item {
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.retry-menu-item:hover,
+.retry-menu-item:focus-visible {
+    background: var(--bg-hover);
+}
+
+.retry-menu-empty,
+.retry-menu-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    color: var(--text-muted);
+}
+
+.retry-menu-error {
+    color: var(--danger);
+}
+
+@media (max-width: 640px) {
+    .answer-compare-cols {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

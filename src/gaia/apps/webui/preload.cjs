@@ -14,6 +14,7 @@
  *   install:*        — First-run backend install progress (Phase A)
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
  *   system:*         — System metrics for the observability dashboard (#2007)
+ *   power:*          — Keep the PC awake while a chat turn runs (#5226)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -53,6 +54,10 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   tray: {
     getConfig: () => ipcRenderer.invoke("tray:get-config"),
     setConfig: (cfg) => ipcRenderer.invoke("tray:set-config", cfg),
+    // What GAIA is doing, for the tray icon, tooltip and menu.
+    setActivity: (activity) => ipcRenderer.invoke("tray:set-activity", activity),
+    // Tray menu actions: open-chat, new-chat, open-settings, refresh-status.
+    onCommand: (cb) => onEvent("tray:command", cb),
     onNavigate: (cb) => onEvent("tray:navigate", cb),
   },
 
@@ -63,12 +68,31 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     respondPermission: (id, action, remember) =>
       ipcRenderer.invoke("notification:respond", id, action, remember),
     onNotification: (cb) => onEvent("notification:new", cb),
+    // Chat alerts (#5226)
+    show: (payload) => ipcRenderer.invoke("notification:show", payload),
+    flash: () => ipcRenderer.invoke("notification:flash"),
+    setAttentionCount: (count) =>
+      ipcRenderer.invoke("notification:attention", count),
+  },
+
+  // ── Keep the PC awake while GAIA works (#5226) ────────────────────────
+  power: {
+    setKeepAwake: (on) => ipcRenderer.invoke("power:keep-awake", on),
   },
 
   // ── System metrics for the observability dashboard (#2007) ────────────
   system: {
     getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
   },
+});
+
+// ── Window frame ─────────────────────────────────────────────────────────
+// The app draws its own top row; this says how the native controls sit in it.
+contextBridge.exposeInMainWorld("gaiaWindow", {
+  /** "mac": traffic lights at the top left; "overlay": controls at the top right. */
+  titleBar: process.platform === "darwin" ? "mac" : "overlay",
+  /** Match the native window controls to the app: { color, symbolColor } as #rrggbb. */
+  setColors: (colors) => ipcRenderer.invoke("window:set-titlebar-colors", colors),
 });
 
 // ── Install progress (Phase A) ──────────────────────────────────────────

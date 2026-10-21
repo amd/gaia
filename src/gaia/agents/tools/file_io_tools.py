@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
+from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.document_text import (
@@ -23,6 +24,8 @@ from gaia.agents.tools.document_text import (
     index_only_error,
     read_budget,
     read_document,
+    text_page_notes,
+    with_small_limit_warning,
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
@@ -31,7 +34,7 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
-from gaia.agents.tools.path_access import readable_entry
+from gaia.agents.tools.path_access import missing_file_error, readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -273,6 +276,8 @@ def _function_span(node, lines: list) -> tuple:
 
 #: Lines one ranged read returns at most.
 MAX_READ_LINES = 400
+#: Lines a past-the-end read is pointed at instead: the end of the file.
+TAIL_LINES = 50
 
 
 def _line_window(
@@ -286,8 +291,17 @@ def _line_window(
     if total == 0:
         return {"content": "", "start_line": 1, "end_line": 0, "total_lines": 0}
     if start > total:
+        tail = max(1, total - TAIL_LINES + 1)
         return {
-            "error": f"start_line {start} is past the end: the file has {total} lines."
+            "error": (
+                f"start_line {start} is past the end: the file has {total} lines "
+                f"(1-{total}). Use a start_line from 1 to {total}; for the last "
+                f"{total - tail + 1} lines, start_line={tail}."
+            ),
+            "total_lines": total,
+            "suggested_start_line": tail,
+            # The error says exactly how to fix the call: a retry is a correction.
+            "correctable": True,
         }
     end = total if end_line is None else min(end_line, total)
     if end < start:
@@ -309,6 +323,10 @@ def _line_window(
     }
     if end < total:
         window["next_start_line"] = end + 1
+        window["note"] = (
+            f"Partial: lines {start}-{end} of {total}. Continue with "
+            f"start_line={end + 1} if you need the rest."
+        )
     return window
 
 
@@ -440,7 +458,7 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
+                limit: Page size in characters, not lines (1..8000 for text files); omitted preserves full analysis. For lines use start_line/end_line.
                 start_line: First line to return (1-based); the result is line-numbered.
                 end_line: Last line to return, inclusive (at most 400 lines per read).
 
@@ -457,7 +475,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -496,7 +514,9 @@ class FileIOToolsMixin:
                     return {"status": "success", "file_path": file_path, **page}
 
                 if is_document:
-                    return read_document(self, file_path, offset, limit)
+                    return with_small_limit_warning(
+                        read_document(self, file_path, offset, limit), limit
+                    )
 
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
@@ -508,7 +528,14 @@ class FileIOToolsMixin:
                         encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
-                    return {"status": "success", "file_path": file_path, **page}
+                    return with_small_limit_warning(
+                        {
+                            "status": "success",
+                            "file_path": file_path,
+                            **text_page_notes(page, os.path.getsize(file_path)),
+                        },
+                        limit,
+                    )
 
                 # Read file content
                 try:
@@ -684,6 +711,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(file_path, "write_python_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -804,7 +832,7 @@ class FileIOToolsMixin:
 
                 # Read current content
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -862,6 +890,7 @@ class FileIOToolsMixin:
                 if backup:
                     backup_path = path_validator.create_backup(str(file_path))
 
+                before_change(file_path, "edit_python_file")
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
@@ -1109,6 +1138,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(file_path, "write_markdown_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -1211,6 +1241,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
+                before_change(path, "write_file")
                 # Backup existing file before overwrite
                 backup_path = None
                 if path.exists():
@@ -1345,7 +1376,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not path.exists():
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
 
                 reads = file_read_record(self)
                 refusal = reads.refusal(path)
@@ -1379,6 +1410,7 @@ class FileIOToolsMixin:
                     )
                 )
 
+                before_change(path, "edit_file")
                 # Write updated content
                 _write_exact(path, updated_content)
                 reads.note(path)
@@ -1544,6 +1576,7 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                before_change(gaia_path, "update_gaia_md")
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
 
@@ -1630,7 +1663,7 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
@@ -1705,6 +1738,7 @@ class FileIOToolsMixin:
                 if misplaced:
                     return {"status": "error", "error": misplaced}
 
+                before_change(file_path, "replace_function")
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)

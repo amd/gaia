@@ -281,6 +281,17 @@
           }
         ]
       },
+      "currentStep": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Currentstep"
+      },
       "data": {
         "anyOf": [
           {},
@@ -352,6 +363,17 @@
         ],
         "title": "Mcpserver"
       },
+      "narration": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Narration"
+      },
       "notice": {
         "anyOf": [
           {
@@ -362,6 +384,20 @@
           }
         ],
         "title": "Notice"
+      },
+      "planNarrations": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Plannarrations"
       },
       "planSteps": {
         "anyOf": [
@@ -620,6 +656,20 @@
     "title": "CancelStreamRequest",
     "type": "object"
   },
+  "ChatModelRequest": {
+    "description": "One of setup's default chat models.",
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "ChatModelRequest",
+    "type": "object"
+  },
   "ChatRequest": {
     "description": "Request to send a chat message.",
     "properties": {
@@ -726,6 +776,30 @@
     "title": "CommandOutputResponse",
     "type": "object"
   },
+  "CommitRequest": {
+    "properties": {
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the commit.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "message"
+    ],
+    "title": "CommitRequest",
+    "type": "object"
+  },
   "ConfigureRequest": {
     "properties": {
       "config": {
@@ -786,6 +860,31 @@
       }
     },
     "title": "ConnectRequest",
+    "type": "object"
+  },
+  "ContextRequest": {
+    "description": "``ctx_size`` None returns the model to GAIA's automatic size.",
+    "properties": {
+      "ctx_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ctx Size"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "ContextRequest",
     "type": "object"
   },
   "CreateScheduleRequest": {
@@ -903,6 +1002,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -1466,6 +1566,77 @@
     "title": "FileSearchResult",
     "type": "object"
   },
+  "FileStatusEntry": {
+    "description": "Whether a file exists now, and when it last changed.",
+    "properties": {
+      "exists": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Exists"
+      },
+      "mtime": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mtime"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "FileStatusEntry",
+    "type": "object"
+  },
+  "FileStatusRequest": {
+    "description": "Paths whose current state the side rail re-checks.",
+    "properties": {
+      "paths": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "title": "Paths",
+        "type": "array"
+      }
+    },
+    "required": [
+      "paths"
+    ],
+    "title": "FileStatusRequest",
+    "type": "object"
+  },
+  "FileStatusResponse": {
+    "description": "Current state of each requested path, in request order.",
+    "properties": {
+      "files": {
+        "items": {
+          "$ref": "#/components/schemas/FileStatusEntry"
+        },
+        "title": "Files",
+        "type": "array"
+      }
+    },
+    "required": [
+      "files"
+    ],
+    "title": "FileStatusResponse",
+    "type": "object"
+  },
   "FileUploadResponse": {
     "description": "Response from a file upload.",
     "properties": {
@@ -1503,6 +1674,39 @@
       "is_image"
     ],
     "title": "FileUploadResponse",
+    "type": "object"
+  },
+  "FolderRequest": {
+    "properties": {
+      "path": {
+        "description": "An absolute folder path.",
+        "minLength": 1,
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "FolderRequest",
+    "type": "object"
+  },
+  "FollowUpRequest": {
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "text"
+    ],
+    "title": "FollowUpRequest",
     "type": "object"
   },
   "ForwardConnectionRequest": {
@@ -1771,10 +1975,54 @@
         "title": "Input Tokens",
         "type": "integer"
       },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
       "output_tokens": {
         "default": 0,
         "title": "Output Tokens",
         "type": "integer"
+      },
+      "place": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Place"
+      },
+      "retried": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Retried"
+      },
+      "seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Seconds"
       },
       "steps": {
         "anyOf": [
@@ -1848,6 +2096,19 @@
       "id"
     ],
     "title": "InstallRequest",
+    "type": "object"
+  },
+  "InternetRequest": {
+    "properties": {
+      "on": {
+        "title": "On",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "on"
+    ],
+    "title": "InternetRequest",
     "type": "object"
   },
   "KnowledgeCreate": {
@@ -2005,6 +2266,24 @@
     "title": "KnowledgeUpdate",
     "type": "object"
   },
+  "LimitRequest": {
+    "description": "``limit_usd`` None removes the limit.",
+    "properties": {
+      "limit_usd": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Limit Usd"
+      }
+    },
+    "title": "LimitRequest",
+    "type": "object"
+  },
   "LoadModelRequest": {
     "properties": {
       "ctx_size": {
@@ -2018,6 +2297,11 @@
           }
         ],
         "title": "Ctx Size"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
       },
       "model_name": {
         "title": "Model Name",
@@ -2225,6 +2509,16 @@
             "type": "null"
           }
         ]
+      },
+      "turn_summary": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TurnSummaryResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -2295,6 +2589,17 @@
             "type": "null"
           }
         ]
+      },
+      "embedding_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Embedding Note"
       },
       "error": {
         "anyOf": [
@@ -2393,6 +2698,11 @@
   "OpenFileRequest": {
     "description": "Request to open a file or folder in the system file explorer.",
     "properties": {
+      "launch": {
+        "default": false,
+        "title": "Launch",
+        "type": "boolean"
+      },
       "path": {
         "title": "Path",
         "type": "string"
@@ -2687,6 +2997,35 @@
     "title": "PreflightReport",
     "type": "object"
   },
+  "PullRequestRequest": {
+    "properties": {
+      "body": {
+        "default": "",
+        "title": "Body",
+        "type": "string"
+      },
+      "confirmed": {
+        "default": false,
+        "description": "True only after the user saw and confirmed the PR.",
+        "title": "Confirmed",
+        "type": "boolean"
+      },
+      "root": {
+        "title": "Root",
+        "type": "string"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "root",
+      "title"
+    ],
+    "title": "PullRequestRequest",
+    "type": "object"
+  },
   "QuickLink": {
     "description": "A quick-access link to a common filesystem location.",
     "properties": {
@@ -2709,6 +3048,118 @@
       "path"
     ],
     "title": "QuickLink",
+    "type": "object"
+  },
+  "RestartRequest": {
+    "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "RestartRequest",
+    "type": "object"
+  },
+  "RetryChoiceRequest": {
+    "properties": {
+      "keep": {
+        "enum": [
+          "original",
+          "retry"
+        ],
+        "title": "Keep",
+        "type": "string"
+      },
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "keep"
+    ],
+    "title": "RetryChoiceRequest",
+    "type": "object"
+  },
+  "RetryWithRequest": {
+    "properties": {
+      "message_id": {
+        "title": "Message Id",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id",
+      "model"
+    ],
+    "title": "RetryWithRequest",
+    "type": "object"
+  },
+  "RunningAnswer": {
+    "description": "A chat whose answer is still being written.",
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "title": "RunningAnswer",
+    "type": "object"
+  },
+  "RunningIndexJob": {
+    "description": "A document still being indexed.",
+    "properties": {
+      "document_id": {
+        "title": "Document Id",
+        "type": "string"
+      },
+      "filename": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Filename"
+      }
+    },
+    "required": [
+      "document_id"
+    ],
+    "title": "RunningIndexJob",
     "type": "object"
   },
   "ScheduleListResponse": {
@@ -2911,6 +3362,20 @@
     "title": "SessionListResponse",
     "type": "object"
   },
+  "SessionPinRequest": {
+    "description": "Pin or unpin a chat.",
+    "properties": {
+      "pinned": {
+        "title": "Pinned",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "pinned"
+    ],
+    "title": "SessionPinRequest",
+    "type": "object"
+  },
   "SessionResponse": {
     "description": "A chat session.",
     "properties": {
@@ -2994,6 +3459,22 @@
         ],
         "title": "Inference Remote"
       },
+      "kind": {
+        "default": "chat",
+        "title": "Kind",
+        "type": "string"
+      },
+      "last_run_status": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Run Status"
+      },
       "mail_provider": {
         "anyOf": [
           {
@@ -3013,6 +3494,11 @@
       "model": {
         "title": "Model",
         "type": "string"
+      },
+      "pinned": {
+        "default": false,
+        "title": "Pinned",
+        "type": "boolean"
       },
       "private": {
         "default": false,
@@ -3037,6 +3523,11 @@
       "title_is_custom": {
         "default": false,
         "title": "Title Is Custom",
+        "type": "boolean"
+      },
+      "unread": {
+        "default": false,
+        "title": "Unread",
         "type": "boolean"
       },
       "updated_at": {
@@ -3258,6 +3749,17 @@
         "title": "Context Size Sufficient",
         "type": "boolean"
       },
+      "data_dir": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Data Dir"
+      },
       "default_model_is_cloud": {
         "default": false,
         "title": "Default Model Is Cloud",
@@ -3367,6 +3869,23 @@
           }
         ],
         "title": "Lemonade Error"
+      },
+      "lemonade_probe": {
+        "anyOf": [
+          {
+            "enum": [
+              "ok",
+              "down",
+              "timed_out",
+              "error"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Probe"
       },
       "lemonade_running": {
         "default": false,
@@ -3720,6 +4239,359 @@
     "title": "ToolConfirmRequest",
     "type": "object"
   },
+  "TurnSummaryCost": {
+    "description": "What the turn cost.",
+    "properties": {
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "usd": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Usd"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "title": "TurnSummaryCost",
+    "type": "object"
+  },
+  "TurnSummaryDocument": {
+    "description": "A document the turn's answer drew passages from.",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "pages": {
+        "items": {
+          "type": "integer"
+        },
+        "title": "Pages",
+        "type": "array"
+      },
+      "passages": {
+        "default": 0,
+        "title": "Passages",
+        "type": "integer"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "path"
+    ],
+    "title": "TurnSummaryDocument",
+    "type": "object"
+  },
+  "TurnSummaryFile": {
+    "description": "A file the turn created or changed.",
+    "properties": {
+      "mtime": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mtime"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "openable": {
+        "default": false,
+        "title": "Openable",
+        "type": "boolean"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "name"
+    ],
+    "title": "TurnSummaryFile",
+    "type": "object"
+  },
+  "TurnSummaryLiveData": {
+    "description": "How the turn's internet tools fared.",
+    "properties": {
+      "attempted": {
+        "default": 0,
+        "title": "Attempted",
+        "type": "integer"
+      },
+      "failed": {
+        "default": 0,
+        "title": "Failed",
+        "type": "integer"
+      }
+    },
+    "title": "TurnSummaryLiveData",
+    "type": "object"
+  },
+  "TurnSummaryModel": {
+    "description": "Where the turn's model ran.",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "provider": {
+        "title": "Provider",
+        "type": "string"
+      },
+      "provider_name": {
+        "title": "Provider Name",
+        "type": "string"
+      },
+      "remote": {
+        "title": "Remote",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "remote",
+      "provider",
+      "provider_name",
+      "name"
+    ],
+    "title": "TurnSummaryModel",
+    "type": "object"
+  },
+  "TurnSummaryOutput": {
+    "description": "Something the turn made besides a file: an image, an indexed document,\na memory or a scheduled task.",
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Path"
+      },
+      "ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ref"
+      }
+    },
+    "required": [
+      "kind",
+      "name"
+    ],
+    "title": "TurnSummaryOutput",
+    "type": "object"
+  },
+  "TurnSummaryPage": {
+    "description": "A web page the turn read, or a search hit when it read none.",
+    "properties": {
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "kind"
+    ],
+    "title": "TurnSummaryPage",
+    "type": "object"
+  },
+  "TurnSummaryResponse": {
+    "description": "Sources, files and data flow of one turn, for the side rail (#5222).",
+    "properties": {
+      "cost": {
+        "$ref": "#/components/schemas/TurnSummaryCost"
+      },
+      "documents": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryDocument"
+        },
+        "title": "Documents",
+        "type": "array"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error"
+      },
+      "files": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryFile"
+        },
+        "title": "Files",
+        "type": "array"
+      },
+      "live_data": {
+        "$ref": "#/components/schemas/TurnSummaryLiveData"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TurnSummaryModel"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "outputs": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryOutput"
+        },
+        "title": "Outputs",
+        "type": "array"
+      },
+      "pages": {
+        "items": {
+          "$ref": "#/components/schemas/TurnSummaryPage"
+        },
+        "title": "Pages",
+        "type": "array"
+      },
+      "sites": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Sites",
+        "type": "array"
+      }
+    },
+    "required": [
+      "cost"
+    ],
+    "title": "TurnSummaryResponse",
+    "type": "object"
+  },
+  "UndoRequest": {
+    "properties": {
+      "force": {
+        "default": false,
+        "description": "Undo even files changed after the turn, losing those changes.",
+        "title": "Force",
+        "type": "boolean"
+      }
+    },
+    "title": "UndoRequest",
+    "type": "object"
+  },
+  "UndoSettings": {
+    "properties": {
+      "max_mb": {
+        "maximum": 100000.0,
+        "minimum": 10.0,
+        "title": "Max Mb",
+        "type": "integer"
+      },
+      "retention_days": {
+        "maximum": 365.0,
+        "minimum": 1.0,
+        "title": "Retention Days",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "retention_days",
+      "max_mb"
+    ],
+    "title": "UndoSettings",
+    "type": "object"
+  },
+  "UnloadModelRequest": {
+    "properties": {
+      "model_name": {
+        "minLength": 1,
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "UnloadModelRequest",
+    "type": "object"
+  },
+  "UnloadModelResponse": {
+    "description": "The model server dropped its models from memory.",
+    "properties": {
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status"
+    ],
+    "title": "UnloadModelResponse",
+    "type": "object"
+  },
   "UpdateScheduleRequest": {
     "description": "Request to update a scheduled task.",
     "properties": {
@@ -3817,6 +4689,7 @@
       "title": {
         "anyOf": [
           {
+            "maxLength": 200,
             "type": "string"
           },
           {
@@ -3918,6 +4791,17 @@
         ],
         "title": "Cached Tokens"
       },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
       "elapsed_seconds": {
         "anyOf": [
           {
@@ -3940,6 +4824,17 @@
         ],
         "title": "Error"
       },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
       "prompt_tokens": {
         "anyOf": [
           {
@@ -3960,6 +4855,31 @@
       "state"
     ],
     "title": "WarmUpStatus",
+    "type": "object"
+  },
+  "WorkInProgress": {
+    "description": "Work that quitting or unloading the model would cut short.",
+    "properties": {
+      "answers": {
+        "items": {
+          "$ref": "#/components/schemas/RunningAnswer"
+        },
+        "title": "Answers",
+        "type": "array"
+      },
+      "indexing": {
+        "items": {
+          "$ref": "#/components/schemas/RunningIndexJob"
+        },
+        "title": "Indexing",
+        "type": "array"
+      }
+    },
+    "required": [
+      "answers",
+      "indexing"
+    ],
+    "title": "WorkInProgress",
     "type": "object"
   }
 }
