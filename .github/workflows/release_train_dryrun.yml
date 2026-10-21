@@ -25,6 +25,9 @@
 name: Release train dry run
 
 on:
+  # TEMPORARY: lets the branch run before the file is on main. Reverted before merge.
+  push:
+    branches: [ci/release-train-dryrun]
   workflow_dispatch:
     inputs:
       ref:
@@ -64,7 +67,7 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || '0b14d740dc77ea621978193b6c4049295cb13730' }}
           path: target
 
       - uses: actions/setup-python@v7
@@ -82,7 +85,7 @@ jobs:
       - name: Check the tag against the tree
         id: plan
         env:
-          RC_TAG: ${{ inputs.rc_tag }}
+          RC_TAG: ${{ inputs.rc_tag || 'v0.25.1-rc2' }}
         run: |
           set -euo pipefail
           python3 tools/util/release_train.py plan --tag "${RC_TAG}" --target target | tee -a "$GITHUB_OUTPUT"
