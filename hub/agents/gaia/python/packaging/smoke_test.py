@@ -91,7 +91,7 @@ STDIO_HANDSHAKE_DEADLINE_S = 300.0
 #: harness imports nothing outside the stdlib (a unit test pins the two).
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 
-#: What a knowledge-work ``run_python`` call does: office files, a table, a
+#: What a typical ``run_python`` call does: office files, a table, a
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
