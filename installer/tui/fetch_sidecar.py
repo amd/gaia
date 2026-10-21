@@ -70,6 +70,12 @@ BINARIES_LOCK = Path("hub/agents/gaia/npm/binaries.lock.json")
 # left half-filled by a future generator cannot slip past as "not PENDING".
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 LOCK_GENERATOR = "hub/agents/gaia/python/packaging/gen_binaries_lock.py"
+# The committed lock is only filled in by the PR the flagship release opens.
+LOCK_FIX = (
+    "Each flagship release (release_agent_gaia.yml) opens a PR that pins its "
+    "published hashes on main (branch release/flagship-lock-v<version>): merge it, "
+    "or re-run that release's pin-lock job if the PR is missing."
+)
 
 
 class NoSidecarForPlatform(Exception):
@@ -124,8 +130,8 @@ def _expected_sha256(sidecar: dict, npm_key: str, lock_path: Path) -> str:
             f"{lock_path} carries no real sha256 for the sidecar on {npm_key} "
             f"(found {sha!r}), so the downloaded binary cannot be verified and this "
             f"installer must not bundle it.\n"
-            f"Regenerate the lock from the published artifacts with {LOCK_GENERATOR}, "
-            f"then re-run. Do NOT fall back to the digest served by the hub alongside "
+            f"{LOCK_FIX} (The lock is written by {LOCK_GENERATOR}.) "
+            f"Do NOT fall back to the digest served by the hub alongside "
             f"the download -- an origin verifying itself is not an integrity check."
         )
     return sha.lower()
@@ -204,7 +210,7 @@ def _download_and_verify(
             f"the committed lock must never be bundled into an installer. Re-run to retry a "
             f"corrupt transfer; if it reproduces, either the hub is serving something other "
             f"than what was released or the lock is stale -- resolve which, do not work "
-            f"around it."
+            f"around it. A stale lock is the usual cause: {LOCK_FIX}"
         )
     if expected_size is not None and written != expected_size:
         tmp.unlink(missing_ok=True)

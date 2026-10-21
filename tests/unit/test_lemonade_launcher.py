@@ -830,7 +830,9 @@ def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
     assert hint.command in hint.instruction
 
 
-def test_start_hint_points_at_gaias_own_server_once_init_installed_it(tmp_path):
+def test_start_hint_points_at_gaias_own_server_once_init_installed_it(
+    tmp_path, gaia_owned_lemonade
+):
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
     from gaia.llm.lemonade_launcher import describe_start_hint
 

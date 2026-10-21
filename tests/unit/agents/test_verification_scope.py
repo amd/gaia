@@ -731,7 +731,8 @@ def test_generic_llm_error_path_carries_the_statement(agent):
     _stub_chat(agent, RuntimeError("kaboom"))
     with patch.object(_DummyAgent, "_is_loaded_ctx_too_small", return_value=False):
         result = _with_sentinel(agent, "hello", max_steps=3)
-    assert "unexpected problem" in result["result"]
+    assert "The model call failed at step 1" in result["result"]
+    assert "Kaboom." in result["result"]
     assert _scope_line(result["result"]) == SENTINEL
 
 
@@ -841,6 +842,7 @@ def _sse_answer(raw: str) -> str:
     handler._step_count = 0
     handler._tool_count = 0
     handler._turn_metrics = None
+    handler._turn_failed = False
     handler.print_final_answer(raw)
     return captured[0]["content"]
 

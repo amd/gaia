@@ -383,7 +383,8 @@ agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and fro
 `agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
 A final core release therefore fails unless that flagship release was cut from
 the same code: same frozen sources at its tag, its hashes committed to the
-lock, and it is the hub's latest. Check before tagging:
+lock, and it is the hub's latest. The flagship release opens a PR that commits
+those hashes to the lock once it publishes; merge it, then check before tagging:
 
 ```bash
 git fetch --tags origin

@@ -135,8 +135,6 @@ def _launch_with_mocked_server(client):
         patch("gaia.llm.lemonade_client.time.sleep"),
     ):
         client.launch_server(background="silent")
-    # A late GC would run __del__'s port cleanup inside another test's patches.
-    client.keep_alive = True
     return launched
 
 
