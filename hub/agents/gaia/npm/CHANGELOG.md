@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Workbooks are checked before they are handed over.** The bundled
+  `office-docs` skill ships its own `verify_workbook` tool, which recalculates
+  a copy of an .xlsx (with LibreOffice when installed) and names every cell
+  with `#REF!`, `#VALUE!`, `#DIV/0!`, `#NAME?`, a circular reference, a
+  SUM/SUMIFS over text or empty cells, or a criterion that matches no row. It
+  never writes the file. The skill also teaches native charts in decks and
+  real headings and tables in Word files.
 - **Full access in the Agent UI grants the folders you name.** Turning it on
   over `/sessions/{id}/bypass` refused every path outside the chat's scope with
   nobody asked. On a run the caller can answer for, Full access now grants the

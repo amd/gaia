@@ -14,6 +14,11 @@ unenforced:
   skill, per agent instance, restricted to the three-tier subcommand table in
   :data:`gaia.skills.binaries.BINARY_POLICIES`. The scope is mandatory: an
   unscoped ``shell:execute`` asks for the whole shell, which no bridge covers.
+- **Context-bridged** — ``program:run:<name>`` and ``scratch:write`` are what a
+  skill's own ``tools.py`` may do through :mod:`gaia.skills.context`: run one
+  named program (no shell, a scrubbed environment) and write inside a per-call
+  temporary folder. The helpers refuse anything the manifest did not declare,
+  and the audit flags code that does either without them.
 - ``filesystem`` / ``database`` / ``desktop`` / ``env`` are local-capability
   domains with no bridge. They need the Phase 2 sandbox, so a skill declaring
   one is **refused**.
@@ -58,6 +63,8 @@ DOMAIN_LEVELS: dict[str, frozenset[str]] = {
     "env": frozenset({"read", "none"}),
     "database": frozenset({"read", "write", "none"}),
     "desktop": frozenset({"control", "none"}),
+    "program": frozenset({"run", "none"}),
+    "scratch": frozenset({"write", "none"}),
 }
 
 #: Domains that map onto the connector grant model.
@@ -67,9 +74,16 @@ CONNECTOR_BRIDGED_DOMAINS = frozenset({"network", "mcp"})
 #: Only meaningful *with* a scope — see :attr:`Permission.is_binary_bridged`.
 BINARY_BRIDGED_DOMAINS = frozenset({"shell"})
 
+#: Domains a skill's code reaches only through :mod:`gaia.skills.context`.
+#: ``program:run`` needs a scope (the program's name); ``scratch:write`` has none.
+CONTEXT_BRIDGED_DOMAINS = frozenset({"program", "scratch"})
+
 #: Domains that need the Phase 2 sandbox — refused.
 LOCAL_CAPABILITY_DOMAINS = (
-    frozenset(DOMAIN_LEVELS) - CONNECTOR_BRIDGED_DOMAINS - BINARY_BRIDGED_DOMAINS
+    frozenset(DOMAIN_LEVELS)
+    - CONNECTOR_BRIDGED_DOMAINS
+    - BINARY_BRIDGED_DOMAINS
+    - CONTEXT_BRIDGED_DOMAINS
 )
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -159,6 +173,21 @@ class Permission:
 
         if domain in BINARY_BRIDGED_DOMAINS and level == "execute":
             _validate_binary_scope(scope, raw=raw, skill_name=skill_name)
+        if domain == "program" and level == "run":
+            if not scope:
+                raise SkillValidationError(
+                    f"Skill '{skill_name}' declares {raw!r} without naming the "
+                    "program. Scope it to the one executable its code runs, e.g. "
+                    "'program:run:soffice'. "
+                    f"Grammar: {FORMAT_DOCS_URL}#permission-model"
+                )
+            _validate_binary_scope(scope, raw=raw, skill_name=skill_name)
+        if domain == "scratch" and scope:
+            raise SkillValidationError(
+                f"Skill '{skill_name}' declares {raw!r}; 'scratch' takes no scope. "
+                "The folder is a fresh temporary one per tool call. Declare "
+                f"'scratch:write'. Grammar: {FORMAT_DOCS_URL}#permission-model"
+            )
 
         return cls(domain=domain, level=level, scope=scope)
 
