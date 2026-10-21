@@ -3342,9 +3342,12 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def warm_up(self, progress=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
-        if not getattr(self, "_incognito", False):
+        incognito = getattr(self, "_incognito", False)
+        if not incognito:
             self._finish_deferred_memory_init()
-        if getattr(self, "_memory_post_init_pending", False):
+        # Upkeep reads existing memories with the chat's model; a private or
+        # memory-off agent keeps it pending for its first memory-on turn.
+        if not incognito and getattr(self, "_memory_post_init_pending", False):
             if progress:
                 progress("Tidying memory")
             self._memory_post_init_pending = False
@@ -3377,8 +3380,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             # before the first turn; report failures through the current handler.
             self.report_memory_unavailable()
 
-            # Run deferred LLM startup tasks on first real query (after self.chat exists)
-            if getattr(self, "_memory_post_init_pending", False):
+            # Run deferred LLM startup tasks on first real query (after self.chat
+            # exists). Not in a private or memory-off turn: upkeep sends existing
+            # memories to this turn's model, so it waits for a memory-on turn.
+            if not getattr(self, "_incognito", False) and getattr(
+                self, "_memory_post_init_pending", False
+            ):
                 self._memory_post_init_pending = False
                 with turn_metrics.pre_turn_span(self, "memory_post_init"):
                     self._run_memory_post_init()
@@ -3648,6 +3655,17 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return f"{tool_name} {value.strip()}"
         return f"{tool_name} {json.dumps(args, sort_keys=True, default=str)}"
 
+    def _automatic_writes_off(self) -> bool:
+        """Whether memory the agent saves on its own must not be written now.
+
+        Checked by every automatic writer itself, not only its callers: a
+        private chat or memory-off must hold whichever path reaches it.
+        """
+        return (
+            getattr(self, "_incognito", False)
+            or getattr(self, "_memory_store", None) is None
+        )
+
     def _forget_errors_for_operation(self, tool_name: str, tool_args: Any) -> None:
         """Drop stored errors for an operation once it has worked again.
 
@@ -3659,6 +3677,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         evidence that ``pytest`` is on PATH now. Rows stored before errors
         carried an operation key are matched by tool, as they always were.
         """
+        if self._automatic_writes_off():
+            return
         operation = self._operation_key(tool_name, tool_args)
         prefix = f"{tool_name}: "
         try:
@@ -3849,6 +3869,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _forget_lesson(self, lesson_id: str) -> None:
         """Delete a lesson and drop it from anything still quoting it this turn."""
+        if self._automatic_writes_off():
+            return
         self._memory_store.delete(lesson_id)
         self._confirmed_lessons_set().discard(lesson_id)
         for bucket in ("_session_lessons", "_turn_lessons"):
@@ -3858,6 +3880,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _learn_from_success(self, tool_name: str, tool_args: Any) -> None:
         """Turn an earlier failure of this operation into a lesson, or confirm one."""
+        if self._automatic_writes_off():
+            return
         operation = self._operation_key(tool_name, tool_args)
         call = self._canonical_args(tool_args)
         failure = (getattr(self, "_turn_failures", None) or {}).pop(operation, None)
@@ -3915,6 +3939,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _confirm_lesson(self, lesson: Dict) -> None:
         """Raise a lesson's confidence the first time its fix works again this session."""
+        if self._automatic_writes_off():
+            return
         confirmed = self._confirmed_lessons_set()
         if lesson["id"] in confirmed:
             return
@@ -3951,6 +3977,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         settings, not the world, the tool reports it fresh on every call, and
         replayed later it teaches the model to avoid what is now allowed.
         """
+        if self._automatic_writes_off():
+            return
         try:
             if not error_msg or not error_msg.strip():
                 return

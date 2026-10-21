@@ -78,6 +78,9 @@ DANGEROUS_GRANTS: frozenset[str] = frozenset(
         # Bridged and reachable today: unrestricted outbound egress. A skill that
         # can POST anywhere can exfiltrate whatever the model puts in front of it.
         "network:write",
+        # Skill code starting a local program: one named executable, no shell,
+        # but still someone else's code running on the user's machine.
+        "program:run",
     }
 )
 
@@ -90,11 +93,19 @@ _CEILINGS: dict[str, frozenset[str] | None] = {
     "verified": None,
     # Everything the bridges support; dangerous grants still prompt.
     "community": frozenset(
-        {"network:read", "network:write", "mcp:connect", "shell:execute"}
+        {
+            "network:read",
+            "network:write",
+            "mcp:connect",
+            "shell:execute",
+            "program:run",
+            "scratch:write",
+        }
     ),
     # Read-only egress only. An unattested skill may not open an MCP connection,
     # write to the network, or run a local CLI without the user promoting it first.
-    "experimental": frozenset({"network:read"}),
+    # A per-call temporary folder reaches nothing the user owns.
+    "experimental": frozenset({"network:read", "scratch:write"}),
 }
 
 

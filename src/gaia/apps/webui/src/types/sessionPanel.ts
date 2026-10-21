@@ -6,7 +6,8 @@
 import type { FileChangeKind, UntrackedWork } from './changes';
 
 export type ScopeSource =
-    | 'added' | 'gaia_documents' | 'scratch' | 'document' | 'working_folder' | 'approved';
+    | 'added' | 'gaia_documents' | 'scratch' | 'document' | 'working_folder' | 'approved'
+    | 'allowed_paths';
 
 export interface ScopeEntry {
     path: string;
