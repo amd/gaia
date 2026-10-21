@@ -77,6 +77,12 @@ def collect_lane(lane: dict, artifacts_dir: Path, prefix: str) -> dict:
     """Read one lane's uploaded artifact into a row of the summary."""
     name = lane["lane"]
     root = artifacts_dir / f"{prefix}{name}"
+    if not root.is_dir():
+        # download-artifact unpacks a LONE artifact straight into the target
+        # directory, with no per-artifact folder: a one-lane targeted run.
+        flat = _read_json(artifacts_dir / "lane-status.json") or {}
+        if flat.get("lane") == name:
+            root = artifacts_dir
     row = {
         "lane": name,
         "categories": list(lane["categories"]),

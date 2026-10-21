@@ -393,6 +393,37 @@ def test_summary_of_a_targeted_run_covers_only_its_lanes(tmp_path, capsys):
     assert "uploaded no artifact" not in out
 
 
+def test_summary_reads_a_lone_artifact_unpacked_without_its_folder(tmp_path, capsys):
+    # download-artifact puts a single matching artifact's files straight into
+    # the target dir; seen on the first one-lane targeted run.
+    lanes_file = tmp_path / "lanes.json"
+    lanes_file.write_text(
+        json.dumps({"lanes": [{"lane": "conversation", "categories": ["adversarial"]}]})
+    )
+    artifacts = tmp_path / "artifacts"
+    (artifacts / "adversarial").mkdir(parents=True)
+    (artifacts / "lane-status.json").write_text(
+        json.dumps({"lane": "conversation", "job_status": "success"})
+    )
+    _write(artifacts / "adversarial" / "scorecard.json", [_result("a")])
+    argv = ["--lanes-file", str(lanes_file), "--artifacts-dir", str(artifacts)]
+    assert summary_main(argv) == 0
+    out = capsys.readouterr().out
+    assert "| `conversation` | adversarial | 1 | 1 | 0 | 0 | — | measured |" in out
+    assert "uploaded no artifact" not in out
+
+
+def test_a_flat_artifact_from_another_lane_is_not_borrowed(tmp_path, capsys):
+    lanes_file = tmp_path / "lanes.json"
+    lanes_file.write_text(
+        json.dumps({"lanes": [{"lane": "memory", "categories": ["memory"]}]})
+    )
+    (tmp_path / "lane-status.json").write_text(json.dumps({"lane": "conversation"}))
+    argv = ["--lanes-file", str(lanes_file), "--artifacts-dir", str(tmp_path)]
+    assert summary_main(argv) == 0
+    assert "`memory`** uploaded no artifact" in capsys.readouterr().out
+
+
 def test_summary_rejects_a_malformed_matrix(tmp_path):
     lanes_file = tmp_path / "lanes.json"
     lanes_file.write_text(json.dumps({"lanes": []}))
