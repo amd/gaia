@@ -20,8 +20,8 @@ open for a moment; on Windows the rename waits that out for a bounded time
 
 The lock is an OS advisory lock on ``<name>.lock`` beside the target
 (:func:`gaia.daemon.lock.try_lock`), released by the OS if the holder dies.
-Waiters queue for it in arrival order through ``<name>.lock.q<number>`` entry
-files, so a later waiter cannot take it ahead of an earlier one.
+Waiters queue for it in arrival order through entry files in
+``<name>.lock.d/``, so a later waiter cannot take it ahead of an earlier one.
 """
 
 from __future__ import annotations
@@ -30,14 +30,13 @@ import errno
 import os
 import re
 import stat
-import sys
 import tempfile
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple, Union
+from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 from gaia.daemon.lock import try_lock, unlock
 from gaia.logger import get_logger
@@ -56,6 +55,7 @@ LOCK_TIMEOUT_SECONDS = 10.0
 #: waiting out an antivirus scan.
 REPLACE_RETRY_SECONDS = 3.0
 _POLL_SECONDS = 0.02
+_NEXT_POLL_SECONDS = 0.001
 #: A waiter checking for dead queue entries holds a new entry's lock for an
 #: instant; the entry's owner retries this long before giving up.
 _ENTRY_LOCK_SECONDS = 1.0
@@ -156,33 +156,39 @@ def _create_error(
     )
 
 
-# A waiter joins the queue before it touches the lock: it creates
-# ``<name>.lock.q<number>``, numbered after every existing entry, and holds an
-# OS lock on it until it is done. It takes the main lock only once no live entry
-# with a smaller number is left. An entry whose lock can be taken belongs to a
-# process that died, and the next waiter to see it deletes it.
+# A waiter joins the queue before it touches the lock: it creates an entry
+# ``q<number>-<id>`` in ``<name>.lock.d/``, numbered after every existing one,
+# and holds an OS lock on it until it is done. It takes the main lock only once
+# no live entry ordered before it is left. An entry whose lock can be taken
+# belongs to a process that finished or died; waiters behind it skip it and
+# delete it after their own turn.
+# Every entry name is used once, so deleting a path only ever removes the file
+# created there. Exclusion never depends on the queue: the main lock gives it.
 
-#: Two spellings of one name are one file here, so their entries share a queue.
-_NAMES_IGNORE_CASE = os.name == "nt" or sys.platform == "darwin"
-#: Taken names (existing, or on Windows still being deleted) skipped per join.
-_MAX_NAME_SKIPS = 1000
+_ENTRY_RE = re.compile(r"^q(\d{10})-([0-9a-f]{32})$")
 
 
-def _queue_entries(path: Path) -> List[Tuple[int, Path]]:
-    pattern = re.compile(
-        re.escape(path.name) + r"\.q(\d{10})$",
-        re.IGNORECASE if _NAMES_IGNORE_CASE else 0,
-    )
+def queue_dir_for(path: Path) -> Path:
+    """The folder holding the wait queue for the lock file *path*."""
+    return path.with_name(path.name + ".d")
+
+
+def _queue_entries(path: Path) -> List[Tuple[Tuple[int, str], Path]]:
+    """Every entry in *path*'s queue with its place in line."""
+    queue = queue_dir_for(path)
     entries = []
     try:
-        with os.scandir(path.parent) as listing:
+        with os.scandir(queue) as listing:
             for item in listing:
-                match = pattern.match(item.name)
+                match = _ENTRY_RE.match(item.name)
                 if match:
-                    entries.append((int(match.group(1)), path.parent / item.name))
+                    place = (int(match.group(1)), match.group(2))
+                    entries.append((place, queue / item.name))
+    except FileNotFoundError:
+        return []
     except OSError as e:
         raise FileLockError(
-            f"Cannot list {path.parent} to queue for the lock {path}: {e}. "
+            f"Cannot list {queue} to queue for the lock {path}: {e}. "
             "Check that this user can read that folder.",
             path,
         ) from e
@@ -231,25 +237,56 @@ def _open_entry(entry: Path) -> int:
         return os.open(str(entry), os.O_RDONLY)
 
 
-def _entry_alive(entry: Path) -> Optional[bool]:
+#: A holder writes this past the locked byte before it unlocks its entry, so a
+#: waiter can tell a finished entry from one whose owner has not locked it yet.
+_SPENT_MARK = b"x"
+_ALIVE, _UNKNOWN, _DEAD, _SPENT = "alive", "unknown", "dead", "spent"
+
+
+def _entry_state(entry: Path, path: Path, *, delete_dead: bool = False) -> str:
     """Whether *entry*'s owner still waits for, or holds, the lock.
 
-    None when this user cannot tell.
+    ``_SPENT`` for an entry its holder gave up, which stays dead. ``_DEAD`` for
+    one nobody holds that is not marked: its owner crashed, or has created it
+    and not locked it yet, so it must be looked at again. ``_UNKNOWN`` when this
+    user cannot tell. With *delete_dead*, a dead entry is deleted; a waiter
+    polls without it, because a delete on Windows costs as much as the whole
+    hand-off, and reaps what it saw after its turn.
     """
     try:
         fd = _open_entry(entry)
     except FileNotFoundError:
-        return False
+        return _SPENT
     except PermissionError:
-        # Windows refuses to open a file that is being deleted.
-        return False if os.name == "nt" else None
+        # Windows: being deleted, or held without sharing by another program.
+        # Not cached: once deleted it reads as gone, and is cached then.
+        return _DEAD if os.name == "nt" else _UNKNOWN
+    except OSError as e:
+        raise FileLockError(
+            f"Cannot open the queue entry {entry} for the lock {path}: {e}", path
+        ) from e
     taken = _probe_lock(fd)
     if not taken:
         os.close(fd)
-        return None if taken is None else True
-    _release_fd(fd)
-    _discard_entry(entry)
-    return False
+        return _UNKNOWN if taken is None else _ALIVE
+    try:
+        os.lseek(fd, len(_SPENT_MARK), os.SEEK_SET)
+        state = _SPENT if os.read(fd, len(_SPENT_MARK)) == _SPENT_MARK else _DEAD
+        if delete_dead and os.name != "nt":
+            # Deleted while locked, so an owner that locks it next sees it gone.
+            _discard_entry(entry)
+    finally:
+        _release_fd(fd)
+    if delete_dead and os.name == "nt":
+        # Windows refuses the delete while the owner still has it open.
+        _discard_entry(entry)
+    return state
+
+
+def _reap(entries: List[Path], path: Path) -> None:
+    """Delete the entries a waiter saw dead, if they are still dead."""
+    for entry in entries:
+        _entry_state(entry, path, delete_dead=True)
 
 
 def _same_file(fd: int, path: Path) -> bool:
@@ -262,16 +299,36 @@ def _same_file(fd: int, path: Path) -> bool:
 
 
 class _QueueEntry:
-    def __init__(self, number: int, path: Path, fd: int):
-        self.number = number
+    def __init__(self, place: Tuple[int, str], path: Path, fd: int):
+        self.place = place
         self.path = path
         self.fd = fd
 
-    def leave(self) -> None:
+    def give_up_place(self) -> Path:
+        """Unlock the entry so the waiter behind sees itself next; delete later.
+
+        Cheaper than :meth:`leave`, so a new holder does not pay for the delete
+        inside its critical section. Its name is never reused, so whoever
+        deletes it removes only this file.
+        """
         try:
-            _release_fd(self.fd)
+            os.lseek(self.fd, len(_SPENT_MARK), os.SEEK_SET)
+            os.write(self.fd, _SPENT_MARK)
         finally:
+            _release_fd(self.fd)
+        return self.path
+
+    def leave(self) -> None:
+        if os.name == "nt":
+            try:
+                _release_fd(self.fd)
+            finally:
+                _discard_entry(self.path)
+            return
+        try:
             _discard_entry(self.path)
+        finally:
+            _release_fd(self.fd)
 
 
 def _create_entry(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
@@ -279,32 +336,25 @@ def _create_entry(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]
 
     None when this user cannot create files beside the lock.
     """
-    number = max((n for n, _ in _queue_entries(path)), default=-1) + 1
-    for _ in range(_MAX_NAME_SKIPS):
-        entry = path.with_name(f"{path.name}.q{number:010d}")
+    queue = queue_dir_for(path)
+    number = max((place[0] for place, _ in _queue_entries(path)), default=-1) + 1
+    place = (number, uuid.uuid4().hex)
+    entry = queue / f"q{place[0]:010d}-{place[1]}"
+    try:
         try:
-            # Readable by all, so any user can tell whether its owner is alive.
-            fd = os.open(str(entry), os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o644)
+            queue.mkdir()
+            if os.name != "nt":
+                # Past the umask: another user must be able to list it.
+                os.chmod(queue, 0o755)
         except FileExistsError:
-            number += 1
-            continue
-        except OSError as e:
-            error = _create_error(entry, target, e)
-            if error.dir_unwritable:
-                return None
-            if os.name == "nt" and isinstance(e, PermissionError):
-                # The folder takes new files, so this name is still being
-                # deleted by a waiter that just left.
-                number += 1
-                continue
-            raise error from e
-        return _QueueEntry(number, entry, fd)
-    raise FileLockError(
-        f"Could not create a queue entry for the lock {path} on {target}: "
-        f"{_MAX_NAME_SKIPS} names in a row were refused. Check that "
-        f"this user can create files in {path.parent}.",
-        path,
-    )
+            pass
+        fd = os.open(str(entry), os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as e:
+        error = _create_error(entry, target, e)
+        if error.dir_unwritable:
+            return None
+        raise error from e
+    return _QueueEntry(place, entry, fd)
 
 
 def _join_queue(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
@@ -332,24 +382,68 @@ def _join_queue(path: Path, target: Union[str, Path]) -> Optional[_QueueEntry]:
                 )
             time.sleep(0.001)
         if _same_file(entry.fd, entry.path):
+            if os.name != "nt":
+                # Past the umask, so another user can open it to test it.
+                os.chmod(entry.path, 0o644)
             return entry
         # POSIX: a waiter took it for dead and deleted it before we locked it.
         _release_fd(entry.fd)
 
 
-def _ahead(path: Path, entry: Optional[_QueueEntry]) -> Tuple[int, List[Path]]:
-    """Live entries queued before *entry* (all of them when None), and the
-    ones this user could not open to check."""
+def _ahead(
+    path: Path,
+    entry: Optional[_QueueEntry],
+    spent: Set[Path],
+    dead: Set[Path],
+    *,
+    count_all: bool = False,
+) -> Tuple[int, List[Path], int]:
+    """Live waiters queued before *entry* (all of them when None), the entries
+    this user could not check, and how many entries are listed ahead. The
+    holder is not among them. Entries found spent or dead are added to *spent*
+    or *dead*, for :func:`_reap` after this waiter's turn.
+
+    Unless *count_all*, stops at the first live one: a poll only needs to know
+    whether anyone is still ahead.
+    """
+    listed = [
+        other
+        for place, other in sorted(_queue_entries(path))
+        if entry is None or place < entry.place
+    ]
     count, unknown = 0, []
-    for number, other in _queue_entries(path):
-        if entry is not None and number >= entry.number:
+    for other in listed:
+        if other in spent:
+            # Names are never reused, so a spent entry stays dead.
             continue
-        alive = _entry_alive(other)
-        if alive is None:
+        state = _entry_state(other, path)
+        if state == _UNKNOWN:
             unknown.append(other)
-        if alive is not False:
+        if state == _SPENT:
+            spent.add(other)
+        elif state == _DEAD:
+            # Not cached: it may be a new entry its owner has yet to lock.
+            dead.add(other)
+        else:
             count += 1
-    return count, unknown
+            if not count_all:
+                break
+    return count, unknown, len(listed)
+
+
+def _poll_interval(listed_ahead: int) -> float:
+    """1 ms per waiter ahead, up to 20 ms: the front of the line moves at once,
+    and a waiter far back stays cheap."""
+    return min(_POLL_SECONDS, _NEXT_POLL_SECONDS * max(1, listed_ahead))
+
+
+def _lock_is_free(fd: int) -> bool:
+    """Whether nobody holds the main lock; taken for an instant to find out."""
+    if not try_lock(fd):
+        return False
+    os.lseek(fd, 0, os.SEEK_SET)
+    unlock(fd)
+    return True
 
 
 def _timeout_message(
@@ -363,12 +457,6 @@ def _timeout_message(
         f"Gave up after {timeout:g}s waiting for the lock on {target} "
         f"(lock file {path})"
     )
-    if ahead == 0:
-        return (
-            f"{waited}: a process outside GAIA's wait queue holds it, such as an "
-            "older GAIA version. Close other `gaia` commands, the Agent UI or "
-            "TUI and retry."
-        )
     if ahead == 1:
         message = (
             f"{waited}: 1 other GAIA operation was ahead of this one. "
@@ -396,10 +484,17 @@ class HeldFileLock:
     re-entrant: taking the same lock again, even in this thread, waits on it.
     """
 
-    def __init__(self, path: Path, fd: int, entry: Optional[_QueueEntry]):
+    def __init__(
+        self,
+        path: Path,
+        fd: int,
+        spent_entry: Optional[Path] = None,
+        dead: Iterable[Path] = (),
+    ):
         self.path = path
         self._fd: Optional[int] = fd
-        self._entry = entry
+        self._spent_entry = spent_entry
+        self._dead = list(dead)
         self._release_lock = threading.Lock()
 
     @property
@@ -415,8 +510,10 @@ class HeldFileLock:
         try:
             _release_fd(fd)
         finally:
-            if self._entry is not None:
-                self._entry.leave()
+            # After the release, so the next holder never waits on a delete.
+            if self._spent_entry is not None:
+                _discard_entry(self._spent_entry)
+            _reap(self._dead, self.path)
 
 
 def acquire_file_lock(
@@ -441,29 +538,44 @@ def acquire_file_lock(
     if timeout is None:
         timeout = LOCK_TIMEOUT_SECONDS
     deadline = time.monotonic() + timeout
+    entry: Optional[_QueueEntry] = None
+    spent: Set[Path] = set()
+    dead: Set[Path] = set()
     try:
+        # Nobody waiting: take it without the cost of a queue entry.
+        if not _queue_entries(path) and try_lock(fd):
+            return HeldFileLock(path, fd)
         entry = _join_queue(path, target)
-    except BaseException:
-        os.close(fd)
-        raise
-    try:
         while True:
-            ahead, unknown = _ahead(path, entry)
-            if ahead == 0 and try_lock(fd):
-                return HeldFileLock(path, fd, entry)
-            if time.monotonic() >= deadline:
+            queued, unknown, listed_ahead = _ahead(path, entry, spent, dead)
+            timed_out = time.monotonic() >= deadline
+            if timed_out and queued:
+                queued, unknown, _ = _ahead(path, entry, spent, dead, count_all=True)
+            if queued == 0 and try_lock(fd):
+                # A holder has no live entry: the waiter behind sees itself next.
+                spent_by_me = None
+                if entry is not None:
+                    mine: _QueueEntry = entry
+                    entry = None
+                    spent_by_me = mine.give_up_place()
+                return HeldFileLock(path, fd, spent_by_me, spent | dead)
+            if timed_out:
+                # With nobody queued ahead, the try above failed: it is held.
+                holder = 1 if queued == 0 or not _lock_is_free(fd) else 0
+                ahead = queued + holder
                 raise FileLockTimeout(
                     _timeout_message(target, path, timeout, ahead, unknown),
                     path,
                     ahead=ahead,
                 )
-            time.sleep(_POLL_SECONDS)
+            time.sleep(_poll_interval(listed_ahead))
     except BaseException:
         try:
             os.close(fd)
         finally:
             if entry is not None:
                 entry.leave()
+            _reap(list(spent | dead), path)
         raise
 
 

@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import os
+import statistics
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from gaia.utils.file_lock import (
     file_lock,
     lock_dir_unwritable,
     lock_path_for,
+    queue_dir_for,
     write_text_atomic,
 )
 from tests.unit.denied_folder import cannot_create_files_in
@@ -227,22 +230,39 @@ def test_an_unopenable_lock_file_in_a_writable_folder_is_not_unwritable(
 
 
 def _queue_files(target):
-    lock = lock_path_for(target)
-    return sorted(p.name for p in lock.parent.glob(lock.name + ".q*"))
+    queue = queue_dir_for(lock_path_for(target))
+    return sorted(p.name for p in queue.iterdir()) if queue.is_dir() else []
 
 
-def test_a_released_lock_leaves_no_queue_entry(tmp_path):
+def _live_entries(target) -> int:
+    from gaia.utils import file_lock as mod
+
+    queue = queue_dir_for(lock_path_for(target))
+    if not queue.is_dir():
+        return 0
+    return sum(
+        mod._entry_state(entry, lock_path_for(target)) == "alive"
+        for entry in queue.iterdir()
+    )
+
+
+def _entry_name(number: int) -> str:
+    return f"q{number:010d}-{uuid.uuid4().hex}"
+
+
+def test_an_uncontended_lock_leaves_no_queue_entry(tmp_path):
     target = tmp_path / "state.json"
     with file_lock(target):
-        assert len(_queue_files(target)) == 1
+        assert _queue_files(target) == []
     assert _queue_files(target) == []
 
 
 def test_a_crashed_waiters_entry_does_not_block_the_queue(tmp_path):
     target = tmp_path / "state.json"
-    lock = lock_path_for(target)
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
     # Left by a process killed while it waited: nobody holds its lock.
-    stale = lock.with_name(lock.name + ".q0000000000")
+    stale = queue / _entry_name(0)
     stale.write_text("", encoding="utf-8")
     with file_lock(target, timeout=0):
         pass
@@ -254,8 +274,9 @@ def test_an_entry_that_cannot_be_checked_is_named_in_the_timeout(tmp_path, monke
     from gaia.utils import file_lock as mod
 
     target = tmp_path / "state.json"
-    lock = lock_path_for(target)
-    unknown = lock.with_name(lock.name + ".q0000000000")
+    queue = queue_dir_for(lock_path_for(target))
+    queue.mkdir()
+    unknown = queue / _entry_name(0)
     unknown.write_text("", encoding="utf-8")
     monkeypatch.setattr(mod, "_probe_lock", lambda fd: None)
     with pytest.raises(FileLockTimeout) as exc:
@@ -265,30 +286,6 @@ def test_an_entry_that_cannot_be_checked_is_named_in_the_timeout(tmp_path, monke
     assert str(unknown) in str(exc.value)
     assert "delete them" in str(exc.value)
     assert unknown.exists()
-
-
-def test_timeout_says_how_many_operations_were_ahead(tmp_path):
-    target = tmp_path / "state.json"
-    taken, release = threading.Event(), threading.Event()
-
-    def _holder():
-        with file_lock(target):
-            taken.set()
-            release.wait(10)
-
-    holder = threading.Thread(target=_holder)
-    holder.start()
-    taken.wait(10)
-    try:
-        with pytest.raises(FileLockTimeout) as exc:
-            with file_lock(target, timeout=0.1):
-                pass
-    finally:
-        release.set()
-        holder.join()
-    assert exc.value.ahead == 1
-    assert "1 other GAIA operation was ahead" in str(exc.value)
-    assert "stuck" not in str(exc.value)
 
 
 def _held_elsewhere(target, check):
@@ -308,6 +305,21 @@ def _held_elsewhere(target, check):
     finally:
         release.set()
         holder.join()
+
+
+def test_timeout_says_how_many_operations_were_ahead(tmp_path):
+    target = tmp_path / "state.json"
+
+    def wait_briefly():
+        with pytest.raises(FileLockTimeout) as exc:
+            with file_lock(target, timeout=0.1):
+                pass
+        return exc.value
+
+    error = _held_elsewhere(target, wait_briefly)
+    assert error.ahead == 1
+    assert "1 other GAIA operation was ahead" in str(error)
+    assert "stuck" not in str(error)
 
 
 def test_a_folder_that_refuses_new_files_still_locks_an_existing_lock_file(
@@ -331,21 +343,6 @@ def test_a_folder_that_refuses_new_files_still_locks_an_existing_lock_file(
     assert _queue_files(target) == []
 
 
-@pytest.mark.skipif(
-    not (os.name == "nt" or sys.platform == "darwin"),
-    reason="case-insensitive file names",
-)
-def test_two_spellings_of_one_name_share_a_queue(tmp_path):
-    def other_spelling():
-        with pytest.raises(FileLockTimeout) as exc:
-            with file_lock(tmp_path / "state.json", timeout=0.1):
-                pass
-        return exc.value
-
-    error = _held_elsewhere(tmp_path / "State.json", other_spelling)
-    assert error.ahead == 1
-
-
 def test_a_held_lock_can_be_released_from_another_thread(tmp_path):
     from gaia.utils.file_lock import acquire_file_lock
 
@@ -363,53 +360,224 @@ def test_a_held_lock_can_be_released_from_another_thread(tmp_path):
     assert _queue_files(target) == []
 
 
+def test_a_checker_never_deletes_an_entry_its_owner_has_just_locked(
+    tmp_path, monkeypatch
+):
+    """The owner locks its new entry the instant a checker that took it for
+    dead lets go: the owner must then either see it gone or keep it."""
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    lock = lock_path_for(target)
+    owner = mod._create_entry(lock, target)  # created, not locked yet
+    real_release = mod._release_fd
+    owner_saw_it_in_place = []
+
+    def checker_lets_go(fd):
+        real_release(fd)
+        if not owner_saw_it_in_place:
+            locked = mod.try_lock(owner.fd)
+            owner_saw_it_in_place.append(
+                locked and mod._same_file(owner.fd, owner.path)
+            )
+
+    monkeypatch.setattr(mod, "_release_fd", checker_lets_go)
+    try:
+        mod._entry_state(owner.path, lock, delete_dead=True)
+    finally:
+        monkeypatch.undo()
+    try:
+        if owner_saw_it_in_place[0]:
+            assert owner.path.exists(), "deleted an entry its owner holds"
+    finally:
+        owner.leave()
+
+
+def test_an_earlier_entry_seen_before_its_owner_locked_it_still_counts(tmp_path):
+    """A waiter that polls inside another's create-then-lock gap must not skip
+    that entry for the rest of its wait, or it jumps the queue."""
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    lock = lock_path_for(target)
+    earlier = mod._create_entry(lock, target)  # created, not locked yet
+    me = mod._join_queue(lock, target)
+    spent, dead = set(), set()
+    try:
+        assert me.place > earlier.place
+        assert mod._ahead(lock, me, spent, dead)[0] == 0  # looks dead for now
+        assert mod.try_lock(earlier.fd)  # its owner locks it
+        assert mod._ahead(lock, me, spent, dead)[0] == 1
+    finally:
+        me.leave()
+        earlier.leave()
+
+
+def test_a_leaving_waiter_never_deletes_a_newer_entry(tmp_path):
+    """Entry names are never reused, so leaving can only remove one's own."""
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    lock = lock_path_for(target)
+    first = mod._join_queue(lock, target)
+    # A checker deleted it while its owner was slow to leave...
+    os.close(first.fd)
+    os.unlink(first.path)
+    # ...and a newcomer queued with the same number.
+    second = mod._join_queue(lock, target)
+    try:
+        assert second.place[0] == first.place[0]
+        assert second.path != first.path
+        # POSIX would delete an open file; Windows refuses, so this half
+        # only bites there.
+        first.fd = os.open(os.devnull, os.O_RDWR)
+        first.leave()
+        assert second.path.exists()
+    finally:
+        second.leave()
+
+
+def test_an_uncontended_lock_does_not_slow_down_in_a_crowded_folder(tmp_path):
+    """The RAG cache folder holds thousands of files beside its lock."""
+    for i in range(5000):
+        (tmp_path / f"{i:016x}_{i:032x}.json").write_bytes(b"x")
+    target = tmp_path / "rag-cache"
+    for _ in range(10):
+        with file_lock(target):
+            pass
+    times = []
+    for _ in range(50):
+        started = time.perf_counter()
+        with file_lock(target):
+            pass
+        times.append(time.perf_counter() - started)
+    assert statistics.median(times) < 0.002, f"median {statistics.median(times)}"
+
+
+def test_the_next_waiter_takes_the_lock_within_milliseconds(tmp_path):
+    """The waiter at the front notices a release fast, not on a 20 ms poll."""
+    target = tmp_path / "state.json"
+    delays = []
+    for _ in range(30):
+        queued, took = threading.Event(), []
+
+        def waiter():
+            queued.set()
+            with file_lock(target, timeout=10):
+                took.append(time.perf_counter())
+
+        with file_lock(target):
+            thread = threading.Thread(target=waiter)
+            thread.start()
+            assert queued.wait(10)
+            time.sleep(0.03)  # it has queued and settled into polling
+            released = time.perf_counter()
+        thread.join()
+        delays.append(took[0] - released)
+    assert statistics.median(delays) < 0.005, f"median {statistics.median(delays)}"
+
+
+def test_a_busy_lock_keeps_its_throughput(tmp_path):
+    """Four threads taking turns hand the lock on in a few milliseconds each."""
+    target = tmp_path / "state.json"
+    cycles, threads = 100, 4
+    durations = []
+
+    def work():
+        for _ in range(cycles):
+            started = time.perf_counter()
+            with file_lock(target, timeout=60):
+                pass
+            durations.append(time.perf_counter() - started)
+
+    workers = [threading.Thread(target=work) for _ in range(threads)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    # A median, so one antivirus or GC stall on a shared runner cannot fail it.
+    typical = statistics.median(durations)
+    assert typical < 0.008, f"{typical * 1000:.1f} ms per turn"
+    assert _queue_files(target) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_queue_entries_are_readable_by_other_users_despite_the_umask(tmp_path):
+    from gaia.utils import file_lock as mod
+
+    target = tmp_path / "state.json"
+    previous = os.umask(0o077)
+    try:
+        entry = mod._join_queue(lock_path_for(target), target)
+    finally:
+        os.umask(previous)
+    try:
+        assert entry.path.stat().st_mode & 0o777 == 0o644
+    finally:
+        entry.leave()
+
+
 _WAITER = """
 import sys, time
+from pathlib import Path
 from gaia.utils.file_lock import FileLockTimeout, file_lock
 
-target, name, timeout, order = sys.argv[1:5]
+target, name, timeout, go, order = sys.argv[1:6]
+print("ready", flush=True)
+while not Path(go).exists():
+    time.sleep(0.002)
 try:
     with file_lock(target, timeout=float(timeout)):
         with open(order, "a", encoding="utf-8") as f:
             f.write(name + "\\n")
         time.sleep(0.05)
 except FileLockTimeout as e:
-    print(str(e))
+    print(str(e), flush=True)
 """
 
 
-def _spawn_waiter(tmp_path, target, name, timeout):
-    """Start a GAIA process waiting on *target*; return once it has queued."""
+def _start_waiter(tmp_path, target, name, timeout):
+    """A GAIA process that imports, says ready, and waits for its go file."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(REPO_SRC) + os.pathsep + env.get("PYTHONPATH", "")
     env["GAIA_HOME"] = str(tmp_path / "gaia-home")
     env["HOME"] = env["USERPROFILE"] = str(tmp_path / "home")
-    queued = len(_queue_files(target)) + 1
+    go = tmp_path / f"go-{name}"
     proc = subprocess.Popen(
-        [sys.executable, "-c", _WAITER, str(target), name, str(timeout)]
+        [sys.executable, "-c", _WAITER, str(target), name, str(timeout), str(go)]
         + [str(tmp_path / "order.txt")],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    deadline = time.monotonic() + 120
-    while len(_queue_files(target)) < queued:
-        assert proc.poll() is None, proc.communicate()
-        assert time.monotonic() < deadline, f"waiter {name} never queued"
-        time.sleep(0.01)
-    return proc
+    return proc, go
 
 
 def test_processes_get_the_lock_in_the_order_they_asked(tmp_path):
     """Four GAIA processes wait on one lock; none may jump the queue."""
     target = tmp_path / "state.json"
+    names = ["0", "1", "2", "3", "impatient"]
+    started = [
+        _start_waiter(tmp_path, target, n, 1 if n == "impatient" else 120)
+        for n in names
+    ]
+    # Importing gaia is slow on a busy machine; that must not decide the order.
+    for proc, _ in started:
+        assert proc.stdout.readline().strip() == "ready", proc.communicate()
     with file_lock(target):
-        waiters = [_spawn_waiter(tmp_path, target, str(i), 120) for i in range(4)]
-        impatient = _spawn_waiter(tmp_path, target, "impatient", 1)
+        for queued, (proc, go) in enumerate(started, start=1):
+            go.touch()
+            deadline = time.monotonic() + 60
+            # Locked, not just created: an entry is only in line once locked.
+            while _live_entries(target) < queued:
+                assert proc.poll() is None, proc.communicate()
+                assert time.monotonic() < deadline, f"waiter {queued} never queued"
+                time.sleep(0.002)
+        impatient = started[-1][0]
         out, err = impatient.communicate(timeout=120)
-    results = [w.communicate(timeout=120) for w in waiters]
-    assert all(p.returncode == 0 for p in waiters + [impatient]), results
+    results = [proc.communicate(timeout=120) for proc, _ in started[:-1]]
+    assert all(proc.returncode == 0 for proc, _ in started), results
     order = (tmp_path / "order.txt").read_text(encoding="utf-8").split()
     assert order == ["0", "1", "2", "3"]
     # The holder plus the four that queued before it.

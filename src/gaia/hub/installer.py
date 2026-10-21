@@ -309,7 +309,8 @@ def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAg
     if not root.exists():
         return result
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name == BACKUP_DIRNAME:
+        # Dot-names are never agent ids: the backup and lock queue folders.
+        if not child.is_dir() or child.name.startswith("."):
             continue
         if not _AGENT_ID_SAFE_RE.match(child.name):
             # Not a directory this installer could have created — skip it
@@ -382,24 +383,26 @@ def claim_install_slot(
     Raises:
         InstallInProgressError: this process or another one holds the slot.
     """
-    busy = (
-        f"An install for '{agent_id}' is already in progress. Wait for it "
-        f"to finish (poll GET /api/agents/{agent_id}/install-status)."
-    )
     root = install_root or default_install_root()
     lock_target = root / f".{_require_safe_agent_id(agent_id)}.install"
     with _GUARD_LOCK:
         if agent_id in _IN_PROGRESS:
-            raise InstallInProgressError(busy)
+            raise InstallInProgressError(
+                f"An install or uninstall of '{agent_id}' is already running in "
+                "this process. Wait for it to finish, then retry."
+            )
         _IN_PROGRESS.add(agent_id)
     try:
-        # Not 0: a brief install_in_progress() probe must not reject a claim.
+        # Not 0: a waiter queued ahead for an instant must not reject a claim.
         held = acquire_file_lock(lock_target, timeout=0.5)
     except FileLockTimeout as exc:
         with _GUARD_LOCK:
             _IN_PROGRESS.discard(agent_id)
         raise InstallInProgressError(
-            f"{busy} Another GAIA process holds {exc.lock_path}."
+            f"Another GAIA process (the Agent UI, the daemon or `gaia hub`) is "
+            f"installing or removing '{agent_id}': it holds {exc.lock_path}. Its "
+            "progress shows in that process, not this one. Wait for it to "
+            "finish, then retry."
         ) from exc
     except BaseException:
         with _GUARD_LOCK:
@@ -437,20 +440,6 @@ def _install_slot(
 def is_installing(agent_id: str) -> bool:
     with _GUARD_LOCK:
         return agent_id in _IN_PROGRESS
-
-
-def install_in_progress(agent_id: str, install_root: Optional[Path] = None) -> bool:
-    """True when this process or another one holds *agent_id*'s install slot."""
-    if is_installing(agent_id):
-        return True
-    root = install_root or default_install_root()
-    try:
-        with file_lock(
-            root / f".{_require_safe_agent_id(agent_id)}.install", timeout=0
-        ):
-            return False
-    except FileLockTimeout:
-        return True
 
 
 # ---------------------------------------------------------------------------

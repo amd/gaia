@@ -244,12 +244,41 @@ def test_install_slot_still_rejects_a_real_concurrent_install(tmp_path):
         thread.join()
 
 
-def test_install_in_progress_probe_does_not_block_a_claim(tmp_path):
+def _slot_is_free(agent_id, root):
+    """Whether *agent_id*'s slot can be claimed right now (and give it back)."""
+    try:
+        installer.claim_install_slot(agent_id, root).release()
+    except InstallInProgressError:
+        return False
+    return True
+
+
+def test_a_lock_queue_folder_in_the_install_root_is_not_an_agent(tmp_path, caplog):
+    import logging
+
+    from gaia.utils.file_lock import lock_path_for, queue_dir_for
+
+    queue_dir_for(lock_path_for(tmp_path / ".demo.install")).mkdir()
+    with caplog.at_level(logging.WARNING):
+        assert installer.list_installed(tmp_path) == {}
+    assert "non-agent" not in caplog.text
+
+
+def test_a_held_slot_is_refused_and_freed_on_exit(tmp_path):
     with installer._install_slot("demo", tmp_path):  # noqa: SLF001
-        assert installer.install_in_progress("demo", tmp_path)
-    assert not installer.install_in_progress("demo", tmp_path)
-    with installer._install_slot("demo", tmp_path):  # noqa: SLF001
-        pass
+        assert not _slot_is_free("demo", tmp_path)
+    assert _slot_is_free("demo", tmp_path)
+
+
+def test_another_process_holding_the_slot_names_it_not_a_status_url(tmp_path):
+    thread = _hold_install_lock(tmp_path, 2)
+    try:
+        with pytest.raises(InstallInProgressError) as exc:
+            installer.claim_install_slot("demo", tmp_path)
+    finally:
+        thread.join()
+    assert "Another GAIA process" in str(exc.value)
+    assert "install-status" not in str(exc.value)
 
 
 def test_a_claimed_slot_is_freed_by_another_thread(tmp_path):
@@ -262,7 +291,7 @@ def test_a_claimed_slot_is_freed_by_another_thread(tmp_path):
     worker.start()
     worker.join()
     slot.release()  # a second release does nothing
-    assert not installer.install_in_progress("demo", tmp_path)
+    assert _slot_is_free("demo", tmp_path)
     with installer.claim_install_slot("demo", tmp_path):
         pass
 
@@ -282,7 +311,7 @@ def test_install_runs_under_a_slot_the_caller_claimed(tmp_path):
         # The caller still owns it.
         assert slot.held
     assert result.id == "demo"
-    assert not installer.install_in_progress("demo", tmp_path)
+    assert _slot_is_free("demo", tmp_path)
 
 
 def test_install_refuses_a_slot_for_another_agent(tmp_path):

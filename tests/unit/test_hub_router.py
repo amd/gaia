@@ -60,6 +60,15 @@ def _clean(tmp_path, monkeypatch):
     installer_mod._IN_PROGRESS.clear()  # noqa: SLF001
 
 
+def _slot_is_free(agent_id: str) -> bool:
+    """Whether *agent_id*'s slot can be claimed right now (and give it back)."""
+    try:
+        installer_mod.claim_install_slot(agent_id).release()
+    except installer_mod.InstallInProgressError:
+        return False
+    return True
+
+
 def _wait_for_worker(agent_id: str) -> None:
     """Wait for the install worker the endpoint started to give its slot back."""
     import time
@@ -296,7 +305,7 @@ def test_the_worker_runs_under_the_endpoints_slot_and_frees_it(client, monkeypat
     _wait_for_worker("demo")
     assert seen == {"slot_held": True}
     assert installer_mod.get_install_status("demo")["status"] == "failed"
-    assert not installer_mod.install_in_progress("demo")
+    assert _slot_is_free("demo")
 
 
 def _catalog_down(*a, **k):
@@ -330,7 +339,7 @@ def test_a_refused_install_gives_the_slot_back(
     monkeypatch.setattr(*patch_target, replacement)
     resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
     assert resp.status_code == status
-    assert not installer_mod.install_in_progress("demo")
+    assert _slot_is_free("demo")
 
 
 class _ThreadThatCannotStart(threading.Thread):
@@ -350,7 +359,7 @@ def test_a_worker_that_cannot_start_reports_failed(client, monkeypatch):
     resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
     assert resp.status_code == 500
     assert installer_mod.get_install_status("demo")["status"] == "failed"
-    assert not installer_mod.install_in_progress("demo")
+    assert _slot_is_free("demo")
 
 
 def test_install_requires_ui_header(client_no_ui_header):
@@ -419,7 +428,7 @@ def test_uninstall_runs_under_the_endpoints_slot_and_frees_it(client, monkeypatc
     resp = client.delete("/api/agents/demo", headers=UI)
     assert resp.status_code == 200
     assert seen == {"slot_held": True}
-    assert not installer_mod.install_in_progress("demo")
+    assert _slot_is_free("demo")
 
 
 def test_a_slot_whose_lock_file_cannot_be_made_is_a_500_naming_it(client, monkeypatch):

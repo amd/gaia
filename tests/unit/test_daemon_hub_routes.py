@@ -882,7 +882,10 @@ def test_install_held_by_another_process_is_409_and_keeps_the_sidecar(
         release.set()
         holder.join()
     assert r.status_code == 409
-    assert "in progress" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "Another GAIA process" in detail
+    # This daemon has no progress for an install another process runs.
+    assert "install-status" not in detail
     assert registry.stop_calls == []
     assert install_svc._QUEUED == set()
 
@@ -1142,6 +1145,30 @@ def test_uninstall_while_another_process_installs_is_409_and_keeps_the_sidecar(
         holder.join()
     assert r.status_code == 409
     assert registry.stop_calls == []
+    assert (install_root / "email" / ".installed").exists()
+
+
+def test_uninstall_whose_slot_lock_cannot_be_made_is_500_naming_it(
+    monkeypatch, install_root
+):
+    from gaia.hub import installer as installer_mod
+    from gaia.utils.file_lock import FileLockError
+
+    _write_sentinel(install_root, "email", "0.5.0")
+    registry = _FakeRegistry()
+    client = _client(registry)
+
+    def unwritable(agent_id, install_root=None):
+        raise FileLockError(
+            "Cannot create the lock file /x/.email.install.lock", Path("/x")
+        )
+
+    monkeypatch.setattr(installer_mod, "claim_install_slot", unwritable)
+    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    assert r.status_code == 500
+    assert "Cannot create the lock file" in r.json()["detail"]
+    assert registry.stop_calls == []
+    assert install_svc._QUEUED == set()
     assert (install_root / "email" / ".installed").exists()
 
 
