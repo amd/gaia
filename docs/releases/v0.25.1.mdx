@@ -49,11 +49,11 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Settings and shared state survive several GAIA processes at once** — config writes, the file index and connector tokens are no longer lost or deleted. (PRs [#5388](https://github.com/amd/gaia/pull/5388), [#5377](https://github.com/amd/gaia/pull/5377), [#5378](https://github.com/amd/gaia/pull/5378))
 - **GAIA no longer closes your own PowerPoint or ngrok tunnels.** (PRs [#5345](https://github.com/amd/gaia/pull/5345), [#5376](https://github.com/amd/gaia/pull/5376))
 - **Scheduled tasks show runs missed while the PC was off**, run in windows that cross midnight, and recover after a crash. (PRs [#5391](https://github.com/amd/gaia/pull/5391), [#5407](https://github.com/amd/gaia/pull/5407), [#5380](https://github.com/amd/gaia/pull/5380))
-- **A custom model downloads on its first chat** and is no longer reloaded before every turn. (PRs [#5360](https://github.com/amd/gaia/pull/5360), [#5362](https://github.com/amd/gaia/pull/5362))
+- **A custom model downloads on its first chat**, can be picked in the Agent UI once downloaded, and is no longer reloaded before every turn. (PRs [#5360](https://github.com/amd/gaia/pull/5360), [#5449](https://github.com/amd/gaia/pull/5449), [#5362](https://github.com/amd/gaia/pull/5362))
 - **A missing file is reported as not found instead of asking you to approve it**, and a download asks about the file, not its folder. (PRs [#5307](https://github.com/amd/gaia/pull/5307), [#5308](https://github.com/amd/gaia/pull/5308))
 - **Your own scripts get 600 s instead of being killed at 30 s.** (PR [#5347](https://github.com/amd/gaia/pull/5347))
 - **One bad batch of parallel tool calls no longer ends the turn with no answer.** (PR [#5413](https://github.com/amd/gaia/pull/5413))
-- **`gaia install --lemonade` checks the installer's size and SHA-256 before running it.** (PR [#5389](https://github.com/amd/gaia/pull/5389))
+- **`gaia install --lemonade` checks the installer's size and SHA-256 before running it**, for every supported installer. (PRs [#5389](https://github.com/amd/gaia/pull/5389), [#5455](https://github.com/amd/gaia/pull/5455))
 - **Model servers left behind by a crashed Lemonade are stopped**, so the next start doesn't load the same models twice. (PR [#5352](https://github.com/amd/gaia/pull/5352))
 
 ## Contributors
@@ -65,8 +65,17 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**117 commits** since v0.25.0:
+**126 commits** since v0.25.0:
 
+- `d343b3aca` — fix(ui): an upload queued for the model isn't stopped as stuck, and Cancel reaches it (#5448)
+- `72b945be4` — fix(ui): let the Agent UI pick a downloaded custom model (#5449)
+- `7e49b1602` — test: catch reverts of the scheduler lease, restart notice and tool limit (#5456)
+- `1158f69ba` — test: four flaky unit tests pass reliably and stay out of ~/.gaia (#5468)
+- `53c6697cb` — fix(lemonade): ask the daemon once per poll while waiting for GAIA's server (#5444)
+- `1441c1d74` — fix(installer): verify every supported Lemonade installer; clearer uninstall errors (#5455)
+- `107e47fa8` — fix(connectors): keep a connection another GAIA process just forwarded (#5467)
+- `b4af7d5c3` — fix(ui): closing the chat database no longer crashes a read still in flight (#5472)
+- `a069d793b` — ci(release): push the flagship lock PR to a branch that can exist (#5473)
 - `d0dc474b3` — fix(agents): report a turn the model gave up on as failed, not done (#5432)
 - `419dbf09a` — ci(release): open a PR pinning the flagship's published hashes on main (#5447)
 - `c64993de0` — fix(llm): only stop a Lemonade server the client launched itself (#5439)
