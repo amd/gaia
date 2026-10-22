@@ -594,6 +594,12 @@ tell from its code that it just reads files, and no files changed in the folders
 it ran in. When in doubt — a library GAIA doesn't know, a file opened in a mode
 it can't read off the code — it is listed.
 
+A plain shell delete of named files in your workspace, such as `del notes.txt`,
+`rm notes.txt` or `Remove-Item notes.txt`, is the exception: GAIA copies those
+files first, so they show as deleted files with a diff and Undo puts them back.
+A delete with a wildcard, a variable, a folder or a file outside the workspace
+is still listed as a command GAIA can't track.
+
 **Settings → Privacy → Undo history** sets how long copies are kept (7 days by
 default) and how much space they may use (500 MB, oldest first), and shows how
 much they use now.
