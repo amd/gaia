@@ -579,6 +579,7 @@ def relay_query(
     finally:
         if answers_confirmations:
             handler.set_relay_confirmation(None)
+        handler.set_relay_question(None)
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None

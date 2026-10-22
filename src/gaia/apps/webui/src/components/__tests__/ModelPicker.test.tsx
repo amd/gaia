@@ -163,6 +163,15 @@ describe('ModelChip model states', () => {
         expect(await screen.findByRole('tooltip')).toHaveTextContent(/GPU · Vulkan \(expected\)[\s\S]*21.7 GB/);
     });
 
+    it('closes the info bubble when the list scrolls', async () => {
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.mouseEnter(within(dialog).getByRole('button', { name: 'About Gemma 4 E4B' }));
+        expect(await screen.findByRole('tooltip')).toBeInTheDocument();
+        fireEvent.scroll(dialog);
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
+
     it('leaves out models this PC cannot run and says how many', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();

@@ -95,8 +95,9 @@ export function ModelChip() {
     const [requestsPending, setRequestsPending] = useState(0);
     // The switch after a download failed, possibly with the list closed: say so on the chip.
     const [autoSwitchError, setAutoSwitchError] = useState<string | null>(null);
-    // Polls that found the picked model neither downloading nor downloaded.
+    // List refreshes that found the picked model missing, or neither downloading nor downloaded.
     const pollsWithoutProgress = useRef(0);
+    const lastCountedList = useRef<ProviderModels[] | null>(null);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -146,7 +147,7 @@ export function ModelChip() {
             await api.downloadModel(model);
             await load(true);
         } catch (err) {
-            setPickAfterDownload(null);
+            setPickAfterDownload((p) => (p?.model === model ? null : p));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setDownloading(null);
@@ -186,13 +187,26 @@ export function ModelChip() {
     useEffect(() => {
         // Wait out the download request itself; until it answers, the row still reads "not downloaded".
         if (!pickAfterDownload || !groups || requestsPending > 0) return;
-        const m = groups.flatMap((g) => g.models).find((x) => x.id === pickAfterDownload.model);
-        if (!m) return;
+        const { model, provider } = pickAfterDownload;
+        // Count each refreshed list once, not every effect run (`choose` changes too).
+        const missedPoll = () => {
+            if (lastCountedList.current !== groups) {
+                lastCountedList.current = groups;
+                pollsWithoutProgress.current += 1;
+            }
+            return pollsWithoutProgress.current >= PICK_START_POLLS;
+        };
+        const m = groups.flatMap((g) => g.models).find((x) => x.id === model);
+        if (!m) {
+            if (!missedPoll()) return;
+            setPickAfterDownload(null);
+            setAutoSwitchError(`${displayModelName(model)} is no longer in the model list, so it wasn't switched to.`);
+            return;
+        }
         if (isDownloading(m)) {
             pollsWithoutProgress.current = 0;
             return;
         }
-        const { model, provider } = pickAfterDownload;
         const progress = m.download_progress;
         if (progress?.state === 'error') {
             setPickAfterDownload(null);
@@ -201,7 +215,7 @@ export function ModelChip() {
         }
         // The model list can lag the finished download by a poll; "complete" already means downloaded.
         if (progress?.state !== 'complete' && modelState(m) === 'not_downloaded') {
-            if (++pollsWithoutProgress.current < PICK_START_POLLS) return;
+            if (!missedPoll()) return;
             setPickAfterDownload(null);
             setAutoSwitchError(`The download of ${displayModelName(model)} never started. Try the download button again.`);
             return;

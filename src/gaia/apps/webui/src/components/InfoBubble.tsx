@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Info } from 'lucide-react';
 import './InfoBubble.css';
@@ -47,6 +47,14 @@ export function InfoBubble({ label, warning, children }: { label: string; warnin
         }
         top = Math.min(Math.max(EDGE, top), vh - EDGE - b.height);
         setPos({ left, top });
+    }, [open]);
+
+    useEffect(() => {
+        if (!open) return;
+        // Placed once on open; a scroll would leave it beside the wrong row.
+        const close = () => setOpen(false);
+        window.addEventListener('scroll', close, true);
+        return () => window.removeEventListener('scroll', close, true);
     }, [open]);
 
     return (

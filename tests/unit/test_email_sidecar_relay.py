@@ -668,6 +668,17 @@ class TestStreamFailureHandling:
         assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
+    def test_crash_while_a_question_is_open_clears_it(self):
+        """Otherwise the chat keeps showing "waiting on you" after the run died."""
+        handler = _FakeHandler()
+
+        def _source():
+            yield {"type": "needs_input", "request_id": "req-9", "question": "Which?"}
+            raise RuntimeError("socket closed")
+
+        relay.relay_query(handler, _ScriptedProxy(_source), query="q", context=[])
+        assert handler.relay_question is None
+
     def test_exception_never_propagates_out_of_relay_query(self):
         handler = _FakeHandler()
 

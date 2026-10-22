@@ -304,6 +304,53 @@ describe('ModelChip', () => {
         expect(mockedApi.selectModel).not.toHaveBeenCalledWith('Qwen3-8B-GGUF');
     }, 10000);
 
+    it('a pick whose model drops out of the list is given up, visibly', async () => {
+        let listed = true;
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF'), ...(listed ? [model('Qwen3-8B-GGUF', { downloaded: false })] : [])]
+                : [],
+        }));
+        mockedApi.downloadModel.mockImplementation(async () => { listed = false; return {} as never; });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+
+        expect(await within(dialog).findByRole('alert', {}, { timeout: 13000 }))
+            .toHaveTextContent(/Qwen3-8B-GGUF is no longer in the model list/);
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    }, 16000);
+
+    it("a failed download of another model keeps the pick waiting on its own download", async () => {
+        let qwen: Partial<ProviderModel> = { downloaded: false };
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF'), model('Phi-4-GGUF', { downloaded: false }), model('Qwen3-8B-GGUF', qwen)]
+                : [],
+        }));
+        mockedApi.downloadModel.mockImplementation(async (id) => {
+            if (id === 'Phi-4-GGUF') throw new Error('Disk full');
+            qwen = { downloaded: false, download_progress: { state: 'downloading', percent: 40 } as never };
+            return {} as never;
+        });
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+        const phi = await within(dialog).findByRole('button', { name: 'Download Phi-4-GGUF' });
+        await waitFor(() => expect(phi).not.toBeDisabled());
+        fireEvent.click(phi);
+        expect(await within(dialog).findByText(/Disk full/)).toBeInTheDocument();
+
+        qwen = { downloaded: true };
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'), { timeout: 5000 });
+    }, 10000);
+
     it('a switch that fails after the download is shown on the chip', async () => {
         let downloaded = false;
         mockedApi.listProviderModels.mockImplementation(async (id) => ({
