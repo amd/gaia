@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, Optional
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
 
+from .chat_search import fold, snippet
+
 logger = logging.getLogger(__name__)
 
 
@@ -391,6 +393,21 @@ class ChatDatabase:
             "ELSE 'chat' END",
         )
 
+        # Chat search: content folded for case and accents, filled lazily by
+        # search_sessions. Any writer that edits content marks it stale.
+        self._add_column("messages", "search_text", "TEXT")
+        with self._transaction():
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_unfolded "
+                "ON messages(id) WHERE search_text IS NULL"
+            )
+            self._conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS messages_search_stale "
+                "AFTER UPDATE OF content ON messages "
+                "WHEN NEW.search_text IS OLD.search_text "
+                "BEGIN UPDATE messages SET search_text = NULL WHERE id = NEW.id; END"
+            )
+
     @property
     def db_path(self) -> str:
         """The SQLite file this database opened, or ``:memory:``."""
@@ -541,6 +558,72 @@ class ChatDatabase:
                 sessions.append(session)
 
             return sessions
+
+    def search_sessions(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Chats whose title or messages contain *query*, newest first.
+
+        Matching ignores case and accents. Each result carries a snippet
+        around its first hit: the earliest message, else the title.
+        """
+        needle = fold(query.strip())
+        if not needle:
+            return []
+        with self._transaction():
+            while True:
+                unfolded = self._conn.execute(
+                    "SELECT id, content FROM messages "
+                    "WHERE search_text IS NULL LIMIT 2000"
+                ).fetchall()
+                if not unfolded:
+                    break
+                self._conn.executemany(
+                    "UPDATE messages SET search_text = ? WHERE id = ?",
+                    [(fold(r["content"] or ""), r["id"]) for r in unfolded],
+                )
+            sessions = self._conn.execute(
+                "SELECT id, title FROM sessions ORDER BY updated_at DESC"
+            ).fetchall()
+            first_hit = {
+                r["session_id"]: r["first_id"]
+                for r in self._conn.execute(
+                    "SELECT session_id, MIN(id) AS first_id FROM messages "
+                    "WHERE role IN ('user', 'assistant') "
+                    "AND instr(search_text, ?) > 0 GROUP BY session_id",
+                    (needle,),
+                )
+            }
+            matched = [
+                s
+                for s in sessions
+                if s["id"] in first_hit or needle in fold(s["title"])
+            ][:limit]
+            hit_ids = [first_hit[s["id"]] for s in matched if s["id"] in first_hit]
+            content = {}
+            if hit_ids:
+                marks = ", ".join("?" for _ in hit_ids)
+                content = {
+                    r["id"]: r["content"]
+                    for r in self._conn.execute(
+                        f"SELECT id, content FROM messages WHERE id IN ({marks})",
+                        hit_ids,
+                    )
+                }
+
+        results: List[Dict[str, Any]] = []
+        for s in matched:
+            if s["id"] in first_hit:
+                field, text = "message", content[first_hit[s["id"]]]
+            else:
+                field, text = "title", s["title"]
+            results.append(
+                {
+                    "session_id": s["id"],
+                    "title": s["title"],
+                    "field": field,
+                    "snippet": snippet(text, needle),
+                }
+            )
+        return results
 
     def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
         """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""

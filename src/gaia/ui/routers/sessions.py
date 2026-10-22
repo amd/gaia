@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
@@ -42,6 +42,7 @@ from ..models import (
     SessionListResponse,
     SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
@@ -278,6 +279,23 @@ async def session_events():
             await _system_emitter.unsubscribe(q)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# Declared before /api/sessions/{session_id}, which would otherwise claim "search".
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 20,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Find chats by title or message text, ignoring case and accents.
+
+    Private chats are included: the search runs on this PC and its results
+    go only to the local UI that already lists those chats.
+    """
+    limit = max(1, min(limit, 50))
+    results = await asyncio.to_thread(db.search_sessions, q, limit)
+    return SessionSearchResponse(query=q, results=results)
 
 
 @router.post("/api/sessions/{session_id}/activate", status_code=200)

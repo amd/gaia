@@ -3316,6 +3316,30 @@
     "title": "ScriptedUserRequest",
     "type": "object"
   },
+  "SearchSnippet": {
+    "description": "Text around a search hit, split so the UI can highlight ``match``.",
+    "properties": {
+      "after": {
+        "title": "After",
+        "type": "string"
+      },
+      "before": {
+        "title": "Before",
+        "type": "string"
+      },
+      "match": {
+        "title": "Match",
+        "type": "string"
+      }
+    },
+    "required": [
+      "before",
+      "match",
+      "after"
+    ],
+    "title": "SearchSnippet",
+    "type": "object"
+  },
   "SelectModelRequest": {
     "properties": {
       "model": {
@@ -3532,6 +3556,60 @@
       "model"
     ],
     "title": "SessionResponse",
+    "type": "object"
+  },
+  "SessionSearchResponse": {
+    "description": "Chats matching a search query, newest first, at most ``limit``.",
+    "properties": {
+      "query": {
+        "title": "Query",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/SessionSearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      }
+    },
+    "required": [
+      "query",
+      "results"
+    ],
+    "title": "SessionSearchResponse",
+    "type": "object"
+  },
+  "SessionSearchResult": {
+    "description": "One chat that matches a search, with where the first hit was.",
+    "properties": {
+      "field": {
+        "enum": [
+          "title",
+          "message"
+        ],
+        "title": "Field",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "snippet": {
+        "$ref": "#/components/schemas/SearchSnippet"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "title",
+      "field",
+      "snippet"
+    ],
+    "title": "SessionSearchResult",
     "type": "object"
   },
   "SettingsResponse": {
