@@ -420,9 +420,10 @@ def test_banner_slash_commands_exist_in_the_tui(sh_text, ps1_text, script):
     )
 
 
-def test_elevation_is_announced_before_it_is_needed(sh_text):
-    assert "announce_elevation" in sh_text
-    assert sh_text.index("announce_elevation\n") < sh_text.index("install_uv\n\n")
+def test_unix_install_promises_no_elevation(sh_text):
+    """`gaia init` installs GAIA's own Lemonade on Linux and macOS: no sudo."""
+    assert "password" not in sh_text.replace("no password needed", "")
+    assert "via sudo" not in sh_text
 
 
 def test_windows_install_promises_no_elevation(ps1_text):

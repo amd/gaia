@@ -8571,7 +8571,15 @@ def handle_agent_list(_args):
         for entry in sorted(available, key=lambda a: a.get("id", "")):
             aid = entry.get("id", "?")
             ver = entry.get("latest_version", "?")
-            mark = "  [installed]" if aid in installed else ""
+            mark = ""
+            if aid in installed:
+                # Show what is on disk; build metadata (+...) doesn't change the release.
+                local = installed[aid].version
+                if local.split("+", 1)[0] == str(ver).split("+", 1)[0]:
+                    mark = "  [installed]"
+                else:
+                    mark = f"  [installed; catalog latest {ver}]"
+                ver = local
             gate, gate_error = catalog.listing_core_gate(entry)
             if gate_error:
                 mark += f"  [unreadable min_gaia_version: {gate_error}]"
