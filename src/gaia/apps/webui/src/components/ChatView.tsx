@@ -38,6 +38,7 @@ import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
+import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -703,7 +704,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (outcome.kind === 'accepted' && isStale()) streamController?.abort();
         };
         // The server names a new chat after its first question when it takes it.
-        let titleShown = reattach || session?.title !== 'New Task';
+        let titleShown = reattach || (!!session && !isPlaceholderTitle(session.title));
         const accepted = () => {
             settleQueued({ kind: 'accepted' });
             if (titleShown) return;

@@ -670,6 +670,20 @@ class ChatDatabase:
             )
         return True
 
+    def replace_auto_title(self, session_id: str, expected: str, title: str) -> bool:
+        """Swap an auto title for *title* only if it is still *expected*.
+
+        True when renamed. A rename that lands first (a new title or a pin)
+        makes this a no-op, in one statement, so it can never be overwritten.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE sessions SET title = ?, updated_at = ?
+                   WHERE id = ? AND title = ? AND title_is_custom = 0""",
+                (title, self._now(), session_id, expected),
+            )
+            return cursor.rowcount > 0
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""
         with self._transaction():

@@ -156,6 +156,35 @@ def test_a_rename_during_titling_wins():
     assert db.get_session(sid)["title"] == "My tea notes"
 
 
+def test_a_failed_title_is_not_requested_again_next_turn():
+    """Each retry would be another billed call on a cloud model."""
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="New Task")["id"]
+    db.begin_turn(sid, ESSAY)
+    ch._set_provisional_title(db, sid, ESSAY)
+
+    first = _retitle(db, sid, CLOUD_MODEL, reply=None)
+    second = _retitle(db, sid, CLOUD_MODEL)
+
+    first.assert_awaited_once()
+    second.assert_not_awaited()
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
+def test_the_title_write_never_overwrites_a_rename():
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="New Task")["id"]
+    ch._set_provisional_title(db, sid, ESSAY)
+
+    db.update_session(sid, title="My tea notes")
+    assert not db.replace_auto_title(sid, PROVISIONAL, "History of Tea Essay")
+    assert db.get_session(sid)["title"] == "My tea notes"
+
+    db.update_session(sid, title=PROVISIONAL, title_is_custom=True)
+    assert not db.replace_auto_title(sid, PROVISIONAL, "History of Tea Essay")
+    assert db.get_session(sid)["title"] == PROVISIONAL
+
+
 def test_a_local_guard_chat_is_not_titled_by_a_cloud_default():
     db = ChatDatabase(":memory:")
     sid = db.create_session(title="New Task")["id"]

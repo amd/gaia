@@ -572,15 +572,13 @@ _classify_chat_exception = classify_lemonade_exception
 #   * The session's title_is_custom flag is set — an explicit user/API title
 #     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
-#   * Title was last updated < 30 s ago — prevents thrash mid-conversation
+#   * A title request already ran for the session in this server run — a
+#     failed one is not retried, so a cloud chat is not billed every turn,
+#     and concurrent fire-and-forget tasks don't pile up
 #   * No agent / no Lemonade base URL available
-#
-# Throttled by a per-session timestamp dict so concurrent fire-and-forget
-# tasks don't pile up.
 _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
-_AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
-_AUTO_TITLE_THROTTLE_S = 30.0
+_AUTO_TITLE_TRIED: set[str] = set()  # sessions that had their title request
 
 
 #: Safety-classifier model families. They answer any prompt with a verdict
@@ -846,21 +844,19 @@ async def _maybe_update_session_title(
         )
         return
 
-    # Throttle: don't re-title if we updated within the last 30 s.
-    now = _time.monotonic()
+    title_model = _title_model_for(model_id)
+    if not title_model:
+        return
+
     with _AUTO_TITLE_LOCK:
-        last = _AUTO_TITLE_LAST_AT.get(session_id, 0.0)
-        if now - last < _AUTO_TITLE_THROTTLE_S:
+        if session_id in _AUTO_TITLE_TRIED:
             return
-        _AUTO_TITLE_LAST_AT[session_id] = now
+        _AUTO_TITLE_TRIED.add(session_id)
 
     # Use the same Lemonade endpoint the chat just used.
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    title_model = _title_model_for(model_id)
-    if not title_model:
-        return
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
@@ -870,12 +866,10 @@ async def _maybe_update_session_title(
     )
     if not new_title or new_title.lower() == current_title.lower():
         return
-    # The user may have renamed the chat while the title was being written.
-    latest = db.get_session(session_id)
-    if not latest or (latest.get("title") or "") != current_title:
-        return
     try:
-        db.update_session(session_id, title=new_title)
+        # A no-op when the user renamed the chat while the title was written.
+        if not db.replace_auto_title(session_id, current_title, new_title):
+            return
         logger.info(
             "Auto-titled session %s: %r → %r",
             session_id[:8],

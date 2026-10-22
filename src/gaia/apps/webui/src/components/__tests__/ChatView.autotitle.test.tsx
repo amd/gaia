@@ -135,6 +135,23 @@ describe('ChatView title pinning (#2165)', () => {
         expect(mockedApi.updateSession).not.toHaveBeenCalled();
     });
 
+    it.each(['New Chat', 'Untitled', ''])('refreshes a chat the server still treats as unnamed (%j)', async (title) => {
+        setSession({ ...SESSION, title });
+        mockedApi.getSession.mockResolvedValue({ ...SESSION, title: 'plan a trip' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'plan a trip' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        await act(async () => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Sure' } as unknown as StreamEvent);
+        });
+
+        expect(mockedApi.getSession).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().sessions[0].title).toBe('plan a trip');
+    });
+
     it('manual rename pins the title', async () => {
         setSession({ ...SESSION, title: 'Auto Generated Title' });
         render(<ChatView sessionId={SESSION.id} />);
