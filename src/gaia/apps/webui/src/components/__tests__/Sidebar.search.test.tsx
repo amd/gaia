@@ -54,7 +54,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(new Date(2026, 8, 29, 12));
-    mockedApi.searchSessions.mockResolvedValue([]);
+    mockedApi.searchSessions.mockResolvedValue({ query: '', results: [] });
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });
@@ -78,6 +78,8 @@ describe('Sidebar chat search', () => {
         await settle();
         expect(mockedApi.searchSessions).toHaveBeenCalledOnce();
         expect(mockedApi.searchSessions.mock.calls[0][0]).toBe('tri');
+        // Background runs stay out of the count, as they stay out of the list.
+        expect(mockedApi.searchSessions.mock.calls[0][1]).toBe(false);
     });
 
     it('filters titles before the backend answers', async () => {
@@ -89,7 +91,7 @@ describe('Sidebar chat search', () => {
     });
 
     it('merges title matches with chats that matched inside a message', async () => {
-        mockedApi.searchSessions.mockResolvedValue([TRIP_IN_TAX]);
+        mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
         render(<Sidebar onNewChat={vi.fn()} />);
         await type('trip');
         await settle();
@@ -107,7 +109,7 @@ describe('Sidebar chat search', () => {
     });
 
     it('drops results that belong to an older query', async () => {
-        mockedApi.searchSessions.mockResolvedValue([TRIP_IN_TAX]);
+        mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
         render(<Sidebar onNewChat={vi.fn()} />);
         await type('trip');
         await settle();
@@ -116,7 +118,7 @@ describe('Sidebar chat search', () => {
     });
 
     it('moves through results with the arrow keys and opens one with Enter', async () => {
-        mockedApi.searchSessions.mockResolvedValue([TRIP_IN_TAX]);
+        mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
         render(<Sidebar onNewChat={vi.fn()} />);
         await type('trip');
         await settle();
@@ -163,6 +165,15 @@ describe('Sidebar chat search', () => {
         expect(screen.getByRole('status')).toHaveTextContent('No chats match.');
     });
 
+    it('says when only the newest matching chats are listed', async () => {
+        mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX], truncated: true });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        await type('trip');
+        expect(within(list()).queryByText(/newest chats that mention this/)).not.toBeInTheDocument();
+        await settle();
+        expect(within(list()).getByText(/Showing the 1 newest chats that mention this/)).toBeInTheDocument();
+    });
+
     it('keeps title matches and reports the error when the backend search fails', async () => {
         mockedApi.searchSessions.mockRejectedValue(new Error('server down'));
         render(<Sidebar onNewChat={vi.fn()} />);
@@ -179,5 +190,6 @@ describe('splitMatch', () => {
         expect(splitMatch('the resume file', 'RÉSUMÉ')).toEqual({ before: 'the ', match: 'resume', after: ' file' });
         expect(splitMatch('😀 emoji then word', 'word')).toEqual({ before: '😀 emoji then ', match: 'word', after: '' });
         expect(splitMatch('nothing', 'zzz')).toBeNull();
+        expect(splitMatch('Die Straße hier', 'strasse')).toEqual({ before: 'Die ', match: 'Straße', after: ' hier' });
     });
 });

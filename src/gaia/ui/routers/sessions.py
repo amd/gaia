@@ -286,16 +286,20 @@ async def session_events():
 async def search_sessions(
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = 20,
+    include_automated: bool = False,
     db: ChatDatabase = Depends(get_db),
 ):
     """Find chats by title or message text, ignoring case and accents.
 
-    Private chats are included: the search runs on this PC and its results
-    go only to the local UI that already lists those chats.
+    Eval and scheduled chats are left out unless *include_automated*, as the
+    sidebar leaves them out. Private chats are included: the search runs on
+    this PC and its results go only to the local UI that already lists them.
     """
     limit = max(1, min(limit, 50))
-    results = await asyncio.to_thread(db.search_sessions, q, limit)
-    return SessionSearchResponse(query=q, results=results)
+    results, truncated = await asyncio.to_thread(
+        db.search_sessions, q, limit, include_automated
+    )
+    return SessionSearchResponse(query=q, results=results, truncated=truncated)
 
 
 @router.post("/api/sessions/{session_id}/activate", status_code=200)

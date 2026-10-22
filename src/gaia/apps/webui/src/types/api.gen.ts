@@ -1042,6 +1042,7 @@ export interface SessionPinRequest {
 export interface SessionSearchResponse {
   query: string;
   results: SessionSearchResult[];
+  truncated?: boolean;
 }
 /**
  * One chat that matches a search, with where the first hit was.

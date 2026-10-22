@@ -103,6 +103,34 @@ def test_result_count_is_bounded(client, db):
     assert len(_search(client, "orchid", limit=500)) == 50
 
 
+def test_more_matches_than_the_limit_are_reported(client, db):
+    for i in range(3):
+        _chat(db, f"chat {i}", "orchid")
+    r = client.get("/api/sessions/search", params={"q": "orchid", "limit": 2})
+    assert r.json()["truncated"] is True
+    r = client.get("/api/sessions/search", params={"q": "orchid", "limit": 3})
+    assert r.json()["truncated"] is False
+
+
+def test_background_runs_do_not_push_a_real_chat_past_the_limit(client, db):
+    """The sidebar hides eval and scheduled chats, so they must not fill the cap."""
+    real = _chat(db, "Tea notes", "my orchid repots")
+    for i in range(5):
+        _chat(db, f"Eval: run {i}", "orchid scenario")
+    _chat(db, "Schedule: daily digest", "orchid digest")
+
+    hits = client.get("/api/sessions/search", params={"q": "orchid", "limit": 2}).json()
+    assert [h["session_id"] for h in hits["results"]] == [real]
+    assert hits["truncated"] is False
+
+    shown = client.get(
+        "/api/sessions/search",
+        params={"q": "orchid", "limit": 2, "include_automated": True},
+    ).json()
+    assert real not in [h["session_id"] for h in shown["results"]]
+    assert shown["truncated"] is True
+
+
 def test_newest_chat_first(client, db):
     old = _chat(db, "Old", "orchid")
     new = _chat(db, "New", "orchid")

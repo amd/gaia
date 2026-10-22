@@ -174,7 +174,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
 
     const [query, setQuery] = useState('');
-    const [hits, setHits] = useState<{ query: string; results: SessionSearchResult[] } | null>(null);
+    const [hits, setHits] = useState<{ query: string; results: SessionSearchResult[]; truncated: boolean } | null>(null);
     const [searchError, setSearchError] = useState<string | null>(null);
     const [activeIdx, setActiveIdx] = useState(-1);
     const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -209,20 +209,20 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
         const ctrl = new AbortController();
         const timer = setTimeout(() => {
-            api.searchSessions(q, ctrl.signal)
-                .then((results) => setHits({ query: q, results }))
+            api.searchSessions(q, showAutomated, ctrl.signal)
+                .then(({ results, truncated }) => setHits({ query: q, results, truncated: !!truncated }))
                 .catch((err) => {
                     if (ctrl.signal.aborted) return;
                     log.chat.error('Chat search failed', err);
                     setSearchError(`Could not search inside chats: ${err instanceof Error ? err.message : err}`);
-                    setHits({ query: q, results: [] });
+                    setHits({ query: q, results: [], truncated: false });
                 });
         }, SEARCH_DEBOUNCE_MS);
         return () => {
             clearTimeout(timer);
             ctrl.abort();
         };
-    }, [q]);
+    }, [q, showAutomated]);
     const pending = !!q && hits?.query !== q;
     const contentHits = useMemo(
         () => (hits && hits.query === q ? new Map(hits.results.map((r) => [r.session_id, r])) : NO_HITS),
@@ -468,6 +468,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                 ? 'Hide background runs'
                                 : `Show ${hiddenCount} background run${hiddenCount === 1 ? '' : 's'}`}
                         </button>
+                    )}
+                    {q && hits?.query === q && hits.truncated && (
+                        <p className="sb-empty">Showing the {hits.results.length} newest chats that mention this. Type more to narrow it down.</p>
                     )}
                     {searchError && <p className="sb-error" role="alert">{searchError}</p>}
                     {deleteError && <p className="sb-error" role="alert">{deleteError}</p>}

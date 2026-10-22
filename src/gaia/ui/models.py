@@ -480,6 +480,8 @@ class SessionSearchResponse(BaseModel):
 
     query: str
     results: List[SessionSearchResult]
+    #: More chats matched than ``limit``; only the newest are listed.
+    truncated: bool = False
 
 
 # ── Messages ────────────────────────────────────────────────────────────────

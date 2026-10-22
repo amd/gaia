@@ -51,6 +51,8 @@ def resolved_default_model() -> str:
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
 SESSION_KINDS = ("chat", "eval", "scheduled")
+#: Kinds the sidebar hides until "Show background runs" is on.
+AUTOMATED_SESSION_KINDS = ("eval", "scheduled")
 
 
 def session_kind_for_title(title: str | None) -> str:
@@ -559,29 +561,41 @@ class ChatDatabase:
 
             return sessions
 
-    def search_sessions(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search_sessions(
+        self, query: str, limit: int = 20, include_automated: bool = False
+    ) -> tuple[List[Dict[str, Any]], bool]:
         """Chats whose title or messages contain *query*, newest first.
 
         Matching ignores case and accents. Each result carries a snippet
-        around its first hit: the earliest message, else the title.
+        around its first hit: the earliest message, else the title. Eval and
+        scheduled chats count only with *include_automated*, so they never
+        push a chat the sidebar shows past *limit*.
+
+        Returns:
+            The results, and whether more chats matched than *limit*.
         """
         needle = fold(query.strip())
         if not needle:
-            return []
-        with self._transaction():
-            while True:
+            return [], False
+        # One batch per transaction, so a large first backfill lets other
+        # writers in between batches.
+        while True:
+            with self._transaction():
                 unfolded = self._conn.execute(
                     "SELECT id, content FROM messages "
                     "WHERE search_text IS NULL LIMIT 2000"
                 ).fetchall()
-                if not unfolded:
-                    break
                 self._conn.executemany(
                     "UPDATE messages SET search_text = ? WHERE id = ?",
                     [(fold(r["content"] or ""), r["id"]) for r in unfolded],
                 )
+            if not unfolded:
+                break
+        automated = "" if include_automated else " WHERE kind NOT IN (?, ?)"
+        with self._transaction():
             sessions = self._conn.execute(
-                "SELECT id, title FROM sessions ORDER BY updated_at DESC"
+                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC",
+                () if include_automated else AUTOMATED_SESSION_KINDS,
             ).fetchall()
             first_hit = {
                 r["session_id"]: r["first_id"]
@@ -596,7 +610,9 @@ class ChatDatabase:
                 s
                 for s in sessions
                 if s["id"] in first_hit or needle in fold(s["title"])
-            ][:limit]
+            ]
+            truncated = len(matched) > limit
+            matched = matched[:limit]
             hit_ids = [first_hit[s["id"]] for s in matched if s["id"] in first_hit]
             content = {}
             if hit_ids:
@@ -623,7 +639,7 @@ class ChatDatabase:
                     "snippet": snippet(text, needle),
                 }
             )
-        return results
+        return results, truncated
 
     def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
         """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""

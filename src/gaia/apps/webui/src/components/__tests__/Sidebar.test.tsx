@@ -33,7 +33,7 @@ beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 29, 12));
     mockedApi.deleteSession.mockResolvedValue(undefined);
-    mockedApi.searchSessions.mockResolvedValue([]);
+    mockedApi.searchSessions.mockResolvedValue({ query: '', results: [] });
     useModelStore.setState({
         active: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true },
     });

@@ -8,13 +8,16 @@ export interface MatchParts {
     after: string;
 }
 
+// Close to Python's casefold() on the backend, not identical: JS has no full
+// case folding, so ß is the one multi-letter fold mapped by hand. The backend
+// result fills any gap once it answers.
 function foldChar(ch: string): string {
-    return ch.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase();
+    return ch.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase().replace(/ß/g, 'ss');
 }
 
 /** Fold case and accents, as the backend search does: "Résumé" → "resume". */
 export function foldText(text: string): string {
-    return text.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase();
+    return Array.from(text, foldChar).join('');
 }
 
 /** Split `text` around the first accent- and case-insensitive match of `query`. */
