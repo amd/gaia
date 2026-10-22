@@ -8575,7 +8575,7 @@ def handle_agent_list(_args):
             if aid in installed:
                 # Show what is on disk; build metadata (+...) doesn't change the release.
                 local = installed[aid].version
-                if local.split("+", 1)[0] == str(ver).split("+", 1)[0]:
+                if ver == "?" or local.split("+", 1)[0] == str(ver).split("+", 1)[0]:
                     mark = "  [installed]"
                 else:
                     mark = f"  [installed; catalog latest {ver}]"

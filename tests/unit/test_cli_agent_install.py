@@ -189,6 +189,18 @@ def test_list_same_release_ignores_build_metadata(monkeypatch, capsys):
     assert "catalog latest" not in line
 
 
+def test_list_without_a_catalog_version_says_installed_only(monkeypatch, capsys):
+    _patch_list(
+        monkeypatch,
+        agents=[{"id": "gaia"}],
+        installed={"gaia": _Installed("0.3.1")},
+    )
+    cli.handle_agent_list(Namespace(agent_action="list"))
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
+    assert "0.3.1  [installed]" in line
+    assert "catalog latest" not in line
+
+
 def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
     from gaia.hub import catalog
 
