@@ -242,6 +242,31 @@ def test_a_wheel_install_still_runs_in_process(monkeypatch, db):
     assert server._run_scheduled_prompt(db, "hi") == "in-process: hi"
 
 
+def test_an_in_process_run_whose_model_failed_is_a_failed_run(monkeypatch, db):
+    """Same rule as the relay: a model failure is a failed run, not an answer."""
+    registry = SimpleNamespace(
+        get=lambda _id: SimpleNamespace(is_sidecar=False),
+        get_load_error=lambda _id: None,
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+
+    class _Agent:
+        def __init__(self, config):
+            self.config = config
+
+        def process_query(self, prompt):
+            return {"result": "Couldn't reach the local LLM.", "model_failed": True}
+
+    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod.GaiaAgent = _Agent
+    fake_mod.GaiaAgentConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+
+    with pytest.raises(RuntimeError, match="Couldn't reach the local LLM"):
+        server._run_scheduled_prompt(db, "hi")
+
+
 # ── A missing flagship ──────────────────────────────────────────────────────
 
 

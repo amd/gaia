@@ -330,7 +330,10 @@ def _run_scheduled_prompt(
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
-        return val if val is not None else result.get("answer", "")
+        answer = val if val is not None else result.get("answer", "")
+        if result.get("model_failed"):
+            raise RuntimeError(str(answer or "The GAIA agent's run failed."))
+        return answer
     return str(result) if result else ""
 
 
@@ -380,6 +383,7 @@ def _relay_scheduled_prompt(
         max_steps=_SCHEDULED_MAX_STEPS,
     )
 
+    # Drained only after the turn ends: safe because event_queue is unbounded.
     answer = None
     failure = None
     while not handler.event_queue.empty():

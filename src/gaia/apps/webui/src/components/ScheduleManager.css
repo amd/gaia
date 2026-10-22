@@ -180,7 +180,7 @@
 .schedule-card-error {
     margin-top: 6px;
     padding: 6px 8px;
-    border-left: 2px solid var(--accent);
+    border-left: 2px solid var(--danger);
     background: color-mix(in srgb, var(--danger) 8%, transparent);
     font-size: 12px;
     color: var(--text-primary);
