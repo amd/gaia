@@ -2176,6 +2176,24 @@ class TestCredentialStore:
         }
         assert "[removed] GAIA's sign-ins and API keys" in captured.text
 
+    @pytest.mark.parametrize("module", ["fail", "null"])
+    def test_no_usable_credential_store_is_a_skip_not_an_error(self, module):
+        """Headless Linux has keyring but no backend; nothing was saved there."""
+        import importlib
+
+        import keyring
+
+        backend = importlib.import_module(f"keyring.backends.{module}").Keyring()
+        previous = keyring.get_keyring()
+        keyring.set_keyring(backend)
+        try:
+            captured = _Capture()
+            assert _REAL_CLEAR_CREDENTIALS(printer=captured) is True
+        finally:
+            keyring.set_keyring(previous)
+        assert "[skip] OS credential store (none is available here" in captured.text
+        assert "[error]" not in captured.text
+
     def test_a_store_failure_is_reported_not_swallowed(
         self, recording_keyring, monkeypatch
     ):

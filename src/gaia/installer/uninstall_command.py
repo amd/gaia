@@ -341,7 +341,27 @@ def _clear_credentials(printer: Callable[[str], None] = print) -> bool:
             printer=printer,
         )
         return True
+    import keyring
+    from keyring.backends import fail as no_store
+    from keyring.backends import null as disabled_store
+
     from gaia.connectors.errors import ConnectorsError
+
+    try:
+        backend = keyring.get_keyring()
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        _print(
+            f"  [error] could not open the OS credential store: {exc}", printer=printer
+        )
+        return False
+    # Headless Linux, WSL and containers: nothing could have been saved there.
+    if isinstance(backend, (no_store.Keyring, disabled_store.Keyring)):
+        _print(
+            "  [skip] OS credential store (none is available here, so GAIA "
+            "saved nothing there)",
+            printer=printer,
+        )
+        return True
 
     try:
         deleters = _credential_deleters()
