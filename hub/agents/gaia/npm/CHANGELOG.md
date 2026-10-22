@@ -12,7 +12,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not cut a model call short, and a stopped turn kept no text. Every `/query`
   turn now streams its model calls and sends the answer as `token` events before
   `final`, the same as the stdio transport. A run cancelled mid-answer stops
-  within a token and ends with an empty `final`, as stdio does.
+  within a token and ends with an empty `final`, as stdio does; text not yet
+  sent when the cancel lands is dropped.
 
 ## [0.3.1]
 
