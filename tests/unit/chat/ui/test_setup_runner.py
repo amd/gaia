@@ -735,6 +735,27 @@ def test_a_remote_server_is_started_where_it_runs(users_server):
     )
 
 
+@pytest.mark.parametrize("url", ["http://0.0.0.0:13305", "http://[::]:13305"])
+def test_a_wildcard_bind_address_is_this_pc(users_server, url):
+    users_server(url, "env")
+    assert _REAL_SERVER_PROBLEM()["start"] == "Start it from the tray."
+
+
+def test_a_start_hint_that_cannot_be_worked_out_still_names_the_problem(
+    users_server, monkeypatch, caplog
+):
+    users_server("http://127.0.0.1:9", "config")
+
+    def unreadable():
+        raise PermissionError("install dir")
+
+    monkeypatch.setattr(lemonade_launcher, "resolve_lemonade", unreadable)
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["message"] == "Your Lemonade Server at 127.0.0.1:9 isn't answering."
+    assert problem["start"] is None
+    assert "install dir" in caplog.text
+
+
 @pytest.mark.parametrize("status", [lemonade_choice.OK, lemonade_choice.NEEDS_KEY])
 def test_a_server_that_answers_is_not_the_problem(users_server, status):
     users_server("http://127.0.0.1:9", "env", status=status)

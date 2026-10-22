@@ -233,14 +233,15 @@ def users_lemonade_url() -> Optional[str]:
     return info["base_url"] if info["mode"] == choice.MODE_EXTERNAL else None
 
 
-_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+#: Hosts that mean this PC, including the wildcard bind addresses.
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::")
 
 
 def _start_hint(host: Optional[str]) -> Optional[str]:
     """How to start the user's server, or None when this PC has none to start."""
     from gaia.llm.lemonade_launcher import describe_start_hint, resolve_lemonade
 
-    if host not in _LOOPBACK_HOSTS:
+    if host not in _LOCAL_HOSTS:
         return f"Start it on the computer at {host}, then try again."
     # With nothing installed the hint says to run `gaia init`, which fails the same way.
     if not resolve_lemonade().found:
@@ -275,10 +276,16 @@ def server_problem() -> Optional[Dict[str, Any]]:
     if choice.probe(url).status != choice.UNREACHABLE:
         return None
     parsed = urlparse(url)
+    try:
+        start = _start_hint(parsed.hostname)
+    except OSError as e:
+        # The hint is extra; losing it must not hide that the server isn't answering.
+        logger.warning("Could not work out how to start Lemonade: %s", e)
+        start = None
     return {
         "kind": "server_unreachable",
         "message": f"Your Lemonade Server at {parsed.netloc or url} isn't answering.",
-        "start": _start_hint(parsed.hostname),
+        "start": start,
         # LEMONADE_BASE_URL outranks a saved choice, so only unsetting it switches.
         "use_gaia": not from_env,
         "switch_hint": (
