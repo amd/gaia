@@ -513,6 +513,9 @@ class SSEOutputHandler(OutputHandler):
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
+    #: The sidecar question a relayed run is parked on, until it is answered.
+    _relay_question_id: Optional[str] = None
+
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
 
@@ -594,6 +597,7 @@ class SSEOutputHandler(OutputHandler):
         self.active_relay_run_id: Optional[str] = None
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        self._relay_question_id = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -1891,7 +1895,9 @@ class SSEOutputHandler(OutputHandler):
             ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if any(not evt.is_set() for evt in self._user_input_events.values()):
+            if self._relay_question_id is not None or any(
+                not evt.is_set() for evt in self._user_input_events.values()
+            ):
                 return "question"
         return None
 
@@ -1902,32 +1908,49 @@ class SSEOutputHandler(OutputHandler):
         On the way back the turn retakes the model at the front of the line,
         and a Stop while it waits there ends the turn.
         """
-        slot = self.turn_slot
-        try:
-            stepped_away = slot is not None and slot.step_away()
-        except TimeoutError:
-            # The hand-back may still run later; never use the model unheld.
-            logger.error("Could not give the model up while waiting; stopping the turn")
-            self.cancelled.set()
-            stepped_away = False
-        if not stepped_away:
+        if not self.step_away_from_model():
             yield
             return
         try:
             yield
         finally:
-            if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
-                # Withdrawn from the line: the turn must not use the model.
+            self.come_back_to_model()
+
+    def step_away_from_model(self) -> bool:
+        """Give the model to other chats while the turn waits on the user.
+
+        Returns whether it was given up, i.e. whether
+        :meth:`come_back_to_model` must follow once the wait ends.
+        """
+        slot = self.turn_slot
+        try:
+            return slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            return False
+
+    def come_back_to_model(self) -> None:
+        """Retake the model at the front of the line after a wait on the user.
+
+        A Stop while the turn waits in line, or a model that can no longer be
+        loaded, sets ``cancelled``; the caller checks it before going on.
+        """
+        if self.cancelled.is_set():
+            return
+        if not self.turn_slot.come_back(self.cancelled):
+            # Withdrawn from the line: the turn must not use the model.
+            self.cancelled.set()
+        elif not self.cancelled.is_set() and self.on_model_regained is not None:
+            try:
+                self.on_model_regained()
+            except Exception as exc:  # pylint: disable=broad-except
+                # The model the turn needs is gone and can't be loaded:
+                # end the turn before the approved tool runs, and say why.
+                logger.error("Model check after the user answered failed: %s", exc)
+                self._emit({"type": "agent_error", "content": str(exc)})
                 self.cancelled.set()
-            elif not self.cancelled.is_set() and self.on_model_regained is not None:
-                try:
-                    self.on_model_regained()
-                except Exception as exc:  # pylint: disable=broad-except
-                    # The model the turn needs is gone and can't be loaded:
-                    # end the turn before the approved tool runs, and say why.
-                    logger.error("Model check after the user answered failed: %s", exc)
-                    self._emit({"type": "agent_error", "content": str(exc)})
-                    self.cancelled.set()
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -2059,7 +2082,7 @@ class SSEOutputHandler(OutputHandler):
         if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
-            return bool(self._user_input_queue)
+            return bool(self._user_input_queue) or self._relay_question_id is not None
 
     def request_user_input_blocking(
         self,
@@ -2208,7 +2231,15 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        with self._user_input_lock:
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
+
+    def set_relay_question(self, request_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the sidecar question now pending."""
+        with self._user_input_lock:
+            self._relay_question_id = request_id
 
     def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending."""

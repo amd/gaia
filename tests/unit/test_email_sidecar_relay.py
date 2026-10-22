@@ -50,7 +50,8 @@ class _FakeHandler:
 
     Mirrors the real handler's attribute names relay_query depends on:
     ``_emit``, ``cancelled`` (a ``threading.Event``), ``active_relay_response``,
-    and ``signal_done()``.
+    ``signal_done()``, and the question / model-slot hooks a ``needs_input``
+    drives (no slot here, so stepping away is a no-op).
     """
 
     def __init__(self) -> None:
@@ -58,12 +59,22 @@ class _FakeHandler:
         self.cancelled = threading.Event()
         self.active_relay_response = None
         self.done_calls = 0
+        self.relay_question = None
 
     def _emit(self, event):
         self.events.append(event)
 
     def signal_done(self):
         self.done_calls += 1
+
+    def set_relay_question(self, request_id):
+        self.relay_question = request_id
+
+    def step_away_from_model(self):
+        return False
+
+    def come_back_to_model(self):
+        raise AssertionError("never stepped away, so never comes back")
 
 
 class _RaisingIterator:
