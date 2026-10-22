@@ -17,6 +17,7 @@ import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
 const DOWNLOAD_POLL_MS = 2000;
 
 function keyStatus(p: ProviderInfo): string {
+    if (p.key_state === 'waiting_for_os_permission') return p.key_message ?? 'Waiting for the OS to allow reading the saved key.';
     switch (p.key_source) {
         case 'environment': return `A key is set in ${p.env_var} and is in use.`;
         case 'lemonade': return 'A key is already configured on the local model server.';
@@ -80,6 +81,13 @@ export function ModelSettings() {
     }, [rememberNames]);
 
     useEffect(() => { void loadProviders(); }, [loadProviders]);
+    // Ask again while the OS keychain dialog is open, so answering it is enough.
+    const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
+    useEffect(() => {
+        if (!awaitingPermission) return;
+        const t = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
+        return () => clearInterval(t);
+    }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
     useEffect(() => { if (activeProvider) setChosen(activeProvider); }, [activeProvider]);
     useEffect(() => {

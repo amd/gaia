@@ -211,19 +211,34 @@ def _registration(provider: str, body: "ConnectRequest") -> Dict[str, Any]:
 # ── Views ──────────────────────────────────────────────────────────────────
 
 
-def _key_source(entry: Optional[Dict[str, Any]], provider: str) -> Optional[str]:
-    from gaia.llm.cloud_keys import recall_key
+#: ``key_state`` while the OS holds the stored-key read for the user's permission.
+KEY_WAITING = "waiting_for_os_permission"
 
+
+def _bounded_recall(provider: str) -> Optional[str]:
+    """The stored key; raises ``CredentialStoreWaiting`` while the OS is prompting."""
+    from gaia.connectors.credential_wait import read_within
+    from gaia.llm import cloud_keys
+
+    return read_within(
+        f"cloud-key:{provider}",
+        lambda: cloud_keys.recall_key(provider),
+        f"your saved {_NAMES[provider]} key",
+    )
+
+
+def _key_source(entry: Optional[Dict[str, Any]], provider: str) -> Optional[str]:
     if entry and entry.get("env_var_set"):
         return "environment"
     if entry and entry.get("runtime_key_set"):
         return "lemonade"
-    if recall_key(provider):
+    if _bounded_recall(provider):
         return "stored"
     return None
 
 
 def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from gaia.connectors.credential_wait import CredentialStoreWaiting
     from gaia.llm.cloud_keys import env_var_for
 
     view: Dict[str, Any] = {
@@ -234,10 +249,17 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
     }
     if provider == LOCAL:
         return view
+    try:
+        key_source, key_state, key_message = _key_source(entry, provider), "read", None
+    except CredentialStoreWaiting as e:
+        # Unknown, not absent: the UI must not offer "Add your key" here.
+        key_source, key_state, key_message = None, KEY_WAITING, str(e)
     view.update(
         {
             "registered": entry is not None,
-            "key_source": _key_source(entry, provider),
+            "key_source": key_source,
+            "key_state": key_state,
+            "key_message": key_message,
             "models_discovered": bool(entry and entry.get("models_discovered")),
             "env_var": env_var_for(provider),
             "base_url": entry.get("base_url") if entry else None,
@@ -485,7 +507,9 @@ def _check_model_available(model_id: str) -> Optional[str]:
     try:
         if provider != LOCAL:
             _require_loopback(_base_url())
-            if not ensure_authenticated(provider):
+            if not ensure_authenticated(
+                provider, recall=lambda: _bounded_recall(provider)
+            ):
                 return f"{_NAMES[provider]} has no working key"
         models = _list_models(provider)
     except ProviderError as e:
@@ -529,10 +553,12 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
         if not last:
             _restore_result = {"status": "none", "message": None}
             return _restore_result
+        from gaia.connectors.credential_wait import CredentialStoreWaiting
+
         try:
             reason = _check_model_available(last)
-        except _ServerNotReady:
-            # Not cached: the UI asks again once the server is up.
+        except (_ServerNotReady, CredentialStoreWaiting):
+            # Not cached: the UI asks again once the server is up or the OS answers.
             return {"status": "pending", "message": None}
         if reason is None:
             from gaia.llm.lemonade_client import resolve_default_chat_model
@@ -589,6 +615,7 @@ def _via_tunnel(request: Request) -> bool:
 @router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Every provider with its connection state, and the active model."""
+    from gaia.connectors.credential_wait import CredentialStoreWaiting
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     providers = [_provider_view(LOCAL, None)]
@@ -601,8 +628,14 @@ def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
             if entry is not None and view["key_source"] == "stored":
                 try:
                     _require_loopback(_base_url())
-                    ensure_authenticated(provider)
+                    ensure_authenticated(
+                        provider, recall=lambda p=provider: _bounded_recall(p)
+                    )
                     view = _provider_view(provider, _cloud_entry(provider))
+                except CredentialStoreWaiting as e:
+                    view.update(
+                        key_source=None, key_state=KEY_WAITING, key_message=str(e)
+                    )
                 except (ProviderError, CloudKeyError, requests.RequestException) as e:
                     view["error"] = str(e)
             providers.append(view)

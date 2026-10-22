@@ -69,6 +69,23 @@ describe('ModelSettings provider keys', () => {
         expect(within(card).getByRole('button', { name: 'Forget key' })).toBeInTheDocument();
     });
 
+    it('says the OS is asking for keychain access instead of "No key yet", then updates', async () => {
+        mockedApi.listProviders
+            .mockResolvedValueOnce({
+                providers: [LOCAL, fireworks({
+                    key_state: 'waiting_for_os_permission',
+                    key_message: 'macOS is asking GAIA for keychain access to read your saved Fireworks AI key.',
+                })],
+                active: LOCAL_ACTIVE,
+                lemonade_error: null,
+            })
+            .mockResolvedValue({ providers: [LOCAL, fireworks({ key_source: 'stored' })], active: LOCAL_ACTIVE, lemonade_error: null });
+        const card = await openFireworks();
+        expect(within(card).getByText(/asking GAIA for keychain access/)).toBeInTheDocument();
+        expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
+        expect(await within(card).findByText('A saved key will be used.', {}, { timeout: 4000 })).toBeInTheDocument();
+    });
+
     it('connects with the typed key and clears the field', async () => {
         mockedApi.connectProvider.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
         const card = await openFireworks();
