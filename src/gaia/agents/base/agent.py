@@ -1213,6 +1213,29 @@ def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
     return answer, "\n\n".join(p for p in parts if p) or None
 
 
+_THINK_TAGS = ("<think>", "</think>")
+
+
+def _visible_so_far(raw: str) -> str:
+    """The part of a still-streaming reply that is certainly not reasoning.
+
+    Drops whole ``<think>`` blocks, everything from an unclosed ``<think>``,
+    everything up to a lone ``</think>``, and a trailing fragment that may be
+    the start of either tag.
+    """
+    text = _THINK_BLOCK_PATTERN.sub("", raw)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    opened = text.find("<think>")
+    if opened >= 0:
+        text = text[:opened]
+    for n in range(min(len("</think>") - 1, len(text)), 0, -1):
+        if any(tag.startswith(text[-n:]) for tag in _THINK_TAGS):
+            text = text[:-n]
+            break
+    return text.lstrip()
+
+
 def _response_reasoning(response: Any) -> Optional[str]:
     """The model's reasoning off a chat response, or ``None`` when it has none.
 
@@ -8850,8 +8873,9 @@ Do NOT wrap conversational replies in JSON.
             if core:
                 self._apply_tool_filter(core)
 
-    #: Output budget for a greeting: two short sentences and room to finish.
-    GREETING_MAX_TOKENS = 96
+    #: Output budget for a greeting. Two sentences need ~60 tokens and a model
+    #: stops there on its own; the rest is room for one that reasons anyway.
+    GREETING_MAX_TOKENS = 512
 
     #: What a new chat's greeting asks for; the memory context, if any, comes first.
     GREETING_INSTRUCTION = (
@@ -8869,6 +8893,19 @@ Do NOT wrap conversational replies in JSON.
         """What the agent knows that a greeting may follow up on; "" by default."""
         return ""
 
+    def _greeting_thinking_kwargs(self) -> Dict[str, Any]:
+        """Thinking off for the greeting, on every local model.
+
+        A model GAIA records no thinking mode for gets the switch anyway: its
+        template may think by default, and one without the switch ignores it.
+        """
+        from gaia.llm.lemonade_client import cloud_model_provider
+
+        kwargs = no_thinking_kwargs(self.model_id)
+        if kwargs or cloud_model_provider(self.model_id):
+            return kwargs
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+
     def greet(
         self,
         on_text: Callable[[str], None],
@@ -8882,13 +8919,15 @@ Do NOT wrap conversational replies in JSON.
 
         Sends the same system prompt and tools a first turn sends, so a greeting
         also does everything :meth:`warm_up` does: the model is loaded and the
-        prefix is cached before the user types. Thinking is off and the budget
-        is small, so the reply starts at once and stays short.
+        prefix is cached before the user types. Thinking is off, so the reply
+        starts at once; reasoning a model streams anyway never reaches
+        *on_text* or the returned text.
 
         Returns ``{"text", "seconds", "prompt_tokens", "cached_tokens"}``.
 
         Raises:
-            RuntimeError: the model answered with a tool call or with nothing.
+            RuntimeError: the model answered with a tool call, with nothing, or
+                with reasoning alone.
             Whatever the LLM client raises for an unreachable or failing model.
         """
         say = progress or (lambda _message: None)
@@ -8898,13 +8937,14 @@ Do NOT wrap conversational replies in JSON.
         self._prepare_first_turn(instruction, say)
         say(f"Loading {self.model_id} and reading its instructions")
         content = f"{context}\n\n{instruction}" if context else instruction
-        parts: List[str] = []
+        raw = ""
+        shown = ""
         stream = self.chat.send_messages_stream(
             [{"role": "user", "content": content}],
             system_prompt=self.system_prompt,
             tools=self._openai_tools,
             max_tokens=self.GREETING_MAX_TOKENS,
-            **no_thinking_kwargs(self.model_id),
+            **self._greeting_thinking_kwargs(),
         )
         try:
             for chunk in stream:
@@ -8916,13 +8956,21 @@ Do NOT wrap conversational replies in JSON.
                         f"{self.model_id} answered the greeting with a tool call "
                         "instead of a message."
                     )
-                if text:
-                    parts.append(text)
-                    on_text(text)
+                raw += text
+                # Reasoning arrives wrapped in <think> tags; only words reach the UI.
+                visible = _visible_so_far(raw)
+                if visible.startswith(shown) and len(visible) > len(shown):
+                    on_text(visible[len(shown) :])
+                    shown = visible
         finally:
             stream.close()
-        greeting = "".join(parts).strip()
+        greeting, reasoning = _split_reasoning(raw)
         if not greeting and not (cancel is not None and cancel.is_set()):
+            if reasoning:
+                raise RuntimeError(
+                    f"{self.model_id} spent the greeting's {self.GREETING_MAX_TOKENS}"
+                    "-token budget reasoning and wrote no greeting."
+                )
             raise RuntimeError(f"{self.model_id} returned an empty greeting.")
         result: Dict[str, Any] = {
             "text": greeting,

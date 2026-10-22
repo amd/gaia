@@ -348,9 +348,11 @@ naming it.
 chat and streams it as `text/event-stream`. The body is `{ "memory": "on" |
 "private" | "off" }` (optional; an unknown field is a `422`). The agent sends
 a first turn's real request (system prompt, tools, the turn's memory context
-and the newest session summary) with thinking off and a small output budget,
-so the model loads and the prompt prefix is cached before the user types; a
-greeting that arrives also shows the stack works. Under `"private"` or
+and the newest session summary) with thinking off, so the model loads and
+the prompt prefix is cached before the user types; a greeting that arrives
+also shows the stack works. Reasoning a model sends anyway is stripped: only
+the greeting's words reach `chunk` and `done`, and a reply that is all
+reasoning ends with an `error`. Under `"private"` or
 `"off"` it draws on no memory and is a plain welcome. It leases the model
 like a user's turn and writes no session history. Events: `status`
 (`phase`: `building`, `model_queue` while another client holds the model,

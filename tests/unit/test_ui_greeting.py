@@ -123,6 +123,61 @@ def test_greet_fails_loudly_rather_than_showing_something_else(chunks, error):
         _Agent(chunks=chunks).greet(lambda _t: None, instruction="Say hello.")
 
 
+def test_streamed_reasoning_never_reaches_the_greeting():
+    """Gemma-4 on Lemonade: reasoning_content arrives as a <think> block first."""
+    agent = _Agent(
+        chunks=[
+            "<think>",
+            "The user wants me to write the first message of this chat\n",
+            "following specific guidelines.</think>",
+            "Welcome back! ",
+            "Shall we finish the parser?",
+        ]
+    )
+    seen = []
+
+    result = agent.greet(seen.append)
+
+    assert "".join(seen) == "Welcome back! Shall we finish the parser?"
+    assert result["text"] == "Welcome back! Shall we finish the parser?"
+    assert not any("think" in part or "guidelines" in part for part in seen)
+
+
+def test_reasoning_tags_split_across_chunks_are_still_held_back():
+    agent = _Agent(chunks=["<th", "ink>plan the", " reply</thi", "nk>Hi ", "there."])
+    seen = []
+    result = agent.greet(seen.append)
+    assert "".join(seen) == "Hi there."
+    assert result["text"] == "Hi there."
+
+
+def test_a_reply_that_is_only_reasoning_is_an_error_not_a_greeting():
+    """The budget ran out mid-thought: say so, never show the reasoning."""
+    agent = _Agent(
+        chunks=[
+            "<think>",
+            "The user wants me to write the first message ... asking what they",
+        ]
+    )
+    seen = []
+    with pytest.raises(RuntimeError, match="reasoning and wrote no greeting"):
+        agent.greet(seen.append)
+    assert seen == []
+
+
+def test_thinking_is_switched_off_even_where_gaia_records_no_mode():
+    """Gemma-4's template takes enable_thinking, but GAIA records no mode for it."""
+    agent = _Agent()
+    agent.model_id = "Gemma-4-E4B-it-GGUF"
+    agent.greet(lambda _t: None)
+    [call] = agent.chat.calls
+    assert call["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_the_budget_leaves_room_for_a_model_that_reasons_anyway():
+    assert Agent.GREETING_MAX_TOKENS >= 256
+
+
 def test_greet_stops_when_cancelled():
     cancel = threading.Event()
     seen = []

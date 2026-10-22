@@ -483,7 +483,7 @@
     },
     "/v1/gaia/greeting": {
       "post": {
-        "description": "Stream the first message of a new chat, written by the agent.\n\nRuns a first turn's real request (system prompt, tools, the turn's memory\ncontext and the newest session summary) with thinking off and a small\nbudget, so the model loads and the prompt is cached before the user types.\nNothing is written to a session's history. Events: ``status`` (``phase``:\n``building``, ``model_queue`` while another client holds the model, then\n``priming``), ``chunk`` (``content``), then one ``done`` (``text``,\n``seconds``, ``prompt_tokens``, ``cached_tokens``) or ``error``\n(``message``), with ``: keepalive`` comments while nothing else is sent.\nClosing the connection stops it at its next step.\nThe greeting's text is not logged.",
+        "description": "Stream the first message of a new chat, written by the agent.\n\nRuns a first turn's real request (system prompt, tools, the turn's memory\ncontext and the newest session summary) with thinking off, so the model\nloads and the prompt is cached before the user types. Reasoning a model\nsends anyway never reaches ``chunk`` or ``done``.\nNothing is written to a session's history. Events: ``status`` (``phase``:\n``building``, ``model_queue`` while another client holds the model, then\n``priming``), ``chunk`` (``content``), then one ``done`` (``text``,\n``seconds``, ``prompt_tokens``, ``cached_tokens``) or ``error``\n(``message``), with ``: keepalive`` comments while nothing else is sent.\nClosing the connection stops it at its next step.\nThe greeting's text is not logged.",
         "operationId": "greeting_v1_gaia_greeting_post",
         "requestBody": {
           "content": {

@@ -900,8 +900,9 @@ async def greeting(request: GreetingRequest):
     """Stream the first message of a new chat, written by the agent.
 
     Runs a first turn's real request (system prompt, tools, the turn's memory
-    context and the newest session summary) with thinking off and a small
-    budget, so the model loads and the prompt is cached before the user types.
+    context and the newest session summary) with thinking off, so the model
+    loads and the prompt is cached before the user types. Reasoning a model
+    sends anyway never reaches ``chunk`` or ``done``.
     Nothing is written to a session's history. Events: ``status`` (``phase``:
     ``building``, ``model_queue`` while another client holds the model, then
     ``priming``), ``chunk`` (``content``), then one ``done`` (``text``,
