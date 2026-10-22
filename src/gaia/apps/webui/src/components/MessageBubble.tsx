@@ -436,13 +436,17 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const [userExpanded, setUserExpanded] = useState(false);
     const userBodyId = useId();
     const userBodyRef = useRef<HTMLDivElement>(null);
+    const scrollAfterCollapseRef = useRef(false);
     const toggleUserExpanded = useCallback(() => {
-        setUserExpanded((was) => {
-            // Collapsing from far down the page would leave the reader past the message.
-            if (was) userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
-            return !was;
-        });
-    }, []);
+        if (userExpanded) scrollAfterCollapseRef.current = true;
+        setUserExpanded(!userExpanded);
+    }, [userExpanded]);
+    useEffect(() => {
+        // Collapsing from far down the page would leave the reader past the message.
+        if (userExpanded || !scrollAfterCollapseRef.current) return;
+        scrollAfterCollapseRef.current = false;
+        userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [userExpanded]);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

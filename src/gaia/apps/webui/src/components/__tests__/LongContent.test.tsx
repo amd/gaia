@@ -11,7 +11,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble, RenderedContent } from '../MessageBubble';
 import { AgentActivity } from '../AgentActivity';
-import { parseTruncationEnvelope } from '../LongContent';
+import { envelopeNote, parseTruncationEnvelope } from '../LongContent';
 import type { AgentStep, Message } from '../../types';
 
 vi.mock('../../services/api');
@@ -56,6 +56,23 @@ describe('long user messages', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
         expect(body).toHaveClass('is-collapsed');
         expect(screen.getByRole('button', { name: 'Show all (700 lines)' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('scrolls the message back into view only after it collapses', () => {
+        const scroll = vi.fn();
+        const { container } = render(<MessageBubble message={{ ...base, content: numbered(700) }} />);
+        const body = container.querySelector('.msg-collapsible') as HTMLElement;
+        Object.defineProperty(body, 'scrollIntoView', {
+            value: () => scroll(body.classList.contains('is-collapsed')),
+            configurable: true,
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show all (700 lines)' }));
+        expect(scroll).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+        expect(scroll).toHaveBeenCalledTimes(1);
+        expect(scroll).toHaveBeenCalledWith(true);
     });
 
     it('counts characters when the length is in one long line', () => {
@@ -194,6 +211,8 @@ describe('long step output', () => {
         expect(env!.head.startsWith('C:\\Windows\\System32\\drivers\\d0.sys\nC:\\')).toBe(true);
         expect(env!.originalChars).toBe(26249);
         expect(env!.omittedChars).toBe(17548);
+        expect(env!.partial).toBe(true);
+        expect(envelopeNote(env!)).toBe('Showing part of the output of 26,249 (17,548 omitted).');
     });
 
     it('ignores JSON that is not an envelope', () => {

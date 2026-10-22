@@ -65,6 +65,8 @@ export interface TruncationEnvelope {
     tail: string;
     originalChars: number | null;
     omittedChars: number | null;
+    /** The JSON was cut short, so `head`/`tail` are fragments, not the agent's full preview. */
+    partial: boolean;
 }
 
 /** Undo JSON string escaping in a captured string body, dropping an escape cut in half. */
@@ -104,6 +106,7 @@ export function parseTruncationEnvelope(text: string): TruncationEnvelope | null
             tail: capturedString(trimmed, 'tail'),
             originalChars: capturedNumber(trimmed, 'original_chars'),
             omittedChars: capturedNumber(trimmed, 'omitted_chars'),
+            partial: true,
         };
     }
     if (!data || typeof data !== 'object') return null;
@@ -114,12 +117,15 @@ export function parseTruncationEnvelope(text: string): TruncationEnvelope | null
         tail: typeof env.tail === 'string' ? env.tail : '',
         originalChars: typeof env.original_chars === 'number' ? env.original_chars : null,
         omittedChars: typeof env.omitted_chars === 'number' ? env.omitted_chars : null,
+        partial: false,
     };
 }
 
 export function envelopeNote(env: TruncationEnvelope): string {
     const n = (v: number) => v.toLocaleString('en-US');
-    const shown = env.tail
+    const shown = env.partial
+        ? 'part of the output'
+        : env.tail
         ? `the first ${n(env.head.length)} and last ${n(env.tail.length)} characters`
         : `the first ${n(env.head.length)} characters`;
     const of = env.originalChars != null ? ` of ${n(env.originalChars)}` : '';
