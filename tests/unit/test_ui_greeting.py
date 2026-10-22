@@ -483,10 +483,16 @@ def test_the_sidecars_timing_reaches_the_warm_up_status(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("version", ["2.18", None])
-def test_a_sidecar_too_old_to_greet_says_how_to_update(monkeypatch, tmp_path, version):
+def test_a_sidecar_too_old_to_greet_says_chat_still_works(
+    monkeypatch, tmp_path, version
+):
+    """No update command: `gaia init` installs the same agent until a release ships one."""
     proxy, _ = _sidecar_flagship(monkeypatch, tmp_path, version, [])
-    with pytest.raises(greeting.GreetingUnavailable, match="needs contract 2.19"):
+    with pytest.raises(greeting.GreetingUnavailable) as raised:
         greeting.write_greeting(_Db(), lambda _t: None)
+    message = str(raised.value)
+    assert "predates contract 2.19" in message and "Chat works" in message
+    assert "gaia init" not in message
     assert proxy.bodies == []
 
 

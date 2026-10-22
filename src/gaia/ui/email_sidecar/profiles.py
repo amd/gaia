@@ -445,10 +445,11 @@ GAIA_PROFILE = RelayProfile(
     ),
     # 2.19 added POST /greeting.
     min_greeting_api_version=(2, 19),
+    # No update command here: until a release ships a 2.19+ agent binary,
+    # `gaia init` installs the same agent.
     greeting_upgrade_message=(
-        "The installed GAIA agent is too old to say hello (needs contract "
-        "2.19+). Run `gaia init` to update it. Chat still works: type a "
-        "message to start."
+        "The GAIA agent installed on this PC can't write greetings yet (it "
+        "predates contract 2.19). Chat works as usual: type a message to start."
     ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
