@@ -126,6 +126,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "query/{run_id}/followup": _NO_EVAL_SENTINEL,
     "query/{run_id}/tool_decision": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/bypass": _NO_EVAL_SENTINEL,
+    "sessions/{session_id}/grants": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
 }

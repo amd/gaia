@@ -247,7 +247,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.18**; the stream is
+package — call it with plain `fetch`. Contract version **2.19**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -323,7 +323,7 @@ The canonical event shapes, as emitted:
 | `token` | `{ type, delta }` — answer text to append |
 | `tool_call` | `{ type, tool, args }` |
 | `tool_result` | `{ type, tool, data, render? }` |
-| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, each value capped at 64,000 characters (`args_truncated: true` when one was cut) |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, each value capped at 64,000 characters (`args_truncated: true` when one was cut) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage?, failed? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
@@ -415,7 +415,8 @@ line once; the next call asks again. `risk` says what the call does (`read`, `wr
 is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
 spelling of a test run) — say so in your UI, because it stops asking; no
-`always_scope` means don't offer it. If your prompt expires unanswered, send
+`always_scope` means don't offer it. `always_label` (when present) says the same
+grant in plain words, e.g. `editing notes.md`. If your prompt expires unanswered, send
 `timeout`, not `deny`: it still refuses, but the agent tells the user the
 request timed out instead of claiming they said no. Unknown run → **404**; a
 prompt that is no longer pending → **409**; any other decision → **422**. All loud,
@@ -432,6 +433,20 @@ POST /v1/gaia/sessions/{session_id}/bypass
 It applies to the very next gated tool, including one in a turn already running,
 and an unknown session is a **404** rather than a new one. A malformed
 `session_id` is a **400**, same as on `/query`.
+
+**Contract ≥ 2.19 lists and revokes `always` answers**, so your UI can show the
+user what the agent may now do unasked and take it back:
+
+```
+GET    /v1/gaia/sessions/{session_id}/grants             → { session_id, grants: [{ key, label }] }
+DELETE /v1/gaia/sessions/{session_id}/grants?key=<key>   → the same shape, after revoking
+```
+
+`label` is the prompt's `always_scope`; `key` is the handle to revoke it by.
+Omit `key` to revoke them all. A revoke applies to the very next gated call,
+including one in a turn already running. An unknown session, or a `key` the
+session does not hold, is a **404**. Grants live in the session: they end when
+it does (evicted, idle, or the sidecar restarts).
 
 **That bypass stops the prompts; it does not open the shell.** The stdio
 transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
@@ -673,7 +688,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.18","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.19","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

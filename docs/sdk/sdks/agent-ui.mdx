@@ -1106,11 +1106,16 @@ Deleting a chat deletes its copies.
     Hand `{session_id, text}` to the session's running turn. The agent reads it
     at its next step without restarting. The stream then carries
     `followup_taken` (`text`) and the message is saved as a user message. A turn
-    that ends first sends `followup_returned` (`texts`) before `done`. 404: no
-    turn is running. 409: the running turn can't take it yet (it hasn't reached
-    the model, or a relayed agent runs it). The Agent UI calls it only when the
-    user picks **Add to this reply** on a queued message; otherwise a message
-    typed mid-turn waits and is sent as its own turn.
+    that ends first sends `followup_returned` (`texts`) before `done`. A turn
+    relayed to the GAIA agent sidecar (contract 2.15+) gets the message over the
+    sidecar's `/query/{run_id}/followup`; the sidecar can't say when its agent
+    reads it, so one it accepts counts as taken at once and nothing is
+    returned. A relayed turn that can't take one at all (email, or an older
+    agent) says so with a `followup_unavailable` event as it starts. 404: no
+    turn is running. 409: the running turn can't take it (it hasn't reached the
+    model, or the agent refused it). The Agent UI calls it only when the user
+    picks **Add to this reply** on a queued message; otherwise a message typed
+    mid-turn waits and is sent as its own turn.
   </Accordion>
 
   <Accordion title="GET /api/chat/followup/{session_id}">
@@ -1521,6 +1526,12 @@ Used to reach the UI from a phone.
     **Errors:** **404** when the chat has no running turn; **409** when
     `confirm_id` no longer matches the live prompt, or `always` was requested
     for a call with no scope narrow enough to grant.
+
+    A turn relayed to the GAIA agent sidecar offers `always_scope` only from
+    agent contract 2.19, and never for a call that needs fresh consent each
+    time (folder access, engineering-context sharing, skill capture). Its
+    "always" is granted in the sidecar's session; the chat then re-reads the
+    sidecar's grants so they are listed and revocable here.
   </Accordion>
 
   <Accordion title="GET /api/chat/permissions">
@@ -1554,6 +1565,10 @@ Used to reach the UI from a phone.
     Revoke one "always allow" grant (`?key=<grant key>`) or, without `key`,
     all of them. Applies to a running turn too. **404** when `key` names no
     grant in the chat. Returns the chat's permission view.
+
+    A grant the relayed GAIA agent holds is revoked in its sidecar first; if
+    the sidecar can't be reached it is a **502** and the grant stays listed,
+    because it is still in force.
   </Accordion>
 
   <Accordion title="POST /api/eval/scripted-user">

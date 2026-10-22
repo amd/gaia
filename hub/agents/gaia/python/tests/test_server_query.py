@@ -1167,9 +1167,13 @@ class _RecordingHandler:
         self.auto_approve_gated_tools = False
         self.confirm_timeout_seconds = 60.0
         self._grants = set()
+        self._scopes = {}
 
     def session_grants(self):
         return self._grants
+
+    def session_grant_scopes(self):
+        return self._scopes
 
 
 def test_a_gated_tool_runs_once_the_decision_arrives(built):

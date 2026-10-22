@@ -23,6 +23,8 @@ export interface QueuedMessage {
     state: QueuedState;
     /** Why a `failed` message did not go out. */
     error?: string;
+    /** Why a `queued` message could not be added to the running reply. */
+    note?: string;
 }
 
 /** What a finished turn did with the messages offered to it (GET /api/chat/followup). */
@@ -43,7 +45,14 @@ export function enqueue(items: QueuedMessage[], text: string, state: QueuedState
 
 /** Move one message from `from` to `to`; a message already settled elsewhere stays put. */
 export function promote(items: QueuedMessage[], id: number, from: QueuedState, to: QueuedState): QueuedMessage[] {
-    return items.map((m) => (m.id === id && m.state === from ? { ...m, state: to, error: undefined } : m));
+    return items.map((m) => (m.id === id && m.state === from ? { ...m, state: to, error: undefined, note: undefined } : m));
+}
+
+export const STEER_REFUSED_NOTE = "Can't add to this reply; it will send when the reply ends.";
+
+/** The running reply refused a message offered to it: back in line, saying so. */
+export function steerRefused(items: QueuedMessage[], id: number): QueuedMessage[] {
+    return items.map((m) => (m.id === id && m.state === 'sending' ? { ...m, state: 'queued', note: STEER_REFUSED_NOTE } : m));
 }
 
 export function remove(items: QueuedMessage[], id: number): QueuedMessage[] {

@@ -24,6 +24,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
@@ -60,6 +61,8 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     confirmations_supported,
     documents_supported,
+    followups_supported,
+    grants_supported,
     memory_supported,
     profile_for,
     scope_supported,
@@ -1901,8 +1904,13 @@ def _dispatch_sidecar_query(
     documents: list | None = None,
     allowed_paths: list | None = None,
     memory: str = "on",
+    record_followup: Callable[[str], None] | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *record_followup* saves a message the user added mid-turn to the chat. A
+    sidecar that takes such messages gets them while it runs; otherwise the
+    chat is told up front, so it does not offer to add one.
 
     *documents* are the session's attached file paths. A sidecar that takes
     them gets them on every turn; one that should but is too old to stops
@@ -2058,29 +2066,78 @@ def _dispatch_sidecar_query(
                 ),
             }
         )
+    from gaia.ui.email_sidecar import grants as relayed_grants
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
-    relay_query(
-        sse_handler,
-        proxy,
-        query=request.message,
-        context=context,
-        model_id=model_id,
-        # The chat's own mode, read per turn: the in-process path applies it
-        # to its handler, the relayed one to the sidecar session.
-        full_access=(
-            session_permissions.for_session(session_id).mode
-            == session_permissions.MODE_FULL_ACCESS
-            if session_id and full_access_supported(profile, handle.api_version)
-            else None
-        ),
-        profile=profile,
-        session_id=session_id,
-        answers_confirmations=confirmations_supported(profile, handle.api_version),
-        documents=relayed_documents,
-        allowed_paths=relayed_scope,
-        memory=relayed_memory,
+    answers_confirmations = confirmations_supported(profile, handle.api_version)
+    offers_always = bool(
+        session_id
+        and answers_confirmations
+        and grants_supported(profile, handle.api_version)
     )
+    if offers_always:
+        try:
+            relayed_grants.reconcile(proxy, session_id)
+        except SidecarError as exc:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Couldn't check what the {profile.display_name} agent "
+                        f"may do without asking in this chat, so this turn was "
+                        f"stopped: {exc}. Send the message again; if it keeps "
+                        "failing, restart the agent from its card."
+                    ),
+                }
+            )
+            return
+
+    run_id = str(uuid.uuid4())
+    inbox = None
+    if (
+        session_id
+        and record_followup is not None
+        and followups_supported(profile, handle.api_version)
+    ):
+
+        def _followup_taken(text: str) -> None:
+            record_followup(text)
+            sse_handler._emit({"type": "followup_taken", "text": text})
+
+        inbox = followups.open_relay_inbox(
+            session_id,
+            lambda text: proxy.followup(run_id, text),
+            _followup_taken,
+        )
+    else:
+        sse_handler._emit({"type": "followup_unavailable"})
+    try:
+        relay_query(
+            sse_handler,
+            proxy,
+            query=request.message,
+            run_id=run_id,
+            context=context,
+            model_id=model_id,
+            # The chat's own mode, read per turn: the in-process path applies it
+            # to its handler, the relayed one to the sidecar session.
+            full_access=(
+                session_permissions.for_session(session_id).mode
+                == session_permissions.MODE_FULL_ACCESS
+                if session_id and full_access_supported(profile, handle.api_version)
+                else None
+            ),
+            profile=profile,
+            session_id=session_id,
+            answers_confirmations=answers_confirmations,
+            offers_always=offers_always,
+            documents=relayed_documents,
+            allowed_paths=relayed_scope,
+            memory=relayed_memory,
+        )
+    finally:
+        if inbox is not None:
+            followups.close_relay_inbox(session_id, inbox)
 
 
 def _find_last_tool_step(steps: list) -> dict | None:
@@ -3473,6 +3530,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         documents=_relayed_documents(rag_file_paths, attached),
                         allowed_paths=allowed,
                         memory=_memory_mode(session, db),
+                        record_followup=lambda text: db.add_message(
+                            session_id, "user", text
+                        ),
                     )
                     return
 

@@ -389,23 +389,36 @@ async def confirm_tool(request: ToolConfirmRequest):
 async def _confirm_relayed_tool(
     handler, request: ToolConfirmRequest, stale: HTTPException
 ):
-    """Deliver allow-once or deny to the sidecar a relayed run is parked on."""
+    """Deliver the answer to the sidecar a relayed run is parked on.
+
+    "Always" is granted by the sidecar's session, so it is only taken where the
+    prompt offered it — a sidecar whose grants this chat can list and revoke.
+    """
     from starlette.concurrency import run_in_threadpool
 
+    from gaia.ui.email_sidecar import grants as relayed_grants
     from gaia.ui.email_sidecar.errors import SidecarError
 
-    if request.always and request.approved:
+    always = request.always and request.approved
+    scope = handler.relay_always_scope(request.confirm_id)
+    if always and scope is None:
+        if not handler.relay_confirmation_pending(request.confirm_id or ""):
+            raise stale
         raise HTTPException(
             status_code=409,
             detail=(
-                "This agent runs as a separate process, so it can't be allowed "
-                "always from here; answer with allow once or deny."
+                "This call has no scope narrow enough to allow always; "
+                "answer it with allow once or deny."
             ),
         )
+    proxy = handler.active_relay_proxy
     try:
         # Off the event loop: this is an HTTP round trip to the sidecar.
         delivered = await run_in_threadpool(
-            handler.resolve_relay_confirmation, request.approved, request.confirm_id
+            handler.resolve_relay_confirmation,
+            request.approved,
+            request.confirm_id,
+            always,
         )
     except SidecarError as exc:
         raise HTTPException(
@@ -413,7 +426,23 @@ async def _confirm_relayed_tool(
         ) from exc
     if not delivered:
         raise stale
-    return {"status": "ok", "approved": request.approved, "granted": None}
+    if always:
+        try:
+            await run_in_threadpool(relayed_grants.refresh, proxy, request.session_id)
+        except SidecarError as exc:
+            # Allowed already; the next turn revokes what this chat can't list.
+            logger.error(
+                "Allowed always, but could not list the agent's grants for "
+                "session %s: %s",
+                request.session_id[:8],
+                exc,
+            )
+            return {"status": "ok", "approved": True, "granted": None}
+    return {
+        "status": "ok",
+        "approved": request.approved,
+        "granted": scope if always else None,
+    }
 
 
 class PermissionModeRequest(BaseModel):
@@ -522,13 +551,53 @@ async def _sync_relayed_mode(session_id: str, enabled: bool) -> None:
 async def revoke_grants(
     session_id: str, key: Optional[str] = None, db: ChatDatabase = Depends(get_db)
 ):
-    """Revoke one "always allow" grant (``?key=``), or all of them."""
+    """Revoke one "always allow" grant (``?key=``), or all of them.
+
+    A relayed agent's grant is revoked in the agent's own session first, and
+    stays listed when that fails, so the list never shows less than it allows.
+    """
     _require_session(db, session_id)
     perms = session_permissions.get(session_id)
+    relayed = 0
+    if perms is not None and perms.relayed_agent is not None:
+        targets = perms.relayed_keys() if key is None else [key]
+        if any(k in perms.relayed_keys() for k in targets):
+            await _revoke_relayed(session_id, perms.relayed_agent, key)
+            relayed = len(targets)
     removed = perms.revoke(key) if perms is not None else 0
-    if key is not None and removed == 0:
+    if key is not None and removed == 0 and relayed == 0:
         raise HTTPException(status_code=404, detail=f"No grant {key!r} in this chat.")
     return _permissions_view(session_id)
+
+
+async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) -> None:
+    """Revoke a grant the chat's relayed agent holds, through its sidecar."""
+    from starlette.concurrency import run_in_threadpool
+
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    from .._chat_helpers import _active_sse_handlers
+
+    def _revoke() -> None:
+        handler = _active_sse_handlers.get(session_id)
+        proxy = getattr(handler, "active_relay_proxy", None)
+        if getattr(proxy, "agent_id", None) != agent_id:
+            proxy = daemon_client.acquire_handle(agent_id).proxy()
+        relayed_grants.revoke(proxy, session_id, key)
+
+    try:
+        await run_in_threadpool(_revoke)
+    except SidecarError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Couldn't reach the {agent_id} agent to revoke this ({exc}), so "
+                "it is still allowed. Try again; restarting the agent also "
+                "clears it."
+            ),
+        ) from exc
 
 
 class UserInputRequest(BaseModel):
@@ -698,10 +767,14 @@ class FollowUpRequest(BaseModel):
 async def send_followup(request: FollowUpRequest):
     """Hand a message to the session's running turn, picked up at its next step.
 
-    404 means no turn is running, 409 that the running one cannot take it
-    (not yet at the model, or relayed to an agent outside this process). Either
-    way the message was not delivered, so the caller must queue it.
+    404 means no turn is running, 409 that the running one cannot take it (not
+    yet at the model, or relayed to an agent that refused it or cannot take
+    one). Either way the message was not delivered, so the caller must queue it.
     """
+    from starlette.concurrency import run_in_threadpool
+
+    from gaia.ui.email_sidecar.errors import SidecarError
+
     text = request.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="A follow-up needs some text.")
@@ -710,7 +783,16 @@ async def send_followup(request: FollowUpRequest):
             status_code=404,
             detail="No reply is running in this chat; send it as a new message.",
         )
-    if not followups.deliver(request.session_id, text):
+    try:
+        # Off the event loop: a relayed turn's delivery is an HTTP round trip.
+        delivered = await run_in_threadpool(followups.deliver, request.session_id, text)
+    except SidecarError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"The running reply did not take the message ({exc}); it is "
+            "sent as the next message once the reply ends.",
+        ) from exc
+    if not delivered:
         raise HTTPException(
             status_code=409,
             detail="The running reply cannot take a message right now; it is "

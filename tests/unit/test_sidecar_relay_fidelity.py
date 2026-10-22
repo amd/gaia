@@ -155,7 +155,7 @@ def test_prompt_args_are_made_json_safe():
 
 def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(
         handler,
         {
@@ -173,7 +173,7 @@ def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     assert prompt["type"] == "permission_request"
     assert prompt["args"] == {"path": "C:\\a.txt", "kind": "file"}
     assert prompt["tool_label"] == "using a file"
-    # Still no "always": the grant would live where this chat can't see it.
+    # No "always": folder access asks afresh every time.
     assert "always_scope" not in prompt
 
 
