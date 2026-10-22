@@ -7,9 +7,10 @@
  * under Advanced. Also covers the dashboard fixes from #4814, #4815 and #4824.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryDashboard } from '../MemoryDashboard';
+import { dueLabel } from '../MemoryDashboardAboutYou';
 import * as memoryApi from '../../services/memoryApi';
 
 vi.mock('../../services/memoryApi');
@@ -315,5 +316,63 @@ describe('Failures the Advanced view used to hide (#4824)', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Yes, re-initialize' }));
 
         expect(await screen.findByText(/system discovery failed/)).toBeInTheDocument();
+    });
+});
+
+describe('Reminder due dates', () => {
+    const NOW = new Date(2026, 9, 22, 12, 0);
+    // Stored like the memory store writes it: an ISO timestamp with an offset.
+    const localMidnight = (day: number) => new Date(2026, 9, day).toISOString();
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
+    });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('shows the stored date, not just the words the user said', async () => {
+        const interview = row({
+            id: 'r1', category: 'reminder', content: "I'm interviewing at Contoso next Friday",
+            due_at: localMidnight(30), updated_at: NOW.toISOString(),
+        });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [CALGARY, interview], total: 2, offset: 0, limit: 200 });
+        await renderAbout();
+
+        const due = within(itemRow("I'm interviewing at Contoso next Friday")).getByText(/^Due /);
+        expect(due).toHaveTextContent(/Fri/);
+        expect(due).toHaveTextContent(/Oct/);
+        expect(due).toHaveTextContent(/30/);
+        expect(due).not.toHaveClass('is-overdue');
+        expect(within(itemRow('Lives in Calgary')).queryByText(/Due /)).not.toBeInTheDocument();
+    });
+
+    it('says it was due once the date has passed', async () => {
+        const dentist = row({ id: 'r2', category: 'reminder', content: 'Dentist on Friday', due_at: localMidnight(16) });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [CALGARY, dentist], total: 2, offset: 0, limit: 200 });
+        await renderAbout();
+
+        const due = within(itemRow('Dentist on Friday')).getByText(/^Was due /);
+        expect(due).toHaveTextContent(/Fri.*Oct.*16|Fri.*16.*Oct/);
+        expect(due).toHaveClass('is-overdue');
+    });
+
+    it('counts a whole-day reminder as due, not past, on its own day', () => {
+        expect(dueLabel(localMidnight(22), NOW)).toMatch(/^Due /);
+        expect(dueLabel('2026-10-21', NOW)).toMatch(/^Was due .*21/);
+        expect(dueLabel(new Date(2026, 9, 22, 9, 30).toISOString(), NOW)).toMatch(/^Was due /);
+        expect(dueLabel('not a date', NOW)).toBe('');
+    });
+
+    it('keeps the due date when a forgotten reminder is undone', async () => {
+        const interview = row({ id: 'r1', category: 'reminder', content: 'Interview at Contoso', due_at: localMidnight(30) });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [CALGARY, interview], total: 2, offset: 0, limit: 200 });
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('Interview at Contoso')).getByRole('button', { name: /Forget/ }));
+        fireEvent.click(await screen.findByRole('button', { name: /Undo/ }));
+
+        await waitFor(() => expect(mockedApi.createKnowledge).toHaveBeenCalledWith(
+            expect.objectContaining({ content: 'Interview at Contoso', due_at: localMidnight(30) }),
+        ));
     });
 });

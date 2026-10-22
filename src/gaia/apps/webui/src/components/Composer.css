@@ -212,3 +212,8 @@
 .composer-chip.is-danger {
     color: var(--danger);
 }
+
+.composer-chip.is-on {
+    background: var(--accent-dim);
+    color: var(--accent);
+}

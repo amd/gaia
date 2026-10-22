@@ -6,6 +6,7 @@ import { ChevronRight, Folder } from 'lucide-react';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
+import { PrivateChip } from './PrivateChip';
 import { StartCards } from './StartCards';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
@@ -145,7 +146,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     disabledReason={starting ? STARTING_REASON : sending ? 'Starting the chat…' : null}
                     autoFocus
                     inputRef={inputRef}
-                    leftControls={<PermissionModeChip sessionId={null} />}
+                    leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
                     rightControls={<ModelChip />}
                 />
                 {folder && (
