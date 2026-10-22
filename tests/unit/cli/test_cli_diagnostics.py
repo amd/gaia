@@ -28,21 +28,21 @@ def install(tmp_path, monkeypatch):
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(daemon_dir))
     monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
 
-    (gaia_dir / "gaia.log").write_text("gaia\n", encoding="utf-8")
-    (gaia_dir / "electron-updater.log").write_text("updater\n", encoding="utf-8")
-    (daemon_dir / "daemon.log").write_text("daemon\n", encoding="utf-8")
-    (daemon_dir / "daemon.log.1").write_text("daemon older\n", encoding="utf-8")
+    (gaia_dir / "gaia.log").write_bytes(b"gaia\n")
+    (gaia_dir / "electron-updater.log").write_bytes(b"updater\n")
+    (daemon_dir / "daemon.log").write_bytes(b"daemon\n")
+    (daemon_dir / "daemon.log.1").write_bytes(b"daemon older\n")
     (daemon_dir / "instance.json").write_text(
         json.dumps({"pid": os.getpid(), "port": 51001, "token": DAEMON_TOKEN}),
         encoding="utf-8",
     )
-    (gaia_dir / "lemonade" / "lemond.log").write_text("lemond\n", encoding="utf-8")
+    (gaia_dir / "lemonade" / "lemond.log").write_bytes(b"lemond\n")
     (gaia_dir / "lemonade" / "state.json").write_text(
         json.dumps({"pid": os.getpid(), "port": 51002, "api_key": LEMONADE_KEY}),
         encoding="utf-8",
     )
     sidecar = gaia_dir / "agents" / "gaia" / "logs" / "sidecar-51003.log"
-    sidecar.write_text("sidecar\n", encoding="utf-8")
+    sidecar.write_bytes(b"sidecar\n")
     (gaia_dir / "backend.pid").write_text("4242\n", encoding="utf-8")
 
     calls = []
