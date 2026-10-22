@@ -1126,6 +1126,17 @@
         "title": "Chunk Count",
         "type": "integer"
       },
+      "error_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Kind"
+      },
       "file_size": {
         "title": "File Size",
         "type": "integer"
@@ -1865,6 +1876,11 @@
       "indexed": {
         "default": 0,
         "title": "Indexed",
+        "type": "integer"
+      },
+      "skipped": {
+        "default": 0,
+        "title": "Skipped",
         "type": "integer"
       }
     },

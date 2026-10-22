@@ -187,3 +187,34 @@
     background: transparent;
     color: var(--text-muted);
 }
+
+/* Why a document failed, shown under its row rather than only in a tooltip */
+.doc-failure { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.doc-failure-hint,
+.doc-failure-reason {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+.doc-failure-hint { color: var(--text-secondary); }
+.doc-failure-reason { color: var(--text-muted); }
+.doc-failure-reason summary { cursor: pointer; }
+.doc-failure-reason p { margin: 4px 0 0; white-space: pre-line; }
+/* Retrying a damaged file fails again, so it steps back */
+.btn-retry-quiet { font-size: 10px; opacity: 0.8; }
+
+/* Result of indexing a folder typed into the path box */
+.doc-folder-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 8px 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+}
+.doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }

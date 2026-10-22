@@ -4589,6 +4589,18 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
+# RAG pdf_status values that retrying can't fix until the file itself changes.
+PERMANENT_INDEX_FAILURES = frozenset({"corrupted", "encrypted", "empty"})
+
+
+class UnreadableDocumentError(RuntimeError):
+    """Indexing failed because of the file itself; ``kind`` says how."""
+
+    def __init__(self, message: str, kind: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 async def _index_document(filepath: Path) -> int:
     """Index a document using RAG SDK. Returns chunk count.
 
@@ -4605,7 +4617,8 @@ async def _index_document(filepath: Path) -> int:
     no chunks. Callers must treat 0 chunks as a failure condition.
 
     Raises:
-        RuntimeError: If indexing fails or stops making progress.
+        RuntimeError: If indexing fails or stops making progress;
+            ``UnreadableDocumentError`` when the file itself is the problem.
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
     from gaia.rag.sdk import IndexingStopped
@@ -4657,7 +4670,11 @@ async def _index_document(filepath: Path) -> int:
 
         error = result.get("error")
         if error:
-            raise RuntimeError(f"RAG indexing failed for {filepath.name}: {error}")
+            message = f"RAG indexing failed for {filepath.name}: {error}"
+            kind = result.get("pdf_status")
+            if kind in PERMANENT_INDEX_FAILURES:
+                raise UnreadableDocumentError(message, kind)
+            raise RuntimeError(message)
 
         if not result.get("success"):
             raise RuntimeError(f"RAG indexing unsuccessful for {filepath.name}")

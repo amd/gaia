@@ -211,11 +211,18 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
 
 // ── Upload Error Toast ───────────────────────────────────────────────────
 
+/** The backend's message without its leading category label, e.g. "File not found:". */
+function stripPrefix(message: string, prefix: string): string {
+    return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+}
+
 interface UploadErrorToastProps {
     /** The filename that failed. */
     filename: string;
     /** The error message from the backend. */
     error: string;
+    /** HTTP status of the failed request, when there was one. */
+    status?: number;
     /** Called when the user dismisses the toast. */
     onDismiss: () => void;
     /** Auto-dismiss timeout in ms (default: 15000). 0 = no auto-dismiss. */
@@ -226,7 +233,7 @@ interface UploadErrorToastProps {
  * A dismissible error toast for document upload failures.
  * Parses the backend error to show helpful context and a GitHub link.
  */
-export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+export function UploadErrorToast({ filename, error, status, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -245,6 +252,7 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
     // Determine if it's a file type issue or a general error
     const isFileTypeError = error.toLowerCase().includes('unsupported file type') ||
         error.toLowerCase().includes('not supported for indexing') ||
+        error.toLowerCase().includes('file type not allowed') ||
         category !== null;
 
     const isConnectionError = error.toLowerCase().includes('fetch') ||
@@ -253,13 +261,29 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
 
     let title: string;
     let detail: string;
-    let issueUrl: string;
+    let issueUrl: string | null;
     let Icon = AlertCircle;
 
-    if (isFileTypeError && category) {
+    // A wrong path or a file outside the readable folders is the user's to fix, not a bug to report.
+    if (status === 404) {
+        title = `"${filename}" doesn't exist`;
+        detail = stripPrefix(error, 'File not found:');
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (status === 403) {
+        title = `GAIA can't read files in that location`;
+        detail = `${stripPrefix(error, 'Access denied:')} Or drop the file here instead and GAIA keeps its own copy.`;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (isFileTypeError && category) {
         title = `${category.label} files not supported`;
         detail = category.message;
         issueUrl = featureRequestUrl(category.featureTitle);
+        Icon = AlertTriangle;
+    } else if (isFileTypeError && !ext) {
+        title = `"${filename}" has no file extension`;
+        detail = stripPrefix(error, 'File type not allowed:');
+        issueUrl = null;
         Icon = AlertTriangle;
     } else if (isFileTypeError) {
         title = `File type not supported: ${ext}`;
@@ -285,8 +309,8 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
                 <div className="upload-error-title">{title}</div>
                 <div className="upload-error-detail">
                     {detail}
-                    {' '}
-                    {isFileTypeError ? (
+                    {issueUrl && ' '}
+                    {issueUrl === null ? null : isFileTypeError ? (
                         <a href={issueUrl} target="_blank" rel="noopener noreferrer">
                             Request this feature →
                         </a>

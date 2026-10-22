@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT DEFAULT (datetime('now')),
     last_accessed_at TEXT,
-    last_error TEXT
+    last_error TEXT,
+    error_kind TEXT
 );
 
 -- Sessions (conversations)
@@ -342,6 +343,8 @@ class ChatDatabase:
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
+        # Why a failure is permanent (corrupted, encrypted, empty); NULL otherwise.
+        self._add_column("documents", "error_kind", "TEXT")
         # The server indexing it, so a restart can tell a dead index from a live one.
         self._add_column("documents", "indexing_owner", "TEXT")
         # Per-session incognito mode and agent selection.
@@ -1428,6 +1431,7 @@ class ChatDatabase:
         status: str,
         chunk_count: int | None = None,
         last_error: str | None = _UNSET,
+        error_kind: str | None = None,
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -1439,6 +1443,8 @@ class ChatDatabase:
                         Omit (default) to leave the existing value unchanged.
                         Pass None to clear the column (SQL NULL).
                         Pass a string to store that error message.
+            error_kind: Stored with ``last_error`` whenever that is written, so
+                        a stale kind never outlives the error it described.
 
         Returns:
             True if the document was found and updated.
@@ -1457,7 +1463,11 @@ class ChatDatabase:
             if status == "complete":
                 parts.append("last_error = ?")
                 params.append(None)
+                parts.append("error_kind = ?")
+                params.append(None)
             elif last_error is not _UNSET:
+                parts.append("error_kind = ?")
+                params.append(error_kind if last_error is not None else None)
                 parts.append("last_error = ?")
                 if (
                     isinstance(last_error, str)
@@ -1485,7 +1495,7 @@ class ChatDatabase:
             ids = [row["id"] for row in rows if owner_is_gone(row["indexing_owner"])]
             self._conn.executemany(
                 "UPDATE documents SET indexing_status = 'failed', last_error = ?, "
-                "last_accessed_at = ? WHERE id = ?",
+                "error_kind = NULL, last_accessed_at = ? WHERE id = ?",
                 [(error, self._now(), doc_id) for doc_id in ids],
             )
         return ids

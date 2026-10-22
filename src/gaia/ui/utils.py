@@ -136,6 +136,23 @@ TEXT_EXTENSIONS = frozenset(
     }
 )
 
+
+def unsupported_type_message(filename: str) -> str:
+    """Why *filename* can't be indexed, in words a user can act on."""
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        return (
+            f"File type not allowed: '{filename}' has no file extension, so GAIA "
+            "can't tell what kind of document it is. Rename it with the right "
+            "extension (for example .txt or .pdf) and index it again."
+        )
+    return (
+        f"File type not allowed: GAIA can't index {suffix} files. It indexes "
+        "PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), text, Markdown, "
+        "CSV, JSON, HTML, XML, YAML and source-code files."
+    )
+
+
 # Threshold for switching to background indexing
 LARGE_FILE_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 
@@ -267,6 +284,7 @@ def doc_to_response(doc: dict) -> DocumentResponse:
         sessions_using=doc.get("sessions_using", 0),
         indexing_status=doc.get("indexing_status", "complete"),
         last_error=doc.get("last_error"),
+        error_kind=doc.get("error_kind"),
     )
 
 
@@ -690,7 +708,8 @@ def safe_open_document(
       in ``GAIA_DOCUMENT_ROOTS``), both lexically and after resolving every
       symlinked component (403 if not)
     - Has an allowed extension (400 if not)
-    - Exists and is a regular file (404 / 400 if not)
+    - Exists (404 if not, only reachable inside a root) and is not a folder
+      (400 with ``detail.status == "is_folder"``) or other non-regular file
 
     Yields a tuple of (fd, stat_result, resolved_path).
     The fd is a raw OS file descriptor open for reading; callers must NOT
@@ -703,10 +722,17 @@ def safe_open_document(
 
     raw = Path(path)
     roots = document_roots()
-    denied = f"Access denied: path must be within one of: {_describe_roots(roots)}"
+    # Worded so it holds whether or not the file exists: see step 1.
+    denied = (
+        f"Access denied: GAIA only reads documents under "
+        f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
+        f"is right. If it is, move or copy the file under one of those folders, "
+        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
+    )
 
     # 1. Must be within an allowed root — check before lstat so that
-    # non-existent paths outside them return 403 (not 404).
+    # non-existent paths outside them return 403 (not 404): answering 404 vs
+    # 403 there would let any client probe which files exist outside the roots.
     # Use os.path.abspath (doesn't follow symlinks) for this check.
     abs_raw = Path(os.path.abspath(str(raw)))
     if not any(abs_raw.is_relative_to(root) for root in roots):
@@ -729,9 +755,24 @@ def safe_open_document(
                 detail="Symbolic link documents are not allowed for security reasons",
             )
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"File not found: {raw}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: there is no file at {raw}. Check the path "
+            "for typos.",
+        )
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"Cannot stat file: {exc}")
+
+    # 3b. A folder gets its own answer so the caller can offer folder indexing.
+    if stat.S_ISDIR(lst.st_mode):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status": "is_folder",
+                "message": f"{raw} is a folder, not a file. Index it as a folder "
+                "to add the documents inside it.",
+            },
+        )
 
     # 4. Open exactly the path we containment-checked (fully resolved)
     resolved = Path(real)
@@ -739,8 +780,7 @@ def safe_open_document(
     # 5. Extension must be allowed
     if resolved.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=400,
-            detail=f"File type not allowed: {resolved.suffix}. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+            status_code=400, detail=unsupported_type_message(resolved.name)
         )
 
     # 6. Open safely — use O_NOFOLLOW on POSIX to reject symlinks at kernel level
