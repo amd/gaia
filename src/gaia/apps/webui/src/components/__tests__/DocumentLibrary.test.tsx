@@ -137,6 +137,14 @@ describe('DocumentLibrary says where documents go', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Index' }));
     };
 
+    it('names the open chat in the attach button label, for screen readers too', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        render(<DocumentLibrary />);
+
+        const button = await screen.findByRole('button', { name: 'Attach good.pdf to “Budget review”' });
+        expect(button.getAttribute('title')).toBe('Use in “Budget review”');
+    });
+
     it('names the open chat as the destination and confirms the attach', async () => {
         render(<DocumentLibrary />);
 

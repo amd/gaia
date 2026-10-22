@@ -614,7 +614,7 @@ export function DocumentLibrary() {
                                             onClick={() => handleAttachDoc(doc.id)}
                                             title={targetSessionId ? `Use in ${targetChatName}` : 'Use in your next chat'}
                                             aria-label={targetSessionId
-                                                ? `Attach ${doc.filename} to current session`
+                                                ? `Attach ${doc.filename} to ${targetChatName}`
                                                 : `Attach ${doc.filename} to your next chat`}
                                         >
                                             <Link2 size={14} />

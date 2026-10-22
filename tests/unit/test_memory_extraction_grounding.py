@@ -679,6 +679,20 @@ class TestLiftedFromTools:
 
         assert _lifted_from_tools(content, user, tool_text) is lifted
 
+    def test_a_personal_detail_only_a_tool_supplied_is_dropped(self):
+        """Intended: memory holds what the user said, even about themselves.
+
+        The time came from their calendar, not their words, so it is not
+        remembered; the calendar stays the source of truth for it.
+        """
+        from gaia.agents.base.memory import _lifted_from_tools
+
+        assert _lifted_from_tools(
+            "User has a dentist appointment Friday 3pm",
+            "check my calendar for the dentist",
+            "Dentist Fri 3pm",
+        )
+
 
 def test_consolidation_drops_answers_to_document_questions(store):
     """A chat distilled weeks later must not turn its answers into facts."""
