@@ -763,8 +763,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(Utf8JsonMiddleware)
-
     # CORS - first-party dev origins only.
     #
     # No tunnel origin is listed: the mobile flow serves the SPA *from*
@@ -793,11 +791,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # that CORS preflight (OPTIONS) responses are handled first.
     app.add_middleware(TunnelAuthMiddleware)
 
-    # Host / Origin / X-Gaia-UI guard. Added last so it is the OUTERMOST
-    # middleware: it runs before tunnel auth (which passes everything
+    # Host / Origin / X-Gaia-UI guard. Added after tunnel auth so it wraps
+    # it: it runs before tunnel auth (which passes everything
     # through while the tunnel is off) and its rejections carry no CORS
     # headers, so a cross-site page cannot read why it failed.
     app.add_middleware(UIRequestGuardMiddleware)
+
+    # Outermost, so the guard's and tunnel auth's own rejections get the
+    # charset too. It only rewrites a header, so the guard still runs first.
+    app.add_middleware(Utf8JsonMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
@@ -826,9 +828,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             exc,
             traceback.format_exc(),
         )
+        # Served outside every middleware, so it names its own charset.
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},
+            media_type="application/json; charset=utf-8",
         )
 
     # ── Include Routers ──────────────────────────────────────────────────

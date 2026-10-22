@@ -127,3 +127,52 @@ def test_agent_ui_json_declares_utf8():
     detail = r.content.decode(get_encoding_from_headers(r.headers))
     assert "—" in detail
     assert MOJIBAKE not in detail
+
+
+@responses.activate
+def test_streamed_responses_keep_the_dash(tmp_path, monkeypatch):
+    """requests reads text/event-stream as ISO-8859-1 unless we decode it."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    base = "http://localhost:13305/api/v1"
+    body = ('data: {"delta": "' + MESSAGE + '"}\n\ndata: [DONE]\n\n').encode("utf-8")
+    responses.add(
+        responses.POST,
+        f"{base}/responses",
+        body=body,
+        content_type="text/event-stream",
+    )
+    client = LemonadeClient(base_url=base, verbose=False)
+    events = list(client.responses(model="m", input="hi", stream=True))
+    assert events == [{"delta": MESSAGE}]
+
+
+class _RunningTunnel:
+    def poll(self):
+        return None
+
+
+def test_tunnel_auth_rejection_declares_utf8():
+    """Responses the other middlewares build get the charset too."""
+    app = create_app(db_path=":memory:")
+    tunnel = app.state.tunnel
+    tunnel._url = "https://fake-tunnel.ngrok-free.app"
+    tunnel._token = "valid"
+    tunnel._process = _RunningTunnel()
+    assert tunnel.active
+    r = TestClient(app).get("/api/sessions", headers={"X-Gaia-UI": "1"})
+    assert r.status_code == 401
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_unhandled_error_declares_utf8():
+    """The generic 500 is served outside every middleware."""
+    app = create_app(db_path=":memory:")
+
+    async def boom():
+        raise RuntimeError("boom")
+
+    app.add_api_route("/api/boom", boom)
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/api/boom", headers={"X-Gaia-UI": "1"})
+    assert r.status_code == 500
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
