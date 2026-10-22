@@ -825,7 +825,10 @@ def model_lease(
     hold = _current_hold()
     if hold is not None:
         held_model = hold.model
-        if held_model != model:
+        from gaia.llm.lemonade_client import _model_ids_match
+
+        # user.X and X are one model: Lemonade lists a registered user.X as X.
+        if not _model_ids_match(held_model, model):
             # The outer holder leased a DIFFERENT model. Folding silently would
             # let this load happen under a lease the broker booked against
             # another model, desyncing its slot bookkeeping — loud, because the

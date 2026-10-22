@@ -86,6 +86,7 @@ from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
+    _model_ids_match,
     cloud_model_provider,
     resolve_default_chat_model,
     resolve_lemonade_base_url,
@@ -812,6 +813,8 @@ def _apply_local_switch(
     chat = agent.chat
     # Raises if unreachable, after waiting out a restart of GAIA's own server.
     base_url, available = _reachable_lemonade_models(agent, target, on_status)
+    # Lemonade lists a registered user.X model as X; switch to the listed name.
+    target = next((m for m in available if _model_ids_match(m, target)), target)
     if target not in available and _replayed_cloud_key(base_url, target):
         available = _lemonade_models(base_url)
     if target not in available:
@@ -1109,7 +1112,11 @@ def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """*messages* ending with :data:`INTERRUPTED_NOTE`, in the last reply when
     there is one, so roles still alternate."""
     last = messages[-1] if messages else None
-    if last and last.get("role") == "assistant" and isinstance(last.get("content"), str):
+    if (
+        last
+        and last.get("role") == "assistant"
+        and isinstance(last.get("content"), str)
+    ):
         text = last["content"].strip()
         noted = f"{text}\n\n{INTERRUPTED_NOTE}" if text else INTERRUPTED_NOTE
         return [*messages[:-1], {**last, "content": noted}]

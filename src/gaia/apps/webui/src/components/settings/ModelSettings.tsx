@@ -4,8 +4,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName } from '../../stores/modelStore';
+import { useModelStore, displayModelName, sameModelId } from '../../stores/modelStore';
 import { ModelContextSize } from './ModelContextSize';
+import { AddCustomModel } from './AddCustomModel';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
@@ -49,6 +50,7 @@ export function ModelSettings() {
     const [busy, setBusy] = useState<string | null>(null);
     const [memory, setMemory] = useState<string | null>(null);
     const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+    const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
     const connected = !!provider && (!provider.remote || !!provider.models_discovered);
@@ -157,6 +159,30 @@ export function ModelSettings() {
         }
     }, [loadModels]);
 
+    const remove = useCallback(async (model: string) => {
+        setBusy(`rm:${model}`);
+        setNotice(null);
+        try {
+            const r = await api.removeCustomModel(model);
+            setConfirmRemove(null);
+            const cleared = r.cleared.includes('last_model')
+                ? ' New messages use your default model.'
+                : r.cleared.includes('default_model') ? " It was your default model, so GAIA's own default takes its place." : '';
+            setNotice({ ok: true, text: `Removed ${r.display_name} and its download.${cleared}` });
+            await loadModels('local', true);
+            await refreshActive();
+        } catch (err) {
+            setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setBusy(null);
+        }
+    }, [loadModels, refreshActive]);
+
+    const added = useCallback(async (name: string) => {
+        setNotice({ ok: true, text: `Added ${name}. Choose Download to fetch it, then Use.` });
+        await loadModels('local', true);
+    }, [loadModels]);
+
     // Poll while a download runs so its row shows progress, then its new state.
     const anyDownloading = !!models?.some(isDownloading);
     useEffect(() => {
@@ -176,7 +202,7 @@ export function ModelSettings() {
     const activeLocal = active && !active.remote && active.model ? active.model : null;
 
     const renderRow = (m: ProviderModel) => {
-        const current = active?.model === m.id;
+        const current = sameModelId(active?.model, m.id);
         const progress = isDownloading(m) ? m.download_progress : null;
         const meta = [
             placementText(m.placement),
@@ -192,6 +218,7 @@ export function ModelSettings() {
                         {m.rank && <span className="model-row-rank">#{m.rank} {m.note}</span>}
                         {m.state === 'loaded' && <span className="model-badge is-loaded">{STATE_LABELS.loaded}</span>}
                         {m.fits === true && m.available !== false && <span className="model-badge is-fit">Fits this PC</span>}
+                        {m.custom && <span className="model-badge is-custom">Added by you</span>}
                     </span>
                     {provider?.remote && (
                         <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price)}</span>
@@ -204,7 +231,33 @@ export function ModelSettings() {
                     {progress && (
                         <progress max={100} value={progress.percent} aria-label={`Downloading ${m.display_name ?? m.id}`} />
                     )}
+                    {m.custom && m.source_url && (
+                        <span className="model-row-meta">From {m.source_url}</span>
+                    )}
                 </div>
+                {m.custom && !current && !progress && (
+                    confirmRemove === m.id ? (
+                        <span className="model-row-confirm">
+                            <button type="button" className="btn-danger" onClick={() => void remove(m.id)} disabled={busy !== null}>
+                                {busy === `rm:${m.id}` ? <Loader2 size={13} className="spin" /> : null}
+                                {m.downloaded ? 'Remove and delete download' : 'Remove'}
+                            </button>
+                            <button type="button" className="btn-secondary" onClick={() => setConfirmRemove(null)} disabled={busy !== null}>
+                                Keep
+                            </button>
+                        </span>
+                    ) : (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setConfirmRemove(m.id)}
+                            disabled={busy !== null}
+                            aria-label={`Remove ${m.display_name ?? displayModelName(m.id)}`}
+                        >
+                            Remove
+                        </button>
+                    )
+                )}
                 {current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
                 ) : m.available === false ? null : progress ? (
@@ -351,6 +404,8 @@ export function ModelSettings() {
                             )}
                         </div>
                     )}
+
+                    {provider.id === 'local' && connected && <AddCustomModel onAdded={(name) => void added(name)} />}
 
                     {provider.remote && <SpendingLimit />}
                 </section>

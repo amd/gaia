@@ -35,6 +35,11 @@ type Recommended struct {
 	// shared margin covers the cache.
 	MinCtxSize      int64 `json:"min_ctx_size"`
 	KVBytesPerToken int64 `json:"kv_bytes_per_token"`
+
+	// Custom marks a model the user added from a Hugging Face link
+	// (ReadCustomModels), which they may remove; SourceURL is that link.
+	Custom    bool   `json:"-"`
+	SourceURL string `json:"-"`
 }
 
 // KVCacheGB is the KV cache at the model's floor window. GAIA grows the window
@@ -48,6 +53,10 @@ func (r Recommended) KVCacheGB() float64 {
 // matches its account-path form (fireworks.accounts/fireworks/models/<name>).
 func (r Recommended) Matches(id string) bool {
 	if id == r.ID || (r.RegisterAs != "" && id == r.RegisterAs) {
+		return true
+	}
+	// Lemonade lists a registered user.X as X.
+	if r.RegisterAs != "" && SameLocalID(id, r.RegisterAs) {
 		return true
 	}
 	return r.Provider != "local" && rankKey(id) == rankKey(r.ID)

@@ -92,6 +92,45 @@
     color: var(--text-secondary);
 }
 
+.model-badge.is-custom {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+}
+
+.model-row-confirm {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* Settings › Model: adding a model from a Hugging Face link */
+
+.custom-model-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12.5px;
+}
+
+.custom-model-checks li {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--text-secondary);
+}
+
+.custom-model-checks li svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.custom-model-checks li.is-ok svg { color: var(--accent-green); }
+.custom-model-checks li.is-failed { color: var(--danger); }
+.custom-model-checks li.is-warning { color: var(--accent-yellow); }
+
 .model-unavailable summary {
     cursor: pointer;
     color: var(--text-secondary);

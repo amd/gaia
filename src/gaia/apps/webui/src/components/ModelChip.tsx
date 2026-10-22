@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2 } from 'lucide-react';
+import { Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import {
-    useModelStore, useInferencePlace, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE,
+    useModelStore, useInferencePlace, selectChipModel, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelMetaLine, modelState } from './modelMeta';
 import { formatPrice } from './settings/cloudPrice';
@@ -220,11 +220,12 @@ export function ModelChip() {
                             <div className="popover-message">No models yet.</div>
                         )}
                         {models.map((m) => {
-                            const current = (queued ?? active?.model) === m.id;
+                            const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const note = provider.remote
                                 ? [m.rank ? `#${m.rank} ${m.note}` : null, formatPrice(m.price)].filter(Boolean).join(' · ')
-                                : [modelMetaLine(m), m.rank ? `#${m.rank} ${m.note}` : null].filter(Boolean).join(' · ');
+                                : [modelMetaLine(m), m.rank ? `#${m.rank} ${m.note}` : null, m.custom ? 'added by you' : null]
+                                    .filter(Boolean).join(' · ');
                             return (
                                 <div key={m.id} className="popover-row">
                                     <button
@@ -277,6 +278,17 @@ export function ModelChip() {
                     </button>
                 )}
                 <div className="popover-divider" />
+                <button
+                    type="button"
+                    className="popover-item"
+                    onClick={() => { setOpen(false); openSettings('model'); }}
+                >
+                    <span className="popover-item-check"><Link2 size={13} aria-hidden="true" /></span>
+                    <span className="popover-item-body">
+                        <span className="popover-item-title">Add a model from a link…</span>
+                        <span className="popover-item-note">Any GGUF chat model on Hugging Face</span>
+                    </span>
+                </button>
                 <button
                     type="button"
                     className="popover-item"

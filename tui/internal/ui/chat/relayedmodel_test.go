@@ -166,6 +166,16 @@ func TestASwitchUsesLemonadesSpellingOfTheID(t *testing.T) {
 	}
 }
 
+// A model added from a link is registered as user.X and listed by Lemonade as X;
+// the picker switches to it by its user. id once its first pull finishes.
+func TestASwitchToAnAddedModelFindsItUnderTheNameLemonadeLists(t *testing.T) {
+	m, c, _ := relayedChat(t)
+	submitRelayed(t, m, "/model user."+localModel)
+	if c.turnModel != localModel {
+		t.Fatalf("turn model = %q, want Lemonade's %q", c.turnModel, localModel)
+	}
+}
+
 func TestRelayedSwitchToACloudModelNamesTheProvider(t *testing.T) {
 	m, c, saves := relayedChat(t)
 	m = submitRelayed(t, m, "/model "+gatewayMdl)
