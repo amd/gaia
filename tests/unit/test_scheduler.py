@@ -16,6 +16,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
+from gaia.ui import scheduler as scheduler_module
 from gaia.ui.database import ChatDatabase
 from gaia.ui.scheduler import (
     ScheduleConfig,
@@ -46,6 +47,12 @@ async def scheduler(fake_db):
     await sched.start()
     yield sched
     await sched.shutdown()
+
+
+@pytest.fixture
+def one_second_floor(monkeypatch):
+    """Let timer tests use 1-second schedules instead of waiting a minute."""
+    monkeypatch.setattr(scheduler_module, "MIN_INTERVAL_SECONDS", 1)
 
 
 # ── parse_interval tests ─────────────────────────────────────────────────────
@@ -149,14 +156,14 @@ class TestSchedulerCreate:
 
     @pytest.mark.asyncio
     async def test_create_invalid_interval(self, scheduler):
-        with pytest.raises(ValueError, match="Cannot parse interval"):
+        with pytest.raises(ValueError, match="couldn't read 'whenever'"):
             await scheduler.create_task("bad", "whenever", "Prompt")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("interval", ["every 0m", "0s"])
     async def test_create_zero_interval_rejected(self, scheduler, interval):
         """A zero interval would run the prompt back to back forever."""
-        with pytest.raises(ValueError, match="at least 1 second"):
+        with pytest.raises(ValueError, match="at most once a minute"):
             await scheduler.create_task("zero", interval, "Prompt")
         assert scheduler.get_task("zero") is None
 
@@ -269,6 +276,7 @@ class TestSchedulerLifecycle:
 # ── Scheduler execution tests ────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("one_second_floor")
 class TestSchedulerExecution:
     """Test the timer execution loop."""
 
@@ -512,11 +520,16 @@ class TestScheduleInputBounds:
         assert config.start_hour == 8
         assert config.end_hour == 18
 
-    def test_window_with_minutes_and_spaces(self):
-        config = parse_schedule_input("every 30m from 9:30 am to 5 pm")
+    def test_window_with_spaces(self):
+        config = parse_schedule_input("every 30m from 9:00 am to 5 pm")
         assert config.interval_seconds == 1800
         assert config.start_hour == 9
         assert config.end_hour == 17
+
+    def test_window_off_the_hour_is_rejected_not_rounded(self):
+        config = parse_schedule_input("every 30m from 9:30 am to 5 pm")
+        assert config.interval_seconds == 0
+        assert "on the hour" in config.description
 
     def test_time_of_day_parsing_still_works(self):
         config = parse_schedule_input("daily at 9 pm")
