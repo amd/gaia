@@ -21,6 +21,7 @@ import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } fr
 import './ChatView.css';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
+import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
@@ -1963,6 +1964,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onUsage={showContextUsage}
                                     onDetails={() => revealPanelSection('context')}
                                 />
+                                <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
                                 <ModelChip />
                             </>
                         )}

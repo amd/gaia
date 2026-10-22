@@ -290,8 +290,13 @@ Pick the install path that fits you best:
 
 ## The window
 
-The app opens straight to an empty chat: a message box, the model it will use,
-and where that model runs.
+The app opens straight to an empty chat: a greeting and a message box over a
+quiet field of dots laid out like the NPU's tile array. The dots say what GAIA
+is doing: they sweep while a model loads, fill from the bottom up while one
+downloads, and stir under the pointer and with each keystroke. Start typing and
+the message box drops to the bottom of the window; send, and the dots clear away
+so the chat starts on a clean page. With reduced motion turned on in your
+system settings, the dots hold still.
 
 - **Sidebar:** New chat, search, **Memory**, **Scheduled tasks**, **Documents**,
   then your chats. **Needs you** at the top holds chats waiting on a permission
@@ -303,8 +308,9 @@ and where that model runs.
   `Local · Gemma-4-E4B-it-GGUF` or `Fireworks AI · glm-5p3-flash`),
   notifications, mobile access and Settings. Collapse it with `Ctrl+B`.
 - **Message box:** **+** attaches files (or drag them in), the shield picks the
-  permission mode, the model chip picks the model, and Send turns into Stop
-  while GAIA is working.
+  permission mode, the folder chip shows the folder GAIA works in (in a chat,
+  click it to see and manage the chat's folders in the session panel), the model chip picks the
+  model, and Send turns into Stop while GAIA is working.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail. "Steps" is the agent's own count, the same figure the TUI and
   evals report.

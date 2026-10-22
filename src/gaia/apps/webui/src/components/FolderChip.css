@@ -1,0 +1,14 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.folder-chip {
+    min-width: 0;
+    max-width: 180px;
+    flex-shrink: 1;
+}
+
+/* Only names the folder here, so it does not light up like a control. */
+span.folder-chip:hover {
+    background: none;
+    color: var(--text-secondary);
+}
