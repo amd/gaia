@@ -556,6 +556,8 @@ export interface SystemStatus {
     disk_space_gb: number;
     memory_available_gb: number | null;
     initialized: boolean;
+    /** Why the desktop app's first-run `gaia init` failed; null when it did not. */
+    setup_error?: string | null;
     version: string;
     // Extended Lemonade info
     lemonade_version: string | null;
