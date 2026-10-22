@@ -873,33 +873,41 @@ def unmatched_scenario_errors(
     return errors
 
 
-def build_scenario_prompt(
-    scenario_data, manifest_data, backend_url, keep_sessions=False, agent_type=None
-):  # pylint: disable=unused-argument
-    """Build the prompt passed to `claude -p` for one scenario.
+DRIVER_INTRO = (
+    "You are the GAIA Eval Agent. Test the GAIA Agent UI by simulating a "
+    "realistic user and judging responses."
+)
 
-    Sessions are always preserved (never deleted) so they remain available
-    for manual inspection in the Agent UI.  The *keep_sessions* parameter
-    is retained for backward compatibility with existing callers but has
-    no effect.
 
-    When *agent_type* is set, the simulator is instructed to create sessions
-    bound to that agent registration ID (e.g. "gaia-lite"). Without it, the
-    backend uses its default agent.
+def rubric_sections() -> str:
+    """The simulator rules and both judge rubrics, inlined.
+
+    The driver runs with ``--tools ""`` and cannot read these files itself.
     """
-    scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
-    manifest_json = json.dumps(manifest_data, indent=2)
+    return (
+        f"## SCORING RULES AND RUBRIC\n{_load_simulator_content()}\n\n"
+        f"## PER-TURN JUDGE INSTRUCTIONS\n{_load_judge_turn_content()}\n\n"
+        f"## SCENARIO-LEVEL JUDGE INSTRUCTIONS\n{_load_judge_scenario_content()}\n"
+    )
 
+
+def scenario_section(scenario_data) -> str:
+    scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
+    return f"## SCENARIO\n```yaml\n{scenario_yaml}\n```\n"
+
+
+def manifest_section(manifest_data) -> str:
+    manifest_json = json.dumps(manifest_data, indent=2)
+    return f"## CORPUS MANIFEST (ground truth)\n```json\n{manifest_json}\n```\n"
+
+
+def _driver_task(backend_url, agent_type=None) -> str:
+    """Document paths, the backend, and the six phases: the same for every scenario."""
     corpus_root = str(CORPUS_DIR / "documents").replace("\\", "/")
     adversarial_root = str(CORPUS_DIR / "adversarial").replace("\\", "/")
     real_world_root = str(REAL_WORLD_CORPUS_DIR).replace("\\", "/")
-    # Inline all three prompt files so the full rubric is always available — the claude
-    # subprocess runs with ``--tools ""`` and cannot read these paths from disk.
     # JSON examples below use {{ and }} as f-string escaped literal braces.
     # If you switch to .replace()-style templating, change all {{ → { and }} → }.
-    simulator_content = _load_simulator_content()
-    judge_turn_content = _load_judge_turn_content()
-    judge_scenario_content = _load_judge_scenario_content()
 
     # When the runner targets a specific agent (e.g. gaia-lite), inject an
     # explicit instruction so the eval simulator creates sessions bound to
@@ -922,28 +930,7 @@ def build_scenario_prompt(
         agent_type_instructions = ""
         create_session_call = 'create_session("Eval: {{scenario_id}}")'
 
-    return f"""You are the GAIA Eval Agent. Test the GAIA Agent UI by simulating a realistic user and judging responses.
-
-## SCORING RULES AND RUBRIC
-{simulator_content}
-
-## PER-TURN JUDGE INSTRUCTIONS
-{judge_turn_content}
-
-## SCENARIO-LEVEL JUDGE INSTRUCTIONS
-{judge_scenario_content}
-
-## SCENARIO
-```yaml
-{scenario_yaml}
-```
-
-## CORPUS MANIFEST (ground truth)
-```json
-{manifest_json}
-```
-
-## DOCUMENT PATHS
+    return f"""## DOCUMENT PATHS
 - Main documents: {corpus_root}/
 - Adversarial docs: {adversarial_root}/
 - Real-world documents: {real_world_root}/
@@ -1043,6 +1030,55 @@ reads that session back to verify which agent actually answered.
 """
 
 
+#: Points the driver from its fixed instructions to the scenario it is given.
+SCENARIO_IN_USER_MESSAGE = (
+    "The scenario to run is in the user message, under ## SCENARIO."
+)
+
+
+def build_scenario_prompt_parts(
+    scenario_data, manifest_data, backend_url, keep_sessions=False, agent_type=None
+):  # pylint: disable=unused-argument
+    """Split one scenario's driver prompt into ``(system_prefix, scenario_message)``.
+
+    The prefix (rubric, manifest, document paths, backend, the six phases)
+    does not depend on the scenario, so every scenario in a run sends it
+    byte-for-byte and the API serves it from the prompt cache instead of
+    writing it again. The runner passes it as an appended system prompt;
+    only the scenario goes in the user message.
+
+    Sessions are always preserved (never deleted) so they remain available
+    for manual inspection in the Agent UI. The *keep_sessions* parameter is
+    retained for backward compatibility with existing callers but has no
+    effect.
+
+    When *agent_type* is set, the simulator is instructed to create sessions
+    bound to that agent registration ID. Without it, the backend uses its
+    default agent.
+    """
+    system_prefix = (
+        f"{DRIVER_INTRO}\n{SCENARIO_IN_USER_MESSAGE}\n\n"
+        f"{rubric_sections()}\n"
+        f"{manifest_section(manifest_data)}\n"
+        f"{_driver_task(backend_url, agent_type)}"
+    )
+    return system_prefix, scenario_section(scenario_data)
+
+
+def build_scenario_prompt(
+    scenario_data, manifest_data, backend_url, keep_sessions=False, agent_type=None
+):
+    """The whole driver prompt as one text: the fixed prefix, then the scenario."""
+    system_prefix, scenario_message = build_scenario_prompt_parts(
+        scenario_data,
+        manifest_data,
+        backend_url,
+        keep_sessions=keep_sessions,
+        agent_type=agent_type,
+    )
+    return f"{system_prefix}\n{scenario_message}"
+
+
 _SCORE_WEIGHTS = {
     "correctness": 0.25,
     "tool_selection": 0.20,
@@ -1085,6 +1121,137 @@ def recompute_turn_score(scores: dict) -> float:
     # Clamp each dimension to [0, 10] — a hallucinating eval agent could return
     # out-of-range values that would inflate/deflate the weighted score.
     return sum(max(0, min(10, scores[k])) * w for k, w in _SCORE_WEIGHTS.items())
+
+
+def apply_rubric(result: dict, scenario_id: str) -> None:
+    """Recompute scores from the dimension scores and re-derive PASS/FAIL.
+
+    Mutates *result*. The judge's own arithmetic and status are never trusted:
+    the per-turn score is the weighted sum, the scenario score their mean, and
+    the status follows the rubric's thresholds.
+    """
+    # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
+    # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
+    for turn in result.get("turns", []):
+        if isinstance(turn.get("scores"), dict):
+            computed = recompute_turn_score(turn["scores"])
+            if computed >= 0:
+                reported = turn.get("overall_score")
+                if (
+                    isinstance(reported, (int, float))
+                    and abs(computed - reported) > 0.25
+                ):
+                    print(
+                        f"[WARN] {scenario_id} turn {turn.get('turn', '?')}: "
+                        f"overwriting score {reported:.2f} → {computed:.2f}",
+                        file=sys.stderr,
+                    )
+                turn["overall_score"] = round(computed, 2)
+                # Recompute per-turn pass flag so trace files stay internally consistent
+                t_correct = turn["scores"].get("correctness")
+                turn["pass"] = bool(
+                    isinstance(t_correct, (int, float))
+                    and t_correct >= 4
+                    and computed >= 6.0
+                )
+
+    # Recompute scenario-level overall_score as the mean of recomputed per-turn scores.
+    # This ensures the scorecard's primary quality metric is fully deterministic.
+    turn_scores = [
+        t["overall_score"]
+        for t in result.get("turns", [])
+        if isinstance(t.get("overall_score"), (int, float))
+    ]
+    if turn_scores:
+        result["overall_score"] = round(sum(turn_scores) / len(turn_scores), 2)
+    elif result.get("turns"):
+        # Turns exist but all have null overall_score (dimension scores missing).
+        # Nullify the scenario score rather than silently propagating the LLM's value.
+        # Turns read back after a timeout were never judged; no warning for those.
+        if any(t.get("judged") is not False for t in result["turns"]):
+            print(
+                f"[WARN] {scenario_id} — all turn scores are null, setting overall_score=None",
+                file=sys.stderr,
+            )
+        result["overall_score"] = None
+
+    # Deterministic status re-derivation: apply rubric rules to recomputed scores.
+    # Corrects both PASS→FAIL and FAIL→PASS; never touches infrastructure statuses
+    # (BLOCKED_BY_ARCHITECTURE, TIMEOUT, etc.).
+    # Design: status is based on the mean of per-turn scores (not any-failing-turn).
+    # The scenario-level judge may legitimately PASS a scenario with one weak non-critical
+    # turn; the runner respects that by using the aggregate mean rather than a strict
+    # all-turns-pass rule.
+    if result.get("status") == "PASS" and result.get("turns"):
+        fail_reason = None
+        for t in result["turns"]:
+            t_correctness = t.get("scores", {}).get("correctness")
+            if isinstance(t_correctness, (int, float)) and t_correctness < 4:
+                fail_reason = (
+                    f"turn {t.get('turn', '?')} correctness={t_correctness:.0f} < 4 "
+                    "(rubric: FAIL if correctness < 4)"
+                )
+                break
+        if fail_reason is None:
+            sc = result.get("overall_score")
+            if isinstance(sc, (int, float)) and sc < 6.0:
+                fail_reason = (
+                    f"overall_score={sc:.2f} < 6.0 (rubric: FAIL if score < 6.0)"
+                )
+        if fail_reason:
+            print(
+                f"[WARN] {scenario_id} — overriding LLM status PASS→FAIL: {fail_reason}",
+                file=sys.stderr,
+            )
+            result["status"] = "FAIL"
+    elif result.get("status") == "FAIL" and result.get("turns"):
+        # Correct a false FAIL: if ALL turns are scored and every turn's correctness ≥ 4
+        # and overall_score ≥ 6.0, the rubric says PASS.
+        # Requiring full coverage prevents upgrading scenarios where some turns had no scores
+        # (e.g. eval agent timed out before scoring them — those turns may be real failures).
+        turns_with_correctness = [
+            t
+            for t in result["turns"]
+            if isinstance(t.get("scores", {}).get("correctness"), (int, float))
+        ]
+        sc = result.get("overall_score")
+        if (
+            turns_with_correctness
+            and len(turns_with_correctness) == len(result["turns"])
+            and all(t["scores"]["correctness"] >= 4 for t in turns_with_correctness)
+            and isinstance(sc, (int, float))
+            and sc >= 6.0
+        ):
+            print(
+                f"[WARN] {scenario_id} — overriding LLM status FAIL\u2192PASS: "
+                f"all turns correctness\u22654, overall_score={sc:.2f}\u22656.0",
+                file=sys.stderr,
+            )
+            result["status"] = "PASS"
+
+    # Guard: BLOCKED_BY_ARCHITECTURE is intentionally NOT overridden to PASS.
+    # But if the eval agent applied it when all turns clearly pass the rubric, warn —
+    # this indicates a hallucinated architectural block that needs human review.
+    elif result.get("status") == "BLOCKED_BY_ARCHITECTURE" and result.get("turns"):
+        turns_with_correctness = [
+            t
+            for t in result["turns"]
+            if isinstance(t.get("scores", {}).get("correctness"), (int, float))
+        ]
+        sc = result.get("overall_score")
+        if (
+            turns_with_correctness
+            and len(turns_with_correctness) == len(result["turns"])
+            and all(t["scores"]["correctness"] >= 4 for t in turns_with_correctness)
+            and isinstance(sc, (int, float))
+            and sc >= 6.0
+        ):
+            print(
+                f"[WARN] {scenario_id} — status=BLOCKED_BY_ARCHITECTURE but all turns pass "
+                f"rubric criteria (correctness\u22654, overall_score={sc:.2f}\u22656.0); "
+                "verify this is a genuine architectural block and not an eval agent error",
+                file=sys.stderr,
+            )
 
 
 def _validate_turn_scores(result: dict) -> list:
@@ -2019,13 +2186,18 @@ def run_scenario_subprocess(
         }
     manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
 
-    prompt = build_scenario_prompt(
+    system_prefix, prompt = build_scenario_prompt_parts(
         scenario_data,
         manifest_data,
         backend_url,
         keep_sessions=keep_sessions,
         agent_type=agent_type,
     )
+    # A file, not argv: the prefix is ~35K characters and Windows caps a
+    # command line at 32K.
+    system_prefix_path = Path(run_dir).resolve() / "driver-system-prompt.md"
+    system_prefix_path.parent.mkdir(parents=True, exist_ok=True)
+    system_prefix_path.write_text(system_prefix, encoding="utf-8")
 
     result_schema = json.dumps(
         {
@@ -2081,6 +2253,13 @@ def run_scenario_subprocess(
             "--dangerously-skip-permissions",
             "--max-budget-usd",
             budget,
+            # The fixed instructions ride in the system prompt, ahead of every
+            # scenario-specific byte, so scenarios share one cached prefix. The
+            # CLI's per-machine sections (cwd, date, git status) move to the
+            # user message so they cannot break that prefix.
+            "--append-system-prompt-file",
+            str(system_prefix_path),
+            "--exclude-dynamic-system-prompt-sections",
         ]
     )
 
@@ -2285,128 +2464,7 @@ def run_scenario_subprocess(
     _stamp_agent_provenance(result, scenario_data, agent_type, backend_url)
     _stamp_agent_model(result, scenario_data, agent_model, backend_url)
 
-    # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
-    # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
-    for turn in result.get("turns", []):
-        if isinstance(turn.get("scores"), dict):
-            computed = recompute_turn_score(turn["scores"])
-            if computed >= 0:
-                reported = turn.get("overall_score")
-                if (
-                    isinstance(reported, (int, float))
-                    and abs(computed - reported) > 0.25
-                ):
-                    print(
-                        f"[WARN] {scenario_id} turn {turn.get('turn', '?')}: "
-                        f"overwriting score {reported:.2f} → {computed:.2f}",
-                        file=sys.stderr,
-                    )
-                turn["overall_score"] = round(computed, 2)
-                # Recompute per-turn pass flag so trace files stay internally consistent
-                t_correct = turn["scores"].get("correctness")
-                turn["pass"] = bool(
-                    isinstance(t_correct, (int, float))
-                    and t_correct >= 4
-                    and computed >= 6.0
-                )
-
-    # Recompute scenario-level overall_score as the mean of recomputed per-turn scores.
-    # This ensures the scorecard's primary quality metric is fully deterministic.
-    turn_scores = [
-        t["overall_score"]
-        for t in result.get("turns", [])
-        if isinstance(t.get("overall_score"), (int, float))
-    ]
-    if turn_scores:
-        result["overall_score"] = round(sum(turn_scores) / len(turn_scores), 2)
-    elif result.get("turns"):
-        # Turns exist but all have null overall_score (dimension scores missing).
-        # Nullify the scenario score rather than silently propagating the LLM's value.
-        # Turns read back after a timeout were never judged; no warning for those.
-        if any(t.get("judged") is not False for t in result["turns"]):
-            print(
-                f"[WARN] {scenario_id} — all turn scores are null, setting overall_score=None",
-                file=sys.stderr,
-            )
-        result["overall_score"] = None
-
-    # Deterministic status re-derivation: apply rubric rules to recomputed scores.
-    # Corrects both PASS→FAIL and FAIL→PASS; never touches infrastructure statuses
-    # (BLOCKED_BY_ARCHITECTURE, TIMEOUT, etc.).
-    # Design: status is based on the mean of per-turn scores (not any-failing-turn).
-    # The scenario-level judge may legitimately PASS a scenario with one weak non-critical
-    # turn; the runner respects that by using the aggregate mean rather than a strict
-    # all-turns-pass rule.
-    if result.get("status") == "PASS" and result.get("turns"):
-        fail_reason = None
-        for t in result["turns"]:
-            t_correctness = t.get("scores", {}).get("correctness")
-            if isinstance(t_correctness, (int, float)) and t_correctness < 4:
-                fail_reason = (
-                    f"turn {t.get('turn', '?')} correctness={t_correctness:.0f} < 4 "
-                    "(rubric: FAIL if correctness < 4)"
-                )
-                break
-        if fail_reason is None:
-            sc = result.get("overall_score")
-            if isinstance(sc, (int, float)) and sc < 6.0:
-                fail_reason = (
-                    f"overall_score={sc:.2f} < 6.0 (rubric: FAIL if score < 6.0)"
-                )
-        if fail_reason:
-            print(
-                f"[WARN] {scenario_id} — overriding LLM status PASS→FAIL: {fail_reason}",
-                file=sys.stderr,
-            )
-            result["status"] = "FAIL"
-    elif result.get("status") == "FAIL" and result.get("turns"):
-        # Correct a false FAIL: if ALL turns are scored and every turn's correctness ≥ 4
-        # and overall_score ≥ 6.0, the rubric says PASS.
-        # Requiring full coverage prevents upgrading scenarios where some turns had no scores
-        # (e.g. eval agent timed out before scoring them — those turns may be real failures).
-        turns_with_correctness = [
-            t
-            for t in result["turns"]
-            if isinstance(t.get("scores", {}).get("correctness"), (int, float))
-        ]
-        sc = result.get("overall_score")
-        if (
-            turns_with_correctness
-            and len(turns_with_correctness) == len(result["turns"])
-            and all(t["scores"]["correctness"] >= 4 for t in turns_with_correctness)
-            and isinstance(sc, (int, float))
-            and sc >= 6.0
-        ):
-            print(
-                f"[WARN] {scenario_id} — overriding LLM status FAIL\u2192PASS: "
-                f"all turns correctness\u22654, overall_score={sc:.2f}\u22656.0",
-                file=sys.stderr,
-            )
-            result["status"] = "PASS"
-
-    # Guard: BLOCKED_BY_ARCHITECTURE is intentionally NOT overridden to PASS.
-    # But if the eval agent applied it when all turns clearly pass the rubric, warn —
-    # this indicates a hallucinated architectural block that needs human review.
-    elif result.get("status") == "BLOCKED_BY_ARCHITECTURE" and result.get("turns"):
-        turns_with_correctness = [
-            t
-            for t in result["turns"]
-            if isinstance(t.get("scores", {}).get("correctness"), (int, float))
-        ]
-        sc = result.get("overall_score")
-        if (
-            turns_with_correctness
-            and len(turns_with_correctness) == len(result["turns"])
-            and all(t["scores"]["correctness"] >= 4 for t in turns_with_correctness)
-            and isinstance(sc, (int, float))
-            and sc >= 6.0
-        ):
-            print(
-                f"[WARN] {scenario_id} — status=BLOCKED_BY_ARCHITECTURE but all turns pass "
-                f"rubric criteria (correctness\u22654, overall_score={sc:.2f}\u22656.0); "
-                "verify this is a genuine architectural block and not an eval agent error",
-                file=sys.stderr,
-            )
+    apply_rubric(result, scenario_id)
 
     # After overwrite, warn on turns where dimensions were missing (recompute returned -1)
     score_warnings = _validate_turn_scores(result)

@@ -210,6 +210,23 @@ under the `driver` role: one Claude session plays the user and judges every turn
 so its tokens cover both jobs. A scenario killed on timeout records none, and the
 totals then say how many scenarios they are missing.
 
+The driver's fixed instructions (rubric, corpus manifest, document paths and the
+task) go in as an appended system prompt that is identical for every scenario, and
+only the scenario itself goes in the user message. After the first scenario, that
+prefix is read from Claude's prompt cache instead of being written again.
+
+To check that a change to how the prompt is laid out keeps the judge's verdicts,
+re-judge saved transcripts from a downloaded run under each layout:
+
+```bash
+python -m gaia.eval.rejudge --artifacts <downloaded-run> --out <dir> \
+  --model claude-sonnet-4-6 --sample 40 --arms legacy,cached,legacy
+```
+
+Repeating `legacy` measures the judge's own noise, which the `legacy` vs `cached`
+agreement is read against. Use the same model as the baseline: a different judge
+changes verdicts on its own.
+
 ### When Claude runs out mid-run
 
 If the driver's `claude -p` call fails because the account is out of quota, its
