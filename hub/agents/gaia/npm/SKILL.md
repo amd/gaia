@@ -442,6 +442,12 @@ not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
 gates, and the request body rejects unknown fields so a client cannot ask. See
 SPEC §5.5.
 
+So a shell command past those gates (a delete, `git add`) is never run unasked
+under bypass. On a run someone can answer (`can_answer_questions` not `false`,
+with a `session_id`) it emits `needs_confirmation` and waits for
+`/tool_decision`, exactly as with bypass off; commands that need no approval
+still run unasked. A run nobody can answer refuses it, as below.
+
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
 immediately with a terminal `final` saying it stopped before running the action,

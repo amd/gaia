@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Full access in the Agent UI asks before a gated shell command instead of
+  refusing it.** With `/sessions/{id}/bypass` on, a command such as a delete or
+  `git add` was refused outright, so a Full access chat could not run it at
+  all. On a run someone can answer it now emits `needs_confirmation` and runs
+  only on an allow from `/tool_decision`. The shell gates still stay on over
+  HTTP, commands that need no approval still run unasked, and a run nobody can
+  answer still refuses.
+
 ## [0.3.1]
 
 Released with GAIA 0.25.1, and requires it. Integrators: the sidecar

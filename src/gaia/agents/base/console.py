@@ -368,6 +368,14 @@ class OutputHandler(ABC):
     scope; this lets an out-of-scope path be asked about instead of refused.
     """
 
+    asks_past_preapproval: bool = False
+    """``confirm_tool_execution`` asks about a call marked ``NEEDS_PERSON_ARG``
+    even while tools are pre-approved, and denies it when nobody can answer.
+
+    A tool marks a call only on a console that declares this, so a console
+    that would pre-approve the marked call never sees one.
+    """
+
     _last_denial: Optional[Denial] = None
     """The most recent denial (#2210).
 

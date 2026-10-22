@@ -537,7 +537,10 @@ arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it —
 `POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
-but never lifts these shell gates. `rm` is excluded
+but never lifts these shell gates. A command those gates hold is never run
+unasked there: on a run someone can answer it still emits `needs_confirmation`
+and waits for `/tool_decision`, and on a run nobody can answer it is refused.
+`rm` is excluded
 from the developer set — not a boundary, since anything in the set can delete a
 file, but a tripwire against an accidental recursive delete. Redirection has one
 exception: a command that is nothing but a skill-granted CLI runs argv-only
