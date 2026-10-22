@@ -45,6 +45,8 @@ def _image_file_error(path: Path, image_path: str) -> Optional[Dict[str, Any]]:
             "status": "error",
             "error": f"Not an image file: {image_path} is a directory",
         }
+    if path.exists():
+        return {"status": "error", "error": f"Not an image file: {image_path}"}
     return {"status": "error", "error": f"Image not found: {image_path}"}
 
 

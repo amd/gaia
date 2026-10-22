@@ -18,6 +18,7 @@ No Lemonade server required.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -236,6 +237,15 @@ class TestToolCallersReportAnError:
         result = self._mixin(None)._answer_question_about_image(str(missing), "q")
 
         assert result == {"status": "error", "error": f"Image not found: {missing}"}
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO")
+    def test_a_path_that_exists_but_is_no_file_is_not_called_missing(self, tmp_path):
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+
+        result = self._mixin(None)._answer_question_about_image(str(fifo), "q")
+
+        assert result == {"status": "error", "error": f"Not an image file: {fifo}"}
 
 
 class TestIngestReportsAnError:
