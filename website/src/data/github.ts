@@ -116,15 +116,20 @@ export interface ReleaseCandidate {
 }
 
 // The installers publish.yml attaches to a release candidate, in the order the
-// list shows them: the one Windows setup first, as on the stable downloads.
-// Everything else (terminal binaries, the wheel) is one click away on the
-// release page.
+// list shows them: per platform as the stable downloads order them, the one
+// Windows setup first. Platform names follow PLATFORM_LABELS and the Linux
+// package families follow INSTALLER_CTA_LABELS (src/scripts/download-target.ts).
+// Raw terminal binaries and the wheel are one click away on the release page.
 const RC_DOWNLOADS: { label: string; match: RegExp }[] = [
   { label: 'Windows — desktop app, terminal, or both (.exe)', match: /^gaia-\d[^/]*-win-x64-setup\.exe$/ },
   { label: 'Windows — desktop app only (.exe)', match: /^gaia-agent-ui-.+-x64-setup\.exe$/ },
-  { label: 'macOS, Apple Silicon — desktop app (.dmg)', match: /^gaia-agent-ui-.+-arm64\.dmg$/ },
+  { label: 'macOS (Apple Silicon) — desktop app (.dmg)', match: /^gaia-agent-ui-.+-arm64\.dmg$/ },
+  { label: 'macOS (Apple Silicon) — terminal app (.pkg)', match: /^gaia-\d[^/]*-darwin-arm64\.pkg$/ },
+  { label: 'macOS (Intel) — terminal app (.pkg)', match: /^gaia-\d[^/]*-darwin-x64\.pkg$/ },
   { label: 'Linux — desktop app (.AppImage)', match: /^gaia-agent-ui-.+-x86_64\.AppImage$/ },
   { label: 'Debian / Ubuntu — desktop app (.deb)', match: /^gaia-agent-ui-.+-amd64\.deb$/ },
+  { label: 'Debian / Ubuntu — terminal app (.deb)', match: /^gaia_\d[^/]*_amd64\.deb$/ },
+  { label: 'Fedora / RHEL / SUSE — terminal app (.rpm)', match: /^gaia-\d[^/]*\.x86_64\.rpm$/ },
 ];
 
 // Numeric parts of a main tag ("v0.24.1" or "v0.15.4.1"), padded to four so
