@@ -626,6 +626,10 @@ def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
     return not title or title.lower() in _AUTO_TITLE_DEFAULTS
 
 
+#: A cloud reasoning model spent 24 tokens thinking and returned no title (#5592).
+_CLOUD_TITLE_MAX_TOKENS = 1024
+
+
 async def _generate_session_title(
     base_url: str,
     model_id: str,
@@ -675,9 +679,15 @@ async def _generate_session_title(
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
-        # It reasons even at "low"; leave room for the title after that.
-        max_tokens = 96 if mr is not None and mr.reasoning_effort else 24
         local = not cloud_model_provider(model_id)
+        if not local and not kwargs:
+            # Thinking can't be switched off for it from here; spare tokens are cheap.
+            max_tokens = _CLOUD_TITLE_MAX_TOKENS
+        elif mr is not None and mr.reasoning_effort:
+            # It reasons even at "low"; leave room for the title after that.
+            max_tokens = 96
+        else:
+            max_tokens = 24
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()

@@ -1121,6 +1121,15 @@ class TestSessionTitleRequest:
         assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
         assert sent["max_tokens"] > 24
 
+    def test_a_cloud_reasoning_model_gets_room_to_think(self):
+        """DeepSeek V4.1 Flash on Fireworks spent 24 tokens reasoning, returned
+        no content, and Lemonade answered HTTP 500 (#5592)."""
+        from gaia.ui import _chat_helpers as ch
+
+        sent = self._sent_kwargs("fireworks.deepseek-v4p1-flash")
+        assert "chat_template_kwargs" not in sent
+        assert sent["max_tokens"] == ch._CLOUD_TITLE_MAX_TOKENS >= 512
+
     @pytest.mark.parametrize("content", [None, "", "  \n "])
     def test_reasoning_that_eats_the_budget_still_names_the_chat(self, content):
         """If gpt-oss reasons past the budget, the reply carries no title text."""
