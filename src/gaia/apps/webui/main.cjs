@@ -21,6 +21,7 @@ const {
   dialog,
   ipcMain,
   powerMonitor,
+  session,
   shell,
 } = require("electron");
 const path = require("path");
@@ -461,6 +462,7 @@ async function handleBackendCrash(code, signal) {
       writeDiagnostics: () => portManager.writeDiagnosticsBundle(),
       // The backend is gone, so there is no running work to ask about.
       beforeQuit: () => { fatalQuitting = true; },
+      parent: mainWindow,
     });
     console.log(`[main] Backend crash: user chose ${choice}`);
   } catch (err) {
@@ -566,6 +568,17 @@ ipcMain.handle("window:set-titlebar-colors", (_event, colors) => {
   return true;
 });
 
+// Registered once: createWindow runs again on every macOS reopen, and the session is shared.
+function titleDownloadSaveDialogs() {
+  // An export is a blob: download, and Chromium titles its Save dialog with the blob URL.
+  session.defaultSession.on("will-download", (_event, item) => {
+    item.setSaveDialogOptions({
+      title: "Save from GAIA",
+      defaultPath: path.join(app.getPath("downloads"), item.getFilename()),
+    });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     ...titleBarOptions(),
@@ -590,14 +603,6 @@ function createWindow() {
     installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
   }
   mainWindow.setMenuBarVisibility(false);
-
-  // An export is a blob: download, and Chromium titles its Save dialog with the blob URL.
-  mainWindow.webContents.session.on("will-download", (_event, item) => {
-    item.setSaveDialogOptions({
-      title: "Save from GAIA",
-      defaultPath: path.join(app.getPath("downloads"), item.getFilename()),
-    });
-  });
 
   // Open external links in the default browser. The URL here is already
   // RESOLVED against the file:// document, so a scheme-less markdown link
@@ -1229,6 +1234,7 @@ app.whenReady().then(async () => {
   }
 
   // Create the window (hidden until ready-to-show)
+  titleDownloadSaveDialogs();
   createWindow();
   isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
 

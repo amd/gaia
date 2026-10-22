@@ -47,12 +47,21 @@ function relaunchOptions(env = process.env, argv = process.argv) {
  * @param {() => Promise<string>} deps.writeDiagnostics resolves to the bundle path
  * @param {() => void} deps.beforeQuit called before app.quit(), e.g. to skip the quit guard
  * @param {object} [deps.env] where an AppImage's own path is read from
+ * @param {object} [deps.parent] window the dialog is modal to, e.g. mainWindow
  * @returns {Promise<"restart"|"quit">}
  */
-async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, writeDiagnostics, beforeQuit, env = process.env }) {
+async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, writeDiagnostics, beforeQuit, env = process.env, parent }) {
   const detail = crashDetail(code, signal, tailLines);
+  // Modal to GAIA's window and in front: unparented, it can open behind other apps.
+  const owner = parent && !parent.isDestroyed() ? parent : null;
+  if (owner) {
+    if (owner.isMinimized()) owner.restore();
+    owner.show();
+    owner.focus();
+  }
+  const show = (box) => (owner && !owner.isDestroyed() ? dialog.showMessageBox(owner, box) : dialog.showMessageBox(box));
   for (;;) {
-    const { response } = await dialog.showMessageBox({
+    const { response } = await show({
       type: "error",
       title: "GAIA stopped",
       message: "GAIA's background service stopped",
@@ -66,7 +75,7 @@ async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, wr
     if (response === SAVE_DIAGNOSTICS) {
       try {
         const bundlePath = await writeDiagnostics();
-        await dialog.showMessageBox({
+        await show({
           type: "info",
           title: "Diagnostics saved",
           message: "Diagnostics saved",

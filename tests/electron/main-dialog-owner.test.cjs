@@ -23,7 +23,22 @@ function body(name) {
 }
 
 test("a download's Save dialog is titled, not named after its blob: URL", () => {
-  expect(main).toMatch(/session\.on\("will-download"[\s\S]{0,200}setSaveDialogOptions\(\{\s*title: "Save from GAIA"/);
+  expect(main).toMatch(/session\.defaultSession\.on\("will-download"[\s\S]{0,200}setSaveDialogOptions\(\{\s*title: "Save from GAIA"/);
+});
+
+test("the will-download listener is added once, not on every window reopen", () => {
+  expect(main.match(/"will-download"/g)).toHaveLength(1);
+  const start = main.indexOf("function createWindow(");
+  expect(start).toBeGreaterThan(-1);
+  const rest = main.slice(start);
+  const createWindow = rest.slice(0, rest.search(/\r?\n\}\r?\n/));
+  expect(createWindow).not.toMatch(/will-download|titleDownloadSaveDialogs/);
+  expect(main.match(/titleDownloadSaveDialogs\(\);/g)).toHaveLength(1);
+});
+
+test("the backend-crash dialog is shown with the main window as its owner", () => {
+  const fn = body("handleBackendCrash");
+  expect(fn).toMatch(/showBackendCrashDialog\(\{[\s\S]*parent: mainWindow/);
 });
 
 test("the Lemonade question is shown with the progress window as its owner", () => {
