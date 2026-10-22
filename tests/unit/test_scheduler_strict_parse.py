@@ -91,6 +91,7 @@ def test_valid_schedules_read_exactly(
         ("every 2 days at 9am", "can't be combined with a time of day"),
         ("every 2 weeks on monday", "can't be combined with set days"),
         ("weekly at 9am", "Say which day to run on"),
+        ("every 7d at 9am", "Say which day to run on"),
         ("daily at 9am and at 5pm", "Give one time per schedule"),
         ("every 30m from 9:30am to 5pm", "starts and ends on the hour"),
         ("from 8am to 6pm", "Say how often to run inside the window"),

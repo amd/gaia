@@ -89,100 +89,6 @@ _ALL_DAY_NAMES = {**_DAY_FULL, **_DAY_ABBR}
 _MAX_SCHEDULE_INPUT_LEN = 256
 
 
-def parse_interval(interval_str: str) -> int:
-    """Parse a human-readable interval string into seconds.
-
-    Supported formats:
-        - "every 30m" or "every 30 minutes"
-        - "every 6h" or "every 6 hours"
-        - "every 2d" or "every 2 days"
-        - "every 30s" or "every 30 seconds"
-        - "every 2w" or "every 2 weeks"
-        - "every monday", "every friday", etc. (weekly on that day)
-        - "daily" (alias for every 24h)
-        - "hourly" (alias for every 1h)
-        - "weekly" (alias for every 7d)
-
-    Args:
-        interval_str: Human-readable interval string.
-
-    Returns:
-        Interval in seconds.
-
-    Raises:
-        ValueError: If the interval string cannot be parsed.
-    """
-    if len(interval_str) > _MAX_SCHEDULE_INPUT_LEN:
-        raise ValueError(
-            f"Interval string is too long ({len(interval_str)} chars, "
-            f"max {_MAX_SCHEDULE_INPUT_LEN}). Use a short form like 'every 6h'."
-        )
-    s = interval_str.strip().lower()
-
-    # Handle aliases
-    if s == "daily":
-        return 86400
-    if s == "hourly":
-        return 3600
-    if s == "weekly":
-        return 604800
-
-    # Handle "every monday", "every tuesday", etc. (treat as weekly = 7 days)
-    day_names = (
-        "monday",
-        "tuesday",
-        "wednesday",
-        "thursday",
-        "friday",
-        "saturday",
-        "sunday",
-    )
-    match_day = re.match(r"every\s+(" + "|".join(day_names) + r")\b", s)
-    if match_day:
-        return 604800  # 7 days in seconds
-
-    # Try "every Xunit" pattern
-    match = re.match(
-        r"every\s+(\d{1,9})\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?|w|wk|weeks?)",
-        s,
-    )
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-        if unit.startswith("s"):
-            return value
-        elif unit.startswith("m"):
-            return value * 60
-        elif unit.startswith("h"):
-            return value * 3600
-        elif unit.startswith("d"):
-            return value * 86400
-        elif unit.startswith("w"):
-            return value * 604800
-
-    # Try bare "Xh", "Xm", etc.
-    match = re.match(r"(\d{1,9})\s*(s|m|h|d|w)", s)
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-        if unit == "s":
-            return value
-        elif unit == "m":
-            return value * 60
-        elif unit == "h":
-            return value * 3600
-        elif unit == "d":
-            return value * 86400
-        elif unit == "w":
-            return value * 604800
-
-    raise ValueError(
-        f"Cannot parse interval: '{interval_str}'. "
-        "Use formats like 'every 30m', 'every 6h', 'every 2d', "
-        "'every 2w', 'every monday', 'daily', 'hourly', 'weekly'."
-    )
-
-
 # ── ScheduleConfig ───────────────────────────────────────────────────────────
 
 
@@ -515,7 +421,7 @@ def _parse_schedule(text: str) -> ScheduleConfig:
     times = re.findall(rf"\bat ({_TIME_RE})\b", s)
     if len(times) > 1:
         raise _ScheduleInputError(
-            "Give one time per schedule — for two times a day, create two " "schedules."
+            "Give one time per schedule — for two times a day, create two schedules."
         )
     if times:
         config.time_of_day = _parse_time(times[0])
