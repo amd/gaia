@@ -39,6 +39,7 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.retry import http_body_text
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
 
@@ -503,7 +504,7 @@ class GatewayManager:
             parsed = response.json()
         except ValueError:
             parsed = None
-            detail = response.text.strip()[:400]
+            detail = http_body_text(response).strip()[:400]
         # Lemonade's 401 says {"error": "<text>"}; its other errors nest an object.
         body = parsed.get("error", {}) if isinstance(parsed, dict) else parsed
         if isinstance(body, dict):
