@@ -127,6 +127,19 @@
     margin-top: 2px;
 }
 
+.custom-model-checks-summary summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+}
+
+.custom-model-checks-summary summary svg { color: var(--accent-green); }
+
+.custom-model-checks-summary[open] summary { margin-bottom: 4px; }
+
 .custom-model-checks li.is-ok svg { color: var(--accent-green); }
 .custom-model-checks li.is-failed { color: var(--danger); }
 .custom-model-checks li.is-warning { color: var(--accent-yellow); }

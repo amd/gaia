@@ -79,14 +79,29 @@ export function AddCustomModel({ onAdded }: { onAdded: (displayName: string) => 
                     {busy === 'check' ? <Loader2 size={13} className="spin" /> : null} Check
                 </button>
             </div>
-            {report && (
-                <ul className="custom-model-checks" aria-label="Checks">
-                    {report.checks.map((c) => (
-                        <li key={c.id} className={c.ok ? 'is-ok' : 'is-failed'}>
-                            {c.ok ? <Check size={13} aria-label="Passed" /> : <X size={13} aria-label="Failed" />}
-                            <span><strong>{c.label}</strong> — {c.detail}</span>
-                        </li>
-                    ))}
+            {report && (() => {
+                const list = (
+                    <ul className="custom-model-checks" aria-label="Checks">
+                        {report.checks.map((c) => (
+                            <li key={c.id} className={c.ok ? 'is-ok' : 'is-failed'}>
+                                {c.ok ? <Check size={13} aria-label="Passed" /> : <X size={13} aria-label="Failed" />}
+                                <span><strong>{c.label}</strong> — {c.detail}</span>
+                            </li>
+                        ))}
+                    </ul>
+                );
+                // Everything passed: one line, the details a click away.
+                return report.ok ? (
+                    <details className="custom-model-checks-summary">
+                        <summary>
+                            <Check size={13} aria-hidden="true" /> All {report.checks.length} checks passed
+                        </summary>
+                        {list}
+                    </details>
+                ) : list;
+            })()}
+            {report && report.warnings.length > 0 && (
+                <ul className="custom-model-checks" aria-label="Warnings">
                     {report.warnings.map((w) => (
                         <li key={w} className="is-warning">
                             <AlertTriangle size={13} aria-label="Warning" /> <span>{w}</span>

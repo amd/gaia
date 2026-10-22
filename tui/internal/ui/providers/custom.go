@@ -207,11 +207,16 @@ func (m Model) addView(w int) []string {
 	if r == nil {
 		return lines
 	}
-	for _, c := range r.Checks {
-		if c.OK {
-			lines = append(lines, ok.Render("✓ ")+c.Label+dim.Render(" — "+c.Detail))
-		} else {
-			lines = append(lines, warn.Render("✗ "+c.Label+" — "+c.Detail))
+	if r.OK {
+		// Everything passed: one line. A failure lists every check.
+		lines = append(lines, ok.Render(fmt.Sprintf("✓ All %d checks passed", len(r.Checks))))
+	} else {
+		for _, c := range r.Checks {
+			if c.OK {
+				lines = append(lines, ok.Render("✓ ")+c.Label+dim.Render(" — "+c.Detail))
+			} else {
+				lines = append(lines, warn.Render("✗ "+c.Label+" — "+c.Detail))
+			}
 		}
 	}
 	for _, w := range r.Warnings {

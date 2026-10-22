@@ -2421,7 +2421,8 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     share. Returns `{"model", "report"}`. Nothing downloads until the user
     picks Download; the first pull registers it with Lemonade as a `user.`
     model. **422** with the failed check's reason, including a model already
-    added.
+    added; **409** when the same model is added twice at once and the second
+    save finds it already there.
   </Accordion>
 
   <Accordion title="DELETE /api/providers/local/custom/{model_id}">

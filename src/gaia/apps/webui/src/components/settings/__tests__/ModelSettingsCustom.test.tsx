@@ -104,7 +104,9 @@ describe('ModelSettings custom models', () => {
         });
         await paste(URL);
 
-        expect(await screen.findByText(/qwen3 runs on llama.cpp b10825/)).toBeInTheDocument();
+        // Every check passed, so they collapse to one line.
+        const summary = await screen.findByText(/All 3 checks passed/);
+        expect((summary.closest('details') as HTMLDetailsElement).open).toBe(false);
         expect(mockedApi.checkCustomModel).toHaveBeenCalledWith(URL, '');
         fireEvent.click(screen.getByRole('button', { name: /Add Qwen3-4B-Instruct-2507 Q4_K_M/ }));
 
@@ -139,6 +141,8 @@ describe('ModelSettings custom models', () => {
         mockedApi.checkCustomModel.mockResolvedValue(UNSUPPORTED);
         await paste('https://huggingface.co/unsloth/flint-GGUF');
         expect(await screen.findByText(/'flint', is not supported by llama.cpp b10825/)).toBeInTheDocument();
+        // A failure keeps the full list open.
+        expect(screen.queryByText(/checks passed/)).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Add / })).not.toBeInTheDocument();
     });
 

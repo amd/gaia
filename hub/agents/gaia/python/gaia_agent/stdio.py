@@ -1112,11 +1112,7 @@ def _with_note(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """*messages* ending with :data:`INTERRUPTED_NOTE`, in the last reply when
     there is one, so roles still alternate."""
     last = messages[-1] if messages else None
-    if (
-        last
-        and last.get("role") == "assistant"
-        and isinstance(last.get("content"), str)
-    ):
+    if last and last.get("role") == "assistant" and isinstance(last.get("content"), str):
         text = last["content"].strip()
         noted = f"{text}\n\n{INTERRUPTED_NOTE}" if text else INTERRUPTED_NOTE
         return [*messages[:-1], {**last, "content": noted}]

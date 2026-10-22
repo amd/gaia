@@ -144,7 +144,10 @@ func TestPasteCheckThenAddALink(t *testing.T) {
 	m, cmd := pressKey(m, "enter")
 	m, _ = feed[customCheckedMsg](t, m, cmd)
 	view := m.View()
-	for _, want := range []string{"✓ Supported architecture", "qwen3 runs on llama.cpp b10825", "Enter adds Qwen3-0.6B Q4_K_M", "tab quantization"} {
+	if strings.Contains(view, "Supported architecture") {
+		t.Errorf("passing checks must collapse to one line:\n%s", view)
+	}
+	for _, want := range []string{"✓ All 2 checks passed", "Enter adds Qwen3-0.6B Q4_K_M", "tab quantization"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q:\n%s", want, view)
 		}

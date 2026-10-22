@@ -1141,6 +1141,15 @@ def test_remove_failure_keeps_the_model(client, custom_server, hf_web, custom_co
     assert cm.find_custom_model("user.Tiny-Q4_K_M-GGUF") is not None
 
 
+def test_check_with_a_broken_saved_list_says_how_to_fix_it(
+    client, custom_server, hf_web, custom_config
+):
+    custom_config.write_text(json.dumps({cm.CONFIG_KEY: [{"id": "nope"}]}))
+    resp = client.post("/api/providers/local/custom/check", json={"url": CUSTOM_URL})
+    assert resp.status_code == 500
+    assert "delete the key" in resp.json()["detail"]
+
+
 def test_remove_a_builtin_is_404(client, custom_server, custom_config):
     resp = client.delete("/api/providers/local/custom/Gemma-4-E4B-it-GGUF")
     assert resp.status_code == 404

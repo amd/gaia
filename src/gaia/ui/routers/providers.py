@@ -1040,6 +1040,7 @@ class CustomModelRequest(BaseModel):
 
 
 def _inspect_custom(body: CustomModelRequest) -> Dict[str, Any]:
+    from gaia.config import GaiaConfigError
     from gaia.llm.custom_models import inspect_link
 
     try:
@@ -1048,13 +1049,17 @@ def _inspect_custom(body: CustomModelRequest) -> Dict[str, Any]:
         catalog = _lemonade_catalog()
     except ProviderError as e:
         _raise(e)
-    return inspect_link(
-        body.url,
-        system_info=system_info,
-        preferred_backend=backend,
-        variant=(body.quant or "").strip() or None,
-        catalog=catalog,
-    )
+    try:
+        return inspect_link(
+            body.url,
+            system_info=system_info,
+            preferred_backend=backend,
+            variant=(body.quant or "").strip() or None,
+            catalog=catalog,
+        )
+    except GaiaConfigError as e:
+        # A broken custom_models entry: say how to fix it, not a bare 500.
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def _lemonade_catalog() -> List[Dict[str, Any]]:
