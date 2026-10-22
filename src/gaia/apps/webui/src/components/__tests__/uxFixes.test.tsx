@@ -111,6 +111,34 @@ describe('a recoverable tool error', () => {
     });
 });
 
+describe('a run that fails before answering', () => {
+    const error = 'Failed to start the query run: Not enough free memory to load Gemma-4-E4B-it-GGUF with a '
+        + '32,768-token window: needs about 7.8 GB and only 6.0 GB is free. Close apps that use a lot of memory, '
+        + 'then try again. See https://amd-gaia.ai/docs/reference/troubleshooting';
+    const errorStep: AgentStep = { id: 1, type: 'error', label: 'Error', detail: error, active: false, success: false, timestamp: 1 };
+    const occurrences = (container: HTMLElement) => container.textContent!.split('Not enough free memory').length - 1;
+
+    it('shows its error once, as the answer with its link, marked as an error', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content: error }} agentSteps={[errorStep]} />);
+        expect(occurrences(container)).toBe(1);
+        expect(container.querySelector('.flow-error')).toBeNull();
+        expect(screen.getByRole('link', { name: /amd-gaia\.ai/ })).toBeInTheDocument();
+        expect(container.querySelector('.msg-error')).not.toBeNull();
+        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    });
+
+    it('keeps an error the answer does not repeat in the steps', () => {
+        const other: AgentStep = { ...errorStep, detail: 'The search tool timed out.' };
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content: 'Here is what I found.' }} agentSteps={[other]} />);
+        expect(container.querySelector('.flow-error')?.textContent).toContain('The search tool timed out.');
+    });
+
+    it('shows the error in the steps while the turn is still streaming', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, id: -1 }} isStreaming agentSteps={[errorStep]} />);
+        expect(container.querySelector('.flow-error')?.textContent).toContain('Not enough free memory');
+    });
+});
+
 describe('the live status while GAIA waits on the user', () => {
     const streaming = (props: { liveStatus?: string | null; awaitingUser?: boolean }) =>
         render(<MessageBubble message={{ ...baseMessage, id: -1 }} isStreaming agentStepsActive {...props} />);
