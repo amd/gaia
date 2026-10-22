@@ -22,6 +22,9 @@ import pytest
 
 from gaia.installer import uninstall_command as uc
 
+# The autouse stub below replaces it; the credential-store tests call this one.
+_REAL_CLEAR_CREDENTIALS = uc._clear_credentials
+
 # Import before pyfakefs starts: it unloads modules first imported under a fake
 # filesystem, which would orphan the monkeypatched EmbeddedLemonade.status.
 from gaia.llm import lemonade_embedded
@@ -106,6 +109,20 @@ def _no_inherited_gaia_env(monkeypatch):
     monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def cleared_credentials(monkeypatch):
+    """Never reach the real OS credential store; record each clear instead."""
+    calls: List[str] = []
+
+    def _fake_clear(printer=print):
+        calls.append("cleared")
+        printer("  [removed] GAIA's sign-ins and API keys (gaia.connections)")
+        return True
+
+    monkeypatch.setattr(uc, "_clear_credentials", _fake_clear)
+    return calls
+
+
 @pytest.fixture
 def fake_home(fs, monkeypatch):
     """Return a fake ``~`` on ``pyfakefs`` and patch ``Path.home`` to use it."""
@@ -162,16 +179,21 @@ class TestBuildPlan:
             gaia / "chat",
             gaia / "documents",
             gaia / "lemonade",
+            *(gaia / name for name in uc._USER_DATA_NAMES),
             gaia / "electron-config.json",
             gaia / "gaia.log",
             gaia / "gaia.log.lock",
             gaia / "electron-install-state.json",
             gaia / "electron-install.log",
+            gaia / "electron-main.log",
+            gaia / "electron-updater.log",
+            gaia / "electron-startup-failures.json",
             gaia / "bin",
             gaia / "traces",
             gaia / "host",
         ]
         assert plan.stop_daemon
+        assert plan.clear_credentials
 
     def test_purge_includes_rotated_gaia_logs(self, fake_home, fs):
         gaia = fake_home / ".gaia"
@@ -233,7 +255,6 @@ class TestDryRun:
                     ".gaia/venv",
                     ".gaia/chat",
                     ".gaia/documents",
-                    ".gaia/lemonade",
                     "electron-config.json",
                     "gaia.log",
                     "electron-install-state.json",
@@ -1861,3 +1882,312 @@ class TestUnreadablePathEditDoesNotBlockThePurge:
         assert "could not read" in captured.text
         assert not (gaia / "chat").exists(), "the user's data must still go"
         assert not (gaia / "venv").exists()
+
+
+# ---------------------------------------------------------------------------
+# #5585: --purge removes what GAIA learned and stored, and says what it keeps
+# ---------------------------------------------------------------------------
+
+_USER_DATA_FILES = (
+    "memory.db",
+    "memory.db-wal",
+    "memory.db-shm",
+    "file_index.db",
+    "file_index.db-wal",
+    "scratchpad.db",
+    "goals.db",
+    "goals.db-shm",
+    "config.json",
+    "config.json.lock",
+    "catalog-cache.json",
+    "backend.pid",
+    "electron-main.log",
+    "electron-updater.log",
+    "electron-startup-failures.json",
+)
+_USER_DATA_DIRS = (
+    "config.json.lock.d",
+    "sessions",
+    "agents/gaia",
+    "tui",
+    "ui",
+    "cache/rag",
+    "logs",
+    "seeder",
+)
+
+
+def _seed_user_data(gaia: Path) -> None:
+    for name in _USER_DATA_FILES:
+        (gaia / name).write_text("data")
+    for name in _USER_DATA_DIRS:
+        (gaia / name).mkdir(parents=True)
+        (gaia / name / "f").write_text("data")
+    # Not GAIA's to delete: connector setup, the user's own skills, a stranger.
+    (gaia / "connectors").mkdir()
+    (gaia / "connectors" / "grants.json").write_text("{}")
+    (gaia / "skills" / "mine").mkdir(parents=True)
+    (gaia / "skills" / "mine" / "SKILL.md").write_text("---\nname: mine\n---\n")
+    (gaia / "someone-elses.txt").write_text("not ours")
+
+
+def _write_shim(path: Path, target: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'#!/bin/sh\nexec "{target}" "$@"\n')
+
+
+class TestPurgeUserData:
+    def test_purge_removes_learned_data_and_keeps_what_is_not_gaias(
+        self, fake_home, cleared_credentials
+    ):
+        _seed_gaia_tree(fake_home)
+        gaia = fake_home / ".gaia"
+        _seed_user_data(gaia)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        for name in (*_USER_DATA_FILES, *_USER_DATA_DIRS):
+            assert not (gaia / name).exists(), f"{name} should be gone"
+        assert not (gaia / "agents").exists()
+        assert not (gaia / "cache").exists()
+        for kept in (
+            "mcp_servers.json",
+            "connectors/grants.json",
+            "skills/mine/SKILL.md",
+            "someone-elses.txt",
+        ):
+            assert (gaia / kept).exists(), f"{kept} must survive a purge"
+        assert cleared_credentials == ["cleared"]
+        assert (
+            "[kept] in " in captured.text
+            and "connectors, mcp_servers.json, skills, someone-elses.txt"
+            in captured.text
+        ), captured.text
+
+    def test_credentials_are_cleared_before_the_venv_is_deleted(
+        self, fake_home, monkeypatch
+    ):
+        _seed_gaia_tree(fake_home)
+        venv = fake_home / ".gaia" / "venv"
+        seen = []
+
+        def _clear(printer=print):
+            seen.append(venv.exists())
+            return True
+
+        monkeypatch.setattr(uc, "_clear_credentials", _clear)
+        assert uc.run(_ns(purge=True, yes=True), printer=_Capture()) == uc.EXIT_OK
+        assert seen == [True]
+
+    def test_a_failed_credential_clear_is_reported_and_exits_non_zero(
+        self, fake_home, monkeypatch
+    ):
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr(uc, "_clear_credentials", lambda printer=print: False)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert not (fake_home / ".gaia" / "chat").exists(), "the data must still go"
+
+    def test_venv_tier_leaves_credentials_and_user_data(
+        self, fake_home, cleared_credentials
+    ):
+        _seed_gaia_tree(fake_home)
+        _seed_user_data(fake_home / ".gaia")
+        assert uc.run(_ns(venv=True, yes=True), printer=_Capture()) == uc.EXIT_OK
+        assert cleared_credentials == []
+        assert (fake_home / ".gaia" / "memory.db").exists()
+
+    def test_another_gaia_home_leaves_the_shared_credential_store_alone(
+        self, fake_home, monkeypatch, cleared_credentials
+    ):
+        other = fake_home / "alt-gaia"
+        other.mkdir()
+        (other / "memory.db").write_text("facts")
+        monkeypatch.setenv("GAIA_HOME", str(other))
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (other / "memory.db").exists()
+        assert cleared_credentials == []
+        assert "leaves them alone" in captured.text
+
+    def test_dry_run_lists_only_paths_that_exist(self, fake_home, cleared_credentials):
+        gaia = fake_home / ".gaia"
+        gaia.mkdir()
+        (gaia / "memory.db").write_text("facts")
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        removed = [line for line in captured.lines if line.startswith("  (--purge)")]
+        assert removed[0].endswith(str(gaia / "memory.db")), captured.text
+        assert not any(
+            path in captured.text
+            for path in (str(gaia / "venv"), str(gaia / "goals.db"), "memory.db-wal")
+        ), captured.text
+        assert "OS credential store (gaia.connections)" in captured.text
+        assert (gaia / "memory.db").exists()
+        assert cleared_credentials == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the shim is POSIX-only")
+class TestDesktopShim:
+    def test_purge_removes_the_shim_that_points_into_this_venv(self, fake_home):
+        _seed_gaia_tree(fake_home)
+        shim = fake_home / ".local" / "bin" / "gaia"
+        _write_shim(shim, fake_home / ".gaia" / "venv" / "bin" / "gaia")
+        captured = _Capture()
+
+        dry = uc.run(_ns(purge=True, dry_run=True), printer=captured)
+        assert dry == uc.EXIT_OK and f"(--purge) {shim}" in captured.text
+        assert shim.exists()
+
+        assert uc.run(_ns(purge=True, yes=True), printer=_Capture()) == uc.EXIT_OK
+        assert not shim.exists()
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '#!/bin/sh\nexec "/usr/local/bin/gaia" "$@"\n',
+            '#!/bin/sh\nexec "/fake/home/user/.gaia/venv/bin/gaia" "$@"\nrm -rf ~\n',
+            "#!/bin/sh\n# my own wrapper\n",
+        ],
+    )
+    def test_a_shim_that_is_not_gaias_is_left_alone(self, fake_home, content):
+        _seed_gaia_tree(fake_home)
+        shim = fake_home / ".local" / "bin" / "gaia"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(content)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert shim.read_text() == content
+        assert "is not the desktop app's shim" in captured.text
+
+    def test_a_symlinked_shim_is_left_alone(self, fake_home, fs):
+        _seed_gaia_tree(fake_home)
+        target = fake_home / "elsewhere" / "gaia"
+        _write_shim(target, fake_home / ".gaia" / "venv" / "bin" / "gaia")
+        shim = fake_home / ".local" / "bin" / "gaia"
+        shim.parent.mkdir(parents=True)
+        fs.create_symlink(shim, target)
+
+        assert uc.run(_ns(purge=True, yes=True), printer=_Capture()) == uc.EXIT_OK
+        assert shim.is_symlink() and target.exists()
+
+    def test_xdg_bin_home_is_where_the_shim_lives(self, fake_home, monkeypatch):
+        _seed_gaia_tree(fake_home)
+        xdg = fake_home / "xdg-bin"
+        monkeypatch.setenv("XDG_BIN_HOME", str(xdg))
+        _write_shim(xdg / "gaia", fake_home / ".gaia" / "venv" / "bin" / "gaia")
+
+        assert uc.run(_ns(purge=True, yes=True), printer=_Capture()) == uc.EXIT_OK
+        assert not (xdg / "gaia").exists()
+
+    def test_a_shim_rewritten_after_the_plan_is_kept(self, fake_home):
+        _seed_gaia_tree(fake_home)
+        shim = fake_home / ".local" / "bin" / "gaia"
+        _write_shim(shim, fake_home / ".gaia" / "venv" / "bin" / "gaia")
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=fake_home,
+        )
+        assert plan.shim_path == shim
+        shim.write_text("#!/bin/sh\necho mine\n")
+
+        uc.execute_plan(
+            plan, allowed_roots=uc._safe_roots(home=fake_home), printer=_Capture()
+        )
+        assert shim.read_text() == "#!/bin/sh\necho mine\n"
+
+
+@pytest.fixture
+def recording_keyring():
+    """An in-memory keyring that records the service of every call."""
+    import keyring
+
+    from tests.conftest import _make_in_memory_keyring
+
+    backend = _make_in_memory_keyring()
+    services: List[str] = []
+    for method in ("get_password", "set_password", "delete_password"):
+        original = getattr(backend, method)
+
+        def _recorded(service, *args, _original=original):
+            services.append(service)
+            return _original(service, *args)
+
+        setattr(backend, method, _recorded)
+    previous = keyring.get_keyring()
+    keyring.set_keyring(backend)
+    try:
+        yield backend, services
+    finally:
+        keyring.set_keyring(previous)
+
+
+class TestCredentialStore:
+    def test_clears_gaias_entries_and_touches_no_other_service(self, recording_keyring):
+        from gaia.connectors import store
+        from gaia.llm.lemonade_choice import API_KEY_SECRET_NAME
+        from gaia.llm.providers.fireworks import API_KEY_SECRET_NAME as FIREWORKS
+        from gaia.messaging.slack import credentials as slack
+
+        backend, services = recording_keyring
+        gaia_entries = {
+            "google:default": "{}",
+            "provider:google": "{}",
+            f"secret:{FIREWORKS}": "fw-key",
+            f"secret:{API_KEY_SECRET_NAME}": "lemon-key",
+            slack.BOT_TOKEN_KEY: "xoxb",
+            slack.APP_TOKEN_KEY: "xapp",
+        }
+        for username, value in gaia_entries.items():
+            backend._store[(store.SERVICE_NAME, username)] = value
+        # Kept: mcp_servers.json survives the purge and still names this secret.
+        mcp_secret = (store.SERVICE_NAME, "mcp-github:GITHUB_PERSONAL_ACCESS_TOKEN")
+        backend._store[mcp_secret] = "ghp"
+        backend._store[("gaia.hub", "hub-token")] = "hub"
+        backend._store[("someone.else", "google:default")] = "theirs"
+        services.clear()
+        captured = _Capture()
+
+        assert _REAL_CLEAR_CREDENTIALS(printer=captured) is True, captured.text
+
+        assert uc.CREDENTIAL_SERVICE == store.SERVICE_NAME
+        assert set(services) == {"gaia.connections"}
+        assert set(backend._store) == {
+            mcp_secret,
+            ("gaia.hub", "hub-token"),
+            ("someone.else", "google:default"),
+        }
+        assert "[removed] GAIA's sign-ins and API keys" in captured.text
+
+    def test_a_store_failure_is_reported_not_swallowed(
+        self, recording_keyring, monkeypatch
+    ):
+        from gaia.connectors import store
+        from gaia.connectors.errors import ConnectorsError
+
+        def _boom(provider, **kwargs):
+            raise ConnectorsError("keychain locked")
+
+        monkeypatch.setattr(store, "delete_connection", _boom)
+        captured = _Capture()
+
+        assert _REAL_CLEAR_CREDENTIALS(printer=captured) is False
+        assert "keychain locked" in captured.text
+        assert "[removed]" not in captured.text
