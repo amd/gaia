@@ -1727,9 +1727,13 @@ gaia download [OPTIONS]
 | `--agent` | string | all | Agent to download models for |
 | `--list` | flag | false | List required models without downloading |
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
-| `--host` | string | localhost | Lemonade server host |
-| `--port` | integer | 13305 | Lemonade server port |
+| `--host` | string | GAIA's server | Lemonade server host |
+| `--port` | integer | GAIA's server | Lemonade server port |
 | `--clear-cache` | flag | false | Delete all downloaded GAIA models to free up disk space |
+
+Without `--host` or `--port`, `gaia download` uses the same Lemonade Server as the
+rest of GAIA: `LEMONADE_BASE_URL` if set, otherwise GAIA's own Lemonade on whatever
+port it started on (`gaia lemonade embedded status` shows it).
 
 **Available Agents:**
 chat, talk, rag, vlm, minimal, mcp

@@ -118,3 +118,42 @@ async def test_api_server_health_asks_gaias_server_with_its_key(
     assert seen["url"] == f"{own_server}/health"
     assert seen["headers"] == {"Authorization": "Bearer own-key"}
     assert component["url"] == own_server
+
+
+def _run_download(monkeypatch, mocker, *flags):
+    """Run ``gaia download --list`` with every model reported as downloaded."""
+    import sys
+
+    from gaia import cli
+    from gaia.llm.lemonade_client import MODELS
+
+    catalog = {
+        "data": [{"id": m.model_id, "downloaded": True} for m in MODELS.values()]
+    }
+    get = mocker.patch(
+        "gaia.llm.lemonade_client.requests.get", return_value=_Resp(200, catalog)
+    )
+    monkeypatch.setattr(sys, "argv", ["gaia", "download", "--list", *flags])
+    cli.main()
+    assert get.called
+    return get
+
+
+def test_download_list_asks_gaias_server_with_its_key(
+    own_server, monkeypatch, mocker, capsys
+):
+    get = _run_download(monkeypatch, mocker)
+
+    for call in get.call_args_list:
+        assert call.args[0].startswith(f"{own_server}/")
+        assert call.kwargs["headers"]["Authorization"] == "Bearer own-key"
+    out = capsys.readouterr().out
+    assert "✅" in out and "⬜" not in out
+
+
+def test_download_explicit_port_still_wins(own_server, monkeypatch, mocker):
+    get = _run_download(monkeypatch, mocker, "--port", "13399")
+
+    for call in get.call_args_list:
+        assert call.args[0].startswith("http://localhost:13399/api/v1/")
+        assert "Authorization" not in call.kwargs["headers"]
