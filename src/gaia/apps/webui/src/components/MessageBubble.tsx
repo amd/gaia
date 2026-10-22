@@ -156,13 +156,14 @@ export function isErrorContent(content: string): boolean {
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /**
- * Drop error steps the answer repeats. A run that fails before answering
- * saves its error as the answer too; it is shown once, there, with its links.
+ * Drop an error step the answer is, word for word. A run that fails before
+ * answering saves its error as the whole answer; it is shown once, there, with
+ * its links. An answer that only quotes a tool's error keeps the step.
  */
 export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
     const answer = squash(content);
     if (!answer) return { steps, echoed: false };
-    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && answer.includes(squash(s.detail))));
+    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && squash(s.detail) === answer));
     return { steps: kept, echoed: kept.length < steps.length };
 }
 

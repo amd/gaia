@@ -133,6 +133,14 @@ describe('a run that fails before answering', () => {
         expect(container.querySelector('.flow-error')?.textContent).toContain('The search tool timed out.');
     });
 
+    it('keeps a recoverable error the answer only quotes, and does not mark the answer failed', () => {
+        const toolError: AgentStep = { ...errorStep, detail: 'File not found: report.pdf' };
+        const content = 'File not found: report.pdf, so I used summary.pdf instead. Here is the summary.';
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content }} agentSteps={[toolError]} />);
+        expect(container.querySelector('.flow-error')?.textContent).toContain('File not found: report.pdf');
+        expect(container.querySelector('.msg-error')).toBeNull();
+    });
+
     it('shows the error in the steps while the turn is still streaming', () => {
         const { container } = render(<MessageBubble message={{ ...baseMessage, id: -1 }} isStreaming agentSteps={[errorStep]} />);
         expect(container.querySelector('.flow-error')?.textContent).toContain('Not enough free memory');
