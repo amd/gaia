@@ -20,7 +20,11 @@ from typing import Any, Optional
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
-from gaia.agents.tools.path_access import missing_file_error, read_access_error
+from gaia.agents.tools.path_access import (
+    missing_file_error,
+    read_access_error,
+    readable_entry,
+)
 from gaia.agents.tools.search_scope import (
     confine_roots,
     in_env_scope,
@@ -966,9 +970,9 @@ class FileSystemToolsMixin:
                 # relevance = default order (already by search priority)
 
                 skipped_note = (
-                    f"{skipped[0]} file(s) outside the folders you can read were "
-                    "not searched. If the file may be there, ask the user to add "
-                    "its folder rather than searching again."
+                    f"{skipped[0]} file(s) GAIA may not read were not searched. "
+                    "If the file may be in a folder outside the allowed ones, ask "
+                    "the user to add that folder rather than searching again."
                     if skipped[0]
                     else ""
                 )
@@ -1623,9 +1627,7 @@ class FileSystemToolsMixin:
                                 if st.st_size > 10 * 1024 * 1024:  # 10MB
                                     continue
 
-                                if read_access_error(
-                                    mixin, entry.path, prompt_user=False
-                                ):
+                                if not readable_entry(mixin, entry.path):
                                     if skipped is not None:
                                         skipped[0] += 1
                                     continue

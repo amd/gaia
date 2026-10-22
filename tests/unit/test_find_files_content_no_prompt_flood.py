@@ -80,7 +80,7 @@ def test_it_says_how_many_files_it_could_not_search(home):
 
     out = _find_files(validator)("acme auth", search_type="content", scope="home")
 
-    assert "5 file(s) outside the folders you can read were not searched" in out
+    assert "5 file(s) GAIA may not read were not searched" in out
     assert "doc0.md" not in out
 
 
@@ -92,7 +92,7 @@ def test_a_miss_still_says_what_was_skipped(home):
     out = _find_files(validator)("no such phrase", search_type="content", scope="home")
 
     assert out.startswith("No files found matching 'no such phrase'.")
-    assert "ask the user to add its folder" in out
+    assert "ask the user to add that folder" in out
 
 
 def test_nothing_skipped_adds_no_note(home):
@@ -103,3 +103,16 @@ def test_nothing_skipped_adds_no_note(home):
 
     assert "not searched" not in out
     assert "doc0.md" in out and "notes.md" in out
+
+
+def test_a_secret_inside_an_allowed_folder_is_not_called_out_of_scope(home):
+    home_dir, inside = home
+    (inside / "secrets.json").write_text('{"acme auth": "hunter2"}\n')
+    validator = PathValidator(allowed_paths=[str(home_dir)])
+
+    out = _find_files(validator)("acme auth", search_type="content", scope="home")
+
+    assert "1 file(s) GAIA may not read were not searched" in out
+    assert "hunter2" not in out and "secrets.json" not in out
+    # The folder is allowed already; the note must not claim it isn't.
+    assert "outside the folders you can read" not in out
