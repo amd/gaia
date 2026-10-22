@@ -7,6 +7,7 @@
 a hard-coded ``Path.home() / ".gaia"`` shows up as a stray ``<home>/.gaia``.
 """
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -110,6 +111,22 @@ def test_an_uncreatable_documents_folder_is_a_loud_error(homes):
 
     with pytest.raises(OSError, match="GAIA's documents folder"):
         _managed_documents_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_an_uncreatable_documents_folder_reaches_the_user(homes, client, monkeypatch):
+    """The error's message is the fix, so the route must not reduce it to a bare 500."""
+    fake_home, gaia_home = homes
+    monkeypatch.chdir(fake_home)  # started from home: the chat gets GAIA's folder
+    gaia_home.chmod(0o500)
+    try:
+        resp = client.get("/api/onboarding/start", headers={"X-Gaia-UI": "1"})
+    finally:
+        gaia_home.chmod(0o700)
+
+    assert resp.status_code == 500
+    assert "Cannot create GAIA's documents folder" in resp.json()["detail"]
+    assert "GAIA_HOME" in resp.json()["detail"]
 
 
 def test_relocated_documents_dir_is_a_document_root(homes):
