@@ -3,7 +3,15 @@
 
 /** Motion driven from script, which the CSS reduced-motion rule cannot reach. */
 
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+export const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+
+/** A CSS duration token (`200ms`, `0.2s`) in milliseconds; throws on anything else, so a renamed token is caught. */
+export function durationMs(token: string): number {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    const m = /^([\d.]+)(ms|s)$/.exec(value);
+    if (!m) throw new Error(`Motion token ${token} is "${value}", not a duration; check styles/index.css.`);
+    return parseFloat(m[1]) * (m[2] === 's' ? 1000 : 1);
+}
 
 export function prefersReducedMotion(): boolean {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;

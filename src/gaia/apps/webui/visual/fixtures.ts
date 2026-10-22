@@ -141,6 +141,12 @@ const ROUTES: Record<string, unknown> = {
     },
     'GET /providers/active': { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'none', message: null } },
     'GET /providers/local/models': { models: [{ id: 'Gemma-4-E4B-it-GGUF', name: 'Gemma-4-E4B-it-GGUF', downloaded: true, loaded: true, size_gb: 4.9 }] },
+    'GET /onboarding/start': { cards: [], working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false } },
+    [`GET /sessions/${ANSWER_SESSION}/environment`]: {
+        session_id: ANSWER_SESSION,
+        folders: [{ path: '/home/you/projects/gaia', kind: 'folder', source: 'working_folder', removable: false }],
+        removed: [], internet: true, enforced: true,
+    },
     'GET /chat/active': { session_ids: [] },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },

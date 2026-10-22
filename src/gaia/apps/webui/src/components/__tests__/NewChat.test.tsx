@@ -110,35 +110,33 @@ describe('NewChat empty state', () => {
         other.remove();
     });
 
-    it('offers the task cards the backend picked', async () => {
+    it('stays clean: no task cards, only the greeting and the composer', async () => {
         render(<NewChat onSend={vi.fn()} />);
-        const list = await screen.findByRole('list', { name: 'Things to try' });
-        expect(list.querySelectorAll('li')).toHaveLength(2);
-        expect(screen.getByText('2 indexed documents')).toBeInTheDocument();
+        await screen.findByText('my-project');
+        expect(screen.queryByRole('list', { name: 'Things to try' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Ask about your documents')).not.toBeInTheDocument();
     });
 
-    it('a complete task card starts the chat with its prompt', async () => {
-        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Ask about your documents/ }));
-        expect(onSend).toHaveBeenCalledWith(START.cards[0].prompt);
+    it('draws the NPU backdrop behind the content', () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        expect(container.querySelector('main.new-chat > canvas.npu-backdrop')).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('a card that needs a subject fills the box and waits for it', async () => {
-        const onSend = vi.fn().mockResolvedValue(undefined);
-        render(<NewChat onSend={onSend} />);
-        fireEvent.click(await screen.findByRole('button', { name: /Research a topic/ }));
-        const box = screen.getByLabelText('Message');
-        expect(box).toHaveValue(START.cards[1].prompt);
-        expect(box).toHaveFocus();
-        expect(onSend).not.toHaveBeenCalled();
+    it('drops the composer to the bottom once typing starts, and back when the box is cleared', () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        const main = container.querySelector('main.new-chat')!;
+        expect(main).not.toHaveClass('is-docked');
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'h' } });
+        expect(main).toHaveClass('is-docked');
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: '' } });
+        expect(main).not.toHaveClass('is-docked');
     });
 
-    it('shows the working folder', async () => {
-        render(<NewChat onSend={vi.fn()} />);
+    it('shows the working folder beside the model, inside the composer', async () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
         const chip = (await screen.findByText('my-project')).parentElement!;
         expect(chip).toHaveAttribute('title', expect.stringContaining('/home/u/my-project'));
+        expect(container.querySelector('.composer')).toContainElement(chip);
     });
 
     it("says when GAIA works in its own folder", async () => {
@@ -155,30 +153,30 @@ describe('NewChat empty state', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
     });
 
-    it('says in one plain sentence why there are no suggestions, with the detail behind Details', async () => {
+    it('says in one plain sentence that the assistant did not start, with the detail behind Details', async () => {
         const detail = `The GAIA agent could not be started: sidecar binary lock ${'PENDING-sha256 '.repeat(60).trim()}`;
         vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [], skills_error: detail });
         render(<NewChat onSend={vi.fn()} />);
-        expect(await screen.findByText(/assistant didn.t start, so it can.t suggest tasks yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/assistant didn.t start yet/)).toBeInTheDocument();
         expect(screen.queryByText(detail)).not.toBeInTheDocument();
-        // The folder still shows: only the cards depend on the agent.
+        // The folder still shows: it does not depend on the agent.
         expect(screen.getByText('my-project')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: /Details/ }));
         expect(screen.getByText(detail)).toBeInTheDocument();
     });
 
-    it('tries the suggestions again', async () => {
+    it('tries the start screen again', async () => {
         vi.mocked(api.getStartScreen)
             .mockRejectedValueOnce(new Error('backend restarting'))
             .mockResolvedValue(START);
         render(<NewChat onSend={vi.fn()} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
-        expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
+        expect(await screen.findByText('my-project')).toBeInTheDocument();
         expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
     });
 
-    it('fetches the suggestions again on its own once the assistant has started', async () => {
+    it('fetches the start screen again on its own once the assistant has started', async () => {
         vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
         try {
             vi.mocked(api.getStartScreen)
@@ -196,8 +194,7 @@ describe('NewChat empty state', () => {
             expect(screen.getByText(/didn.t start/)).toBeInTheDocument();
 
             await act(async () => { vi.advanceTimersByTime(START_RETRY_MS); });
-            expect(await screen.findByRole('list', { name: 'Things to try' })).toBeInTheDocument();
-            expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument();
+            await waitFor(() => expect(screen.queryByText(/didn.t start/)).not.toBeInTheDocument());
         } finally {
             vi.useRealTimers();
         }
@@ -205,7 +202,7 @@ describe('NewChat empty state', () => {
 
     it('makes no model call of its own', async () => {
         render(<NewChat onSend={vi.fn()} />);
-        await screen.findByRole('list', { name: 'Things to try' });
+        await screen.findByText('my-project');
         expect(api.sendMessageStream).not.toHaveBeenCalled();
         expect(api.loadModel).not.toHaveBeenCalled();
     });
