@@ -157,3 +157,14 @@ def test_download_explicit_port_still_wins(own_server, monkeypatch, mocker):
     for call in get.call_args_list:
         assert call.args[0].startswith("http://localhost:13399/api/v1/")
         assert "Authorization" not in call.kwargs["headers"]
+
+
+def test_download_host_alone_uses_lemonade_default_port(
+    own_server, monkeypatch, mocker
+):
+    """``--host`` on its own means Lemonade's standard port there, not GAIA's own."""
+    get = _run_download(monkeypatch, mocker, "--host", "otherbox")
+
+    for call in get.call_args_list:
+        assert call.args[0].startswith("http://otherbox:13305/api/v1/")
+        assert "Authorization" not in call.kwargs["headers"]
