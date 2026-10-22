@@ -50,7 +50,7 @@ class _FakeHandler:
 
     Mirrors the real handler's attribute names relay_query depends on:
     ``_emit``, ``cancelled`` (a ``threading.Event``), ``active_relay_response``,
-    and ``signal_done()``.
+    ``signal_done()``, and the ``record_tool_*`` turn-state hooks.
     """
 
     def __init__(self) -> None:
@@ -61,6 +61,15 @@ class _FakeHandler:
 
     def _emit(self, event):
         self.events.append(event)
+
+    def record_tool_started(self, tool_name):
+        pass
+
+    def record_tool_args(self, args):
+        pass
+
+    def record_tool_result(self, data, success):
+        pass
 
     def signal_done(self):
         self.done_calls += 1

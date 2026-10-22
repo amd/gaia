@@ -227,6 +227,10 @@ def _dispatch_one(
         tool = str(event.get("tool") or "unknown")
         args = event.get("args") or {}
         label = _tool_label(tool, profile)
+        # The turn summary and the heartbeat read this state, not the events.
+        handler.record_tool_started(tool)
+        if isinstance(args, dict):
+            handler.record_tool_args(args)
         handler._emit({"type": "tool_start", "tool": tool, "detail": label})
         handler._emit(
             {
@@ -247,11 +251,13 @@ def _dispatch_one(
     elif etype == "tool_result":
         tool = str(event.get("tool") or "unknown")
         data = event.get("data")
+        success = _derive_success(data)
+        handler.record_tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
             "summary": _derive_summary(tool, data, profile),
-            "success": _derive_success(data),
+            "success": success,
             "data": data if data is not None else {},
         }
         render = event.get("render")
