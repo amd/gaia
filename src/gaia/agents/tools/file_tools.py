@@ -15,7 +15,6 @@ import mimetypes
 import os
 import platform
 import re
-import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
@@ -47,10 +46,12 @@ from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     confine_roots,
     is_broad_root,
+    is_link,
     root_depth,
     search_roots,
 )
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
@@ -341,7 +342,8 @@ class FileSearchToolsMixin:
                     }
 
                 matching_files = []
-                pattern_lower = file_pattern.lower()
+                # Folded, so "resume" finds "résumé.txt" and "CAFE" finds "Café".
+                pattern_lower = fold_name(file_pattern)
                 searched_locations = []
 
                 # Detect pattern type: regex, glob, or plain text.
@@ -352,7 +354,10 @@ class FileSearchToolsMixin:
                 _compiled_re = None
                 if is_regex:
                     try:
-                        _compiled_re = re.compile(pattern_lower, re.IGNORECASE)
+                        # Accents only: casefolding would turn ``\D`` into ``\d``.
+                        _compiled_re = re.compile(
+                            strip_accents(file_pattern), re.IGNORECASE
+                        )
                     except re.error:
                         is_regex = False  # Fall back if invalid regex
                 # Glob: simple wildcards only when not already a regex pattern
@@ -378,12 +383,12 @@ class FileSearchToolsMixin:
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
                     # Match against both filename and stem (without extension)
-                    name_lower = file_path.name.lower()
-                    stem_lower = file_path.stem.lower()
+                    name_lower = fold_name(file_path.name)
+                    stem_lower = fold_name(file_path.stem)
                     # Normalize separators so "employ.*book" matches "employee_handbook"
                     name_normalized = re.sub(r"[_\-.]", "", name_lower)
                     if is_glob:
-                        name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                        name_match = fnmatch.fnmatchcase(name_lower, pattern_lower)
                     elif is_regex and _compiled_re:
                         # Regex: try against filename, stem, and normalized form
                         name_match = bool(
@@ -412,54 +417,30 @@ class FileSearchToolsMixin:
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
-                budget = {}
+                budget = search_scope.SearchBudget()
 
                 def reset_budget():
-                    budget.update(
-                        started=time.monotonic(),
-                        entries=0,
-                        truncated=False,
-                        reason="",
-                    )
-
-                def budget_exhausted() -> bool:
-                    if budget["truncated"]:
-                        return True
-                    if budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET:
-                        budget["reason"] = "entries"
-                    elif (
-                        time.monotonic() - budget["started"]
-                        >= search_scope.SEARCH_TIME_BUDGET_S
-                    ):
-                        budget["reason"] = "time"
-                    else:
-                        return False
-                    budget["truncated"] = True
-                    logger.info(
-                        "search_file stopped (%s budget) after %d entries / %.1f s",
-                        budget["reason"],
-                        budget["entries"],
-                        time.monotonic() - budget["started"],
-                    )
-                    return True
+                    nonlocal budget
+                    budget = search_scope.SearchBudget()
 
                 def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
                     """Mark a result partial when the walk ran out of budget."""
-                    if not budget["truncated"]:
+                    if not budget.truncated:
                         return result
+                    logger.info(
+                        "search_file stopped (%s budget) after %d entries / %.1f s",
+                        budget.reason,
+                        budget.entries,
+                        budget.elapsed(),
+                    )
                     where = "a narrower `directory`" if directory else "`directory`"
-                    if budget["reason"] == "entries":
-                        stopped = (
-                            f"after examining {budget['entries']:,} files and folders"
-                        )
-                    else:
-                        stopped = f"after {time.monotonic() - budget['started']:.1f} s"
                     hint = (
-                        f"Search stopped {stopped} — pass {where} to "
+                        f"Search stopped {budget.stopped_after()} — pass {where} to "
                         "search a specific folder."
                     )
                     result["truncated"] = True
                     result["hint"] = hint
+                    result["unfinished_paths"] = list(budget.unfinished_paths)
                     if not result.get("files"):
                         result["display_message"] = (
                             f"Search for '{file_pattern}' stopped before "
@@ -471,12 +452,14 @@ class FileSearchToolsMixin:
                         )
                     return result
 
-                reset_budget()
                 walked = set()
 
                 def search_location(location: Path, max_depth: int = 999):
                     """Search a specific location up to max_depth."""
-                    if not location.exists() or budget_exhausted():
+                    if not location.exists():
+                        return
+                    if budget.exhausted():
+                        budget.unfinished(location)
                         return
 
                     searched_locations.append(str(location))
@@ -509,8 +492,7 @@ class FileSearchToolsMixin:
 
                         try:
                             for item in current_path.iterdir():
-                                budget["entries"] += 1
-                                if budget_exhausted():
+                                if budget.spend(current_path):
                                     return
                                 # Skip system/hidden directories
                                 if item.name.startswith(
@@ -529,12 +511,17 @@ class FileSearchToolsMixin:
                                     item.is_dir()
                                     and depth < max_depth
                                     and item not in walked
+                                    and not is_link(item)
                                 ):
                                     search_recursive(item, depth + 1)
+                                    if budget.truncated:
+                                        return
                         except (PermissionError, OSError) as e:
                             logger.debug(f"Skipping {current_path}: {e}")
 
                     search_recursive(location, 0)
+                    if budget.truncated:
+                        budget.unfinished(location)
 
                 home = Path.home()
 
@@ -1203,11 +1190,9 @@ class FileSearchToolsMixin:
                         logger.warning("Could not search %s: %s", file_path, exc)
                         return True
 
-                # Search files
-                for file_path in directory.rglob("*"):
-                    if not file_path.is_file():
-                        continue
-
+                # Search files; both passes share one allowance.
+                budget = search_scope.SearchBudget()
+                for file_path in search_scope.walk_files(directory, budget):
                     # Filter by file pattern if provided
                     if file_pattern:
                         if not fnmatch.fnmatch(file_path.name, file_pattern):
@@ -1227,9 +1212,7 @@ class FileSearchToolsMixin:
                 if _use_regex and not matches:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
-                    for _fp2 in directory.rglob("*"):
-                        if not _fp2.is_file():
-                            continue
+                    for _fp2 in search_scope.walk_files(directory, budget):
                         if file_pattern:
                             if not fnmatch.fnmatch(_fp2.name, file_pattern):
                                 continue
@@ -1240,7 +1223,7 @@ class FileSearchToolsMixin:
                             break
 
                 if matches:
-                    return {
+                    result = {
                         "status": "success",
                         "pattern": pattern,
                         "matches": matches[:50],  # Return first 50
@@ -1249,7 +1232,7 @@ class FileSearchToolsMixin:
                         "message": f"Found {len(matches)} matches in {files_searched} files",
                     }
                 else:
-                    return {
+                    result = {
                         "status": "success",
                         "pattern": pattern,
                         "matches": [],
@@ -1257,6 +1240,14 @@ class FileSearchToolsMixin:
                         "files_searched": files_searched,
                         "message": f"No matches found for '{pattern}' in {files_searched} files",
                     }
+                if budget.truncated:
+                    result["truncated"] = True
+                    result["unfinished_paths"] = list(budget.unfinished_paths)
+                    result["message"] += (
+                        f". {budget.note()} Pass a narrower `directory` to "
+                        "search it fully."
+                    )
+                return result
 
             except Exception as e:
                 logger.error(f"Error searching file content: {e}")

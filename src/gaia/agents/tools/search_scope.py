@@ -18,8 +18,15 @@ One module rather than a method on each mixin, so the two cannot drift.
 
 from __future__ import annotations
 
+import os
+import stat
+import time
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, Iterator, List, Optional, Union
+
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 #: Depth the primary root is walked to — effectively unlimited. The project the
 #: user is working in is the one place worth an exhaustive walk.
@@ -37,6 +44,133 @@ SEARCH_TIME_BUDGET_S = 20.0
 
 #: Directory entries one search walk may examine before it stops (#3889).
 SEARCH_ENTRY_BUDGET = 200_000
+
+#: The clock a :class:`SearchBudget` reads unless given one; patch it in tests.
+monotonic: Callable[[], float] = time.monotonic
+
+# Junctions and symlinks. Cloud placeholders (OneDrive) are reparse points too
+# but hold the user's own files, so they are walked.
+_LINK_REPARSE_TAGS = frozenset({0xA0000003, 0xA000000C})
+
+
+def is_link(entry: Union[os.DirEntry, Path, str]) -> bool:
+    """True for a symlink or a Windows junction, which a search never enters.
+
+    ``DirEntry.is_dir(follow_symlinks=False)`` is True for a junction, so a
+    ``.cache`` junction to a model store would otherwise be crawled.
+    """
+    if isinstance(entry, os.DirEntry):
+        st = entry.stat(follow_symlinks=False)
+    else:
+        st = os.lstat(entry)
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    return getattr(st, "st_reparse_tag", 0) in _LINK_REPARSE_TAGS
+
+
+class SearchBudget:
+    """The time and entry allowance of one search, and where it stopped.
+
+    A walk calls :meth:`spend` per directory entry and stops once it returns
+    True. Folders it did not finish are recorded with :meth:`unfinished`, so
+    the result can say what was not searched instead of reading as a zero.
+    """
+
+    def __init__(
+        self,
+        seconds: Optional[float] = None,
+        entries: Optional[int] = None,
+        clock: Optional[Callable[[], float]] = None,
+    ):
+        self.seconds = SEARCH_TIME_BUDGET_S if seconds is None else seconds
+        self.max_entries = SEARCH_ENTRY_BUDGET if entries is None else entries
+        self.clock = clock or monotonic
+        self.started = self.clock()
+        self.entries = 0
+        self.reason = ""
+        self.stopped_in: Optional[str] = None
+        self.unfinished_paths: List[str] = []
+
+    @property
+    def truncated(self) -> bool:
+        return bool(self.reason)
+
+    def elapsed(self) -> float:
+        return self.clock() - self.started
+
+    def exhausted(self) -> bool:
+        """True once the time or entry allowance is used up; it stays True."""
+        if self.reason:
+            return True
+        if self.entries >= self.max_entries:
+            self.reason = "entries"
+        elif self.elapsed() >= self.seconds:
+            self.reason = "time"
+        return bool(self.reason)
+
+    def spend(self, current: Any = None) -> bool:
+        """Count one entry under *current*; True when the walk must stop."""
+        self.entries += 1
+        if self.exhausted():
+            if self.stopped_in is None and current is not None:
+                self.stopped_in = str(current)
+            return True
+        return False
+
+    def unfinished(self, path: Any) -> None:
+        """Record *path* as a folder this search did not finish."""
+        text = str(path)
+        if text not in self.unfinished_paths:
+            self.unfinished_paths.append(text)
+
+    def stopped_after(self) -> str:
+        if self.reason == "entries":
+            return f"after examining {self.entries:,} files and folders"
+        return f"after {self.elapsed():.1f} s"
+
+    def note(self) -> str:
+        """A plain sentence saying the search stopped early and what it skipped."""
+        if not self.truncated:
+            return ""
+        text = f"The search stopped early ({self.stopped_after()}), so results are partial."
+        if self.unfinished_paths:
+            listed = self.unfinished_paths[:8]
+            more = len(self.unfinished_paths) - len(listed)
+            text += " Not finished: " + ", ".join(listed)
+            text += f" (+{more} more)." if more > 0 else "."
+        if self.stopped_in:
+            text += f" It stopped inside {self.stopped_in}."
+        return text
+
+
+def walk_files(root: Path, budget: SearchBudget) -> Iterator[Path]:
+    """Every file under *root*, folder by folder, within *budget*.
+
+    Links are not entered. Stops when the budget runs out, recording *root* as
+    unfinished; unreadable folders are skipped.
+    """
+    pending = [Path(root)]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError as exc:
+            logger.debug("Skipping %s: %s", current, exc)
+            continue
+        subdirs = []
+        for entry in entries:
+            if budget.spend(current):
+                budget.unfinished(root)
+                return
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if not is_link(entry):
+                        subdirs.append(Path(entry.path))
+                elif entry.is_file():
+                    yield Path(entry.path)
+            except OSError as exc:
+                logger.debug("Skipping %s: %s", entry.path, exc)
+        pending.extend(reversed(subdirs))
 
 
 def path_validator_of(host: Any) -> Any:
