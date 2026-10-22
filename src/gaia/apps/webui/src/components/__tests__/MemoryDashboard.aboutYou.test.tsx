@@ -357,10 +357,12 @@ describe('Reminder due dates', () => {
     });
 
     it('counts a whole-day reminder as due, not past, on its own day', () => {
-        expect(dueLabel(localMidnight(22), NOW)).toMatch(/^Due /);
-        expect(dueLabel('2026-10-21', NOW)).toMatch(/^Was due .*21/);
-        expect(dueLabel(new Date(2026, 9, 22, 9, 30).toISOString(), NOW)).toMatch(/^Was due /);
-        expect(dueLabel('not a date', NOW)).toBe('');
+        expect(dueLabel(localMidnight(22), NOW)).toMatchObject({ text: expect.stringMatching(/^Due /), past: false });
+        expect(dueLabel('2026-10-21', NOW)).toMatchObject({ text: expect.stringMatching(/^Was due .*21/), past: true });
+        expect(dueLabel(new Date(2026, 9, 22, 9, 30).toISOString(), NOW)).toMatchObject({
+            text: expect.stringMatching(/^Was due /), past: true,
+        });
+        expect(dueLabel('not a date', NOW)).toBeNull();
     });
 
     it('keeps the due date when a forgotten reminder is undone', async () => {

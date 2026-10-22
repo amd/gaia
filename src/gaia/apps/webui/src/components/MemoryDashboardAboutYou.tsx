@@ -52,10 +52,10 @@ function relativeDay(iso: string): string {
 }
 
 /** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
-export function dueLabel(iso: string, now: Date = new Date()): string {
+export function dueLabel(iso: string, now: Date = new Date()): { text: string; past: boolean } | null {
     const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
     const due = bare ? new Date(+bare[1], +bare[2] - 1, +bare[3]) : new Date(iso);
-    if (Number.isNaN(due.getTime())) return '';
+    if (Number.isNaN(due.getTime())) return null;
     const allDay = due.getHours() === 0 && due.getMinutes() === 0 && due.getSeconds() === 0;
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const past = allDay ? due.getTime() < startOfToday : due.getTime() < now.getTime();
@@ -64,7 +64,7 @@ export function dueLabel(iso: string, now: Date = new Date()): string {
         ...(due.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
         ...(allDay ? {} : { hour: 'numeric', minute: '2-digit' }),
     });
-    return `${past ? 'Was due' : 'Due'} ${when}`;
+    return { text: `${past ? 'Was due' : 'Due'} ${when}`, past };
 }
 
 interface Props {
@@ -271,7 +271,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                         <ul className="mem-about-list">
                             {group.rows.map(item => {
                                 const hidden = item.sensitive && !revealed.has(item.id);
-                                const due = item.due_at ? dueLabel(item.due_at) : '';
+                                const due = item.due_at ? dueLabel(item.due_at) : null;
                                 return (
                                     <li key={item.id} className="mem-about-item">
                                         {editingId === item.id ? (
@@ -308,8 +308,8 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                         </button>
                                                     ) : item.content}
                                                     {due && (
-                                                        <span className={`mem-about-due${due.startsWith('Was') ? ' is-overdue' : ''}`}>
-                                                            {due}
+                                                        <span className={`mem-about-due${due.past ? ' is-overdue' : ''}`}>
+                                                            {due.text}
                                                         </span>
                                                     )}
                                                     <span className="mem-about-meta">
