@@ -55,6 +55,9 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **One bad batch of parallel tool calls no longer ends the turn with no answer.** (PR [#5413](https://github.com/amd/gaia/pull/5413))
 - **`gaia install --lemonade` checks the installer's size and SHA-256 before running it**, for every supported installer. (PRs [#5389](https://github.com/amd/gaia/pull/5389), [#5455](https://github.com/amd/gaia/pull/5455))
 - **Model servers left behind by a crashed Lemonade are stopped**, so the next start doesn't load the same models twice. (PR [#5352](https://github.com/amd/gaia/pull/5352))
+- **The GAIA agent starts on Ubuntu 22.04, Debian 12 and RHEL 9** — it needed glibc 2.38 and failed at launch. (PR [#5545](https://github.com/amd/gaia/pull/5545))
+- **Intel Macs can install GAIA again**, with `install.sh`, `pip install amd-gaia` and the `[rag]` and `[ui]` extras. (PRs [#5546](https://github.com/amd/gaia/pull/5546), [#5481](https://github.com/amd/gaia/pull/5481))
+- **Settings load from a folder Windows lets you read but not create files in**, and GAIA operations waiting on a shared file take turns in order instead of timing out at random. (PR [#5469](https://github.com/amd/gaia/pull/5469))
 
 ## Contributors
 
@@ -65,8 +68,31 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**126 commits** since v0.25.0:
+**149 commits** since v0.25.0:
 
+- `f6ced7fec` — ci(release): build and attach the terminal installers on release candidates (#5550)
+- `e3f221c51` — ci(eval): tier the flagship eval and score Qwen3.6 on Strix Halo (#5535)
+- `47860cdd0` — feat(website): one primary download per platform; Install starts it (#5536)
+- `52d7165cd` — fix(eval): locate split chunks without jumping to repeated passages (#5548)
+- `72c4421e3` — fix(deps): cap cryptography below 49 on Intel Macs (#5546)
+- `d4d91fc80` — fix(packaging): build the Linux agent on glibc 2.34 so older distros run it (#5545)
+- `6b174933f` — feat(eval): stop on a Claude quota outage and resume the run later (#5533)
+- `233dfbd9e` — ci(installers): run every installer end to end on clean runners (#5521)
+- `be2c42d79` — ci(release): dry-run the release train without publishing (#5534)
+- `db8d17339` — feat(eval): record the Claude tokens each scenario really spent (#5525)
+- `cee6a47ff` — ci(release): one command stamps and checks every version field (#5508)
+- `3f07cee13` — fix(rag): unblock the release retrieval eval (image chunks, pypdf labels) (#5490)
+- `3064f8032` — ci(release): take installers from GitHub releases, stop uploading them to R2 (#5509)
+- `a2e03cbb7` — ci(workflows): run each CI lane only on the code it covers (#5514)
+- `bf38b295a` — ci(eval): targeted flagship dispatch by category and scenario (#5513)
+- `efc68fcf6` — chore: drop internal eval references from comments and tests (#5507)
+- `ada7b4113` — feat(website): link download buttons to GitHub release assets (#5491)
+- `0b14d740d` — fix(deps): cap pymupdf below 2 so Intel Macs can install (#5481)
+- `b4018e00c` — fix(file-lock): fair cross-process queue, ACL-aware unwritable dirs (#5469)
+- `1a0ffcd07` — chore(release): flagship agent 0.3.1 (#5461)
+- `e34ba86f5` — Release v0.25.1 (#5474)
+- `d80736b55` — fix(chat): retry a watched document another program has open (#5458)
+- `ce37b284e` — fix(ui): an upload waiting for the embedder is not stopped as stalled (#5452)
 - `d343b3aca` — fix(ui): an upload queued for the model isn't stopped as stuck, and Cancel reaches it (#5448)
 - `72b945be4` — fix(ui): let the Agent UI pick a downloaded custom model (#5449)
 - `7e49b1602` — test: catch reverts of the scheduler lease, restart notice and tool limit (#5456)
