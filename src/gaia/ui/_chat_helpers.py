@@ -680,8 +680,8 @@ async def _generate_session_title(
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
         local = not cloud_model_provider(model_id)
-        if not local and not kwargs:
-            # Thinking can't be switched off for it from here; spare tokens are cheap.
+        if not local:
+            # No cloud model gets a thinking switch here; spare tokens are cheap.
             max_tokens = _CLOUD_TITLE_MAX_TOKENS
         elif mr is not None and mr.reasoning_effort:
             # It reasons even at "low"; leave room for the title after that.
