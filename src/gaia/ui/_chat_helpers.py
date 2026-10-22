@@ -1791,12 +1791,27 @@ def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[li
     return turn
 
 
+def _marked_stopped_reply(model_messages: Optional[list]) -> Optional[str]:
+    """The closing reply of a turn stopped mid-answer, which carries the stop note."""
+    if not model_messages:
+        return None
+    last = model_messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "assistant":
+        return None
+    content = last.get("content")
+    if isinstance(content, str) and content.endswith(_STOPPED_REPLY_FOR_MODEL):
+        return content
+    return None
+
+
 def model_context_messages(db, session_id: str) -> list:
     """The session's messages as a model reads them: stopped replies withdrawn."""
     messages = []
     for message in db.get_context_messages(session_id):
         if message.get("role") == "assistant":
-            reply = _withdrawn_reply(message.get("content") or "")
+            reply = _withdrawn_reply(
+                message.get("content") or ""
+            ) or _marked_stopped_reply(message.get("model_messages"))
             if reply is not None:
                 message = {
                     **message,
@@ -2375,6 +2390,13 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         return (
             f"No answer came back because Lemonade Server at {base_url} isn't "
             f"responding. {describe_start_hint().instruction}"
+        )
+    if resp.status_code in (401, 403):
+        # Running, so the start hint would be wrong; the key is what to fix.
+        return (
+            f"No answer came back because Lemonade Server at {base_url} "
+            f"rejected GAIA's API key (HTTP {resp.status_code}). Check that "
+            "LEMONADE_API_KEY matches the key the server was started with."
         )
     if not isinstance(health, dict):
         return (
@@ -4319,9 +4341,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             model_messages = result_holder.get("model_messages")
             if turn_cancelled:
                 # The model sees what was shown, marked as stopped, not a blank.
-                model_messages = _with_final_reply(
-                    model_messages, f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
-                )
+                stopped_reply = f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
+                model_messages = _with_final_reply(model_messages, stopped_reply)
+                if not model_messages and full_response.strip():
+                    # A relayed turn records none; keep the stop note anyway.
+                    model_messages = [
+                        {"role": "user", "content": request.message},
+                        {"role": "assistant", "content": stopped_reply},
+                    ]
             msg_id = db.upsert_message(
                 request.session_id,
                 persisted_policy_block_msg_id,

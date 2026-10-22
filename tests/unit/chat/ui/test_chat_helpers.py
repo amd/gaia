@@ -508,6 +508,13 @@ class TestEmptyAnswerBackendProblem:
         assert "HTTP 503" in problem
         assert problem.endswith("START-HINT")
 
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):
+        problem = _probe("M-GGUF", lambda request: httpx.Response(status))
+        assert f"HTTP {status}" in problem
+        assert "LEMONADE_API_KEY" in problem
+        assert "START-HINT" not in problem
+
     def test_server_up_without_the_model_says_it_is_not_loaded(self):
         problem = _probe("Gemma-4-E4B-it-GGUF", _health("Other-GGUF"))
         assert "Lemonade Server is running" in problem

@@ -140,7 +140,8 @@ def test_relayed_sidecar_history_carries_the_withdrawn_reply(db):
 class _EssayAgent:
     """Cached agent that streams *partial* text, then runs until Stop."""
 
-    def __init__(self, partial=""):
+    def __init__(self, partial="", records_turn=True):
+        self.records_turn = records_turn
         self.model_id = "M-GGUF"
         self.conversation_history = []
         self.indexed_files = set()
@@ -159,6 +160,9 @@ class _EssayAgent:
             handler._emit({"type": "chunk", "content": self.partial})
         self.started.set()
         assert handler.cancelled.wait(10)
+        if not self.records_turn:
+            # Like a relayed sidecar turn: text only, no recorded messages.
+            return {"result": ""}
         # As the agent loop records a cancelled turn: a blank closing answer.
         return {
             "result": "",
@@ -192,6 +196,8 @@ async def _stop_turn(db, agent):
     request = ChatRequest(
         session_id=session["id"], message="Write an 800-word essay.", stream=True
     )
+    # As the chat route does before it streams the turn.
+    db.begin_turn(session["id"], request.message)
     events = []
 
     async def consume():
@@ -232,3 +238,36 @@ async def test_turn_stopped_mid_answer_shows_the_model_what_it_wrote(runtime):
         "role": "assistant",
         "content": f"The first paragraph.\n\n{STOPPED}",
     }
+    # A relayed sidecar reads the reply text, not the recorded turn.
+    pairs = helpers._build_history_pairs(helpers.model_context_messages(runtime, sid))
+    assert pairs == [("Write an 800-word essay.", f"The first paragraph.\n\n{STOPPED}")]
+
+
+@pytest.mark.asyncio
+async def test_turn_stopped_mid_answer_without_a_recorded_turn_keeps_the_stop_note(
+    runtime,
+):
+    agent = _EssayAgent(partial="The first paragraph.", records_turn=False)
+    sid = await _stop_turn(runtime, agent)
+
+    assert runtime.get_messages(sid)[-1]["content"] == "The first paragraph."
+    pairs = helpers._build_history_pairs(helpers.model_context_messages(runtime, sid))
+    assert pairs == [("Write an 800-word essay.", f"The first paragraph.\n\n{STOPPED}")]
+
+
+def test_the_agent_ui_footer_knows_every_cut_off_notice():
+    """MessageBubble copies these strings to read a cut-off turn's footer."""
+    from pathlib import Path
+
+    from gaia.ui import restart_recovery
+
+    bubble = (
+        Path(__file__).resolve().parents[4]
+        / "src/gaia/apps/webui/src/components/MessageBubble.tsx"
+    ).read_text(encoding="utf-8")
+    for notice in (
+        restart_recovery.INTERRUPTED_TURN_NOTICE,
+        restart_recovery.CANCELLED_TURN_NOTICE,
+        restart_recovery.ENDED_WITHOUT_REPLY_NOTICE,
+    ):
+        assert f"'{notice}'" in bubble, notice
