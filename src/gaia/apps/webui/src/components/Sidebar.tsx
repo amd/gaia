@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
     Bell, Brain, Clock, EyeOff, FileText, PanelLeftClose, PanelLeftOpen,
     Pin, PinOff, Search, Settings, Smartphone, SquarePen, Trash2, X,
@@ -21,6 +21,8 @@ import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import gaiaRobot from '../assets/gaia-robot.png';
 import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
+import type { SessionSearchResult } from '../types/api.gen';
+import { foldText, splitMatch, type MatchParts } from '../utils/chatSearch';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -38,6 +40,12 @@ const STATUS_LABEL: Record<RowStatus, string> = {
 };
 
 const SHOW_AUTOMATED_KEY = 'gaia-show-automated-runs';
+const SEARCH_DEBOUNCE_MS = 200;
+const NO_HITS = new Map<string, SessionSearchResult>();
+
+function Highlight({ parts }: { parts: MatchParts }) {
+    return <>{parts.before}<mark className="sb-hit">{parts.match}</mark>{parts.after}</>;
+}
 
 function readShowAutomated(): boolean {
     try {
@@ -48,9 +56,17 @@ function readShowAutomated(): boolean {
     }
 }
 
-function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin }: {
+const resultRowId = (id: string) => `sb-result-${id}`;
+
+function SessionRow({ session, active, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, rowId, kbdActive, titleMatch, snippet }: {
     session: Session;
     active: boolean;
+    /** DOM id the search box points at while this row is the keyboard pick. */
+    rowId?: string;
+    kbdActive?: boolean;
+    /** Where the search query sits in the title, and in the chat's text. */
+    titleMatch?: MatchParts | null;
+    snippet?: MatchParts | null;
     status: RowStatus | null;
     /** 1-based place in line for the GPU while queued; 0 otherwise. */
     queuePlace: number;
@@ -76,20 +92,28 @@ function SessionRow({ session, active, status, queuePlace, unsent, failed, onSel
     const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const unsentWords = `${unsent} unsent message${unsent === 1 ? '' : 's'}`;
+    const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
+    const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
 
     return (
-        <li className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}`} data-status={dot ?? undefined}>
+        <li className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}${kbdActive ? ' is-kbd-active' : ''}`} data-status={dot ?? undefined}>
             <button
                 type="button"
+                id={rowId}
                 className="sb-row-main"
                 onClick={() => onSelect(session.id)}
                 aria-current={active ? 'page' : undefined}
-                aria-label={[session.title, label, waiting, unread ? 'unread' : null].filter(Boolean).join(', ')}
+                aria-label={[session.title, label, waiting, unread ? 'unread' : null, snippetText].filter(Boolean).join(', ')}
                 title={session.title}
             >
                 {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
                 {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
-                <span className="sb-row-title">{session.title}</span>
+                {snippet ? (
+                    <span className="sb-row-text">
+                        {title}
+                        <span className="sb-row-snippet"><Highlight parts={snippet} /></span>
+                    </span>
+                ) : title}
                 {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
             </button>
             <button
@@ -150,6 +174,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
 
     const [query, setQuery] = useState('');
+    const [hits, setHits] = useState<{ query: string; results: SessionSearchResult[]; truncated: boolean } | null>(null);
+    const [searchError, setSearchError] = useState<string | null>(null);
+    const [activeIdx, setActiveIdx] = useState(-1);
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const [rowError, setRowError] = useState<string | null>(null);
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
@@ -171,12 +198,51 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         prompting,
     }), [runningSessionIds, queuedSessionIds, awaitingBySession, prompting]);
 
+    // Titles filter on every keystroke; message text comes from the backend.
+    const q = query.trim();
+    useEffect(() => {
+        setActiveIdx(-1);
+        setSearchError(null);
+        if (!q) {
+            setHits(null);
+            return;
+        }
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => {
+            api.searchSessions(q, showAutomated, ctrl.signal)
+                .then(({ results, truncated }) => setHits({ query: q, results, truncated: !!truncated }))
+                .catch((err) => {
+                    if (ctrl.signal.aborted) return;
+                    log.chat.error('Chat search failed', err);
+                    setSearchError(`Could not search inside chats: ${err instanceof Error ? err.message : err}`);
+                    setHits({ query: q, results: [], truncated: false });
+                });
+        }, SEARCH_DEBOUNCE_MS);
+        return () => {
+            clearTimeout(timer);
+            ctrl.abort();
+        };
+    }, [q, showAutomated]);
+    const pending = !!q && hits?.query !== q;
+    const contentHits = useMemo(
+        () => (hits && hits.query === q ? new Map(hits.results.map((r) => [r.session_id, r])) : NO_HITS),
+        [hits, q],
+    );
+
     const hiddenCount = hiddenAutomatedCount(sessions);
     const groups = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        const list = q ? sessions.filter((s) => s.title.toLowerCase().includes(q)) : sessions;
+        const needle = foldText(q);
+        const list = q
+            ? sessions.filter((s) => foldText(s.title).includes(needle) || contentHits.has(s.id))
+            : sessions;
         return groupSessionsForList(list, live, { showAutomated });
-    }, [sessions, query, live, showAutomated]);
+    }, [sessions, q, contentHits, live, showAutomated]);
+    const results = useMemo(() => (q ? groups.flatMap((g) => g.sessions) : []), [q, groups]);
+    const picked = activeIdx >= 0 && results.length > 0 ? results[Math.min(activeIdx, results.length - 1)] : undefined;
+
+    useEffect(() => {
+        if (picked) document.getElementById(resultRowId(picked.id))?.scrollIntoView?.({ block: 'nearest' });
+    }, [picked]);
 
     const toggleAutomated = useCallback(() => {
         setShowAutomated((on) => {
@@ -239,6 +305,27 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         setMessages([]);
         closeOnMobile();
     }, [currentSessionId, setCurrentSession, setMessages, closeOnMobile]);
+
+    const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            setQuery('');
+            searchRef.current?.blur();
+            return;
+        }
+        if (!q || results.length === 0 || e.nativeEvent.isComposing) return;
+        const at = picked ? results.indexOf(picked) : -1;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActiveIdx(Math.min(at + 1, results.length - 1));
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveIdx(Math.max(at - 1, 0));
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            select((picked ?? results[0]).id);
+        }
+    };
 
     const remove = useCallback(async (id: string) => {
         setDeleteError(null);
@@ -308,13 +395,22 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             type="search"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setQuery(''); searchRef.current?.blur(); } }}
+                            onKeyDown={onSearchKey}
                             {...CLAIMS_ESCAPE}
                             placeholder="Search chats"
                             aria-label="Search chats (Ctrl+K)"
+                            aria-controls="sb-chat-list"
+                            aria-activedescendant={picked ? resultRowId(picked.id) : undefined}
                         />
                     </label>
                 )}
+                <p className="sb-sr-only" role="status" aria-live="polite">
+                    {q && !pending
+                        ? results.length === 0
+                            ? 'No chats match.'
+                            : `${results.length} chat${results.length === 1 ? '' : 's'} match`
+                        : ''}
+                </p>
                 {nav.map(({ key, label, icon: Icon, on, onClick }) => (
                     <button
                         key={key}
@@ -332,9 +428,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
             </div>
 
             {!isCollapsed && (
-                <nav className="sb-list" aria-label="Recent chats">
+                <nav className="sb-list" id="sb-chat-list" aria-label="Recent chats">
                     {groups.length === 0 && (
-                        <p className="sb-empty">{query ? 'No chats match.' : 'No chats yet.'}</p>
+                        <p className="sb-empty">{q ? (pending ? 'Searching inside chats…' : 'No chats match.') : 'No chats yet.'}</p>
                     )}
                     {groups.map((g) => (
                         <section key={g.label} className={`sb-group${g.label === 'Needs you' ? ' is-needs-you' : ''}`}>
@@ -352,6 +448,10 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         onSelect={select}
                                         onDelete={remove}
                                         onPin={(id, pinned) => void pin(id, pinned)}
+                                        rowId={q ? resultRowId(s.id) : undefined}
+                                        kbdActive={picked?.id === s.id}
+                                        titleMatch={q ? splitMatch(s.title, q) : null}
+                                        snippet={contentHits.get(s.id)?.field === 'message' ? contentHits.get(s.id)!.snippet : null}
                                     />
                                 ))}
                             </ul>
@@ -369,6 +469,10 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                 : `Show ${hiddenCount} background run${hiddenCount === 1 ? '' : 's'}`}
                         </button>
                     )}
+                    {q && hits?.query === q && hits.truncated && (
+                        <p className="sb-empty">Showing the {hits.results.length} newest chats that mention this. Type more to narrow it down.</p>
+                    )}
+                    {searchError && <p className="sb-error" role="alert">{searchError}</p>}
                     {deleteError && <p className="sb-error" role="alert">{deleteError}</p>}
                     {rowError && <p className="sb-error" role="alert">{rowError}</p>}
                 </nav>

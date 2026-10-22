@@ -4,7 +4,7 @@
 /** API client for GAIA Agent UI backend. */
 
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
-import type { ModelServerInfo } from '../types/api.gen';
+import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
@@ -438,6 +438,17 @@ export async function getSession(id: string): Promise<Session> {
 
 export async function pinSession(id: string, pinned: boolean): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}/pin`, { pinned });
+}
+
+/**
+ * Chats whose title or messages contain `query`, ignoring case and accents.
+ * Eval and scheduled chats count only with `includeAutomated`.
+ */
+export async function searchSessions(
+    query: string, includeAutomated: boolean, signal?: AbortSignal,
+): Promise<SessionSearchResponse> {
+    const params = new URLSearchParams({ q: query, include_automated: String(includeAutomated) });
+    return apiFetch('GET', `/sessions/search?${params}`, undefined, undefined, signal);
 }
 
 /** Clear the chat's unread mark. */
