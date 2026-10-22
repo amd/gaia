@@ -1460,8 +1460,24 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
 
 
 def _managed_documents_dir() -> Path:
-    """The Agent UI's own documents folder — the session's writable scratch space."""
-    return managed_documents_dir().resolve()
+    """The Agent UI's own documents folder — the session's writable scratch space.
+
+    Created here because every grant goes through this call: an agent told it
+    may write to a folder that doesn't exist probes the protected parent instead.
+
+    Raises:
+        OSError: The folder cannot be created.
+    """
+    folder = managed_documents_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise OSError(
+            f"Cannot create GAIA's documents folder {folder}: {e}. Check that "
+            f"GAIA_HOME ({folder.parent}) is writable, or point GAIA_HOME at a "
+            f"writable directory and restart the Agent UI."
+        ) from e
+    return folder.resolve()
 
 
 def _unsafe_directory_grant_reason(directory: Path) -> str:

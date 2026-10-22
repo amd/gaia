@@ -86,6 +86,32 @@ def test_agent_scope_documents_dir_follows_gaia_home(homes):
     assert _managed_documents_dir() == (gaia_home / "documents").resolve()
 
 
+def test_a_fresh_sessions_writable_folder_exists_once_granted(homes, monkeypatch):
+    """#5579: a granted folder that doesn't exist sends the agent to probe ~/.gaia."""
+    from gaia.ui import start_screen
+    from gaia.ui._chat_helpers import _compute_allowed_paths
+
+    fake_home, gaia_home = homes
+    documents = gaia_home / "documents"
+    assert not documents.exists()
+
+    monkeypatch.chdir(fake_home)
+    assert str(documents.resolve()) in _compute_allowed_paths([])
+    assert documents.is_dir()
+
+    documents.rmdir()
+    assert start_screen.working_folder()["path"] == str(documents.resolve())
+    assert documents.is_dir()
+
+
+def test_an_uncreatable_documents_folder_is_a_loud_error(homes):
+    _, gaia_home = homes
+    gaia_home.write_text("not a directory")
+
+    with pytest.raises(OSError, match="GAIA's documents folder"):
+        _managed_documents_dir()
+
+
 def test_relocated_documents_dir_is_a_document_root(homes):
     _, gaia_home = homes
     assert (gaia_home / "documents").resolve() in document_roots()
