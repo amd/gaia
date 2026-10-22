@@ -13,7 +13,6 @@ import json
 import pytest
 
 from gaia import config as config_mod
-from gaia.config import GaiaConfigError
 from gaia.llm import custom_models as cm
 from gaia.llm.lemonade_client import find_model_requirement
 
@@ -465,14 +464,12 @@ def test_remove_refuses_a_model_the_user_did_not_add(config_file):
 
 
 def test_a_malformed_saved_list_fails_config_load(config_file):
-    from gaia.config import GaiaConfig
-
     config_file.write_text(json.dumps({cm.CONFIG_KEY: "nope"}))
-    with pytest.raises(GaiaConfigError, match="custom_models"):
-        GaiaConfig.load()
+    with pytest.raises(config_mod.GaiaConfigError, match="custom_models"):
+        config_mod.GaiaConfig.load()
 
 
 def test_malformed_saved_list_fails_loudly(config_file):
     config_file.write_text(json.dumps({cm.CONFIG_KEY: [{"id": "no-namespace"}]}))
-    with pytest.raises(GaiaConfigError, match="custom_models"):
+    with pytest.raises(config_mod.GaiaConfigError, match="custom_models"):
         cm.list_custom_models()
