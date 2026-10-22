@@ -651,6 +651,25 @@ class ChatDatabase:
 
         return self.get_session(session_id)
 
+    def set_provisional_title(self, session_id: str, title: str) -> bool:
+        """Name a chat that still has a placeholder title; True when renamed.
+
+        ``title_is_custom`` stays off, so the auto-titler can still replace it.
+        A title the user or an API caller chose is never touched.
+        """
+        with self._transaction():
+            row = self._conn.execute(
+                "SELECT title, title_is_custom FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None or row[1] or not is_placeholder_title(row[0]):
+                return False
+            self._conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+                (title, self._now(), session_id),
+            )
+        return True
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""
         with self._transaction():

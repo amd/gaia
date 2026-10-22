@@ -702,7 +702,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // The view closed while the server answered; the run goes on without it.
             if (outcome.kind === 'accepted' && isStale()) streamController?.abort();
         };
-        const accepted = () => settleQueued({ kind: 'accepted' });
+        // The server names a new chat after its first question when it takes it.
+        let titleShown = reattach || session?.title !== 'New Task';
+        const accepted = () => {
+            settleQueued({ kind: 'accepted' });
+            if (titleShown) return;
+            titleShown = true;
+            api.getSession(sessionId)
+                .then((s) => updateSessionInList(sessionId, { title: s.title }))
+                .catch((err) => log.chat.warn('Could not refresh the chat title', err));
+        };
         streamBufferRef.current = '';
         stopRequestedRef.current = false;
         setStopping(false);
@@ -1232,18 +1241,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         })
                         .catch((err) => log.chat.error(`Could not refresh messages for session=${sessionId}`, err));
                 }, 300);
-
-                // Auto-title on first message
-                // Skip client-side auto-title when re-attaching (no user text in
-                // hand and the run's lifecycle already titles server-side, #1580).
-                if (!reattach && session && session.title === 'New Task') {
-                    const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
-                    // Not a user choice — leave unpinned so the server-side
-                    // LLM titler can still replace it (#2165).
-                    api.updateSession(sessionId, { title: autoTitle, title_is_custom: false })
-                        .then(() => updateSessionInList(sessionId, { title: autoTitle }))
-                        .catch((err) => log.chat.error('Auto-title failed', err));
-                }
             },
             onError: (err) => {
                 const interrupted = isStreamInterrupted(err);

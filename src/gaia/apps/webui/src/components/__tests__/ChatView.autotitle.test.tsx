@@ -1,9 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// #2165: explicit renames must PIN the session title (title_is_custom: true)
-// while the client-side first-message auto-title must NOT pin it
-// (title_is_custom: false) so the server-side LLM titler can still improve it.
+// #2165: explicit renames must PIN the session title (title_is_custom: true).
+// A new chat's first-message name comes from the server, which leaves it
+// unpinned so its LLM titler can still improve it; the view only shows it.
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -90,7 +90,8 @@ beforeEach(() => {
 });
 
 describe('ChatView title pinning (#2165)', () => {
-    it('client-side auto-title on first message does NOT pin the title', async () => {
+    it('shows the name the server gave a new chat, without writing one itself', async () => {
+        mockedApi.getSession.mockResolvedValue({ ...SESSION, title: 'what is the capital of france' });
         render(<ChatView sessionId={SESSION.id} />);
 
         await act(async () => {
@@ -101,17 +102,37 @@ describe('ChatView title pinning (#2165)', () => {
         });
         expect(capturedCallbacks).not.toBeNull();
 
+        // The first event means the server took the message, and named the chat.
         await act(async () => {
+            capturedCallbacks!.onAgentEvent({ type: 'status', message: 'Connecting to LLM...' } as unknown as StreamEvent);
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Par' } as unknown as StreamEvent);
             capturedCallbacks!.onDone({
                 type: 'done',
                 content: 'Paris.',
             } as unknown as StreamEvent);
         });
 
-        expect(mockedApi.updateSession).toHaveBeenCalledWith(SESSION.id, {
-            title: 'what is the capital of france',
-            title_is_custom: false,
+        expect(mockedApi.getSession).toHaveBeenCalledTimes(1);
+        expect(mockedApi.getSession).toHaveBeenCalledWith(SESSION.id);
+        expect(useChatStore.getState().sessions[0].title).toBe('what is the capital of france');
+        // A client-written title would block the server's titler from improving it.
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+    });
+
+    it('leaves a named chat alone', async () => {
+        setSession({ ...SESSION, title: 'Capital cities' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'and of spain?' } });
+            fireEvent.click(screen.getByLabelText('Send'));
         });
+        await act(async () => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Madrid' } as unknown as StreamEvent);
+        });
+
+        expect(mockedApi.getSession).not.toHaveBeenCalled();
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
     });
 
     it('manual rename pins the title', async () => {
