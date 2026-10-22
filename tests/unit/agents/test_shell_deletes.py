@@ -58,6 +58,8 @@ def test_windows_deletes_that_are_read(command, operands):
         "powershell Remove-Item ~\\notes.txt",
         "python -c \"import os; os.remove('notes.txt')\"",
         "del",
+        'del "a""b"',
+        'del "a"""',
     ],
 )
 def test_windows_deletes_with_unknown_effects(command):
@@ -91,6 +93,7 @@ def test_posix_deletes_that_are_read(command, operands):
         "unlink a.txt b.txt",
         "find . -name '*.txt' -delete",
         "rm -f",
+        "rm a.txt #b.txt",
     ],
 )
 def test_posix_deletes_with_unknown_effects(command):

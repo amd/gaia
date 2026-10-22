@@ -595,7 +595,7 @@ it ran in. When in doubt — a library GAIA doesn't know, a file opened in a mod
 it can't read off the code — it is listed.
 
 A plain shell delete of named files in your workspace, such as `del notes.txt`,
-`rm notes.txt` or `Remove-Item notes.txt`, is the exception: GAIA copies those
+`rm notes.txt` or `powershell Remove-Item notes.txt`, is the exception: GAIA copies those
 files first, so they show as deleted files with a diff and Undo puts them back.
 A delete with a wildcard, a variable, a folder or a file outside the workspace
 is still listed as a command GAIA can't track.

@@ -24,7 +24,7 @@ MAX_SHELL_DELETE_COPY_BYTES = 64 * 1024 * 1024
 #: Characters cmd.exe expands, splits or redirects on, quoted or not.
 _CMD_UNSAFE = set("%^!&|<>*?\r\n")
 #: Characters sh expands, escapes or splits on.
-_POSIX_UNSAFE = set("$`\\*?[]{}!;&|<>()\r\n\"'")
+_POSIX_UNSAFE = set("$`\\*?[]{}!;&|<>()#\r\n\"'")
 #: Characters PowerShell expands, escapes, globs or splits on.
 _PS_UNSAFE = set("$`;|&(){}@,<>*?[]#\r\n")
 
@@ -46,6 +46,9 @@ def _program(token: str) -> str:
 
 def _split_windows(text: str) -> Optional[List[str]]:
     """*text* split the way cmd.exe hands it to a program, or None if unsure."""
+    # shlex splits "a""b" in two; the program may read it as one name.
+    if '""' in text:
+        return None
     try:
         tokens = shlex.split(text, posix=False)
     except ValueError:
