@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, WarmUpStatus, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, PreflightReport, GreetingEvent, SetupPlan, StartScreen, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
@@ -174,13 +174,51 @@ export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatu
     return apiFetch<SystemStatus>('GET', '/system/status', undefined, undefined, signal);
 }
 
-/** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
-export async function requestWarmUp(): Promise<WarmUpStatus> {
-    return apiFetch<WarmUpStatus>('POST', '/system/warm-up');
-}
-
-export async function getWarmUp(): Promise<WarmUpStatus> {
-    return apiFetch<WarmUpStatus>('GET', '/system/warm-up');
+/**
+ * Stream the agent's greeting for a new chat. Resolves once the stream ends;
+ * every outcome, failures included, arrives through `onEvent`.
+ */
+export async function streamGreeting(onEvent: (event: GreetingEvent) => void, signal: AbortSignal): Promise<void> {
+    const url = `${API_BASE}/system/greeting`;
+    let res: Response;
+    try {
+        res = await fetch(url, { method: 'POST', headers: UI_HEADER, signal });
+    } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return;
+        log.api.error(`POST ${url} - network error`, err);
+        onEvent({ type: 'error', message: "Can't reach GAIA's backend, so the agent can't say hello yet." });
+        return;
+    }
+    if (!res.ok || !res.body) {
+        const detail = parseErrorDetail(await res.text().catch(() => ''));
+        onEvent({ type: 'error', message: getFriendlyError(res.status, detail) });
+        return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let ended = false;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const event = JSON.parse(line.slice(6)) as GreetingEvent;
+                ended = ended || event.type === 'done' || event.type === 'error';
+                onEvent(event);
+            }
+        }
+    } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return;
+        log.api.error('Greeting stream cut off', err);
+    }
+    if (!ended && !signal.aborted) {
+        onEvent({ type: 'error', message: 'The greeting stopped before it finished.' });
+    }
 }
 
 /** Which Lemonade GAIA uses, where, and the backend each loaded model runs on. */

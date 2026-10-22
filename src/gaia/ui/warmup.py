@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,66 @@ class PrefixWarmer:
             result.get("prompt_tokens", "?"),
         )
         self._finish(READY, result, None)
+
+    def run_now(
+        self,
+        reason: str,
+        job: Callable[[], Dict[str, Any]],
+        cancel: Optional[threading.Event] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Run *job* in this thread as the warm-up, once any running one ends
+        and no chat turn is running (a load now could swap that turn's model).
+
+        Turns wait for it like any warm-up. Returns the job's result, or None
+        when *cancel* was set first or the job returned None. Raises whatever
+        the job raises.
+        """
+        while True:
+            if cancel is not None and cancel.is_set():
+                return None
+            with self._lock:
+                warming = self._state == WARMING
+                if not warming and not self._busy():
+                    self._state = WARMING
+                    self._started = time.monotonic()
+                    self._finished = None
+                    self._result = {}
+                    self._error = None
+                    self._phase = None
+                    self._target = {}
+                    self._done.clear()
+                    break
+            if warming:
+                self._done.wait(0.2)
+            else:
+                time.sleep(0.2)
+        try:
+            result = job()
+        except Exception as exc:
+            self._finish(FAILED, {}, str(exc))
+            raise
+        if result is None:
+            self._finish(SKIPPED, {}, None)
+            return None
+        logger.info(
+            "Warm-up (%s) done in %ss: %s of %s prompt tokens were already cached",
+            reason,
+            result.get("seconds"),
+            result.get("cached_tokens", "?"),
+            result.get("prompt_tokens", "?"),
+        )
+        # Only the numbers: the snapshot is served to the UI and the log.
+        self._finish(
+            READY,
+            {k: result.get(k) for k in ("seconds", "prompt_tokens", "cached_tokens")},
+            None,
+        )
+        return result
+
+    def waiting_on_a_turn(self) -> bool:
+        """True while no warm-up runs but a chat turn holds the model."""
+        with self._lock:
+            return self._state != WARMING and self._busy()
 
     def set_target(self, model: str, device: Optional[str]) -> None:
         """Name what the running warm-up loads, so the UI can say so."""
@@ -220,49 +281,14 @@ def _device_for(client, model: str) -> Optional[str]:
     return "cpu" if backend == "cpu" else "gpu"
 
 
-def _warm_new_chat_prefix(
-    db, note_target: Optional[Callable[[str, Optional[str]], None]] = None
-) -> Optional[Dict[str, Any]]:
-    """Build the flagship exactly as a new chat's first turn does, and warm it.
+class NewChatAgentUnavailable(RuntimeError):
+    """The flagship a new chat runs can't be built in this process."""
 
-    Returns None when there is nothing to warm locally: a cloud model, a model
-    not downloaded yet (loading it would start a download nobody asked for),
-    no flagship registered, a flagship that runs in its daemon sidecar, or a
-    PC small enough to load on demand.
-    """
-    from gaia.llm.lemonade_client import LemonadeClient
+
+def _new_chat_model(db, registry):
+    """``(model_id, device_ctx, custom_model)`` a new chat's first turn uses."""
     from gaia.ui import _chat_helpers as chat
     from gaia.ui.database import resolved_default_model
-
-    low_memory = preload_skip_reason()
-    if low_memory:
-        logger.info("Warm-up skipped: %s", low_memory)
-        return None
-    if chat._eval_provider_kwargs():
-        logger.info("Warm-up skipped: chat turns run on a cloud provider")
-        return None
-    registry = chat.get_agent_registry()
-    if registry is None or registry.get(NEW_CHAT_AGENT) is None:
-        logger.info("Warm-up skipped: the %s agent is not registered", NEW_CHAT_AGENT)
-        return None
-    if chat._should_relay_to_sidecar(NEW_CHAT_AGENT, registry):
-        # Chat relays to the sidecar, which cannot be built here and warms its
-        # own prompt when the daemon starts it.
-        logger.info(
-            "Warm-up skipped: the %s agent runs in its daemon sidecar", NEW_CHAT_AGENT
-        )
-        return None
-    client = LemonadeClient(verbose=False)
-
-    def skip_reason(model: Optional[str]) -> Optional[str]:
-        # The catalog read comes first: it is what teaches the cloud check
-        # about providers beyond the built-in ones.
-        downloaded = client.get_model_info(model)["downloaded"]
-        if chat._ui_cloud_provider(model):
-            return "runs in the cloud"
-        if not downloaded:
-            return "is not downloaded yet"
-        return None
 
     # What ChatDatabase.create_session stores for a chat the user just opened.
     session = {
@@ -274,12 +300,36 @@ def _warm_new_chat_prefix(
     model_id, device_ctx = chat.resolve_session_model(
         session, NEW_CHAT_AGENT, custom_model, registry
     )
-    reason = skip_reason(model_id) if model_id else None
-    if reason:
-        logger.info("Warm-up skipped: %s %s", model_id, reason)
-        return None
+    return model_id, device_ctx, custom_model
+
+
+def _check_new_chat_agent(registry) -> None:
+    """Raise :class:`NewChatAgentUnavailable` unless the flagship builds here."""
+    from gaia.ui import _chat_helpers as chat
+
+    if registry is None or registry.get(NEW_CHAT_AGENT) is None:
+        raise NewChatAgentUnavailable(f"the {NEW_CHAT_AGENT} agent is not registered")
+    if chat._should_relay_to_sidecar(NEW_CHAT_AGENT, registry):
+        # Chat relays to the sidecar, which cannot be built here.
+        raise NewChatAgentUnavailable(
+            f"the {NEW_CHAT_AGENT} agent runs in its daemon sidecar"
+        )
+
+
+@contextmanager
+def new_chat_agent(db, registry, model_id, device_ctx, custom_model):
+    """Build the flagship exactly as a new chat's first turn does.
+
+    Yields ``(agent, effective_model)``; the model is the agent's own default
+    when *model_id* is None.
+
+    Raises:
+        NewChatAgentUnavailable: the agent has no model.
+    """
+    from gaia.ui import _chat_helpers as chat
 
     _set_phase("building")
+    session = {"device": "gpu"}
     with chat.writing_tool_registry():
         agent = registry.create_agent(
             NEW_CHAT_AGENT,
@@ -300,28 +350,83 @@ def _warm_new_chat_prefix(
             ),
         )
     try:
-        # An omitted model_id lets the agent pick its own default: check that one.
+        # An omitted model_id lets the agent pick its own default.
         effective = chat._effective_model(agent, model_id)
         if not effective:
-            logger.info("Warm-up skipped: the %s agent has no model", NEW_CHAT_AGENT)
-            return None
-        if effective != model_id:
-            reason = skip_reason(effective)
-            if reason:
-                logger.info("Warm-up skipped: %s %s", effective, reason)
-                return None
-        if note_target is not None:
-            note_target(effective, _device_for(client, effective))
-        # The turn's own pre-flight: load at the ctx a turn expects, or the
-        # first turn reloads the model and the primed cache goes with it.
-        _set_phase("loading")
-        chat._maybe_load_expected_model(effective)
-        _set_phase("priming")
-        return agent.warm_up()
+            raise NewChatAgentUnavailable(f"the {NEW_CHAT_AGENT} agent has no model")
+        yield agent, effective
     finally:
         close = getattr(agent, "close", None)
         if callable(close):
             close()
+
+
+def _warm_new_chat_prefix(
+    db, note_target: Optional[Callable[[str, Optional[str]], None]] = None
+) -> Optional[Dict[str, Any]]:
+    """Build the flagship exactly as a new chat's first turn does, and warm it.
+
+    Returns None when there is nothing to warm locally: a cloud model, a model
+    not downloaded yet (loading it would start a download nobody asked for),
+    no flagship registered, a flagship that runs in its daemon sidecar, or a
+    PC small enough to load on demand.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.ui import _chat_helpers as chat
+
+    low_memory = preload_skip_reason()
+    if low_memory:
+        logger.info("Warm-up skipped: %s", low_memory)
+        return None
+    if chat._eval_provider_kwargs():
+        logger.info("Warm-up skipped: chat turns run on a cloud provider")
+        return None
+    registry = chat.get_agent_registry()
+    try:
+        _check_new_chat_agent(registry)
+    except NewChatAgentUnavailable as exc:
+        # A sidecar warms its own prompt when the daemon starts it.
+        logger.info("Warm-up skipped: %s", exc)
+        return None
+    client = LemonadeClient(verbose=False)
+
+    def skip_reason(model: Optional[str]) -> Optional[str]:
+        # The catalog read comes first: it is what teaches the cloud check
+        # about providers beyond the built-in ones.
+        downloaded = client.get_model_info(model)["downloaded"]
+        if chat._ui_cloud_provider(model):
+            return "runs in the cloud"
+        if not downloaded:
+            return "is not downloaded yet"
+        return None
+
+    model_id, device_ctx, custom_model = _new_chat_model(db, registry)
+    reason = skip_reason(model_id) if model_id else None
+    if reason:
+        logger.info("Warm-up skipped: %s %s", model_id, reason)
+        return None
+
+    try:
+        with new_chat_agent(db, registry, model_id, device_ctx, custom_model) as (
+            agent,
+            effective,
+        ):
+            if effective != model_id:
+                reason = skip_reason(effective)
+                if reason:
+                    logger.info("Warm-up skipped: %s %s", effective, reason)
+                    return None
+            if note_target is not None:
+                note_target(effective, _device_for(client, effective))
+            # The turn's own pre-flight: load at the ctx a turn expects, or the
+            # first turn reloads the model and the primed cache goes with it.
+            _set_phase("loading")
+            chat._maybe_load_expected_model(effective)
+            _set_phase("priming")
+            return agent.warm_up()
+    except NewChatAgentUnavailable as exc:
+        logger.info("Warm-up skipped: %s", exc)
+        return None
 
 
 _warmer: Optional[PrefixWarmer] = None
@@ -334,6 +439,11 @@ def configure(db) -> PrefixWarmer:
 
     _warmer = PrefixWarmer(lambda: _warm_new_chat_prefix(db, _warmer.set_target))
     _warmer.set_busy_check(lambda: bool(chat._active_sse_handlers))
+    return _warmer
+
+
+def get_warmer() -> Optional[PrefixWarmer]:
+    """The process's warmer, or None before :func:`configure`."""
     return _warmer
 
 

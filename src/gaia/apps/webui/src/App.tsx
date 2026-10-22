@@ -17,6 +17,7 @@ import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { forgetGreeting } from './hooks/useGreeting';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
@@ -379,6 +380,7 @@ function App() {
             store = useChatStore.getState();
         }
         store.clearDraftDocuments();
+        forgetGreeting();
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);

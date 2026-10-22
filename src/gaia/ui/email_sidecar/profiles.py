@@ -121,6 +121,12 @@ class RelayProfile:
     #: Shown instead of running a private or memory-off turn when the installed
     #: agent is below :attr:`min_memory_api_version` — it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``POST /v1/<agent>/greeting`` writes a new
+    #: chat's first message. ``None`` means the agent has no such route.
+    min_greeting_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in place of the greeting when the installed agent is below
+    #: :attr:`min_greeting_api_version`.
+    greeting_upgrade_message: str = ""
 
 
 # --- email ------------------------------------------------------------------
@@ -437,6 +443,14 @@ GAIA_PROFILE = RelayProfile(
         "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
         "page. Its skills still work in chat."
     ),
+    # 2.19 added POST /greeting.
+    min_greeting_api_version=(2, 19),
+    # No update command here: until a release ships a 2.19+ agent binary,
+    # `gaia init` installs the same agent.
+    greeting_upgrade_message=(
+        "The GAIA agent installed on this PC can't write greetings yet (it "
+        "predates contract 2.19). Chat works as usual: type a message to start."
+    ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
     memory_upgrade_message=(
@@ -522,6 +536,15 @@ def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def greeting_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar writes greetings on ``POST /v1/<agent>/greeting``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_greeting_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when the sidecar takes the chat's file scope on ``/query``.
 
@@ -564,6 +587,7 @@ __all__ = [
     "confirmations_supported",
     "documents_supported",
     "skills_supported",
+    "greeting_supported",
     "scope_supported",
     "memory_supported",
 ]

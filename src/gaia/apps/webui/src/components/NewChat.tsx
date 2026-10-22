@@ -8,7 +8,7 @@ import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { StartCards } from './StartCards';
 import { useAttachments } from '../hooks/useAttachments';
-import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
+import { useGreeting, type Greeting } from '../hooks/useGreeting';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames } from '../stores/modelStore';
@@ -16,6 +16,7 @@ import { setVisibleInterval } from '../utils/visibleInterval';
 import { STARTING_REASON } from '../utils/constants';
 import { log } from '../utils/logger';
 import { deviceLabel } from '../utils/modelLabels';
+import gaiaRobot from '../assets/gaia-robot.png';
 import type { StartCard, StartScreen } from '../types';
 import './NewChat.css';
 
@@ -31,16 +32,42 @@ interface NewChatProps {
 /** How often the new-chat cards are asked for again while they are unavailable. */
 export const START_RETRY_MS = 15_000;
 
-export function greeting(now: Date = new Date()): string {
-    const h = now.getHours();
-    const part = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-    return `Good ${part}. What should we work on?`;
+type Loading = Extract<Greeting, { kind: 'loading' }>;
+
+/** The start-up step the agent is on, e.g. "Loading Gemma 4 E4B on your GPU… 3s". */
+export function loadingLine({ phase, model, device, seconds }: Loading, bootTask: string | null = null): string {
+    let step: string;
+    if (phase === 'waiting') step = 'Waiting for another chat to finish';
+    else if (phase === 'model_queue') step = 'Waiting for the model: another app is using it';
+    else if (phase === 'building') step = 'Starting the agent';
+    else if (phase === 'priming') step = 'Reading GAIA’s instructions';
+    else if (phase === 'loading' && model) {
+        const where = deviceLabel(device);
+        step = `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}`;
+    } else if (phase === 'loading') step = 'Loading the model';
+    else step = bootTask ?? 'Starting GAIA';
+    return `${step}… ${seconds}s`;
 }
 
-export function warmUpLine({ seconds, model, device }: WarmUpProgress): string {
-    if (!model) return `Getting GAIA ready… ${seconds}s`;
-    const where = deviceLabel(device);
-    return `Loading ${displayModelName(model)}${where ? ` on ${where}` : ''}… ${seconds}s`;
+/** Where the agent's greeting goes: its loading state, its words, or why it has none. */
+function AgentGreeting({ greeting, bootTask, onRetry }: { greeting: Greeting; bootTask: string | null; onRetry: () => void }) {
+    if (greeting.kind === 'loading') {
+        return (
+            <div className="new-chat-loading is-live" role="status">
+                <img className="new-chat-loading-robot" src={gaiaRobot} alt="" width={40} height={40} />
+                <p className="new-chat-loading-line">{loadingLine(greeting, bootTask)}</p>
+            </div>
+        );
+    }
+    if (greeting.kind === 'failed') {
+        return (
+            <p className="new-chat-greeting-error" role="alert">
+                {greeting.message}{' '}
+                <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
+            </p>
+        );
+    }
+    return <h1 className="new-chat-greeting" aria-busy={greeting.kind === 'writing'}>{greeting.text}</h1>;
 }
 
 /** No suggestions: one plain sentence, a retry, and the full error behind Details. */
@@ -60,7 +87,7 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
     );
 }
 
-/** An empty chat: a greeting, the composer, tasks to start from. Created on the first message. */
+/** An empty chat: the agent's greeting, the composer, tasks to start from. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const [text, setText] = useState(initialText);
@@ -70,7 +97,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     const [startError, setStartError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const attachments = useAttachments();
-    const warming = useWarmUp();
+    const { greeting, retry: retryGreeting } = useGreeting();
+    const bootTask = useChatStore((s) => s.systemStatus?.init_tasks?.find((t) => t.status === 'running')?.name ?? null);
     useModelNames();
 
     const live = useRef(true);
@@ -136,7 +164,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     return (
         <main className="new-chat" aria-label="New chat">
             <div className="new-chat-inner">
-                <h1 className="new-chat-greeting">{greeting()}</h1>
+                <AgentGreeting greeting={greeting} bootTask={bootTask} onRetry={retryGreeting} />
                 <Composer
                     value={text}
                     onChange={setText}
@@ -160,9 +188,6 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                             <span>{folder.name}</span>
                         </span>
                     </div>
-                )}
-                {warming !== null && !starting && (
-                    <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {start && <StartCards cards={start.cards} onPick={pick} disabled={starting || sending} />}

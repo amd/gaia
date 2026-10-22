@@ -80,7 +80,8 @@ AGENT_ID = "gaia"
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
-API_VERSION = "2.18"
+#: 2.19 added ``POST /greeting`` for the Agent UI's new-chat greeting.
+API_VERSION = "2.19"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -877,6 +878,103 @@ async def skills() -> Dict[str, Any]:
         )
     except SkillError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class GreetingRequest(BaseModel):
+    """``POST /v1/gaia/greeting`` body (contract >= 2.19)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory: Optional[Literal["on", "private", "off"]] = Field(
+        default=None,
+        description=(
+            "Whether the greeting may draw on memory: 'on', 'private' or "
+            "'off'. With 'private' or 'off' it is a plain welcome. Omit it to "
+            "leave memory as the agent has it."
+        ),
+    )
+
+
+@router.post("/greeting")
+async def greeting(request: GreetingRequest):
+    """Stream the first message of a new chat, written by the agent.
+
+    Runs a first turn's real request (system prompt, tools, the turn's memory
+    context and the newest session summary) with thinking off, so the model
+    loads and the prompt is cached before the user types. Reasoning a model
+    sends anyway never reaches ``chunk`` or ``done``.
+    Nothing is written to a session's history. Events: ``status`` (``phase``:
+    ``building``, ``model_queue`` while another client holds the model, then
+    ``priming``), ``chunk`` (``content``), then one ``done`` (``text``,
+    ``seconds``, ``prompt_tokens``, ``cached_tokens``) or ``error``
+    (``message``), with ``: keepalive`` comments while nothing else is sent.
+    Closing the connection stops it at its next step.
+    The greeting's text is not logged.
+    """
+    events: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue()
+    cancel = threading.Event()
+
+    def write() -> None:
+        agent = None
+        try:
+            events.put({"type": "status", "phase": "building"})
+            agent = build_query_agent()
+            _apply_memory_mode(agent, request.memory)
+            if cancel.is_set():
+                return
+
+            def on_wait(event: Dict[str, Any]) -> None:
+                granted = event.get("event") == "granted"
+                phase = "priming" if granted else "model_queue"
+                events.put({"type": "status", "phase": phase})
+
+            with interactive_turn(on_wait_event=on_wait, cancel=cancel):
+                if cancel.is_set():
+                    return
+                events.put({"type": "status", "phase": "priming"})
+                result = agent.greet(
+                    lambda text: events.put({"type": "chunk", "content": text}),
+                    cancel=cancel,
+                )
+            done = {"type": "done", "text": result["text"]}
+            for key in ("seconds", "prompt_tokens", "cached_tokens"):
+                done[key] = result.get(key)
+            events.put(done)
+        except Exception as exc:  # noqa: BLE001 - reported on the stream
+            # The exception's own words only: the prompt quotes memory.
+            logger.warning("GAIA sidecar: greeting failed: %s", exc, exc_info=True)
+            events.put({"type": "error", "message": _terminal_error_detail(exc)})
+        finally:
+            try:
+                if agent is not None:
+                    close_agent(agent)
+            finally:
+                events.put(None)
+
+    threading.Thread(target=write, name="gaia-greeting", daemon=True).start()
+
+    async def _stream():
+        try:
+            while True:
+                try:
+                    event = await asyncio.to_thread(
+                        events.get, True, _HEARTBEAT_SECONDS
+                    )
+                except queue.Empty:
+                    # A model wait or a cold load can outlast a reader's idle timeout.
+                    yield ": keepalive\n\n"
+                    continue
+                if event is None:
+                    return
+                yield _sse(event)
+        finally:
+            cancel.set()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _require_valid_session_id(session_id: str) -> None:

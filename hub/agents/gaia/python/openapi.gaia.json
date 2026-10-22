@@ -35,6 +35,31 @@
         "title": "BypassResponse",
         "type": "object"
       },
+      "GreetingRequest": {
+        "additionalProperties": false,
+        "description": "``POST /v1/gaia/greeting`` body (contract >= 2.19).",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "enum": [
+                  "on",
+                  "private",
+                  "off"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the greeting may draw on memory: 'on', 'private' or 'off'. With 'private' or 'off' it is a plain welcome. Omit it to leave memory as the agent has it.",
+            "title": "Memory"
+          }
+        },
+        "title": "GreetingRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -429,7 +454,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.18"
+    "version": "2.19"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -454,6 +479,52 @@
         },
         "security": [],
         "summary": "Health"
+      }
+    },
+    "/v1/gaia/greeting": {
+      "post": {
+        "description": "Stream the first message of a new chat, written by the agent.\n\nRuns a first turn's real request (system prompt, tools, the turn's memory\ncontext and the newest session summary) with thinking off, so the model\nloads and the prompt is cached before the user types. Reasoning a model\nsends anyway never reaches ``chunk`` or ``done``.\nNothing is written to a session's history. Events: ``status`` (``phase``:\n``building``, ``model_queue`` while another client holds the model, then\n``priming``), ``chunk`` (``content``), then one ``done`` (``text``,\n``seconds``, ``prompt_tokens``, ``cached_tokens``) or ``error``\n(``message``), with ``: keepalive`` comments while nothing else is sent.\nClosing the connection stops it at its next step.\nThe greeting's text is not logged.",
+        "operationId": "greeting_v1_gaia_greeting_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GreetingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Greeting",
+        "tags": [
+          "gaia-query"
+        ]
       }
     },
     "/v1/gaia/init": {

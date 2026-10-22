@@ -314,17 +314,27 @@ and where that model runs.
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked.
-- **A new chat** greets you, shows the folder GAIA works in, and offers up to
-  four tasks from the skills you have and what you've set up (indexed
-  documents, a connected mail account). A task with a subject to fill in is
-  typed into the message box; the others start straight away.
+- **A new chat** opens with a line the GAIA agent writes itself. When memory
+  holds recent work or an open thread from your last conversation, it picks
+  that up ("Did the date parser fix hold up?"); otherwise it's a short
+  welcome. Writing it loads the model and reads GAIA's instructions, so a
+  greeting that arrives also tells you the agent works, and your first
+  message gets a quick answer. With memory turned off it's a plain welcome.
+  Below it: the folder GAIA works in and up to four tasks from the skills
+  you have and what you've set up (indexed documents, a connected mail
+  account). A task with a subject to fill in is typed into the message box;
+  the others start straight away.
 - **The session panel** on the right keeps the facts about this chat in view;
   see [The session panel](#the-session-panel).
-- **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
-  the model is loading and reading GAIA's instructions ahead of your first
-  message, so that message gets a quick answer. You can type and send
-  meanwhile; a message sent early waits for it to finish rather than starting
-  over.
+- **While the agent gets ready**, the robot sits where the greeting goes,
+  with the step it's on: "Starting GAIA", "Waiting for another chat to
+  finish", "Starting the agent", "Waiting for the model: another app is
+  using it", "Loading Qwen3.6-35B-A3B on your GPU… 12s" or "Reading GAIA's
+  instructions". You can type and send meanwhile; a
+  message sent early waits for it to finish rather than starting over. If
+  the agent can't write a greeting, the reason shows in its place with
+  **Try again**. A greeting is written once per new chat, not each time you
+  come back to it.
 
 Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
 `file` agents stay readable but can't be continued; start a new chat instead.

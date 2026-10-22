@@ -6,6 +6,7 @@
 import asyncio
 import json
 import logging
+import queue
 import shutil
 import sys
 import threading
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
@@ -972,6 +974,94 @@ async def request_warm_up():
 async def get_warm_up():
     """The warm-up state alone, cheap enough to poll while one runs."""
     return WarmUpStatus(**warmup.warm_up_status())
+
+
+#: How often the greeting stream checks the stage it is waiting on.
+_GREETING_POLL_S = 0.25
+
+
+@router.post("/api/system/greeting")
+async def stream_greeting(request: Request, db: ChatDatabase = Depends(get_db)):
+    """Stream the flagship's greeting for a new chat as SSE.
+
+    Events: ``status`` (``phase``: starting, waiting for a running chat turn,
+    building, model_queue (a relayed flagship waiting for the model), loading
+    or priming, with the ``model`` and ``device`` once known)
+    until the text starts, then ``chunk`` (``content``), then one ``done``
+    (``text``) or ``error`` (``message``). Closing the connection stops the
+    greeting at its next step.
+    """
+    from .. import greeting
+
+    events: "queue.Queue[Optional[dict]]" = queue.Queue()
+    cancel = threading.Event()
+
+    def write() -> None:
+        try:
+            result = greeting.write_greeting(
+                db, lambda text: events.put({"type": "chunk", "content": text}), cancel
+            )
+            events.put({"type": "done", "text": (result or {}).get("text", "")})
+        except greeting.GreetingUnavailable as exc:
+            events.put({"type": "error", "message": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - reported on the stream
+            # The exception's own words only: the prompt quotes memory.
+            logger.warning("Greeting failed: %s", exc, exc_info=True)
+            events.put(
+                {
+                    "type": "error",
+                    "message": f"GAIA's agent couldn't write a greeting: {exc}",
+                }
+            )
+        finally:
+            events.put(None)
+
+    threading.Thread(target=write, name="gaia-greeting", daemon=True).start()
+
+    async def generate():
+        shown = None
+        writing = False
+        try:
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    event = await asyncio.to_thread(events.get, True, _GREETING_POLL_S)
+                except queue.Empty:
+                    event = False
+                if event is None:
+                    return
+                if event:
+                    writing = writing or event["type"] == "chunk"
+                    yield f"data: {json.dumps(event)}\n\n"
+                    continue
+                if writing:
+                    continue
+                snap = warmup.warm_up_status()
+                warmer = warmup.get_warmer()
+                if warmer is not None and warmer.waiting_on_a_turn():
+                    phase = "waiting"
+                elif warmer is not None and snap["state"] == warmup.WARMING:
+                    phase = warmer.phase() or "starting"
+                else:
+                    phase = "starting"
+                status = {
+                    "type": "status",
+                    "phase": phase,
+                    "model": snap.get("model"),
+                    "device": snap.get("device"),
+                }
+                if status != shown:
+                    shown = status
+                    yield f"data: {json.dumps(status)}\n\n"
+        finally:
+            cancel.set()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/api/system/tasks", response_model=TaskListResponse)

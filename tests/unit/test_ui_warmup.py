@@ -405,6 +405,50 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
     )
 
 
+def test_a_greeting_primes_the_same_prefix_as_the_warm_up(ui_flagship, monkeypatch):
+    """A greeting replaces the new chat's warm-up, so it must leave the same cache."""
+    from gaia.ui import greeting
+    from gaia.ui.setup_runner import mark_initialized
+
+    chat, registry, requests, agents, db = ui_flagship
+    mark_initialized()
+    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: None))
+
+    warmup._warm_new_chat_prefix(db)
+    warm = requests[-1]
+    words = []
+    result = greeting.write_greeting(db, words.append)
+
+    assert result["text"] == "OK" and words == ["OK"]
+    greet = requests[-1]
+    assert greet is not warm
+    assert _prefix(*greet) == _prefix(*warm)
+    assert warmup.warm_up_status()["state"] == warmup.READY
+
+
+def test_a_greeting_never_starts_a_download(ui_flagship, monkeypatch):
+    from gaia.llm import lemonade_client
+    from gaia.ui import greeting
+    from gaia.ui.setup_runner import mark_initialized
+
+    chat, registry, requests, agents, db = ui_flagship
+    mark_initialized()
+    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: None))
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_model_info",
+        lambda self, name: {"id": name, "downloaded": False},
+    )
+    loads = []
+    monkeypatch.setattr(
+        chat, "_maybe_load_expected_model", lambda *a, **k: loads.append(a)
+    )
+
+    with pytest.raises(greeting.GreetingUnavailable, match="isn't downloaded yet"):
+        greeting.write_greeting(db, lambda _t: None)
+    assert loads == [] and requests == []
+
+
 def test_a_turn_never_races_a_warm_up_that_overruns(monkeypatch):
     import threading
 

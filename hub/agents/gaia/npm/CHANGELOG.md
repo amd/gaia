@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.19
+
+- **`POST /v1/gaia/greeting` writes a new chat's first message** (contract
+  **2.19**). The Agent UI opens a new chat on it instead of a canned line.
+  It follows up on the last conversation when memory holds one, and writing
+  it loads the model and caches the prompt, so the first question answers
+  quickly. It takes `memory` like `/query`, leaves no session history, and
+  streams `status`, `chunk`, then one `done` or `error`. Clients built for
+  2.18 keep working; older binaries `404` the route, so probe `/version`.
+
 ## [0.3.1]
 
 Released with GAIA 0.25.1, and requires it. Integrators: the sidecar
