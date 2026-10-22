@@ -137,3 +137,52 @@ def test_changes_need_a_session(built):
 def test_a_turn_id_that_is_not_one_is_refused(built, bad):
     client, _agents = built
     assert _query(client, session_id=SESSION, changes_turn_id=bad).status_code == 422
+
+
+class _AskingAgent(_WritingAgent):
+    """Writes, then asks to run a gated tool nobody can approve."""
+
+    def process_query(self, query, max_steps=None):
+        fs.before_change(self.target, "write_file")
+        self.target.write_bytes(b"hello")
+        self.console._emit(
+            {"type": "permission_request", "tool": "run_shell_command", "args": {}}
+        )
+        self.release.wait(timeout=10)
+        return {"answer": "stopped"}
+
+
+def test_a_refused_confirmation_still_finishes_the_recording(built, monkeypatch):
+    client, agents = built
+
+    def build(**kw):
+        agents.append(_AskingAgent(**kw))
+        return agents[-1]
+
+    monkeypatch.setattr(sr, "build_session_agent", build)
+    response = _query(
+        client,
+        session_id=SESSION,
+        changes_turn_id=fs.new_turn_id(),
+        can_answer_questions=False,
+    )
+    assert response.status_code == 200
+    (turn,) = fs.list_turns(SESSION)
+    assert turn["finished_at"] is not None
+    assert [f["change"] for f in turn["files"]] == ["created"]
+
+
+def test_an_unsaved_recording_is_reported_before_the_end(built, monkeypatch):
+    client, _agents = built
+
+    def fail(_self):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fs.TurnRecorder, "finish", fail)
+    response = _query(client, session_id=SESSION, changes_turn_id=fs.new_turn_id())
+    events = _events(response)
+    assert events[-1]["type"] == "final"
+    assert {
+        "type": "status",
+        "message": "Undo may not work for this turn: disk full",
+    } in events

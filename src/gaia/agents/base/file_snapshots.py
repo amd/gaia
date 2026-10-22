@@ -165,6 +165,7 @@ class TurnRecorder:
         }
         self._index: Dict[str, Dict[str, Any]] = {}
         self._closed = False
+        self._finished = False
 
     @property
     def has_changes(self) -> bool:
@@ -277,13 +278,15 @@ class TurnRecorder:
     def finish(self) -> None:
         """Save the state the turn left each file in; drop an empty turn.
 
-        A second call does nothing: by then an undo may have been saved.
+        A call after one that succeeded does nothing: by then an undo may have
+        been saved. One after a failure tries again.
         """
         with self._lock:
-            if self._closed:
+            if self._finished:
                 return
             self._closed = True
             if not self.has_changes:
+                self._finished = True
                 return
             (self.dir / "blobs").mkdir(parents=True, exist_ok=True)
             for i, entry in enumerate(self._manifest["files"]):
@@ -311,6 +314,7 @@ class TurnRecorder:
                     )
             self._manifest["finished_at"] = _now_iso()
             self._save()
+            self._finished = True
 
     def link_message(self, message_id: int) -> None:
         """Tie this turn to the assistant message that answered it."""

@@ -765,3 +765,19 @@ class TestRecordedElsewhere:
         (turn,) = fs.list_turns(SID, root=root)
         assert turn["restored_at"] is not None
         assert target.read_bytes() == b"before"
+
+    def test_a_finish_that_failed_is_tried_again(self, root, work, monkeypatch):
+        target = work / "notes.txt"
+        with _record(root) as rec:
+            fs.before_change(target, "write_file")
+            target.write_bytes(b"new")
+            real_copy = fs.shutil.copyfile
+            monkeypatch.setattr(
+                fs.shutil, "copyfile", lambda *a: (_ for _ in ()).throw(OSError("full"))
+            )
+            with pytest.raises(OSError, match="full"):
+                rec.finish()
+            monkeypatch.setattr(fs.shutil, "copyfile", real_copy)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert turn["finished_at"] is not None
+        assert turn["files"][0]["change"] == "created"

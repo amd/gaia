@@ -1403,6 +1403,8 @@ async def query(request: QueryRequest):
                         # Nobody can answer — refusing is the honest end, and
                         # far better than parking a run on a prompt no one will
                         # ever see.
+                        for warning in await _finish_changes(run):
+                            yield _sse(warning)
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
