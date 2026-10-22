@@ -1160,7 +1160,7 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('ruleIds: event.rule_ids ?? []');
       expect(chatContent).toContain('policyVersion: event.policy_version');
       expect(chatContent).toContain('receiptId: event.receipt_id');
-      expect(chatContent).toContain('setPolicyToast');
+      expect(chatContent).toContain('showPolicyToast');
       expect(chatContent).toContain('View receipt');
       expect(chatContent).toContain('Receipt unavailable');
     });
