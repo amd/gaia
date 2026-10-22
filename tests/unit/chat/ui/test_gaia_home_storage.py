@@ -118,6 +118,10 @@ def test_an_uncreatable_documents_folder_reaches_the_user(homes, client, monkeyp
     """The error's message is the fix, so the route must not reduce it to a bare 500."""
     fake_home, gaia_home = homes
     monkeypatch.chdir(fake_home)  # started from home: the chat gets GAIA's folder
+    # The skill list comes from the agent sidecar; this test is about the folder.
+    monkeypatch.setattr(
+        "gaia.ui.routers.skills.list_skills", lambda *a, **k: {"skills": []}
+    )
     gaia_home.chmod(0o500)
     try:
         resp = client.get("/api/onboarding/start", headers={"X-Gaia-UI": "1"})
