@@ -117,7 +117,7 @@ export interface ReleaseCandidate {
 
 // The installers publish.yml attaches to a release candidate, in the order the
 // list shows them: per platform as the stable downloads order them, the one
-// Windows setup first. Platform names follow PLATFORM_LABELS and the Linux
+// Windows setup first. The macOS chip names follow PLATFORM_LABELS and the Linux
 // package families follow INSTALLER_CTA_LABELS (src/scripts/download-target.ts).
 // Raw terminal binaries and the wheel are one click away on the release page.
 const RC_DOWNLOADS: { label: string; match: RegExp }[] = [
