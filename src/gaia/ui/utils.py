@@ -720,7 +720,7 @@ def safe_open_document(
     if "\x00" in path:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    raw = Path(path)
+    raw = Path(os.path.expanduser(path))
     roots = document_roots()
     # Worded so it holds whether or not the file exists: see step 1.
     denied = (

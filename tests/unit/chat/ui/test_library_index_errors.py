@@ -77,6 +77,29 @@ class TestFolderPath:
         assert body["failed"] == 0
         assert [d["filename"] for d in body["documents"]] == ["notes.md"]
 
+    def test_tilde_folder_path_reaches_folder_indexing(self, home, client, monkeypatch):
+        """``~`` is the user's home, not a folder named ``~`` in the server's cwd."""
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        folder = home / "documents"
+        folder.mkdir()
+        (folder / "notes.md").write_text("# Notes")
+
+        resp = _upload(client, "~/documents")
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["status"] == "is_folder"
+
+        async def fake_index(_path):
+            return 1
+
+        with patch("gaia.ui.server._index_document", fake_index):
+            resp = client.post(
+                "/api/documents/index-folder",
+                json={"folder_path": "~/documents", "recursive": False},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["indexed"] == 1
+
 
 class TestMissingAndOutOfScope:
     def test_missing_file_inside_the_roots_says_it_does_not_exist(self, home, client):

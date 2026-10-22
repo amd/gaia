@@ -681,7 +681,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     if "\x00" in folder_path:
         raise HTTPException(status_code=400, detail="Invalid folder path")
 
-    raw_folder = Path(folder_path)
+    raw_folder = Path(os.path.expanduser(folder_path))
 
     resolved = raw_folder.resolve(strict=False)
 

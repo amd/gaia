@@ -265,6 +265,41 @@ describe('DocumentLibrary path box', () => {
         expect(toast.textContent).not.toContain('Report this issue');
         expect(mockedApi.indexFolder).not.toHaveBeenCalled();
     });
+
+    it('indexes a dotted folder name typed with a trailing separator', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, errors: [], documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('C:\\Users\\me\\notes.v2\\');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('Indexed 1 file from "notes.v2".');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\notes.v2\\');
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('asks the server about an unsupported typed path, then names the file type', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error("File type not allowed: GAIA can't index .png files."), {
+                httpStatus: 400, reason: null,
+            }),
+        );
+        render(<DocumentLibrary />);
+
+        submitPath('C:\\Users\\me\\photo.png');
+
+        const toast = await screen.findByRole('alert');
+        expect(toast.textContent).toContain('Image files cannot be indexed for text search.');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.png');
+        expect(mockedApi.indexFolder).not.toHaveBeenCalled();
+    });
 });
 
 describe('DocumentLibrary chunk counts', () => {

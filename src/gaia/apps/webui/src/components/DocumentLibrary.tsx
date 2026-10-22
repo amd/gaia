@@ -275,15 +275,14 @@ export function DocumentLibrary() {
         uploader: () => Promise<Document>,
         onFolder?: () => Promise<void>,
     ) => {
-        // Pre-check: warn about unsupported file types before sending to server
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
-        if (ext && !isExtensionSupported(ext)) {
-            const category = getUnsupportedCategory(ext);
-            const errMsg = category
-                ? category.message
-                : `The file type "${ext}" is not supported for indexing.`;
+        const unsupportedMessage = ext && !isExtensionSupported(ext)
+            ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
+            : null;
+        // A typed path may be a dotted folder name (notes.v2), so only the server can rule it out.
+        if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
-            setUploadError({ filename, error: errMsg });
+            setUploadError({ filename, error: unsupportedMessage });
             return;
         }
 
@@ -310,7 +309,9 @@ export function DocumentLibrary() {
                 return;
             }
             log.doc.error(`Failed to index "${filename}"`, err);
-            const errMsg = err instanceof Error ? err.message : 'Upload failed';
+            const errMsg = httpStatus === 400 && unsupportedMessage
+                ? unsupportedMessage
+                : err instanceof Error ? err.message : 'Upload failed';
             setUploadError({ filename, error: errMsg, status: httpStatus });
             setUploadStatus('');
         } finally {
@@ -463,8 +464,9 @@ export function DocumentLibrary() {
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
         if (!folderPath.trim()) return;
-        log.doc.info(`Indexing from path input: ${folderPath.trim()}`);
-        await uploadFile(folderPath.trim(), folderPath.trim().split(/[\\/]/).pop() || 'file');
+        const typed = folderPath.trim();
+        log.doc.info(`Indexing from path input: ${typed}`);
+        await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
         setFolderPath('');
     }, [folderPath, uploadFile]);
 
