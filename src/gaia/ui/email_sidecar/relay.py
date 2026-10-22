@@ -386,8 +386,13 @@ def relay_query(
     documents: Optional[List[str]] = None,
     allowed_paths: Optional[List[str]] = None,
     memory: Optional[str] = None,
+    changes_turn_id: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *changes_turn_id* — the undo-history turn the sidecar records this run's
+    file changes under, for a sidecar the caller has established takes it
+    (``profiles.changes_supported``).
 
     *allowed_paths* — the chat's file scope, for a sidecar the caller has
     established takes it (``profiles.scope_supported``); ``None`` leaves the
@@ -467,6 +472,8 @@ def relay_query(
         body["allowed_paths"] = list(allowed_paths)
     if memory is not None:
         body["memory"] = memory
+    if changes_turn_id is not None:
+        body["changes_turn_id"] = changes_turn_id
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False
