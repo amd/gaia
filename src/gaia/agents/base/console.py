@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import (
@@ -638,11 +638,7 @@ class OutputHandler(ABC):
         against; this keeps what each answer granted, so it can be listed by
         its label and revoked as a whole.
         """
-        scopes = getattr(self, "_session_grant_scopes", None)
-        if scopes is None:
-            scopes = {}
-            self._session_grant_scopes = scopes
-        return scopes
+        return self._lazy_attribute("_session_grant_scopes", dict)
 
     def call_is_granted(self, tool_name: str, tool_args: Any) -> bool:
         """True when an earlier "always" already covers THIS exact call."""
@@ -687,11 +683,14 @@ class OutputHandler(ABC):
         into every other console in the process — so a subclass that skips
         ``super().__init__()`` still behaves.
         """
-        names = getattr(self, attribute, None)
-        if names is None:
-            names = set()
-            setattr(self, attribute, names)
-        return names
+        return self._lazy_attribute(attribute, set)
+
+    def _lazy_attribute(self, attribute: str, factory: Callable[[], Any]) -> Any:
+        value = getattr(self, attribute, None)
+        if value is None:
+            value = factory()
+            setattr(self, attribute, value)
+        return value
 
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""

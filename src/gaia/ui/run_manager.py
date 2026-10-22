@@ -77,6 +77,9 @@ def _parse(frame: str) -> Optional[dict]:
 # Streamed text events the client concatenates while consecutive.
 _MERGEABLE_TYPES = ("chunk", "thinking")
 
+# Events that set state for the whole turn, so a trim must never drop them.
+_TURN_STATE_TYPES = ("followup_unavailable",)
+
 
 def _mergeable_type(event: Optional[dict]) -> Optional[str]:
     if (
@@ -117,6 +120,8 @@ class Run:
         self._open_chunk_bytes = 0
         self._last_event: Optional[dict] = None
         self._trimmed = False
+        # ``_TURN_STATE_TYPES`` frames, replayed ahead of the buffer and never trimmed.
+        self._turn_state: List[str] = []
         # Live subscriber queues. emit() fans out to each; finish() closes them.
         self.subscribers: List[asyncio.Queue] = []
         self.done = asyncio.Event()
@@ -144,6 +149,9 @@ class Run:
         if not line.startswith("data: "):
             return
         event = _parse(line)
+        if event is not None and event.get("type") in _TURN_STATE_TYPES:
+            self._turn_state.append(line + "\n\n")
+            return
         merge_type = _mergeable_type(event)
         if merge_type:
             if merge_type != self._open_type:
@@ -185,7 +193,7 @@ class Run:
         self._open_type = None
 
     def _replay_frames(self) -> List[str]:
-        frames = list(self.buffer)
+        frames = self._turn_state + self.buffer
         if self._open_chunk:
             frames.append(self._chunk_frame())
         return frames
