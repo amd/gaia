@@ -14,16 +14,19 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
-    _EMPTY_ANSWER_LEMONADE_MSG,
+    _EMPTY_MODEL_ANSWER_MSG,
     _NO_ANSWER_AFTER_TOOLS_MSG,
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
     _done_event,
+    _empty_answer_backend_problem,
     _empty_answer_outcome,
     _find_last_tool_step,
     _managed_documents_dir,
@@ -431,16 +434,98 @@ class TestEmptyAnswerOutcome:
         assert sse_type == "failed"
         assert keep_steps is True
 
-    def test_no_answer_no_cancel_no_steps_uses_lemonade_copy(self):
-        """The Lemonade remediation copy appears ONLY when there is no answer,
-        no cancel, and no steps/cards."""
+    def test_nothing_with_a_backend_problem_reports_it_as_an_error(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            backend_problem="Lemonade Server isn't responding.",
+        )
+        assert content == "Lemonade Server isn't responding."
+        assert sse_type == "error"
+        assert keep_steps is False
+
+    def test_nothing_with_a_healthy_backend_blames_the_model_not_lemonade(self):
         content, sse_type, keep_steps = _empty_answer_outcome(
             turn_cancelled=False, has_steps=False, has_card=False
         )
-        assert content == _EMPTY_ANSWER_LEMONADE_MSG
-        assert "Lemonade Server is running" in content
-        assert sse_type == "error"
+        assert content == _EMPTY_MODEL_ANSWER_MSG
+        assert "Lemonade" not in content
+        assert sse_type == "failed"
         assert keep_steps is False
+
+
+_BASE = "http://lemonade.test:8000/api/v1"
+
+
+def _probe(model_id, handler):
+    """Run the backend probe against a fake Lemonade served by ``handler``."""
+    real_client = httpx.AsyncClient
+    with (
+        patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+            return_value=_BASE,
+        ),
+        patch(
+            "httpx.AsyncClient",
+            lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
+    ):
+        return asyncio.run(_empty_answer_backend_problem(model_id))
+
+
+def _health(*names):
+    payload = {"all_models_loaded": [{"model_name": n, "type": "llm"} for n in names]}
+    return lambda request: httpx.Response(200, json=payload)
+
+
+class TestEmptyAnswerBackendProblem:
+    """Lemonade is named only when its own /health says it is at fault."""
+
+    def test_server_up_with_the_model_loaded_is_not_a_problem(self):
+        assert _probe("Gemma-4-E4B-it-GGUF", _health("Gemma-4-E4B-it-GGUF")) is None
+
+    def test_user_namespace_still_matches_the_loaded_model(self):
+        assert _probe("user.Qwen3.5-4B-GGUF", _health("Qwen3.5-4B-GGUF")) is None
+
+    def test_server_down_names_lemonade_and_the_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
+        assert _BASE in problem
+        assert "isn't responding" in problem
+        assert problem.endswith("START-HINT")
+        assert "lemonade-server serve" not in problem
+
+    def test_unhealthy_status_names_the_http_code(self):
+        problem = _probe("M-GGUF", lambda request: httpx.Response(503))
+        assert "HTTP 503" in problem
+        assert problem.endswith("START-HINT")
+
+    def test_server_up_without_the_model_says_it_is_not_loaded(self):
+        problem = _probe("Gemma-4-E4B-it-GGUF", _health("Other-GGUF"))
+        assert "Lemonade Server is running" in problem
+        assert "Gemma-4-E4B-it-GGUF isn't loaded" in problem
+
+    def test_cloud_model_skips_the_loaded_check(self):
+        assert _probe("fireworks.some-model", _health()) is None
+
+    def test_eval_on_claude_never_touches_lemonade(self):
+        with (
+            patch.object(
+                _chat_helpers,
+                "_eval_provider_kwargs",
+                return_value={"use_claude": True},
+            ),
+            patch("httpx.AsyncClient", side_effect=AssertionError("contacted")),
+        ):
+            assert asyncio.run(_empty_answer_backend_problem("M-GGUF")) is None
 
 
 class TestDoneEvent:

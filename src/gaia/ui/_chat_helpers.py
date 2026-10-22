@@ -2331,12 +2331,9 @@ def _canonicalize_user_input_request(event: dict) -> dict:
     }
 
 
-# Remediation copy for a turn that produced no answer at all — reserved for a
-# genuine backend failure, never a deliberate cancel or an intentionally-empty
-# final (see _empty_answer_outcome).
-_EMPTY_ANSWER_LEMONADE_MSG = (
-    "I wasn't able to generate a response. Please make sure Lemonade Server "
-    "is running and try again."
+_EMPTY_MODEL_ANSWER_MSG = (
+    "The model returned an empty answer. Send your message again, or try "
+    "another model."
 )
 
 
@@ -2346,8 +2343,64 @@ _NO_ANSWER_AFTER_TOOLS_MSG = (
 )
 
 
+async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str]:
+    """Why the backend left a turn with no answer, or None when it looks fine.
+
+    Asks Lemonade's ``/health`` so a working server is never blamed for a
+    model that simply wrote nothing. Returns user-facing copy naming the
+    cause: the server is unreachable or unhealthy, or the model isn't loaded.
+    """
+    if _eval_provider_kwargs():
+        return None
+    import httpx
+
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        cloud_model_provider,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/health", headers=headers)
+        health = resp.json() if resp.status_code == 200 else None
+    except (httpx.HTTPError, ValueError) as e:
+        logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
+        return (
+            f"No answer came back because Lemonade Server at {base_url} isn't "
+            f"responding. {describe_start_hint().instruction}"
+        )
+    if not isinstance(health, dict):
+        return (
+            f"No answer came back because Lemonade Server at {base_url} failed "
+            f"its health check (HTTP {resp.status_code}). "
+            f"{describe_start_hint().instruction}"
+        )
+    if not model_id or cloud_model_provider(model_id):
+        return None
+    loaded = health.get("all_models_loaded") or []
+    if any(
+        isinstance(m, dict) and _model_ids_match(m.get("model_name"), model_id)
+        for m in loaded
+    ):
+        return None
+    return (
+        f"Lemonade Server is running, but {model_id} isn't loaded, so no answer "
+        "came back. Send your message again to reload it, or try another model."
+    )
+
+
 def _empty_answer_outcome(
-    turn_cancelled: bool, has_steps: bool, has_card: bool
+    turn_cancelled: bool,
+    has_steps: bool,
+    has_card: bool,
+    backend_problem: Optional[str] = None,
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
@@ -2362,8 +2415,10 @@ def _empty_answer_outcome(
         the steps so the card survives a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
-      * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
-        no cancel, no steps: the only case that warrants the Lemonade copy.
+      * nothing, backend at fault → ``(backend_problem, "error", False)`` —
+        the only case that names Lemonade (see _empty_answer_backend_problem).
+      * nothing, backend fine → ``(<empty-model copy>, "failed", False)`` —
+        the model answered with nothing.
     """
     if turn_cancelled:
         return _CANCELLED_REPLY, "done", True
@@ -2371,7 +2426,9 @@ def _empty_answer_outcome(
         return "", "done", True
     if has_steps:
         return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
-    return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
+    if backend_problem:
+        return backend_problem, "error", False
+    return _EMPTY_MODEL_ANSWER_MSG, "failed", False
 
 
 def _turn_inference_stats(
@@ -4327,10 +4384,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
+            backend_problem = None
+            if not (turn_cancelled or captured_steps):
+                backend_problem = await _empty_answer_backend_problem(
+                    getattr(result_holder.get("agent"), "model_id", None)
+                    or session_model
+                )
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
                 bool(captured_steps),
                 any(step.get("render") for step in captured_steps),
+                backend_problem,
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
