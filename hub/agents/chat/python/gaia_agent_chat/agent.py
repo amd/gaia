@@ -218,6 +218,16 @@ def _python_script_run_context(
     return project, env
 
 
+#: Without it the model told Agent UI users it has no scheduler.
+_AGENT_UI_SCHEDULE_LINE = (
+    "\nRecurring tasks: the Agent UI runs a prompt on a schedule from "
+    '**Scheduled tasks** in the sidebar (schedules like "every 6h", "daily at '
+    '9am", "every monday at 3pm"). For a recurring request, point the user '
+    "there and help them word a valid schedule and prompt; never say scheduling "
+    "is unavailable.\n"
+)
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -301,6 +311,9 @@ class ChatAgentConfig:
 
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
+    # The front-end serving this session: "agent_ui", "tui", "cli", or None
+    # when the caller didn't say. Only "agent_ui" changes the prompt today.
+    surface: Optional[str] = None
     # Memory starts off (private chat / memory off in the UI): the embedder
     # loads only once memory is actually used.
     memory_incognito: bool = False
@@ -1395,6 +1408,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "load_tools_menu": load_tools_menu,
         }
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        if not spec.early_return:
+            prompt += self._session_folders_line()
+        if getattr(self.config, "surface", None) == "agent_ui":
+            prompt += _AGENT_UI_SCHEDULE_LINE
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
             prompt += (
@@ -1403,6 +1420,36 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "user's project.\n"
             )
         return prompt
+
+    def _session_folders_line(self) -> str:
+        """One prompt line naming the folders this session can work in.
+
+        Computed once: a folder created mid-session must not change the prompt
+        and invalidate the cached prefix. Files (attached documents) are left
+        out; the indexed-documents line already names them.
+        """
+        cached = getattr(self, "_folders_line", None)
+        if cached is not None:
+            return cached
+        gaia_docs = os.path.normcase(str((gaia_home() / "documents").resolve()))
+        labelled = []
+        allowed = getattr(self, "allowed_paths", None) or []
+        for path in dict.fromkeys(Path(p).resolve() for p in allowed):
+            if not path.is_dir():
+                continue
+            if os.path.normcase(str(path)) == gaia_docs:
+                labelled.insert(0, f"{path} (GAIA's documents folder)")
+            else:
+                labelled.append(str(path))
+        line = ""
+        if labelled:
+            line = (
+                f"\nYour folders this session: {', '.join(labelled)}. For "
+                '"my documents", "your folder", or a file named without a path, '
+                "look here first.\n"
+            )
+        self._folders_line = line
+        return line
 
     def _create_console(self):
         """Create console for chat agent."""

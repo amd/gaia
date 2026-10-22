@@ -291,7 +291,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
 - **Confirmation-gated tools are answered over `POST /v1/gaia/query/{run_id}/tool_decision`** (contract >= 2.14) when there's a session to hold the grant and the caller declared it can answer — see [Tools that need your approval](#tools-that-need-your-approval).
 
-`/query` implements the shared canonical SSE contract (API version **2.18**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
+`/query` implements the shared canonical SSE contract (API version **2.19**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
 
 ### Authenticating your requests
 

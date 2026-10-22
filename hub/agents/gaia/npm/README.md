@@ -202,6 +202,10 @@ read, so the agent works in the same scope. Binaries older than 2.18 reject both
 fields with `422`, so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
+2.19), and the agent points recurring requests at the **Scheduled tasks** page
+instead of saying it cannot schedule. Older binaries reject it with `422`.
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

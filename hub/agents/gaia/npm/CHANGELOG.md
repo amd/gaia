@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### For integrators: contract 2.19
+
+- **`/query` takes `surface`** (contract **2.19**): `"agent_ui"`, `"tui"` or
+  `"cli"`. Asked to run something on a schedule from the Agent UI, the agent
+  said it had no scheduler and sent the user to Windows Task Scheduler; with
+  `"agent_ui"` it points them at the **Scheduled tasks** page instead. Older
+  binaries `422` the field, so probe `/version` before sending it.
+- **The agent knows which folders it can work in.** The system prompt now names
+  the session's folders and labels GAIA's documents folder, so "summarize X in
+  my documents folder" looks there first instead of trying `~/Documents` and
+  the home folder.
+
 ## [0.3.1]
 
 Released with GAIA 0.25.1, and requires it. Integrators: the sidecar

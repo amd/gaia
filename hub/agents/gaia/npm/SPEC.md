@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.18"`                  |
+| Contract version   | `API_VERSION = "2.19"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -286,7 +286,7 @@ checked for drift in CI — the same pattern as the email agent's own
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
-`documents`, `allowed_paths`, `memory`) is optional.
+`documents`, `allowed_paths`, `memory`, `surface`) is optional.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
@@ -313,6 +313,12 @@ on its own. A retained session keeps the last value, so send it every turn;
 omit it to leave memory as the agent has it. `"on"` never turns memory on when
 the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `422` the field.
+
+`surface` (contract ≥ 2.19) is the front-end the turn comes from: `"agent_ui"`,
+`"tui"` or `"cli"`. With `"agent_ui"` the agent points recurring requests at the
+Agent UI's **Scheduled tasks** page instead of saying it cannot schedule. It is
+read when a session is built and kept for that session. Omit it when unknown.
+Pre-2.19 binaries `422` the field.
 
 ```json
 {
