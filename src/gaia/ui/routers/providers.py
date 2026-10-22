@@ -215,13 +215,17 @@ def _registration(provider: str, body: "ConnectRequest") -> Dict[str, Any]:
 KEY_WAITING = "waiting_for_os_permission"
 
 
+def _key_slot(provider: str) -> str:
+    return f"cloud-key:{provider}"
+
+
 def _bounded_recall(provider: str) -> Optional[str]:
     """The stored key; raises ``CredentialStoreWaiting`` while the OS is prompting."""
     from gaia.connectors.credential_wait import read_within
     from gaia.llm import cloud_keys
 
     return read_within(
-        f"cloud-key:{provider}",
+        _key_slot(provider),
         lambda: cloud_keys.recall_key(provider),
         f"your saved {_NAMES[provider]} key",
     )
@@ -707,6 +711,11 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
+    if key:
+        from gaia.connectors.credential_wait import discard
+
+        # A read from before this key was pasted must not be served after it.
+        discard(_key_slot(provider))
     if _uses_users_server():
         return _connect_on_users_server(provider)
     try:
@@ -800,6 +809,7 @@ def _connect_on_users_server(provider: str) -> Dict[str, Any]:
 @router.delete("/api/providers/{provider}/key")
 def forget_provider_key(provider: str) -> Dict[str, Any]:
     """Clear the key from Lemonade and from the OS credential store."""
+    from gaia.connectors.credential_wait import discard
     from gaia.connectors.errors import ConnectorsError
     from gaia.llm.cloud_keys import forget_key
 
@@ -813,6 +823,7 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
             if status >= 400 and status != 404:
                 raise _cloud_error(provider, status, body)
         removed = forget_key(provider)
+        discard(_key_slot(provider))
     except ProviderError as e:
         _raise(e)
     except ConnectorsError as e:
@@ -905,10 +916,14 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
+    from gaia.connectors.credential_wait import CredentialStoreWaiting
+
     try:
         reason = _check_model_available(model_id)
     except _ServerNotReady as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except CredentialStoreWaiting as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     if reason is not None:
         raise HTTPException(
             status_code=409,

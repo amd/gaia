@@ -352,6 +352,44 @@ def test_restore_waits_for_a_keychain_prompt_then_restores(
     assert db.get_setting("custom_model") == model
 
 
+def test_select_while_a_keychain_prompt_is_open_says_so(
+    client, lemonade, keys, db, keychain_prompt
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    lemonade.models = _cloud_models()
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    resp = client.post("/api/providers/select", json={"model": model})
+    assert time.monotonic() - started < 2
+    assert resp.status_code == 409, resp.text
+    assert "Look for a system dialog" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    resp = client.post("/api/providers/select", json={"model": model})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == model
+
+
+def test_a_saved_key_is_read_afresh_after_connect_or_forget():
+    """A read nobody collected is not served once the user changes the key."""
+    credential_wait._in_flight.clear()
+    assert (
+        credential_wait.read_within("cloud-key:fireworks", lambda: "old", "k") == "old"
+    )
+    stale = credential_wait.Future()
+    stale.set_result("old")
+    credential_wait._in_flight["cloud-key:fireworks"] = stale
+
+    credential_wait.discard("cloud-key:fireworks")
+
+    assert (
+        credential_wait.read_within("cloud-key:fireworks", lambda: "new", "k") == "new"
+    )
+
+
 # ── GET /api/providers/active ──────────────────────────────────────────────
 
 

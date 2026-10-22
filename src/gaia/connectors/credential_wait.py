@@ -105,6 +105,16 @@ def read_within(
     return result  # type: ignore[return-value]
 
 
+def discard(slot: str) -> None:
+    """Forget *slot*'s read, so the next call reads the store afresh.
+
+    For a key the user just saved or removed: an earlier read that nobody
+    collected would otherwise be served as the current value.
+    """
+    with _lock:
+        _in_flight.pop(slot, None)
+
+
 def in_flight_count() -> int:
     """Reads still waiting on the OS. For tests and diagnostics."""
     with _lock:
@@ -114,6 +124,7 @@ def in_flight_count() -> int:
 __all__ = [
     "CredentialStoreWaiting",
     "WAIT_SECONDS",
+    "discard",
     "in_flight_count",
     "read_within",
     "waiting_message",
