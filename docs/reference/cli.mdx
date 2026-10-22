@@ -3849,9 +3849,11 @@ gaia diagnostics --output /tmp/my-bundle.tgz
 </CodeGroup>
 
 The bundle includes:
-- System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
-- State files from `~/.gaia/` (config, session data — no chat content)
-- Log files: `~/.gaia/gaia.log` with its rotated copies (`gaia.log.1`, `gaia.log.2`, ...) and `~/.gaia/electron-main.log`, omitted with `--no-logs`. A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
+- System info snapshot: OS version (`uname -a` and distro on Linux, `sw_vers` on macOS, `ver` on Windows), relevant env vars with secrets redacted, the pid and port of the GAIA daemon, GAIA's Lemonade and the Agent UI backend with what listens on them, and all TCP listeners (`ss -tlnp` on Linux, `lsof -iTCP -sTCP:LISTEN` on macOS, `netstat -ano` on Windows)
+- `~/.gaia/electron-install-state.json` (no chat content)
+- Log files, omitted with `--no-logs`: `~/.gaia/gaia.log`, the Electron logs (`electron-install.log`, `electron-main.log`, `electron-updater.log`), `~/.gaia/logs/*.log`, the daemon log (`~/.gaia/host/daemon.log`), GAIA's Lemonade log (`~/.gaia/lemonade/lemond.log`) and agent sidecar logs (`~/.gaia/agents/*/logs/*.log`), each with its rotated copies (`gaia.log.1`, ...). A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
+
+API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance.json`) are never bundled.
 
 ---
 
