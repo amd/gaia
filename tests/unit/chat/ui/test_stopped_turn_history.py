@@ -10,6 +10,7 @@ on the next turn: stop an essay, ask for a capital, get the essay back.
 import asyncio
 import json
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -19,6 +20,7 @@ from gaia.ui import _chat_helpers as helpers
 from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.restart_recovery import (
+    CANCELLED_TURN_NOTICE,
     ENDED_WITHOUT_REPLY_NOTICE,
     INTERRUPTED_TURN_NOTICE,
     tools_ran_notice,
@@ -232,3 +234,21 @@ async def test_turn_stopped_mid_answer_shows_the_model_what_it_wrote(runtime):
         "role": "assistant",
         "content": f"The first paragraph.\n\n{STOPPED}",
     }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        helpers._CANCELLED_REPLY,
+        INTERRUPTED_TURN_NOTICE,
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+    ],
+)
+def test_the_ui_matches_the_same_cut_off_text(text):
+    """The footer matches these by text; a reworded notice would read as answered."""
+    bubble = (
+        Path(__file__).resolve().parents[4]
+        / "src/gaia/apps/webui/src/components/MessageBubble.tsx"
+    ).read_text(encoding="utf-8")
+    assert f"'{text}'" in bubble, f"MessageBubble.tsx no longer lists {text!r}"
