@@ -89,6 +89,7 @@ module_skips:
     runs_in: test_chat_agent.yml
     paths:
       - tests/unit/agents/test_registry.py
+      - tests/unit/chat/test_session_prompt_context.py
       - tests/unit/test_chat_agent_integration.py
       - tests/unit/test_chat_dynamic_tools.py
       - tests/unit/test_chat_fix_contracts.py

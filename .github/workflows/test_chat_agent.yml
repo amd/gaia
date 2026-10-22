@@ -58,6 +58,7 @@ on:
       - 'tests/unit/test_inference_location.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
+      - 'tests/unit/chat/test_session_prompt_context.py'
       - 'src/gaia/eval/retrieval/**'
       - 'tests/unit/rag/test_retrieval_bench_harness.py'
       - 'setup.py'
@@ -139,6 +140,7 @@ on:
       - 'tests/unit/test_inference_location.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
+      - 'tests/unit/chat/test_session_prompt_context.py'
       - 'src/gaia/eval/retrieval/**'
       - 'tests/unit/rag/test_retrieval_bench_harness.py'
       - 'setup.py'
@@ -270,6 +272,7 @@ jobs:
             tests/unit/test_inference_location.py \
             tests/unit/test_skill_tools_same_turn.py \
             tests/unit/test_tool_admission_order.py \
+            tests/unit/chat/test_session_prompt_context.py \
             tests/unit/rag/test_retrieval_bench_harness.py \
             -v --tb=short
 

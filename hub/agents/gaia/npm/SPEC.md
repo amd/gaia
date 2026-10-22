@@ -304,7 +304,10 @@ entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
 still narrows it, and a path outside it is asked about, never silently
 granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
-field.
+field. Whatever the scope, its existing folders are named in the system prompt
+once, when the session is built, with GAIA's documents folder first; a folder
+added to a retained session later is usable but not named. A caller that omits
+the field, like the TUI, gets the default scope (the user's home folder) named.
 
 `memory` (contract ≥ 2.18) is `"on"`, `"private"` (a private chat) or `"off"`
 (memory turned off in the caller's settings). Under `"private"` or `"off"` the
