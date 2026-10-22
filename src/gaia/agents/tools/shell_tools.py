@@ -2975,12 +2975,29 @@ class ShellToolsMixin:
         """
         note = str(error.get("risk_note") or "").rstrip(".")
         needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
-        if getattr(self, "console", None) is None:
+        console = getattr(self, "console", None)
+        # A watched Full access chat over the sidecar socket: shell gates stay on
+        # there (#3373), so "turn on full access" would point at what's already on.
+        full_access_chat = (
+            getattr(console, "grants_paths", False) is True
+            and getattr(console, "answers_confirmations", False) is True
+        )
+        if console is None:
             why = "this run has no console to show the confirmation prompt on"
             plain = (
                 f"Not run: {needs}, and nothing in this "
                 "run can ask you — start the request from the GAIA terminal UI "
                 "or Agent UI to approve it there."
+            )
+        elif full_access_chat:
+            why = (
+                "Full access over the sidecar socket pre-approves prompts but "
+                "keeps the shell gates on (#3373)"
+            )
+            plain = (
+                f"Not run: {needs}. Full access in this chat doesn't cover "
+                "commands like this one — switch the chat to Ask and GAIA will "
+                "ask you before it runs."
             )
         else:
             why = (

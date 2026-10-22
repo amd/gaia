@@ -350,6 +350,30 @@ def test_an_auto_approving_run_refuses_rather_than_widening(repo, monkeypatch):
     assert _staged(repo) == {"tracked.txt"}
 
 
+def test_a_full_access_desktop_chat_is_told_how_to_approve(repo):
+    """Full access over the sidecar socket keeps the shell gates on (#3373).
+
+    The refusal must not tell that user to turn on Full access: it is on. It
+    names the mode that does reach a prompt.
+    """
+    handler = SSEOutputHandler()
+    # What PermissionState applies for Full access on the HTTP transport.
+    handler.auto_approve_gated_tools = True
+    handler.full_access = False
+    handler.grants_paths = True
+    handler.answers_confirmations = True
+    agent = _agent(handler)
+
+    result, events = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert result["executed"] is False
+    assert _prompts(events) == []
+    assert "Full access in this chat doesn't cover" in result["error"]
+    assert "switch the chat to Ask" in result["error"]
+    assert "turn on full access" not in result["error"].lower()
+    assert _staged(repo) == {"tracked.txt"}
+
+
 def test_a_prompt_nobody_answers_refuses(repo):
     handler = SSEOutputHandler()
     handler.confirm_timeout_seconds = 0.3
