@@ -27,7 +27,12 @@ from gaia.agents.tools import search_scope
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.filesystem.index import FileSystemIndexService
-from gaia.filesystem.name_match import fold_glob_match, fold_name, fold_words_match
+from gaia.filesystem.name_match import (
+    fold_glob_match,
+    fold_name,
+    fold_words_match,
+    glob_matches_mid_word,
+)
 
 RESUME_NFC = unicodedata.normalize("NFC", "résumé 📄 draft.txt")
 RESUME_NFD = unicodedata.normalize("NFD", "Résumé final.txt")
@@ -211,6 +216,40 @@ class TestTheIndexFoldsToo:
         assert RESUME_NFC in out
         assert "unrelated.txt" not in out
 
+    @pytest.mark.parametrize("glob", ["*port*", "?eport.pdf", "re*ort*"])
+    def test_a_glob_that_matches_mid_word_is_not_cut_short(self, tmp_path, glob):
+        # The index finds word starts, so it would answer with port.txt alone.
+        folder = tmp_path / "reports"
+        folder.mkdir()
+        for name in ("report.pdf", "port.txt", "unrelated.md"):
+            (folder / name).write_text("x", encoding="utf-8")
+        service = FileSystemIndexService(db_path=str(tmp_path / "glob.db"))
+        try:
+            service.scan_directory(str(folder))
+            out = _find_files(folder, service)(glob, scope=str(folder))
+        finally:
+            service.close_db()
+        assert "report.pdf" in out
+        assert "unrelated.md" not in out
+        if glob == "*port*":
+            assert "port.txt" in out
+
+    @pytest.mark.parametrize(
+        "glob, mid_word",
+        [
+            ("*port*", True),
+            ("?esume.txt", True),
+            ("res*ume", True),
+            ("[rR]*esume", True),
+            ("résumé*", False),
+            ("*.pdf", False),
+            ("*_2026.txt", False),
+            ("report", False),
+        ],
+    )
+    def test_which_globs_the_index_cannot_answer(self, glob, mid_word):
+        assert glob_matches_mid_word(glob) is mid_word
+
 
 # ============================================================================
 # 4. search_file
@@ -365,8 +404,9 @@ class TestLinksAreNotWalked:
     def test_is_link_sees_the_link_and_not_a_folder(self, home_with_link):
         home, link = home_with_link
         entries = {e.name: e for e in os.scandir(home)}
-        # The trap: a junction reports as a plain directory without following.
-        assert entries["models"].is_dir(follow_symlinks=False)
+        if sys.platform == "win32":
+            # The trap: a junction reports as a plain directory without following.
+            assert entries["models"].is_dir(follow_symlinks=False)
         assert search_scope.is_link(entries["models"])
         assert search_scope.is_link(link)
         assert not search_scope.is_link(home)

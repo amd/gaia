@@ -72,3 +72,17 @@ def fts_name_terms(query: str) -> List[str]:
     ``résumé*.txt`` is a syntax error there; only the words are kept.
     """
     return _WORD.findall(fold_name(query))
+
+
+# A letter or digit right after a wildcard; "_" separates words in the index.
+_WILDCARD_THEN_WORD = re.compile(r"[*?\]][^\W_]")
+
+
+def glob_matches_mid_word(pattern: str) -> bool:
+    """True when a word of glob *pattern* can match inside a name's word.
+
+    ``*port*`` matches ``report.pdf``, but the index finds word starts only,
+    so such a glob must be answered by the walk. ``*.pdf`` and ``resume*`` are
+    safe: each of their words starts a word of the name.
+    """
+    return bool(_WILDCARD_THEN_WORD.search(fold_name(pattern)))

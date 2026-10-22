@@ -33,6 +33,7 @@ from gaia.filesystem.name_match import (
     fold_glob_match,
     fold_words_match,
     fts_name_terms,
+    glob_matches_mid_word,
 )
 from gaia.logger import get_logger
 
@@ -849,13 +850,20 @@ class FileSystemToolsMixin:
                         return fold_glob_match(name, query)
                     return fold_words_match(name, query)
 
-                # Try index first if available. A query with no words (``*.pdf``)
-                # cannot be asked of the full-text index, so it goes to the walk.
+                # Try index first if available. The index matches word starts,
+                # so a query with no words (``*.*``) or a glob that can match
+                # mid-word (``*port*`` finds ``report``) goes to the walk.
                 by_name = effective_type != "metadata"
                 if (
                     mixin._fs_index
                     and effective_type in ("name", "auto", "metadata")
-                    and (not by_name or fts_name_terms(query))
+                    and (
+                        not by_name
+                        or (
+                            fts_name_terms(query)
+                            and not (is_glob and glob_matches_mid_word(query))
+                        )
+                    )
                 ):
                     # The index spans every indexed directory, so the caller's
                     # scope has to be applied to its rows too.
