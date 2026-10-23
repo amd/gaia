@@ -964,7 +964,9 @@ The agent supports the **Model Context Protocol** in both directions — connect
   </Accordion>
 
   <Accordion title="LLM response times out or fails">
-    If you see "I wasn't able to generate a response" errors, check your MCP server configuration. Misconfigured or unreachable MCP servers cause the agent to wait up to 10 seconds per server before responding.
+    When a reply comes back empty, GAIA checks Lemonade Server before saying why. "The model returned an empty answer" means the server is fine: send the message again or pick another model. A message naming Lemonade means the server isn't responding (it says how to start it), it rejected GAIA's API key (check `LEMONADE_API_KEY`), or the model isn't loaded.
+
+    Slow or timed-out replies can also come from your MCP server configuration. Misconfigured or unreachable MCP servers cause the agent to wait up to 10 seconds per server before responding.
 
     Check your config:
 
