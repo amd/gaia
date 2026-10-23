@@ -53,6 +53,7 @@ from gaia.utils.perf_trace import (  # noqa: F401  (re-exported)
     note_wait,
     span,
 )
+from gaia.utils.tiktoken_bundle import use_bundled_cache
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ class _Tokenizer:
         try:
             import tiktoken
 
+            use_bundled_cache()
             self._enc = tiktoken.get_encoding("cl100k_base")
             self.name = "tiktoken:cl100k_base"
         except Exception as e:  # noqa: BLE001 - load failure is named, not hidden
