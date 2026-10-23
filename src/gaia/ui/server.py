@@ -781,6 +781,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # Prevent stack traces from leaking to external users (CodeQL
     # py/stack-trace-exposure).  Log the full traceback server-side
     # for debugging, but return only a generic error message.
+    from gaia.ui._chat_helpers import DocumentsFolderError
+
+    @app.exception_handler(DocumentsFolderError)
+    async def _documents_folder_error_handler(
+        request: Request, exc: DocumentsFolderError
+    ):
+        # Its message is the fix; "Internal server error" would hide it.
+        logger.error("%s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
     @app.exception_handler(Exception)
     async def _global_exception_handler(request: Request, exc: Exception):
         logger.error(
