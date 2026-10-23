@@ -256,10 +256,11 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
 # even when nothing has changed.  Caching the agent per session_id lets us skip
 # all of that on follow-up turns.
 #
-# Thread-safety: the global turn queue (turn_queue.py) serialises all chat
-# turns, and the per-session session_lock prevents concurrent turns within
-# the same session.  Together they guarantee the cache dict and each agent are
-# accessed by at most one thread at a time — no per-entry locking needed.
+# Thread-safety: ``_agent_cache_lock`` guards the dict, and the per-session
+# session_lock prevents concurrent turns within the same session, so each
+# agent is used by at most one thread at a time — no per-entry locking needed.
+# Turns in different chats can overlap (cloud turns skip turn_queue, and a
+# turn waiting on the user gives its place up).
 _agent_cache: dict[str, dict] = (
     {}
 )  # session_id -> {"agent": Agent, "model_id": str, "agent_type": str, "document_ids": list}
@@ -2588,6 +2589,33 @@ def _cloud_place(loc: InferenceLocation) -> Optional[str]:
     return f"via {loc.display}" if loc.remote else None
 
 
+def turn_takes_the_line(
+    db: ChatDatabase, session: dict, agent_type: Optional[str] = None
+) -> bool:
+    """Whether a turn in *session* waits in ``turn_queue`` for the local model.
+
+    A turn answered by a cloud model doesn't: the line protects the one local
+    chat model and its prompt cache, which a cloud turn never touches. What a
+    cloud turn does run locally (the embedder, a vision model) is leased from
+    the daemon's broker like every other caller, and the tool registry has
+    its own lock.
+    """
+    agent_type = agent_type or session.get("agent_type") or "chat"
+    try:
+        model_id, _ctx = resolve_session_model(
+            session, agent_type, db.get_setting("custom_model"), _agent_registry
+        )
+        return not (model_id and _turn_location(model_id).remote)
+    except Exception as exc:  # pylint: disable=broad-except
+        # The turn resolves its model again and reports this error itself.
+        logger.warning(
+            "Could not tell where session %s's turn runs, so it waits in line: %s",
+            session.get("id", "?")[:8],
+            exc,
+        )
+        return True
+
+
 async def _local_place(model_id: str, client, base_url: str, headers: dict) -> str:
     """Where a local turn ran: the device Lemonade reports for the model.
 
@@ -4604,10 +4632,9 @@ async def _run_chat_lifecycle(
         journal.observe(data)
         run.emit(data)
 
-    queued_at = _time.monotonic()
-
     def _announce_place(position: int) -> None:
-        waited = int(_time.monotonic() - queued_at)
+        # From when this wait began: a turn back from the user counts afresh.
+        waited = int(_time.monotonic() - run.slot.waiting_since)
         _emit(_sse(_queued_status_event(position, ordinal, waited)))
 
     async def _heartbeat() -> None:
@@ -4621,12 +4648,16 @@ async def _run_chat_lifecycle(
         _emit(_sse(_RESUMED_STATUS_EVENT))
 
     # The producer thread hands this back while the turn waits on the user.
-    run.slot = TurnSlot(
-        turn_queue,
-        session_id,
-        asyncio.get_running_loop(),
-        on_position=_announce_place,
-        on_resume=_announce_resume,
+    run.slot = (
+        TurnSlot(
+            turn_queue,
+            session_id,
+            asyncio.get_running_loop(),
+            on_position=_announce_place,
+            on_resume=_announce_resume,
+        )
+        if turn_takes_the_line(db, session, request.agent_type)
+        else None
     )
 
     async def _keep_alive_while_queued() -> None:
@@ -4637,24 +4668,26 @@ async def _run_chat_lifecycle(
             run.emit(_KEEPALIVE_FRAME)
 
     try:
-        keep_alive = asyncio.create_task(_keep_alive_while_queued())
-        heartbeat = asyncio.create_task(_heartbeat())
-        try:
-            await run.slot.acquire()
-        except TurnCancelled:
-            msg_id = db.add_message(
-                session_id, "assistant", "Cancelled.", ends_turn=True
-            )
-            _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
-            return
-        finally:
-            keep_alive.cancel()
-            heartbeat.cancel()
+        if run.slot is not None:
+            keep_alive = asyncio.create_task(_keep_alive_while_queued())
+            heartbeat = asyncio.create_task(_heartbeat())
+            try:
+                await run.slot.acquire()
+            except TurnCancelled:
+                msg_id = db.add_message(
+                    session_id, "assistant", "Cancelled.", ends_turn=True
+                )
+                _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
+                return
+            finally:
+                keep_alive.cancel()
+                heartbeat.cancel()
         try:
             async for data in _stream_chat_impl(run, db, session, request):
                 _emit(data)
         finally:
-            run.slot.close()
+            if run.slot is not None:
+                run.slot.close()
     except asyncio.CancelledError:
         # Shutdown: the marker stays, and the next start says the turn was cut off.
         shutting_down = True

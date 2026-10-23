@@ -661,7 +661,9 @@ battery it lets the PC sleep below the level you choose (20% by default).
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also
 on its row in the sidebar), then runs when the first finishes. **Stop** takes a
-waiting chat out of the line.
+waiting chat out of the line. A chat waiting on you (a permission prompt or a
+question) steps out of the line until you answer, then goes ahead of chats that
+arrived meanwhile. Chats on a cloud model don't wait for the line at all.
 
 **Colors** keeps the warm gray look by default. Pick one of eight palettes
 instead (Stone and ink, Blue marble, Glacier, Forest floor, Sage and mist,

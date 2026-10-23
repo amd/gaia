@@ -952,13 +952,17 @@ Deleting a chat deletes its copies.
     a **422**, and sending into a chat stored under another agent is a **409**
     ("start a new chat"). See [Flagship only](#flagship-only).
 
-    Turns run one at a time. A streamed turn sent while another chat is working
+    Turns on a local model run one at a time; a turn on a cloud model skips
+    the line. A streamed turn sent while another chat is working
     starts at once and waits in line inside its run, sending
     `{"type": "status", "phase": "queued", "queue_position": 1,
     "queue_waited_s": 0, "message": "Waiting for the GPU — 1st in line"}`
     whenever its place changes and again every 10 s while it waits, so the
-    stream is never silent. A non-streamed turn waits up to 60 s, then gets
-    **429**.
+    stream is never silent. A turn waiting on the user (a permission prompt
+    or question, in process or relayed from a sidecar) leaves the line until
+    answered, then rejoins at the front; `queue_waited_s` counts from that
+    rejoin, and `{"type": "status", "phase": "resumed"}` ends that wait. A non-streamed turn is saved first, then waits until it
+    reaches the model or is stopped.
 
     **Request:**
     ```json
