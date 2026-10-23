@@ -9,6 +9,7 @@
  * text nodes and puts the source spelling of each drive (`C:\...`) or UNC
  * (`\\server\...`) path back. Inline code and code blocks are separate node
  * types and are never touched; escapes outside a path keep working.
+ * Must run before `remarkSoftBreaks`, whose split text nodes carry no source position.
  */
 
 interface MdNode {
@@ -21,8 +22,10 @@ interface MdNode {
 /**
  * A drive or UNC path in markdown source, up to whitespace, a quote, backtick,
  * `]`, a char Windows forbids, or a `)` that closes no `(` inside the path.
+ * An escaped `\*` stays in, so a glob like `C:\logs\*.txt` keeps its backslash;
+ * a bare `*` ends the path so emphasis around it still parses.
  */
-const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:[^\s"`()\]<>|*]|\([^\s"`()\]<>|*]*\))*/g;
+const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
 
 const ESCAPE_RE = /\\([!-/:-@[-`{-~])/g;
 
@@ -44,7 +47,12 @@ function restorePaths(node: MdNode, source: string): void {
         for (const match of raw.matchAll(RAW_WIN_PATH_RE)) {
             const token = match[0];
             const shown = unescaped(token);
-            if (shown === token) continue;
+            if (shown === token) {
+                // Step past it, or a later path's display form could match here instead.
+                const same = value.indexOf(token, cursor);
+                if (same !== -1) cursor = same + token.length;
+                continue;
+            }
             const at = value.indexOf(shown, cursor);
             // Not found means the parser read it differently (an entity, a hard break): leave it.
             if (at === -1) continue;

@@ -50,6 +50,25 @@ describe('Windows paths in prose keep their backslashes', () => {
         expect(textOf('Logs (see C:\\me\\.gaia\\logs) are kept')).toBe('Logs (see C:\\me\\.gaia\\logs) are kept');
     });
 
+    it('restores each path in place when an unescaped one comes first', () => {
+        expect(textOf('C:\\me.gaia and C:\\me\\.gaia')).toBe('C:\\me.gaia and C:\\me\\.gaia');
+    });
+
+    it.each(['C:\\logs\\*.txt', 'C:\\logs\\?.txt', '\\\\nas\\share\\*.log'])('keeps the glob %s', (glob) => {
+        expect(textOf(`Matched ${glob} today.`)).toBe(`Matched ${glob} today.`);
+    });
+
+    it('keeps a glob inside bold', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content: '**C:\\logs\\*.txt** found' }} />);
+        expect(container.querySelector('strong')?.textContent).toBe('C:\\logs\\*.txt');
+    });
+
+    it('keeps paths on separate lines', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, content: 'C:\\a\\.x\nC:\\b\\_y' }} />);
+        expect(container.querySelector('.md-content br')).not.toBeNull();
+        expect(container.querySelector('.md-content')?.textContent).toBe('C:\\a\\.x\nC:\\b\\_y');
+    });
+
     it('still honours a deliberate escape outside a path', () => {
         const { container } = render(
             <MessageBubble message={{ ...baseMessage, content: '\\*literal asterisks\\* near C:\\me\\.gaia' }} />,
