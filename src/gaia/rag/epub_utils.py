@@ -12,6 +12,7 @@ import posixpath
 import re
 import warnings
 import zipfile
+import zlib
 from pathlib import Path
 from typing import List, Tuple
 from urllib.parse import unquote
@@ -80,9 +81,20 @@ def _chapter_text(markup: bytes) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+def _read(zf: zipfile.ZipFile, name: str, file_name: str) -> bytes:
+    """Read one member; a damaged or unsupported entry raises ValueError."""
+    try:
+        return zf.read(name)
+    except (zipfile.BadZipFile, NotImplementedError, zlib.error, EOFError) as e:
+        raise ValueError(
+            f"Could not read EPUB file: {file_name}\n"
+            f"Reason: entry '{name}' is unreadable ({e})\n{_CORRUPT_HINT}"
+        ) from e
+
+
 def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
     try:
-        container = _soup(zf.read("META-INF/container.xml"))
+        container = _soup(_read(zf, "META-INF/container.xml", file_name))
     except KeyError as e:
         raise ValueError(
             f"Could not read EPUB file: {file_name}\n"
@@ -96,7 +108,7 @@ def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
             f"Reason: the package (.opf) file is missing\n{_CORRUPT_HINT}"
         )
 
-    opf = _soup(zf.read(opf_path))
+    opf = _soup(_read(zf, opf_path, file_name))
     base = posixpath.dirname(opf_path)
     manifest = {
         item.get("id"): item
@@ -116,9 +128,9 @@ def _spine_paths(zf: zipfile.ZipFile, file_name: str) -> List[str]:
     return paths
 
 
-def _encrypted_paths(zf: zipfile.ZipFile) -> set:
+def _encrypted_paths(zf: zipfile.ZipFile, file_name: str) -> set:
     try:
-        encryption = _soup(zf.read("META-INF/encryption.xml"))
+        encryption = _soup(_read(zf, "META-INF/encryption.xml", file_name))
     except KeyError:
         return set()
     return {
@@ -164,7 +176,7 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
             )
 
         spine = _spine_paths(zf, file_name)
-        if _encrypted_paths(zf) & set(spine):
+        if _encrypted_paths(zf, file_name) & set(spine):
             raise ValueError(
                 f"Cannot read EPUB file: {file_name}\n"
                 "Its chapters are DRM-encrypted, so the text cannot be extracted.\n"
@@ -181,7 +193,7 @@ def extract_epub_text(epub_path: str) -> Tuple[str, int]:
                     f"Reason: chapter '{path}' is listed but missing\n"
                     f"{_CORRUPT_HINT}"
                 )
-            text = _chapter_text(zf.read(path))
+            text = _chapter_text(_read(zf, path, file_name))
             if text:
                 chapters.append(text)
 

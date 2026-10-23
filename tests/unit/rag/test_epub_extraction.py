@@ -8,6 +8,7 @@ EPUB fixtures are built with zipfile so the tests stay hermetic.
 from __future__ import annotations
 
 import zipfile
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -119,6 +120,29 @@ def test_epub_is_dispatched_and_reports_chapters(rag, tmp_path):
 def test_drm_encrypted_epub_is_refused(tmp_path):
     path = _make_epub(tmp_path / "drm.epub", encrypted=True)
     with pytest.raises(ValueError, match="DRM-encrypted"):
+        extract_epub_text(str(path))
+
+
+def test_chapter_failing_its_crc_is_a_corrupt_file_error(tmp_path):
+    path = _make_epub(tmp_path / "damaged.epub")
+    raw = path.read_bytes()
+    assert raw.count(b"Second paragraph") == 1
+    path.write_bytes(raw.replace(b"Second paragraph", b"Xecond paragraph"))
+    with pytest.raises(ValueError, match=r"damaged\.epub[\s\S]*ch1\.xhtml") as err:
+        extract_epub_text(str(path))
+    assert isinstance(err.value.__cause__, zipfile.BadZipFile)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [NotImplementedError("compression type 99"), zlib.error("invalid stored block")],
+)
+def test_unreadable_zip_entry_is_a_corrupt_file_error(tmp_path, failure):
+    path = _make_epub(tmp_path / "odd.epub")
+    with (
+        patch.object(zipfile.ZipFile, "read", side_effect=failure),
+        pytest.raises(ValueError, match=r"odd\.epub[\s\S]*not a valid \.epub"),
+    ):
         extract_epub_text(str(path))
 
 

@@ -773,6 +773,19 @@ def test_search_file_count_matches_returned_files(
     assert result["count"] == 10
 
 
+@pytest.mark.parametrize("extension", [".epub", ".pptx"])
+def test_search_file_finds_indexable_documents_by_default(
+    search_file_fn, tmp_path, monkeypatch, extension
+):
+    (tmp_path / f"handbook{extension}").write_bytes(b"PK\x03\x04")
+    monkeypatch.chdir(tmp_path)
+
+    result = search_file_fn("handbook", deep_search=False)
+
+    assert result["status"] == "success"
+    assert [Path(f).name for f in result["files"]] == [f"handbook{extension}"]
+
+
 # ===========================================================================
 # 9. read_file: binary document guard
 # ===========================================================================
