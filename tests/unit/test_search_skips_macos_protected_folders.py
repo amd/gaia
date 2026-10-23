@@ -22,7 +22,14 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 
-_GUARDED = ("Desktop", "Documents", "Downloads", "Library/Mobile Documents")
+_GUARDED = (
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Library/Mobile Documents",
+    "Music",
+    "Pictures/Photos Library.photoslibrary",
+)
 
 
 class _Sandbox:
@@ -151,8 +158,10 @@ class TestFindFilesOnMacOS:
 
         assert out.splitlines()[-1] == (
             "Skipped ~/Desktop, ~/Documents, ~/Downloads, "
-            "~/Library/Mobile Documents: macOS asks for permission before GAIA "
-            "can read them; ask the user to name the folder to search it."
+            "~/Library/Mobile Documents, ~/Music, "
+            "~/Pictures/Photos Library.photoslibrary: macOS asks for permission "
+            "before GAIA can read them; ask the user to name the folder to "
+            "search it."
         ), out
 
     def test_a_miss_still_carries_the_note(self, home, on_macos):
