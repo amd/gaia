@@ -157,11 +157,20 @@ func (m Model) Init() tea.Cmd {
 		msg := loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
 		if e == nil {
 			if info, err := c.ServerInfo(m.ctx); err == nil {
-				msg.server = info.StatusLine()
+				msg.server = localServerLine(info)
 			}
 		}
 		return msg
 	}
+}
+
+// localServerLine describes Lemonade under the Local row. A cloud model it
+// is serving belongs to that provider's row, not here.
+func localServerLine(info lemonade.ServerInfo) string {
+	if info.Chat != nil && info.Chat.Backend == "remote" {
+		info.Chat = nil
+	}
+	return info.StatusLine()
 }
 
 // WithSetupStep tells the panel Lemonade is still first-run step n, so its
