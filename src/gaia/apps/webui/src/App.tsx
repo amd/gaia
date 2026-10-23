@@ -361,6 +361,7 @@ function App() {
                 title: 'New Task',
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
+                private: store.draftPrivate,
             });
         } catch (err) {
             if (!isFlagshipMissingError(err)) throw err;
@@ -379,6 +380,7 @@ function App() {
             store = useChatStore.getState();
         }
         store.clearDraftDocuments();
+        store.setDraftPrivate(false);
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
