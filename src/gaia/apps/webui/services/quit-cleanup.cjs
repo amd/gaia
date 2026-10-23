@@ -14,8 +14,12 @@
 
 "use strict";
 
-/** Longest the quit waits for cleanup before going ahead without it (ms). */
-const CLEANUP_TIMEOUT_MS = 20000;
+/**
+ * Longest the quit waits for cleanup before going ahead without it (ms).
+ * Covers the slowest agent stop: two 20 s Windows process-table reads, the
+ * agent's shutdown wait and the kill grace.
+ */
+const CLEANUP_TIMEOUT_MS = 50000;
 
 /**
  * @param {object} deps

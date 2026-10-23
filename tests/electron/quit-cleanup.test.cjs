@@ -128,10 +128,23 @@ describe("installQuitCleanup", () => {
     expect(String(logger.error.mock.calls[0][1])).toMatch(/tray already destroyed/);
   });
 
-  test("the default timeout leaves room for the agents' and backend's own bounded stops", () => {
-    // 5 s agent shutdown + 2 s tree grace + 1 s SIGKILL wait run before the backend's 3 s + 1 s.
-    expect(CLEANUP_TIMEOUT_MS).toBeGreaterThanOrEqual(12000);
-  });
+  test.each(["win32", "linux", "darwin"])(
+    "the default timeout outlasts the slowest agent and backend stop on %s",
+    (platform) => {
+      // Agents and the backend stop side by side, so the slower one sets the bar.
+      // Past the deadline the app quits with the agent's children still running.
+      const AgentProcessManager = require("../../src/gaia/apps/webui/services/agent-process-manager.cjs");
+      const { worstCaseKillMs } = require("../../src/gaia/apps/webui/services/process-tree.cjs");
+      const portManager = require("../../src/gaia/apps/webui/services/port-manager.cjs");
+      const backend = worstCaseKillMs({
+        platform,
+        graceMs: portManager.BACKEND_KILL_GRACE_MS,
+        forceWaitMs: portManager.BACKEND_FORCE_WAIT_MS,
+      });
+      expect(AgentProcessManager.worstCaseStopMs(platform)).toBeLessThan(CLEANUP_TIMEOUT_MS);
+      expect(backend).toBeLessThan(CLEANUP_TIMEOUT_MS);
+    }
+  );
 });
 
 describe("a fatal error quits through cleanup", () => {
