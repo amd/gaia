@@ -202,6 +202,13 @@ read, so the agent works in the same scope. Binaries older than 2.18 reject both
 fields with `422`, so probe `/version` first. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
+2.19) along with `session_id`: the agent copies each file before it writes it,
+into the snapshot store under its GAIA home, keyed by the session and that turn
+id. The copies are complete before the stream's terminal event, so you can read
+and restore them as soon as the stream ends. Omit it and nothing is copied. See
+[`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.
