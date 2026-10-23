@@ -121,6 +121,15 @@ icon: "bug"
     back to GAIA's own server with `gaia config set lemonade_mode gaia`.
   </Accordion>
 
+  <Accordion title="The model list says macOS is asking for keychain access" icon="key">
+    A saved Fireworks AI or AMD LLM Gateway key from an earlier install is in your
+    login keychain, and the reinstalled GAIA is not yet on its access list, so macOS
+    asks before letting GAIA read it. Look for the system dialog (it can open behind
+    other windows) and click **Always Allow**. The model list updates once you
+    answer. If you click **Deny**, GAIA can't use the saved key; paste it again under
+    **Settings → Model**.
+  </Accordion>
+
   <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
     Switching back from your Lemonade needs GAIA's own server, and on this PC it was
     never installed (or only partly). The switch is refused and GAIA keeps using
