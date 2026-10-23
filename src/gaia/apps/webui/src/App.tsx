@@ -15,6 +15,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { startActiveRunsPoll } from './services/activeRuns';
@@ -264,6 +265,13 @@ function App() {
     }, [setSessions]);
 
     useEffect(() => startActiveRunsPoll(), []);
+    // Schedules run unattended: a failed run raises a notification even with the panel closed.
+    useEffect(() => {
+        const load = () => { void useScheduleStore.getState().loadSchedules(); };
+        load();
+        const t = setInterval(load, 30_000);
+        return () => clearInterval(t);
+    }, []);
     // Queued messages go out when their chat's turn ends, even with another chat open.
     useEffect(() => startQueueDispatcher(), []);
 
@@ -435,13 +443,19 @@ function App() {
     const finishSetup = useCallback((first?: StartCard) => {
         setSetup({ state: 'ready' });
         void checkSystemStatus();
+        // Setup installs the agent; the list read at startup predates it.
+        loadAgents().catch((err) => {
+            // Unknown beats a stale "not installed"; a refused new chat still raises it.
+            setAgentsKnown(false);
+            log.api.warn('Agent list unavailable after setup', err);
+        });
         if (!first) return;
         if (first.needs_input) {
             setDraftText(first.prompt);
             return;
         }
         startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
-    }, [checkSystemStatus, startChat]);
+    }, [checkSystemStatus, loadAgents, startChat]);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
     useEffect(() => {

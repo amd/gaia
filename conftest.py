@@ -14,8 +14,8 @@ directories at the front of ``sys.path``, so the checkout you are sitting in is
 the one that gets tested. It also fails the session loudly if a core module
 still resolves elsewhere, rather than letting a green run mean nothing.
 
-It also points GAIA's config file, daemon home and memory database at a
-per-session tmp dir, so no result depends on the developer's real ~/.gaia.
+It also points GAIA's config file, daemon home, memory database and log file
+at a per-session tmp dir, so no result depends on the developer's real ~/.gaia.
 
 Set ``GAIA_ALLOW_EXTERNAL_IMPORTS=1`` to opt out — testing an actually-installed
 wheel is a legitimate thing to do, it just must not happen by accident.
@@ -121,6 +121,8 @@ _STATE_ENV = {
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
     # Cloud calls record model availability here.
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
+    # Opened when gaia is first imported, so it must be set before that.
+    "GAIA_LOG_FILE": ("logs", "gaia.log"),
 }
 _STATE_ROOT = Path(tempfile.mkdtemp(prefix="gaia-test-state-"))
 atexit.register(shutil.rmtree, _STATE_ROOT, ignore_errors=True)

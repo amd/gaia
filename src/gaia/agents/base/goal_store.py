@@ -229,7 +229,9 @@ class GoalStore:
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
         if db_path is None:
-            db_path = Path.home() / ".gaia" / "goals.db"
+            from gaia.config import gaia_home
+
+            db_path = gaia_home() / "goals.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
         self._lock = threading.Lock()

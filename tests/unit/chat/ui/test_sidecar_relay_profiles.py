@@ -217,9 +217,13 @@ class _FakeSSEHandler:
         self.events = []
         self.cancelled = threading.Event()
         self.turn_ledger = TurnLedger()
+        self.relay_question = None
 
     def _emit(self, event):
         self.events.append(event)
+
+    def set_relay_question(self, request_id):
+        self.relay_question = request_id
 
     def record_tool_started(self, tool_name):
         pass

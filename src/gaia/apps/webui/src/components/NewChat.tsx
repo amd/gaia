@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Folder } from 'lucide-react';
+import { ChevronRight, FileText, Folder, X } from 'lucide-react';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
@@ -61,6 +61,72 @@ function SuggestionsUnavailable({ detail, onRetry }: { detail: string; onRetry: 
     );
 }
 
+/** The start card that asks about the library's documents. */
+const DOCUMENT_CARD = 'document-brief';
+
+/** Hold every indexed library document for the chat about to be created. */
+function attachWholeLibrary() {
+    const { documents, draftDocumentIds, addDraftDocuments } = useChatStore.getState();
+    addDraftDocuments(documents
+        .filter((d) => d.indexing_status === 'complete' && !draftDocumentIds.includes(d.id))
+        .map((d) => d.id));
+}
+
+/**
+ * A chat searches only the documents attached to it: show what this one will
+ * get, and offer the rest of the library.
+ */
+function LibraryDocuments() {
+    const documents = useChatStore((s) => s.documents);
+    const draftIds = useChatStore((s) => s.draftDocumentIds);
+    const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
+    const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
+    const attached = documents.filter((d) => draftIds.includes(d.id));
+    const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
+    if (!attached.length && !offered.length) return null;
+    const n = offered.length;
+    return (
+        <div className="new-chat-docs">
+            {attached.length > 0 && (
+                <ul className="new-chat-doc-list" aria-label="Documents for this chat">
+                    {attached.map((d) => (
+                        <li key={d.id} className="new-chat-doc">
+                            <FileText size={12} aria-hidden="true" />
+                            <span>{d.filename}</span>
+                            <button
+                                type="button"
+                                className="new-chat-doc-remove"
+                                onClick={() => removeDraftDocument(d.id)}
+                                aria-label={`Don't attach ${d.filename}`}
+                            >
+                                <X size={12} aria-hidden="true" />
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            {n > 0 && (
+                <p className="new-chat-note">
+                    {attached.length
+                        ? `${n} more document${n !== 1 ? 's' : ''} in your library. `
+                        : `Your library has ${n} document${n !== 1 ? 's' : ''}; this chat can search only the ones you attach. `}
+                    <button type="button" className="link-btn" onClick={attachWholeLibrary}>
+                        Attach {n === 1 ? 'it' : `all ${n}`}
+                    </button>
+                    {n > 1 && (
+                        <>
+                            {' · '}
+                            <button type="button" className="link-btn" onClick={() => setShowDocLibrary(true)}>
+                                Choose
+                            </button>
+                        </>
+                    )}
+                </p>
+            )}
+        </div>
+    );
+}
+
 /** First-run setup failed: say so before the first message fails with the same error. */
 function SetupFailed({ error }: { error: string }) {
     const openSettings = useChatStore((s) => s.openSettings);
@@ -114,6 +180,12 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         return () => { live.current = false; };
     }, [loadStart]);
 
+    useEffect(() => {
+        api.listDocuments()
+            .then((data) => useChatStore.getState().setDocuments(data.documents || []))
+            .catch((err) => log.api.warn('Document library unavailable; not offering its documents', err));
+    }, []);
+
     // The assistant may still be starting: keep asking while the reason is on screen.
     useEffect(() => {
         if (!startError) return;
@@ -142,6 +214,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     }, [focusRequest]);
 
     const pick = useCallback((card: StartCard) => {
+        // The card counts the library's documents; without them attached the chat has none.
+        if (card.skill === DOCUMENT_CARD) attachWholeLibrary();
         if (!card.needs_input) {
             void send(attachments.compose(card.prompt));
             return;
@@ -181,6 +255,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                         </span>
                     </div>
                 )}
+                <LibraryDocuments />
                 {warming !== null && !starting && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming)}</p>
                 )}

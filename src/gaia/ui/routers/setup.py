@@ -65,16 +65,18 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
 
 
 class SetupRunRequest(BaseModel):
-    """``skip_chat_model`` when the chat runs on a cloud provider."""
+    """``skip_chat_model`` when the chat runs on a cloud provider;
+    ``gaia_lemonade`` to set up GAIA's own server instead of the user's."""
 
     skip_chat_model: bool = False
+    gaia_lemonade: bool = False
 
 
 @router.post("/api/setup/run")
 def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     """Start ``gaia init --profile gaia --yes``; follow it with ``/api/setup/status``."""
     try:
-        return runner.start(body.skip_chat_model)
+        return runner.start(body.skip_chat_model, body.gaia_lemonade)
     except SetupError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 
