@@ -97,6 +97,8 @@ func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
 	// `bin/gaia` NOT followed by another name-forming character: bin/gaia-tui,
 	// bin/gaia-agent and bin/gaia-linux-amd64 are all fine.
 	bare := regexp.MustCompile(`bin/gaia(?:[^-\w]|$)`)
+	// The desktop app's shim wraps the Python CLI, however the doc punctuates it.
+	pythonShim := regexp.MustCompile(`\.local/bin/gaia(?:[^-\w]|$)`)
 
 	for _, path := range docs {
 		raw, err := os.ReadFile(path)
@@ -105,7 +107,7 @@ func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
 		}
 		for i, line := range strings.Split(string(raw), "\n") {
 			// The Python CLI genuinely does live at <venv>/bin/gaia.
-			if strings.Contains(line, "venv/bin/gaia") || strings.Contains(line, ".local/bin/gaia ") {
+			if strings.Contains(line, "venv/bin/gaia") || pythonShim.MatchString(line) {
 				continue
 			}
 			if bare.MatchString(line) {
