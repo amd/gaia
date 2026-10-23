@@ -295,6 +295,27 @@ def test_name_file_for_user_replaces_every_spelling(tmp_path: Path, text: str) -
     assert shown.endswith(": notes.md")
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("error ({name})", "error (notes.md)"),
+        ("error ({path})", "error (notes.md)"),
+        ("error (C:\\PROGRA~1\\Temp\\{name})", "error (notes.md)"),
+        ("cannot open '{name}'", "cannot open 'notes.md'"),
+        ('cannot open "{name}"', 'cannot open "notes.md"'),
+        ("PDF:{name}", "PDF:notes.md"),
+        ("{name} is corrupt", "notes.md is corrupt"),
+    ],
+)
+def test_name_file_for_user_keeps_neighbouring_text(
+    tmp_path: Path, text: str, expected: str
+) -> None:
+    copy = tmp_path / "gaia_upload_abc.md"
+    text = text.format(name=copy.name, path=str(copy))
+
+    assert name_file_for_user(text, str(copy), "notes.md") == expected
+
+
 # ---------------------------------------------------------------------------
 # Empty / no-text PDFs
 # ---------------------------------------------------------------------------

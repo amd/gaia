@@ -161,7 +161,9 @@ def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
     for spelling in sorted(spellings, key=len, reverse=True):
         text = text.replace(spelling, display_name)
     # Any other spelling of the copy's folder (8.3 names, a symlinked temp dir).
-    return re.sub(r"[^\s'\"]*" + re.escape(path.name), lambda _m: display_name, text)
+    return re.sub(
+        r"(?:[^\s'\"()]*[\\/])?" + re.escape(path.name), lambda _m: display_name, text
+    )
 
 
 # The running index_document's ``heartbeat`` on this thread, called once per
