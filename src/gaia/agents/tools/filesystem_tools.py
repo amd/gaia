@@ -1459,6 +1459,10 @@ class FileSystemToolsMixin:
                 # Treat as a specific path
                 return [scope]
 
+        def _listed(results, path):
+            # Search roots overlap (cwd sits under home), so a file can be met twice.
+            return any(r["path"] == path for r in results)
+
         def _search_names(
             root,
             _query,
@@ -1532,15 +1536,17 @@ class FileSystemToolsMixin:
                                     if mod_str > max_date:
                                         continue
 
-                                results.append(
-                                    {
-                                        "path": str(Path(entry.path).resolve()),
-                                        "name": name,
-                                        "size": st.st_size if not is_dir else 0,
-                                        "modified": st.st_mtime,
-                                        "is_dir": is_dir,
-                                    }
-                                )
+                                found = str(Path(entry.path).resolve())
+                                if not _listed(results, found):
+                                    results.append(
+                                        {
+                                            "path": found,
+                                            "name": name,
+                                            "size": st.st_size if not is_dir else 0,
+                                            "modified": st.st_mtime,
+                                            "is_dir": is_dir,
+                                        }
+                                    )
 
                             if (
                                 is_dir
@@ -1646,6 +1652,8 @@ class FileSystemToolsMixin:
                                 if st.st_size > 10 * 1024 * 1024:  # 10MB
                                     continue
 
+                                if _listed(results, str(Path(entry.path).resolve())):
+                                    continue
                                 if not readable_entry(mixin, entry.path):
                                     if skipped is not None:
                                         skipped[0] += 1

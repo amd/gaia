@@ -293,7 +293,7 @@ The CLI lets you escalate cleanup as far as you want — useful for reclaiming d
 ```bash
 gaia uninstall --purge --dry-run            # Preview the purge tier without deleting
 gaia uninstall --venv                       # Just the Python env
-gaia uninstall --purge                      # Venv + chats, documents, memory, sessions, config, agents, saved keys + installer leftovers
+gaia uninstall --purge                      # Venv + chats, documents, memory, sessions, undo snapshots, config, agents, saved keys + installer leftovers
 gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
 gaia uninstall --purge --purge-models       # Also remove downloaded Lemonade models
 gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
