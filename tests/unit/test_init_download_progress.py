@@ -157,6 +157,66 @@ def test_json_progress_reports_bytes_and_speed_instead_of_a_bar():
     ]
 
 
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _json_progress(monkeypatch):
+    from gaia.installer import init_command
+
+    clock, seen = _Clock(), []
+    monkeypatch.setattr(init_command.time, "monotonic", clock)
+    progress = _DownloadProgress(
+        MagicMock(), "m", emit=lambda kind, **f: seen.append({"event": kind, **f})
+    )
+    return clock, seen, progress
+
+
+def _sample(progress, done, total=20_000_000_000):
+    progress({"event": "progress", "bytes_downloaded": done, "bytes_total": total})
+
+
+def test_a_resumed_download_measures_speed_from_its_first_sample(monkeypatch):
+    """10 GB already on disk is not 10 GB downloaded in the first second."""
+    clock, seen, progress = _json_progress(monkeypatch)
+    clock.now = 1.0
+    _sample(progress, 10_000_000_000)
+    clock.now = 2.0
+    _sample(progress, 10_050_000_000)
+    assert seen[0]["speed_bps"] == 0.0
+    assert seen[1]["speed_bps"] == pytest.approx(50_000_000, rel=0.01)
+
+
+def test_a_stalled_download_reports_no_speed(monkeypatch):
+    clock, seen, progress = _json_progress(monkeypatch)
+    clock.now = 1.0
+    _sample(progress, 1_000_000_000)
+    clock.now = 2.0
+    _sample(progress, 1_050_000_000)
+    clock.now = 30.0
+    _sample(progress, 1_050_000_000)
+    assert seen[-1]["speed_bps"] == 0.0
+
+
+def test_a_pull_with_no_total_still_reports_its_bytes(monkeypatch):
+    clock, seen, progress = _json_progress(monkeypatch)
+    clock.now = 1.0
+    progress({"event": "progress", "bytes_downloaded": 500_000_000, "bytes_total": 0})
+    assert seen == [
+        {
+            "event": "download",
+            "model": "m",
+            "bytes_done": 500_000_000,
+            "bytes_total": None,
+            "speed_bps": 0.0,
+        }
+    ]
+
+
 def test_json_progress_names_the_chat_model_and_why_others_were_passed_over(capsys):
     from gaia.installer.init_command import ChatModelChoice, InitCommand
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME

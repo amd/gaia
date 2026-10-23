@@ -1003,9 +1003,11 @@ export interface SetupDownload {
     index: number | null;
     count: number | null;
     bytes_done: number;
-    bytes_total: number;
+    /** Null when the server reports no total; the screen then shows bytes only. */
+    bytes_total: number | null;
+    /** 0 until measured, and again once the pull goes quiet. */
     speed_bps: number;
-    /** Seconds left at the current speed; null until a speed is measured. */
+    /** Seconds left at the current speed; null without a speed or a total. */
     eta_s: number | null;
 }
 

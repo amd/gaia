@@ -483,6 +483,40 @@ def test_json_progress_names_the_model_bytes_speed_and_time_left(monkeypatch):
     _wait_done(runner)
 
 
+def _download(done, total, speed):
+    return {
+        "event": "download",
+        "model": "m",
+        "bytes_done": done,
+        "bytes_total": total,
+        "speed_bps": speed,
+    }
+
+
+def test_a_download_with_no_total_shows_bytes_without_a_percentage():
+    run = sr.SetupRun(skip_chat_model=False)
+    run.apply(_download(500_000_000, None, 50_000_000.0))
+    view = run.view()
+    assert view["download"]["bytes_done"] == 500_000_000
+    assert view["download"]["bytes_total"] is None
+    assert view["download"]["eta_s"] is None
+    assert view["percent"] is None
+
+
+def test_a_download_that_goes_quiet_stops_claiming_a_speed(monkeypatch):
+    """Lemonade sends nothing while it stalls or hashes a file; stale numbers lie."""
+    clock = [100.0]
+    monkeypatch.setattr(sr.time, "monotonic", lambda: clock[0])
+    run = sr.SetupRun(skip_chat_model=False)
+    run.apply(_download(1_000_000_000, 4_000_000_000, 50_000_000.0))
+    assert run.view()["download"]["eta_s"] == 60
+    clock[0] += sr.STALE_DOWNLOAD_S + 1
+    view = run.view()
+    assert view["download"]["speed_bps"] == 0.0
+    assert view["download"]["eta_s"] is None
+    assert view["download"]["bytes_done"] == 1_000_000_000
+
+
 def test_unknown_or_broken_json_lines_are_kept_as_output(monkeypatch):
     out = b'{"event": "something_new"}\n{not json\n'
     _popen(monkeypatch, _FakeProc(io.BytesIO(out)))

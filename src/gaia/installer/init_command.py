@@ -777,6 +777,8 @@ class _DownloadProgress:
     """Draws a model pull's streamed events as a live progress bar."""
 
     REDRAW_S = 0.2
+    #: No new bytes for this long reads as stalled: no speed, no time left.
+    STALL_S = 10.0
 
     def __init__(self, console, model_id: str, emit=None):
         self.console = console
@@ -785,10 +787,22 @@ class _DownloadProgress:
         self.emit = emit
         self.events = 0
         self.reported_error = False
-        self._last_bytes = 0
-        self._last_time = time.monotonic()
+        # Set by the first sample: a resumed pull starts with bytes on disk.
+        self._last_bytes: Optional[int] = None
+        self._last_time = 0.0
         self._drawn_at = None
         self._speed_mbps = 0.0
+
+    def _measure(self, done: int, now: float) -> None:
+        if self._last_bytes is None or done < self._last_bytes:
+            self._last_bytes, self._last_time = done, now
+        elif done > self._last_bytes and now - self._last_time > 0.5:
+            self._speed_mbps = (
+                (done - self._last_bytes) / (now - self._last_time) / 1024**2
+            )
+            self._last_bytes, self._last_time = done, now
+        elif done == self._last_bytes and now - self._last_time > self.STALL_S:
+            self._speed_mbps = 0.0
 
     def __call__(self, event: dict) -> None:
         self.events += 1
@@ -798,22 +812,19 @@ class _DownloadProgress:
             total = event.get("bytes_total", 0)
             now = time.monotonic()
             # Lemonade streams thousands of events, many for 0-byte metadata.
-            if not total or (
+            # A pull with no total still reports its bytes; only the bar needs one.
+            if not (total or (done and self.emit is not None)) or (
                 self._drawn_at is not None and now - self._drawn_at < self.REDRAW_S
             ):
                 return
-            if now - self._last_time > 0.5 and done > self._last_bytes:
-                self._speed_mbps = (
-                    (done - self._last_bytes) / (now - self._last_time) / 1024**2
-                )
-                self._last_bytes, self._last_time = done, now
+            self._measure(done, now)
             self._drawn_at = now
             if self.emit is not None:
                 self.emit(
                     "download",
                     model=self.model_id,
                     bytes_done=done,
-                    bytes_total=total,
+                    bytes_total=total or None,
                     speed_bps=round(self._speed_mbps * 1024**2, 1),
                 )
                 return

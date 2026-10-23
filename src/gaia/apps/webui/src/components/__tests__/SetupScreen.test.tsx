@@ -167,6 +167,25 @@ describe('SetupScreen', () => {
         expect(screen.getByRole('progressbar')).toHaveAttribute('value', '25');
     });
 
+    it('shows the bytes, without a total, for a pull that reports none', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(PLAN);
+        mockedApi.startSetup.mockResolvedValue({
+            state: 'running',
+            steps: steps('done', 'active'),
+            text: 'Downloading Gemma-4-E4B-it-GGUF',
+            percent: null,
+            download: {
+                model: 'Gemma-4-E4B-it-GGUF', index: null, count: null,
+                bytes_done: 5e8, bytes_total: null, speed_bps: 0, eta_s: null,
+            },
+        });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockReturnValue(new Promise(() => {}));
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: /finish setup/ }));
+        expect(await screen.findByText('Downloading Gemma-4-E4B-it-GGUF: 0.5 GB')).toBeInTheDocument();
+        expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    });
+
     it("won't start a download that doesn't fit the disk, and says why", async () => {
         const problem = 'The models need 29.2 GB and the disk that holds them has 10.0 GB free.';
         mockedApi.getSetupPlan.mockResolvedValue({ ...PLAN, disk_free_gb: 10, disk_problem: problem });

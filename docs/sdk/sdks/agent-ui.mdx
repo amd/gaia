@@ -2287,6 +2287,8 @@ so the two can never disagree about whether GAIA is set up.
     `passed_over` once setup has said which chat model it chose. `download_gb`
     is the total setup downloads; `download` is the pull in progress (`model`,
     its `index` of `count`, `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`).
+    `bytes_total` is null when the server reports no total (no `percent` then);
+    after 15 s with no progress, `speed_bps` is 0 and `eta_s` null.
     A `server_only` run ends `ready` without loading a model, with only the
     first step done. When the user chose their own Lemonade Server,
     the first step is "Use your Lemonade Server" rather than an install.

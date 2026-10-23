@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +42,8 @@ VERIFY_TIMEOUT_S = CHECK_TIMEOUT_S + 150
 _NOT_READY_EXIT = 1
 _LOAD_FAILED_EXIT = 3
 _UNWRAPPED_COLUMNS = 1000
+#: A pull that reports nothing for this long shows no speed or time left.
+STALE_DOWNLOAD_S = 15.0
 
 PHASE_SERVER = "server"
 PHASE_MODELS = "models"
@@ -331,6 +334,7 @@ class SetupRun:
     download_gb: Optional[float] = None
     #: The pull in progress: model, its place in the queue, bytes, speed, time left.
     download: Optional[Dict[str, Any]] = None
+    _download_at: float = 0.0
 
     def command(self) -> str:
         return run_command(self.skip_chat_model, self.server_only, self.pinned_model)
@@ -361,7 +365,7 @@ class SetupRun:
     def _apply_download(self, event: Dict[str, Any]) -> None:
         model = event.get("model")
         done = int(event.get("bytes_done") or 0)
-        total = int(event.get("bytes_total") or 0)
+        total = int(event.get("bytes_total") or 0) or None
         speed = float(event.get("speed_bps") or 0.0)
         queue = [m.get("id") for m in self.downloads if m.get("size_gb") != 0]
         self.download = {
@@ -373,9 +377,18 @@ class SetupRun:
             "speed_bps": speed,
             "eta_s": round((total - done) / speed) if speed > 0 and total else None,
         }
+        self._download_at = time.monotonic()
         self.phase = PHASE_MODELS
         self.text = f"Downloading {model}"
         self.percent = min(100, done * 100 // total) if total else None
+
+    def _download_view(self) -> Optional[Dict[str, Any]]:
+        """The pull in progress, without a speed once it has gone quiet."""
+        if self.download is None:
+            return None
+        if time.monotonic() - self._download_at <= STALE_DOWNLOAD_S:
+            return self.download
+        return {**self.download, "speed_bps": 0.0, "eta_s": None}
 
     def view(self) -> Dict[str, Any]:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
@@ -398,7 +411,7 @@ class SetupRun:
             "chat_model": None if self.skip_chat_model else self.chat_model,
             "passed_over": self.passed_over,
             "download_gb": self.download_gb,
-            "download": self.download,
+            "download": self._download_view(),
         }
 
 

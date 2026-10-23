@@ -215,7 +215,7 @@ function timeLeft(seconds: number): string {
 /** "Downloading Qwen3.6 (2 of 3): 4.1 GB of 23.3 GB · 48 MB/s · about 7 min left" */
 function downloadText(d: SetupDownload): string {
     const place = d.index != null && d.count != null && d.count > 1 ? ` (${d.index} of ${d.count})` : '';
-    const parts = [`${bytesGb(d.bytes_done)} of ${bytesGb(d.bytes_total)}`];
+    const parts = [d.bytes_total != null ? `${bytesGb(d.bytes_done)} of ${bytesGb(d.bytes_total)}` : bytesGb(d.bytes_done)];
     if (d.speed_bps > 0) parts.push(`${Math.round(d.speed_bps / 1e6)} MB/s`);
     if (d.eta_s != null) parts.push(`about ${timeLeft(d.eta_s)} left`);
     return `Downloading ${shortModelName(d.model)}${place}: ${parts.join(' · ')}`;
