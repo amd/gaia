@@ -125,8 +125,10 @@ def _python_target(program: str, cwd: str) -> Optional[str]:
     root = _environment_root(executable)
     if (root / "pyvenv.cfg").is_file():
         return None
-    if os.path.normcase(str(root)) == os.path.normcase(os.path.abspath(sys.prefix)):
-        return None  # GAIA's own environment
+    if sys.prefix != sys.base_prefix and os.path.normcase(
+        str(root)
+    ) == os.path.normcase(os.path.abspath(sys.prefix)):
+        return None  # GAIA's own virtual environment
     return f"the Python installation at {root}, outside any virtual environment"
 
 

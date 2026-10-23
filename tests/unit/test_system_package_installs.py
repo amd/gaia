@@ -127,6 +127,24 @@ class TestWhatCountsAsASystemInstall:
         assert target is not None
         assert str(tmp_path / "Python312") in target
 
+    def test_gaias_own_venv_is_exempt(self, tmp_path, monkeypatch):
+        root = tmp_path / "gaia-env"
+        exe = _interpreter(root, venv=False)
+        monkeypatch.setattr(package_installs.sys, "prefix", str(root))
+        monkeypatch.setattr(package_installs.sys, "base_prefix", str(tmp_path / "py"))
+        argv = [str(exe), "-m", "pip", "install", "x"]
+        assert system_install_target(argv, str(tmp_path)) is None
+
+    def test_gaia_installed_into_the_system_python_is_not_exempt(
+        self, tmp_path, monkeypatch
+    ):
+        root = tmp_path / "Python312"
+        exe = _interpreter(root, venv=False)
+        monkeypatch.setattr(package_installs.sys, "prefix", str(root))
+        monkeypatch.setattr(package_installs.sys, "base_prefix", str(root))
+        argv = [str(exe), "-m", "pip", "install", "x"]
+        assert system_install_target(argv, str(tmp_path)) is not None
+
 
 class _Host(ShellToolsMixin):
     debug = False
