@@ -28,7 +28,7 @@ icon: sparkles
 # + remember_skill_lesson. The load_tools escape hatch is not counted: it
 # registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # This is the REGISTERED size — what the agent can do.
-tools_count: 95
+tools_count: 96
 
 language: python
 # The chat agent this one subclasses imports gaia.agents.tools.reasoning_tools;

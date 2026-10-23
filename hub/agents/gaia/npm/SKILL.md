@@ -361,14 +361,14 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 95 tools mutate the machine and need explicit approval
-before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Thirteen of the agent's 96 tools mutate the machine and need explicit approval
+before they run. Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, and **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account — and the flagship adds three of its own
+account, and **`forget_everything`**, which erases all memory — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
 content under `~/.gaia/skills` and removing one deletes it. A capture that does

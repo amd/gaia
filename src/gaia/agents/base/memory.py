@@ -2262,6 +2262,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = self._memory_store
         target_context = context if context is not None else self._memory_context
         applied = 0
+        if said_at is not None and store.erased_after(said_at):
+            logger.info(
+                "[MemoryMixin] extraction: not stored, the user erased all memory "
+                "after this turn was said"
+            )
+            return applied
 
         for op in operations:
             try:

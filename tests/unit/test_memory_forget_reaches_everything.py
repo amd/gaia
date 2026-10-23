@@ -12,6 +12,8 @@ forgotten trip included, from past conversations. Runs against a real
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
@@ -92,3 +94,32 @@ def test_something_said_again_after_forgetting_is_found(store):
 
     assert out["count"] == 1
     assert "forgotten_hidden" not in out
+
+
+def test_learning_queued_before_forget_everything_does_not_refill_memory(store):
+    host = _Host(store, [])
+    said = datetime.now().astimezone().isoformat()
+    _tool("forget_everything")()
+
+    applied = host._execute_extraction_operations(
+        [{"op": "add", "category": "fact", "content": "User's name is Jordan"}],
+        existing_items=[],
+        said_at=said,
+    )
+
+    assert applied == 0
+    assert store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
+
+
+def test_something_said_after_forget_everything_is_learned(store):
+    host = _Host(store, [])
+    _tool("forget_everything")()
+    said = (datetime.now().astimezone() + timedelta(seconds=1)).isoformat()
+
+    applied = host._execute_extraction_operations(
+        [{"op": "add", "category": "fact", "content": "User's name is Jordan"}],
+        existing_items=[],
+        said_at=said,
+    )
+
+    assert applied == 1
