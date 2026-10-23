@@ -3615,6 +3615,11 @@ Examples:
 
     skills_cli.add_subparser(subparsers)
 
+    # Local GGUF models added from a Hugging Face link (shared with the Agent UI and TUI).
+    from gaia.llm import custom_models_cli
+
+    custom_models_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -5865,6 +5870,11 @@ Let me know your answer!
     if args.action == "hub":
         handle_hub_command(args)
         return
+
+    if args.action == "model":
+        from gaia.llm import custom_models_cli  # pylint: disable=reimported
+
+        sys.exit(custom_models_cli.handle(args))
 
     # Handle Config command
     if args.action == "config":

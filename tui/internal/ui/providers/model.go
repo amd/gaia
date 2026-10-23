@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/gaiamodel"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -118,6 +119,18 @@ type Model struct {
 	showDetail bool
 	// server names the Lemonade in use and the backend its chat model runs on.
 	server string
+	// The "add" stage: the pasted link, what checking it found, and the
+	// quantization chosen. The "remove" stage confirms removing removing.
+	addInput  textinput.Model
+	addReport *gaiamodel.Report
+	addQuant  string
+	removing  *lemonade.Entry
+	// focusID is the model to focus once the list next loads; afterRefresh
+	// the note to show then.
+	focusID      string
+	afterRefresh string
+	// currentModel is the model chat runs on, which can't be removed.
+	currentModel string
 	// gatewayChecked is set once a reachability check of the AMD gateway has
 	// answered; gatewayErr is what it found (nil: the host answered).
 	gatewayChecked bool
@@ -167,6 +180,9 @@ func (m Model) Init() tea.Cmd {
 // WithSetupStep tells the panel Lemonade is still first-run step n, so its
 // absence reads as a step not reached rather than a fault.
 func (m Model) WithSetupStep(n int) Model { m.setupStep = n; return m }
+
+// WithCurrentModel names the model chat runs on, so it is not removed from under it.
+func (m Model) WithCurrentModel(id string) Model { m.currentModel = id; return m }
 
 // WithCurrent opens the panel on the provider chat runs on now, so enter
 // continues with it; an unknown name leaves Local first.
@@ -344,8 +360,16 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 			}
 		}
 	}
-	entries, err := c.Catalog(ctx, provider, capacity, capErr)
-	return modelsMsg{source: c, entries: entries, capacity: line, err: err}
+	var added []lemonade.Recommended
+	note := ""
+	if provider == "local" {
+		var err error
+		if added, err = readCustomModels(); err != nil {
+			note = "Your added models aren't listed: " + err.Error()
+		}
+	}
+	entries, err := c.Catalog(ctx, provider, capacity, capErr, added...)
+	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
 
 func waitPull(ch chan tea.Msg) tea.Cmd {
@@ -576,8 +600,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		if m.focusID != "" {
+			for i, e := range m.entries {
+				if e.Model.ID == m.focusID || (e.Recommended != nil && e.Recommended.Matches(m.focusID)) {
+					m.focus = i
+				}
+			}
+			m.focusID = ""
+		}
 		m = m.withDetail(v.note, v.noteDetail)
+		if m.afterRefresh != "" && v.note == "" {
+			m.note = m.afterRefresh
+		}
+		m.afterRefresh = ""
 		return m, m.Init()
+	case customCheckedMsg:
+		return m.onChecked(v)
+	case customRemovedMsg:
+		return m.onRemoved(v)
 	case pullProgressMsg:
 		if v.ch != m.pullCh || m.stage != "download" {
 			return m, nil
@@ -648,6 +688,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		switch m.stage {
+		case "add":
+			return m.updateAdd(v)
+		case "remove":
+			return m.updateRemove(v)
+		}
 		if v.String() == "esc" {
 			if m.stage == "providers" {
 				m.cancel()
@@ -717,6 +763,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.note = ""
 				m.activity = "Refreshing models"
 				return m, tea.Batch(m.spin.Tick, m.fetchModels())
+			case "ctrl+a":
+				if m.chosen() == "local" {
+					return m.openAdd()
+				}
+			case "ctrl+x", "delete":
+				if m.chosen() == "local" && m.focus >= 0 && m.focus < len(entries) {
+					return m.openRemove(entries[m.focus]), nil
+				}
 			case "backspace":
 				r := []rune(m.search)
 				if len(r) > 0 {
@@ -948,6 +1002,10 @@ func (m Model) View() string {
 			name = entryName(*e, m.chosen())
 		}
 		lines = append(lines, title.Render("Downloading "+name), "Lemonade is downloading the model to this PC. It is selected when the download finishes.", "", m.spin.View()+" "+m.pullLine)
+	case "add":
+		lines = append(lines, m.addView(w)...)
+	case "remove":
+		lines = append(lines, m.removeView()...)
 	case "models":
 		entries := m.filteredEntries()
 		dim := lipgloss.NewStyle().Foreground(theme.Dim)
@@ -960,18 +1018,15 @@ func (m Model) View() string {
 		start := max(0, m.focus-count+1)
 		for i := start; i < min(len(entries), start+count); i++ {
 			e := entries[i]
-			if e.Recommended != nil && (i == start || entries[i-1].Recommended == nil) {
-				lines = append(lines, title.Render("Recommended"))
-			}
-			if e.Recommended == nil && (i == start || entries[i-1].Recommended != nil) {
-				lines = append(lines, title.Render("All models"))
+			if group := entryGroup(e); i == start || entryGroup(entries[i-1]) != group {
+				lines = append(lines, title.Render(group))
 			}
 			marker := "  "
 			if i == m.focus {
 				marker = "› "
 			}
 			label := entryName(e, m.chosen())
-			if e.Recommended != nil {
+			if e.Recommended != nil && !e.Recommended.Custom {
 				label = "★ " + label
 			}
 			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {
@@ -1036,6 +1091,21 @@ func (m Model) View() string {
 	hint := "↑/↓ choose · enter continue · r refresh · esc close"
 	if m.stage == "models" {
 		hint = "type to search · ↑/↓ choose · enter select · ctrl+r refresh · esc back"
+		if m.chosen() == "local" {
+			hint = "type to search · enter select · ctrl+a add from link · " + m.removeOrRefreshHint() + " · esc back"
+		}
+	}
+	if m.stage == "add" {
+		hint = "enter check · esc back"
+		if m.addReport != nil && m.addReport.OK {
+			hint = "enter add · esc back"
+		}
+		if m.addReport != nil && len(m.addReport.Variants) > 1 {
+			hint = strings.Replace(hint, " · esc", " · tab quantization · esc", 1)
+		}
+	}
+	if m.stage == "remove" {
+		hint = "enter remove · esc keep"
 	}
 	if m.stage == "setup" {
 		hint = "tab field · enter connect · ctrl+d forget key · esc back"
@@ -1048,6 +1118,11 @@ func (m Model) View() string {
 		switch m.stage {
 		case "models":
 			hint = "type to search · ↑/↓ · enter · esc back"
+			if m.chosen() == "local" {
+				hint = "search · enter · ctrl+a add · " + strings.SplitN(m.removeOrRefreshHint(), " ", 2)[0] + " · esc"
+			}
+		case "add", "remove":
+			hint = "enter · esc back"
 		case "setup":
 			hint = "tab field · enter connect · esc back"
 		case "download":
@@ -1092,4 +1167,25 @@ func formatTokens(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// entryGroup is the heading a picker row sits under.
+func entryGroup(e lemonade.Entry) string {
+	switch {
+	case e.Recommended == nil:
+		return "All models"
+	case e.Recommended.Custom:
+		return "Added by you"
+	default:
+		return "Recommended"
+	}
+}
+
+// removeOrRefreshHint offers ctrl+x on a model the user added, ctrl+r elsewhere.
+func (m Model) removeOrRefreshHint() string {
+	entries := m.filteredEntries()
+	if m.focus >= 0 && m.focus < len(entries) && isCustom(entries[m.focus]) {
+		return "ctrl+x remove"
+	}
+	return "ctrl+r refresh"
 }

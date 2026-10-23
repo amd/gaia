@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import {
-    useModelStore, useInferencePlace, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE,
+    useModelStore, useInferencePlace, selectChipModel, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
@@ -35,6 +35,7 @@ function modelDetails(m: ProviderModel, remote: boolean): string[] {
         m.size_gb ? `${m.size_gb} GB` : null,
         m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s on this PC` : null,
         rank,
+        m.custom ? 'added by you' : null,
     ].filter((x): x is string => !!x);
 }
 
@@ -381,7 +382,7 @@ export function ModelChip() {
                             <div className="popover-message">No models yet.</div>
                         )}
                         {models.map((m) => {
-                            const current = (queued ?? active?.model) === m.id;
+                            const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = m.display_name ?? displayModelName(m.id);
                             const details = modelDetails(m, provider.remote);
@@ -471,6 +472,17 @@ export function ModelChip() {
                     </button>
                 )}
                 <div className="popover-divider" />
+                <button
+                    type="button"
+                    className="popover-item"
+                    onClick={() => { setOpen(false); openSettings('model'); }}
+                >
+                    <span className="popover-item-check"><Link2 size={13} aria-hidden="true" /></span>
+                    <span className="popover-item-body">
+                        <span className="popover-item-title">Add a model from a link…</span>
+                        <span className="popover-item-note">Any GGUF chat model on Hugging Face</span>
+                    </span>
+                </button>
                 <button
                     type="button"
                     className="popover-item"

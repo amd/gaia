@@ -1004,6 +1004,31 @@
     "title": "CreateSessionRequest",
     "type": "object"
   },
+  "CustomModelRequest": {
+    "description": "``quant`` picks a quantization; None lets GAIA choose one that fits.",
+    "properties": {
+      "quant": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Quant"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "CustomModelRequest",
+    "type": "object"
+  },
   "DiscoveryCommit": {
     "properties": {
       "items": {

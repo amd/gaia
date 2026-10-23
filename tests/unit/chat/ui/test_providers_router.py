@@ -24,7 +24,9 @@ from fastapi.testclient import TestClient
 from gaia import config as config_mod
 from gaia.connectors import credential_wait
 from gaia.connectors.errors import ConnectorsError
-from gaia.llm import cloud_keys, lemonade_client
+from gaia.llm import cloud_keys
+from gaia.llm import custom_models as cm
+from gaia.llm import lemonade_client
 from gaia.llm.cloud_keys import CloudKeyError
 from gaia.llm.gateway import (
     DEFAULT_AUTH_HEADER_NAME,
@@ -35,6 +37,9 @@ from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.llm.recommended_models import RECOMMENDED_MODELS, rank
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers import providers
+
+from ...test_custom_models import ARCH_SOURCE, SYSTEM_INFO
+from ...test_custom_models import _repo as repo_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CLOUD_GO = REPO_ROOT / "tui" / "internal" / "lemonade" / "cloud.go"
@@ -1167,6 +1172,191 @@ def test_select_while_the_server_is_starting_is_503(client, lemonade, keys, db):
     resp = client.post("/api/providers/select", json={"model": DEFAULT_MODEL_NAME})
     assert resp.status_code == 503
     assert db.get_setting("custom_model") is None
+
+
+# ── Models added from a Hugging Face link ─────────────────────────────────
+
+
+CUSTOM_URL = "https://huggingface.co/unsloth/Tiny-GGUF?_sm_nck=1"
+
+
+class _Web:
+    def __init__(self, status, body=None, text=""):
+        self.status_code, self._body, self.text = status, body, text
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture
+def hf_web(monkeypatch, tmp_path):
+    state = {"repo": repo_payload()}
+
+    def get(url, headers=None):
+        if url.startswith("https://huggingface.co/api/models/"):
+            return _Web(200, state["repo"])
+        return _Web(200, text=ARCH_SOURCE)
+
+    monkeypatch.setattr(cm, "_http_get", get)
+    monkeypatch.setattr(cm, "_arch_cache_path", lambda tag: tmp_path / f"{tag}.json")
+    return state
+
+
+@pytest.fixture
+def custom_config(monkeypatch, tmp_path):
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", path)
+    return path
+
+
+@pytest.fixture
+def custom_server(lemonade):
+    lemonade.answers[("GET", "system-info")] = (200, SYSTEM_INFO)
+    return lemonade
+
+
+def test_check_saves_nothing(client, custom_server, hf_web, custom_config):
+    body = client.post(
+        "/api/providers/local/custom/check", json={"url": CUSTOM_URL}
+    ).json()
+    assert body["ok"] and body["model_id"] == "user.Tiny-Q4_K_M-GGUF"
+    assert not custom_config.exists()
+    assert custom_server.paths("POST") == []
+
+
+def test_check_reports_an_unsupported_architecture(
+    client, custom_server, hf_web, custom_config
+):
+    hf_web["repo"] = repo_payload(arch="flint")
+    body = client.post(
+        "/api/providers/local/custom/check", json={"url": CUSTOM_URL}
+    ).json()
+    assert body["ok"] is False and "'flint'" in body["error"]
+
+
+def test_add_then_listed_before_download_and_after(
+    client, custom_server, hf_web, custom_config
+):
+    resp = client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model"]["id"] == "user.Tiny-Q4_K_M-GGUF"
+
+    models = client.get("/api/providers/local/models").json()["models"]
+    row = next(m for m in models if m["id"] == "user.Tiny-Q4_K_M-GGUF")
+    assert row["custom"] is True and row["downloaded"] is False
+    assert row["source_url"] == CUSTOM_URL
+    assert row["display_name"] == "Tiny Q4_K_M" and row["size_gb"] == 3.2
+    assert all(m["custom"] is False for m in models if m is not row)
+
+    # Once downloaded, Lemonade lists it without the namespace.
+    custom_server.models = [
+        {
+            "id": "Tiny-Q4_K_M-GGUF",
+            "downloaded": True,
+            "labels": [],
+            "recipe": "llamacpp",
+        }
+    ]
+    models = client.get("/api/providers/local/models").json()["models"]
+    rows = [m for m in models if "Tiny" in m["id"]]
+    assert len(rows) == 1 and rows[0]["downloaded"] and rows[0]["custom"]
+
+
+def test_add_refused_is_422_with_the_reason(
+    client, custom_server, hf_web, custom_config
+):
+    hf_web["repo"] = repo_payload(template="")
+    resp = client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    assert resp.status_code == 422 and "base model" in resp.json()["detail"]
+    assert not custom_config.exists()
+
+
+def test_add_twice_is_refused(client, custom_server, hf_web, custom_config):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    resp = client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    assert resp.status_code == 422 and "already added" in resp.json()["detail"]
+
+
+def test_remove_deletes_by_the_name_lemonade_lists(
+    client, custom_server, hf_web, custom_config, db
+):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    custom_server.models = [
+        {"id": "Tiny-Q4_K_M-GGUF", "checkpoint": "someone/else:x.gguf"},
+        {
+            "id": "Tiny-Q4_K_M-GGUF",
+            "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+            "downloaded": True,
+        },
+    ]
+    custom_server.answers[("POST", "delete")] = (200, {"status": "success"})
+    db.set_setting("custom_model", "user.Tiny-Q4_K_M-GGUF")
+
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+    assert resp.status_code == 200, resp.text
+    assert custom_server.call("POST", "delete")["json"] == {
+        "model_name": "Tiny-Q4_K_M-GGUF"
+    }
+    assert cm.CONFIG_KEY not in json.loads(custom_config.read_text())
+    assert db.get_setting("custom_model") is None
+
+
+def test_remove_before_download_skips_the_server_delete(
+    client, custom_server, hf_web, custom_config
+):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+    assert resp.status_code == 200
+    assert "delete" not in custom_server.paths("POST")
+
+
+def test_remove_failure_keeps_the_model(client, custom_server, hf_web, custom_config):
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    custom_server.models = [
+        {
+            "id": "Tiny-Q4_K_M-GGUF",
+            "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+            "downloaded": True,
+        },
+    ]
+    custom_server.answers[("POST", "delete")] = (500, {"error": {"message": "in use"}})
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+    assert resp.status_code == 502 and "in use" in resp.json()["detail"]
+    assert cm.find_custom_model("user.Tiny-Q4_K_M-GGUF") is not None
+
+
+def test_check_with_a_broken_saved_list_says_how_to_fix_it(
+    client, custom_server, hf_web, custom_config
+):
+    custom_config.write_text(json.dumps({cm.CONFIG_KEY: [{"id": "nope"}]}))
+    resp = client.post("/api/providers/local/custom/check", json={"url": CUSTOM_URL})
+    assert resp.status_code == 500
+    assert "delete the key" in resp.json()["detail"]
+
+
+def test_remove_a_builtin_is_404(client, custom_server, custom_config):
+    resp = client.delete("/api/providers/local/custom/Gemma-4-E4B-it-GGUF")
+    assert resp.status_code == 404
+
+
+def test_first_download_registers_under_the_user_name(
+    custom_server, hf_web, custom_config, monkeypatch
+):
+    """The download stream sends checkpoint + recipe with the user. name (#1655)."""
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    cm.add_custom_model(cm.inspect_link(CUSTOM_URL, system_info=SYSTEM_INFO))
+    req = find_model_requirement("user.Tiny-Q4_K_M-GGUF")
+    payload = {"model_name": req.model_id}
+    payload.update({k: v for k, v in req.pull_kwargs().items() if v is not None})
+    assert payload == {
+        "model_name": "user.Tiny-Q4_K_M-GGUF",
+        "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+        "recipe": "llamacpp",
+        "mmproj": "mmproj-F16.gguf",
+        "vision": True,
+        "reasoning": True,
+    }
 
 
 # ── AMD gateway reachability (#5604) ───────────────────────────────────────

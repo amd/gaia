@@ -30,6 +30,7 @@ export interface ApiSchemas {
   ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
+  CustomModelRequest: CustomModelRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -386,6 +387,13 @@ export interface CreateSessionRequest {
   private?: boolean;
   system_prompt?: string | null;
   title?: string | null;
+}
+/**
+ * ``quant`` picks a quantization; None lets GAIA choose one that fits.
+ */
+export interface CustomModelRequest {
+  quant?: string | null;
+  url: string;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];

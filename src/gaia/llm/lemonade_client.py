@@ -1632,11 +1632,17 @@ MODELS = {
 
 
 def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
-    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace.
+
+    A model the user added from a Hugging Face link resolves too.
+    """
     for mr in MODELS.values():
         if _model_ids_match(mr.model_id, model_id):
             return mr
-    return None
+    from gaia.llm.custom_models import find_custom_model, requirement_for
+
+    entry = find_custom_model(model_id)
+    return requirement_for(entry) if entry is not None else None
 
 
 # Sampling for a local model with no published profile below: low temperature

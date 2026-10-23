@@ -134,6 +134,50 @@ the whole conversation. The next message starts at medium again. Set
 point. Calls that need only a short, structured reply always use low: chat
 titles, memory upkeep, document summaries and `gaia llm`.
 
+### Add a model from Hugging Face
+
+Any GGUF chat model on Hugging Face can join the local model list. Paste its link
+and GAIA checks it before saving anything:
+
+- **Hugging Face link** — any page of a model repo works: its card, `/tree/main`,
+  `/discussions`, with a tracking query string or not. A link to one `.gguf` file
+  (`/blob/main/…` or `/resolve/main/…`) picks that file.
+- **Public repository** — private and gated repos can't be added, because
+  Lemonade can't download them for you. GAIA checks without your Hugging Face
+  token, so a private repo you can see still counts as private.
+- **GGUF weights** and a **chat model** — the repo needs GGUF files and a chat
+  template; a base model without one can't hold a conversation.
+- **Supported architecture** — the model's architecture must be in the llama.cpp
+  release your Lemonade runs. GAIA reads that release's own architecture table, so
+  a model that needs a newer llama.cpp is refused with the release it was checked
+  against. Update Lemonade, then add it again.
+- **Fits this PC** — the download plus working room must fit this PC's memory
+  and free disk. GAIA picks a quantization that fits: a 4-bit one such as Q4_K_M
+  first, else the largest that fits. Choose another from the list if you prefer.
+- **Not already listed** — a model GAIA ships, one you already added, or a name
+  Lemonade already uses for another model is refused.
+
+A chat template without tool support is allowed with a warning: GAIA can chat with
+the model but can't use tools through it.
+
+A model that passes is listed under **Added by you** and downloads the first time
+you pick it, like any other local model. It loads with a 32K context window (or
+its own, if smaller): GAIA doesn't know its memory use per token, so it doesn't
+grow the window the way it does for its own models. Removing it deletes its download too, and
+if it was your saved model the next launch uses the default.
+
+- **Agent UI:** Settings › Model › Local, **Add a model from Hugging Face**. The
+  model chip's menu has **Add a model from a link…**. Added models have a
+  **Remove** button.
+- **TUI:** in `/provider` › Local, press **Ctrl+A**, paste the link, and press
+  **Enter** to check it, **Tab** for another quantization, **Enter** again to add.
+  On an added model, **Ctrl+X** removes it.
+- **CLI:** `gaia model add <link>`, `gaia model remove <id>`, `gaia model list`;
+  `gaia model check <link>` runs the checks without saving. See
+  [Model Command](/reference/cli#model-command).
+
+All three share one list, `custom_models` in `~/.gaia/config.json`.
+
 ### Context length follows memory
 
 Qwen3.6 35B A3B reads up to 262,144 tokens. Only 10 of its 40 layers keep a

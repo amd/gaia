@@ -2416,7 +2416,42 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `/health` for a loaded model) or `expected` (its recipe), and a `warning`
     when the two differ; `size_gb`; `fits` this PC's memory; `available` with
     an `unavailable_reason` (no NPU, no usable backend, too large); and
-    `tokens_per_second`, the median of its recent turns on this PC.
+    `tokens_per_second`, the median of its recent turns on this PC. A model
+    the user added from a Hugging Face link has `custom: true` and its
+    `source_url`, and is listed before it is downloaded.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/local/custom/check">
+    Check a pasted Hugging Face link without saving or downloading anything.
+    Body: `{"url", "quant"}`; `quant` (such as `Q4_K_M`) is optional, and
+    without it GAIA picks one that fits this PC. Any page of a model repo
+    works, query string and all; a `/blob/` or `/resolve/` link to a `.gguf`
+    file picks that file. Returns `ok`, the `checks` run (`link`, `repo`,
+    `gguf`, `chat`, `architecture`, `fit`, `new`, each with `ok` and `detail`),
+    `error` (the first failure), `warnings` (a chat template without tool
+    support), every quantization in `variants` with its `size_gb` and `fits`,
+    and for a model that passes its `model_id`, `display_name`, `checkpoint`,
+    `size_gb`, `architecture` and `llamacpp_version`. The architecture is
+    checked against the llama.cpp release Lemonade reports for the backend
+    GAIA uses.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/local/custom">
+    Check a link as above and, when it passes, add the model to
+    `custom_models` in `~/.gaia/config.json`, which the TUI and `gaia model`
+    share. Returns `{"model", "report"}`. Nothing downloads until the user
+    picks Download; the first pull registers it with Lemonade as a `user.`
+    model. **422** with the failed check's reason, including a model already
+    added; **409** when the same model is added twice at once and the second
+    save finds it already there.
+  </Accordion>
+
+  <Accordion title="DELETE /api/providers/local/custom/{model_id}">
+    Remove a model the user added: delete it from Lemonade if it was
+    downloaded, forget it, and clear `default_model` / `last_model` if either
+    named it. Returns `{"removed", "display_name", "cleared"}`. **404** for a
+    model the user didn't add; **502** when Lemonade refuses the delete, and
+    the model stays in the list.
   </Accordion>
 
   <Accordion title="GET /api/providers/local/context">

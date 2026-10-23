@@ -522,7 +522,8 @@ describe('ModelChip keyboard', () => {
         await user.keyboard('{ArrowDown}');
 
         await user.tab();
-        expect(within(dialog).getByRole('button', { name: 'Providers and keys…' })).toHaveFocus();
+        // The first stop after the list is the footer's first item.
+        expect(within(dialog).getByRole('button', { name: /Add a model from a link/ })).toHaveFocus();
         await user.tab({ shift: true });
         expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
     });
