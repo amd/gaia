@@ -39,6 +39,15 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
+      # The installer jobs it calls read the flagship's pins and version.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
+      - 'util/flagship_rc_assets.py'
+      - 'util/release_tag.py'
+      - 'src/gaia/version.py'
+      - 'LICENSE.md'
   pull_request:
     # NO `branches:` filter on purpose. It used to be `branches: [main]`, which
     # silences every stacked PR — one opened against another feature branch
@@ -69,6 +78,15 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
+      # The installer jobs it calls read the flagship's pins and version.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
+      - 'util/flagship_rc_assets.py'
+      - 'util/release_tag.py'
+      - 'src/gaia/version.py'
+      - 'LICENSE.md'
   merge_group:
   workflow_dispatch:
 

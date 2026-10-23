@@ -167,7 +167,13 @@ class ChatAgent(
         pass
 
     def reindex_file(self, file_path: str) -> None:
-        """Reindex modified/created file (auto-called by file watcher)."""
+        """Reindex modified/created file (auto-called by file watcher).
+
+        On Windows, raises PermissionError when the file cannot be read
+        because another program holds it exclusively or has locked part of it,
+        so the watcher retries it; any other failure is logged with its
+        traceback.
+        """
         pass
 
     def stop_watching(self) -> None:
@@ -256,36 +262,24 @@ Agent: {"answer": "According to the Oil & Gas Manual, the vision is..."}
 
 ### File Change Monitoring
 
-**Implementation:**
-```python
-class FileChangeHandler(FileSystemEventHandler):
-    """Handler for file system changes to trigger re-indexing."""
+Each watched directory gets a `FileChangeHandler` from `gaia.utils.file_watcher`
+(see the [file change handler spec](/spec/file-change-handler)), with
+`reindex_file` as its created and modified callback. It watches the handler's
+default extensions: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.log`, `.csv`,
+`.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`,
+`.html` and `.css` (see [default extensions](/sdk/utils/file-watcher#default-extensions)).
+Word, PowerPoint and Excel files are not watched.
 
-    def __init__(self, agent):
-        self.agent = agent
-        self.last_indexed = {}  # LRU cache
-        self.debounce_time = 2.0  # seconds
-
-    def on_modified(self, event):
-        """Handle file modification."""
-        if not event.is_directory and self._should_index(event.src_path):
-            self._schedule_reindex(event.src_path)
-
-    def _schedule_reindex(self, file_path: str):
-        """Debounced reindexing with LRU eviction."""
-        current_time = time.time()
-        last_time = self.last_indexed.get(file_path, 0)
-
-        if current_time - last_time > self.debounce_time:
-            self.last_indexed[file_path] = current_time
-            self.agent.reindex_file(file_path)
-
-            # LRU eviction (max 1000 entries)
-            if len(self.last_indexed) > 1000:
-                oldest = sorted(self.last_indexed.items(), key=lambda x: x[1])[:100]
-                for path, _ in oldest:
-                    del self.last_indexed[path]
-```
+- A created or modified file is reindexed once it has gone a full window
+  (`debounce_seconds`, 2 s by default) with no change in size or modification
+  time, so a file still being copied in is never indexed half-written.
+- On Windows, if another program holds the file exclusively or has locked part
+  of it, `reindex_file` raises `PermissionError` and the watcher retries the
+  file 1, 2 and 4 windows later. A file saved by renaming a temp file onto it
+  is retried the same way. After the third retry it gives up and logs one
+  error telling the user to close the program and save the file again.
+- A deleted file is removed from the index, and a moved file is removed under
+  its old path and indexed under its new one.
 
 ### Security: Path Validation
 

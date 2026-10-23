@@ -36,6 +36,7 @@ from typing import (
     Literal,
     MutableMapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -236,6 +237,22 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 # A cloud reasoning model spends output tokens on thinking too; its window is
 # the provider's, not local hardware's.
 CLOUD_MAX_OUTPUT_TOKENS = 32768
+# Share of a local window one reply may take: 8K of 32K, 16K of 64K.
+LOCAL_OUTPUT_CTX_FRACTION = 4
+
+
+def local_max_output_tokens(ctx_size: int) -> int:
+    """Output cap for a local model loaded with a *ctx_size*-token window.
+
+    A quarter of the window, never above the cloud cap, so a big script fits in
+    one reply when the window has room. Never below the 32K-window cap either,
+    except that a window under 16K gives half of itself, so the reply cannot
+    take the whole window and leave nothing for the prompt and history.
+    """
+    floor = min(LOCAL_MAX_OUTPUT_TOKENS, ctx_size // 2)
+    return max(
+        floor, min(CLOUD_MAX_OUTPUT_TOKENS, ctx_size // LOCAL_OUTPUT_CTX_FRACTION)
+    )
 
 
 def _skill_prompt_body(agent, skill) -> str:
@@ -523,12 +540,14 @@ def _trace_includes_schema_text() -> bool:
 class ToolCallTruncated(ValueError):
     """A native tool call ran past the output-token cap mid-arguments."""
 
-    def __init__(self, model_id: str, cap: int):
+    def __init__(self, model_id: str, cap: int, tools: Sequence[str] = ()):
         self.cap = cap
+        self.tools = tuple(tools)
         super().__init__(
             f"Tool call truncated mid-arguments (finish_reason=length). Model "
             f"{model_id} ran out of output tokens before finishing the call "
-            f"({cap} max) — pass a larger max_output_tokens to the agent."
+            f"({cap} max). Write long content in smaller parts across several "
+            "calls, or pass a larger max_output_tokens to the agent."
         )
 
 
@@ -2609,14 +2628,18 @@ Do NOT wrap conversational replies in JSON.
         switch mid-session takes effect."""
         if self.max_output_tokens is not None:
             return self.max_output_tokens
+        from gaia.agents.base.history import context_window
         from gaia.llm.lemonade_client import LemonadeClient
 
         backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
-        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
-            self.chat.effective_model
-        ):
+        if not isinstance(backend, LemonadeClient):
+            return LOCAL_MAX_OUTPUT_TOKENS
+        if backend.cloud_model_provider(self.chat.effective_model):
             return CLOUD_MAX_OUTPUT_TOKENS
-        return LOCAL_MAX_OUTPUT_TOKENS
+        # The same window history budgets against, re-read each call: the user
+        # may pick another size, or a client may pin it. Its sizing is cached
+        # per process in lemonade_client, so this does not re-probe Lemonade.
+        return local_max_output_tokens(context_window(self))
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -4581,7 +4604,8 @@ Do NOT wrap conversational replies in JSON.
             prompt = (
                 f"Your last tool call was cut off at the {reason.cap}-token output "
                 "limit before its arguments were finished, so nothing ran. Send "
-                "much shorter arguments."
+                "much shorter arguments: split the work into parts that each fit "
+                "well under the limit, and do them in several calls."
             )
             # write_file replaces the whole file, so a long file is built with edits.
             if "edit_file" in self._tools_registry:
@@ -4590,6 +4614,13 @@ Do NOT wrap conversational replies in JSON.
                     "old_content and new_content, never the whole file; to create "
                     "a long file, write_file a short first part, then add the rest "
                     "with edit_file in small pieces."
+                )
+            if "run_python" in reason.tools:
+                prompt += (
+                    " For run_python, do not send one big script: build the file "
+                    "in steps, one run_python call per part (e.g. one sheet or a "
+                    "few slides), each opening the file the previous call saved, "
+                    "adding its part and saving it again."
                 )
             return prompt
         if isinstance(reason, MalformedToolMarkup):
@@ -5398,7 +5429,15 @@ Do NOT wrap conversational replies in JSON.
                 # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
-                raise ToolCallTruncated(self.model_id, self._max_output_tokens())
+                raise ToolCallTruncated(
+                    self.model_id,
+                    self._max_output_tokens(),
+                    [
+                        (tc.get("function") or {}).get("name", "")
+                        for tc in raw_tool_calls
+                        if isinstance(tc, dict)
+                    ],
+                )
             if not raw_tool_calls:
                 raise ValueError(
                     "Native tool_calls envelope contained an empty tool_calls list."
@@ -5982,12 +6021,19 @@ Do NOT wrap conversational replies in JSON.
         # Time spent on a question the body raised (e.g. path access) is the
         # user's, not the tool's: abandoning there strands a live prompt. Time
         # the PC sleeps is nobody's: the awake clock leaves it out.
-        started = awake_clock.monotonic()
-        while worker.is_alive():
-            remaining = started + timeout + user_wait.waited() - awake_clock.monotonic()
-            if remaining <= 0:
-                break
-            worker.join(min(remaining, 0.5))
+        try:
+            started = awake_clock.monotonic()
+            while worker.is_alive():
+                remaining = (
+                    started + timeout + user_wait.waited() - awake_clock.monotonic()
+                )
+                if remaining <= 0:
+                    break
+                worker.join(min(remaining, 0.5))
+        except BaseException:
+            # The clock (or a Ctrl+C) failed the call: the tool must not run on.
+            cancel.set()
+            raise
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
@@ -6590,6 +6636,10 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # A policy client matches on what the model sent, not what the prompt adds.
+            noting = getattr(self.console, "note_call_args", None)
+            if callable(noting) and isinstance(tool_args, dict):
+                noting(tool_name, tool_args)
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.

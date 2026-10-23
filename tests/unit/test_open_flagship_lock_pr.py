@@ -31,7 +31,7 @@ _spec.loader.exec_module(pin)
 
 VERSION = "0.3.1"
 REPO = "amd/gaia"
-BRANCH = f"release/flagship-lock-v{VERSION}"
+BRANCH = f"flagship-lock/v{VERSION}"
 PLACEHOLDER = "PENDING-replace-with-real-sha256"
 SIDECAR = ("win32-x64", "darwin-arm64", "darwin-x64", "linux-x64")
 
@@ -118,7 +118,8 @@ class FakeRepo:
                 return err("fatal: invalid object name", 128)
             return ok(_text(self.branch_lock))
         if cmd[:2] == ["gh", "pr"] and cmd[2] == "list":
-            return ok(json.dumps(self.open_prs))
+            head = cmd[cmd.index("--head") + 1]
+            return ok(json.dumps(self.open_prs if head == BRANCH else []))
         if cmd[:2] == ["git", "push"]:
             if self.push_err:
                 return err(self.push_err, 128)
@@ -234,6 +235,28 @@ def test_rerun_after_pr_creation_failed_opens_it_without_repushing(workdir):
     repo = FakeRepo(_lock(sha="0"), branch_lock=_lock())
     _run(repo, workdir)
     assert repo.created and not repo.pushed
+
+
+def test_rerun_looks_up_the_open_pr_by_the_pushed_branch(workdir):
+    pr = {"number": 42, "url": "https://github.com/amd/gaia/pull/42"}
+    repo = FakeRepo(_lock(sha="0"), branch_lock=_lock(), open_prs=[pr])
+    _run(repo, workdir)
+    listed = next(c for c in repo.calls if c[:3] == ["gh", "pr", "list"])
+    assert listed[listed.index("--head") + 1] == BRANCH == pin.branch_name(VERSION)
+    assert not repo.created
+
+
+# -- the branch name can be created on origin --------------------------------
+
+
+@pytest.mark.parametrize("version", [VERSION, "1.0.0", "0.3.1-rc1"])
+def test_the_branch_is_never_under_release(version):
+    # origin keeps a `release` branch (update-release-branch.yml); git refuses
+    # to create any `release/*` ref beside it, so the push would always fail.
+    branch = pin.branch_name(version)
+    assert not branch.startswith("release/")
+    assert branch.split("/")[0] not in {"release", "main"}
+    assert branch.endswith(version)
 
 
 # -- refusals ----------------------------------------------------------------

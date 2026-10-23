@@ -266,9 +266,9 @@ export interface InferenceStats {
     output_tokens: number;
     /** The agent's own step count for the turn. */
     steps?: number | null;
-    /** Set when the answer came from Retry with…: the model that wrote it. */
+    /** The model that wrote the answer; absent on answers saved before it was recorded. */
     model?: string | null;
-    /** Set with `model`: how long that model took, loading included. */
+    /** Set when the answer came from Retry with…: how long its model took, loading included. */
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
@@ -556,6 +556,8 @@ export interface SystemStatus {
     disk_space_gb: number;
     memory_available_gb: number | null;
     initialized: boolean;
+    /** Why the desktop app's first-run `gaia init` failed; null when it did not. */
+    setup_error?: string | null;
     version: string;
     // Extended Lemonade info
     lemonade_version: string | null;
@@ -690,6 +692,8 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
+    /** The last run's error; null when it succeeded. */
+    last_error: string | null;
 }
 
 /** A single execution result for a scheduled task. */
@@ -971,22 +975,41 @@ export interface SetupCheck {
     cloud_steps?: SetupStep[];
 }
 
+/** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
+export interface SetupProblem {
+    kind: 'server_unreachable';
+    /** One plain sentence: what is wrong. */
+    message: string;
+    /** How to start that server, or null when this PC has none to start. */
+    start: string | null;
+    /** Setup can switch to GAIA's own server instead. */
+    use_gaia: boolean;
+    /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
+    switch_hint: string | null;
+}
+
 export interface SetupRunStatus {
     state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
     steps?: SetupStep[];
     text?: string;
     percent?: number | null;
+    /** How much of the current download is done, e.g. "1.20 GB of 5.60 GB". */
+    size?: string | null;
     error?: string | null;
+    problem?: SetupProblem | null;
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+    /** The run is switching to GAIA's own server; a retry must keep switching. */
+    gaia_lemonade?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
-    lemonade: { mode: 'gaia' | 'external'; url: string; reachable: boolean };
+    /** `url` is null while GAIA's own server isn't running: it has no address yet. */
+    lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
     chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */
@@ -1065,10 +1088,26 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /**
+     * `waiting_for_os_permission` while the OS holds the saved-key read for the
+     * user's permission (a macOS keychain dialog): `key_source` is then unknown,
+     * not absent, and `key_message` says what to do.
+     */
+    key_state?: 'read' | 'waiting_for_os_permission';
+    key_message?: string | null;
     models_discovered?: boolean;
     env_var?: string;
     base_url?: string | null;
     error?: string;
+    /** AMD gateway only: whether its host answers from this network. */
+    network?: ProviderNetwork;
+}
+
+export interface ProviderNetwork {
+    /** Null when this PC can't tell: Lemonade runs elsewhere, or a proxy carries the traffic. */
+    reachable: boolean | null;
+    /** Why it can't be reached; null when it can. */
+    detail: string | null;
 }
 
 export interface ActiveModel {

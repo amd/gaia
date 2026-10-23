@@ -1,0 +1,17 @@
+/* Sits in the composer's column, so a docked session panel never covers it. */
+.export-error-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
+    border-radius: var(--radius-md);
+}
+
+.export-error-bar span { flex: 1; }
+.export-error-bar button { flex-shrink: 0; }

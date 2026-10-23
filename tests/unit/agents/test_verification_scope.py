@@ -1617,6 +1617,9 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         "    def test_arithmetic(self): self.assertEqual(2 + 2, 4)\n",
         encoding="utf-8",
     )
+    # Pin pytest's rootdir here; otherwise it can land on the shared temp
+    # dir and list sibling dirs other parallel tests are deleting.
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     command = [sys.executable, "-m", runner]
     command.extend(
         [str(test_file), "-q"]

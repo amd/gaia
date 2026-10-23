@@ -12,6 +12,8 @@ OS credential store is never touched: ``gaia.llm.cloud_keys`` is mocked.
 import json
 import logging
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
+from gaia.connectors import credential_wait
 from gaia.connectors.errors import ConnectorsError
 from gaia.llm import cloud_keys, lemonade_client
 from gaia.llm.cloud_keys import CloudKeyError
@@ -128,8 +131,10 @@ def keys(monkeypatch):
             raise state["forget_error"]
         return state["stored"].pop(provider, None) is not None
 
-    def ensure_authenticated(provider, client=None):
+    def ensure_authenticated(provider, client=None, recall=None):
         state["ensure"].append(provider)
+        if recall is not None:
+            recall()  # as the real one reads the kept key
         if isinstance(state["ensure_result"], Exception):
             raise state["ensure_result"]
         return state["ensure_result"]
@@ -138,6 +143,21 @@ def keys(monkeypatch):
     monkeypatch.setattr(cloud_keys, "recall_key", recall_key)
     monkeypatch.setattr(cloud_keys, "forget_key", forget_key)
     monkeypatch.setattr(cloud_keys, "ensure_authenticated", ensure_authenticated)
+    return state
+
+
+@pytest.fixture(autouse=True)
+def reach(monkeypatch):
+    """The gateway reachability check, faked: reachable unless a test says not."""
+    state = {"error": None, "asked": []}
+
+    def check_reachable(base_url=None):
+        state["asked"].append(base_url)
+        if state["error"] is not None:
+            raise state["error"]
+
+    monkeypatch.setattr(providers, "check_gateway_reachable", check_reachable)
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {})
     return state
 
 
@@ -239,7 +259,7 @@ def test_stored_key_is_handed_to_a_lemonade_that_lost_it(
     lemonade.cloud["fireworks"] = {"name": "fireworks"}
     keys["stored"]["fireworks"] = KEY
 
-    def ensure(provider, client=None):
+    def ensure(provider, client=None, recall=None):
         keys["ensure"].append(provider)
         lemonade.cloud[provider].update(runtime_key_set=True, models_discovered=True)
         return True
@@ -260,6 +280,129 @@ def test_stored_key_replay_failure_is_reported_on_the_provider(client, lemonade,
     fw = client.get("/api/providers").json()["providers"][1]
     assert fw["key_source"] == "stored"
     assert "500" in fw["error"]
+
+
+# ── A keychain read the OS holds for permission (#5570) ────────────────────
+
+
+@pytest.fixture
+def keychain_prompt(monkeypatch, keys):
+    """The Fireworks key read blocks, as macOS does while its access dialog is open."""
+    state = {"answered": threading.Event(), "reads": 0}
+
+    def recall_key(provider):
+        if provider != "fireworks":
+            return keys["stored"].get(provider)
+        state["reads"] += 1
+        state["answered"].wait(timeout=30)
+        return keys["stored"].get(provider)
+
+    monkeypatch.setattr(cloud_keys, "recall_key", recall_key)
+    monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
+    yield state
+    state["answered"].set()
+    _wait_for_reads_to_drain()
+    credential_wait._in_flight.clear()  # a finished, unconsumed read
+
+
+def _wait_for_reads_to_drain():
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _credential_threads():
+        time.sleep(0.01)
+
+
+def _credential_threads():
+    return [t for t in threading.enumerate() if t.name.startswith("credential-read:")]
+
+
+def test_a_keychain_prompt_is_reported_as_waiting_not_as_no_key(
+    client, lemonade, keys, keychain_prompt, caplog
+):
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    keys["stored"]["fireworks"] = KEY
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            started = time.monotonic()
+            body = client.get("/api/providers").json()
+            assert time.monotonic() - started < 2
+            fw = body["providers"][1]
+            assert fw["key_state"] == "waiting_for_os_permission"
+            assert fw["key_source"] is None
+            assert "Look for a system dialog" in fw["key_message"]
+            assert body["providers"][2]["key_state"] == "read"
+    # One read in flight however often the UI polls, and one warning for it.
+    assert keychain_prompt["reads"] == 1
+    assert len(_credential_threads()) == 1
+    assert caplog.text.count("has not returned") == 1
+    assert keys["ensure"] == []
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_state"] == "read"
+    assert fw["key_message"] is None
+    assert keys["ensure"] == ["fireworks"]
+    assert credential_wait.in_flight_count() == 0
+
+
+def test_restore_waits_for_a_keychain_prompt_then_restores(
+    client, lemonade, keys, db, keychain_prompt
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    body = client.get("/api/providers/active").json()
+    assert time.monotonic() - started < 2
+    assert body["restore"] == {"status": "pending", "message": None}
+    assert db.get_setting("custom_model") is None
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    again = client.get("/api/providers/active").json()
+    assert again["restore"]["status"] == "restored"
+    assert db.get_setting("custom_model") == model
+
+
+def test_select_while_a_keychain_prompt_is_open_says_so(
+    client, lemonade, keys, db, keychain_prompt
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    lemonade.models = _cloud_models()
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    resp = client.post("/api/providers/select", json={"model": model})
+    assert time.monotonic() - started < 2
+    assert resp.status_code == 409, resp.text
+    assert "Look for a system dialog" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    resp = client.post("/api/providers/select", json={"model": model})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == model
+
+
+def test_a_saved_key_is_read_afresh_after_connect_or_forget():
+    """A read nobody collected is not served once the user changes the key."""
+    credential_wait._in_flight.clear()
+    assert (
+        credential_wait.read_within("cloud-key:fireworks", lambda: "old", "k") == "old"
+    )
+    stale = credential_wait.Future()
+    stale.set_result("old")
+    credential_wait._in_flight["cloud-key:fireworks"] = stale
+
+    credential_wait.discard("cloud-key:fireworks")
+
+    assert (
+        credential_wait.read_within("cloud-key:fireworks", lambda: "new", "k") == "new"
+    )
 
 
 # ── GET /api/providers/active ──────────────────────────────────────────────
@@ -338,6 +481,39 @@ def test_active_restore_fails_for_a_local_model_not_downloaded(
     body = client.get("/api/providers/active").json()
     assert body["restore"]["status"] == "failed"
     assert "not downloaded" in body["restore"]["message"]
+
+
+# Lemonade lists a registered ``user.X`` model as ``X`` (seen on v2026.40.0).
+_CUSTOM = "user.ggml-gpt-oss-20b-MXFP4-GGUF"
+_CUSTOM_LISTED = {"id": "ggml-gpt-oss-20b-MXFP4-GGUF", "downloaded": True, "labels": []}
+
+
+def test_active_custom_model_is_downloaded_under_its_listed_name(
+    client, lemonade, keys, db
+):
+    """The chip showed a download icon for gpt-oss 20B that was on disk."""
+    _write_config({"default_model": _CUSTOM})
+    lemonade.models = [_CUSTOM_LISTED]
+    body = client.get("/api/providers/active").json()
+    assert body["model"] == _CUSTOM
+    assert body["downloaded"] is True
+
+
+def test_selecting_a_downloaded_custom_model_by_its_user_name_works(
+    client, lemonade, keys, db
+):
+    lemonade.models = [_CUSTOM_LISTED]
+    resp = client.post("/api/providers/select", json={"model": _CUSTOM})
+    assert resp.status_code == 200, resp.json()
+    assert db.get_setting("custom_model") == _CUSTOM
+
+
+def test_restoring_a_downloaded_custom_model_works(client, lemonade, keys, db):
+    _write_config({"last_model": _CUSTOM})
+    lemonade.models = [_CUSTOM_LISTED]
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "restored", body["restore"]
+    assert body["model"] == _CUSTOM
 
 
 def test_active_restore_reports_a_corrupt_config(client, lemonade, keys, db):
@@ -606,6 +782,47 @@ _CATALOG = [
     {"id": "fireworks.embed", "recipe": "cloud", "labels": ["embedding"]},
     {"id": "amd.gpt-oss", "recipe": "cloud", "labels": [], "downloaded": True},
 ]
+
+
+def test_cloud_models_show_the_providers_window_not_lemonades_4096(client, lemonade):
+    # Lemonade v2026.42.1: a cloud model it has "loaded" lists context_length 4096.
+    lemonade.models = [
+        {
+            "id": "fireworks.deepseek-v4p1-flash",
+            "recipe": "cloud",
+            "labels": [],
+            "context_length": 4096,
+            "max_context_window": 1048576,
+        },
+        {
+            "id": "fireworks.glm-5p3-flash",
+            "recipe": "cloud",
+            "labels": [],
+            "context_length": 1048576,
+            "max_context_window": 1048576,
+        },
+    ]
+    models = client.get("/api/providers/fireworks/models").json()["models"]
+    assert {m["id"]: m["context_length"] for m in models} == {
+        "fireworks.deepseek-v4p1-flash": 1048576,
+        "fireworks.glm-5p3-flash": 1048576,
+    }
+
+
+def test_local_models_show_their_configured_window(client, lemonade):
+    lemonade.models = [
+        {
+            "id": "Qwen3-4B-GGUF",
+            "downloaded": True,
+            "labels": [],
+            "recipe": "llamacpp",
+            "context_length": 65536,
+            "max_context_window": 262144,
+        }
+    ]
+    models = client.get("/api/providers/local/models").json()["models"]
+    (row,) = [m for m in models if m["id"] == "Qwen3-4B-GGUF"]
+    assert row["context_length"] == 65536
 
 
 def test_local_models_are_downloaded_chat_models_plus_the_default(client, lemonade):
@@ -950,3 +1167,92 @@ def test_select_while_the_server_is_starting_is_503(client, lemonade, keys, db):
     resp = client.post("/api/providers/select", json={"model": DEFAULT_MODEL_NAME})
     assert resp.status_code == 503
     assert db.get_setting("custom_model") is None
+
+
+# ── AMD gateway reachability (#5604) ───────────────────────────────────────
+
+
+def _offline():
+    from gaia.llm.gateway import GatewayUnreachable
+
+    return GatewayUnreachable("llm-api.amd.com", "Name or service not known")
+
+
+def _amd(body):
+    return next(p for p in body["providers"] if p["id"] == "amd")
+
+
+def test_list_says_a_reachable_gateway_has_a_network(client, lemonade, keys, reach):
+    lemonade.cloud["amd"] = {"name": "amd", "base_url": "https://gw.example.test/v1"}
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": True, "detail": None}
+    assert reach["asked"] == ["https://gw.example.test/v1"]
+
+
+def test_list_marks_an_unreachable_gateway_no_network(client, lemonade, keys, reach):
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"]["reachable"] is False
+    assert "No network available" in amd["network"]["detail"]
+    assert "llm-api.amd.com" in amd["network"]["detail"]
+    fireworks = next(
+        p
+        for p in client.get("/api/providers").json()["providers"]
+        if p["id"] == "fireworks"
+    )
+    assert "network" not in fireworks
+
+
+def test_list_checks_the_gateway_even_when_lemonade_is_down(
+    client, lemonade, keys, reach
+):
+    lemonade.down = True
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"]["reachable"] is False
+
+
+def test_connecting_an_unreachable_gateway_says_no_network_not_key(
+    client, lemonade, keys, reach
+):
+    reach["error"] = _offline()
+    resp = client.post("/api/providers/amd/connect", json={"api_key": KEY})
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert "No network available" in detail
+    assert "key" not in detail.lower()
+    # Nothing was registered or sent: the key never left this machine.
+    assert lemonade.paths("POST") == []
+    assert keys["remembered"] == []
+
+
+@pytest.mark.parametrize("setup", ["remote_lemonade", "proxy"])
+def test_the_gateway_is_not_checked_where_a_dial_from_here_proves_nothing(
+    client, lemonade, keys, reach, monkeypatch, setup
+):
+    """Lemonade sends the gateway's requests; a remote one, or a proxy, takes another path."""
+    if setup == "remote_lemonade":
+        monkeypatch.setattr(providers, "_is_local_url", lambda url: False)
+    else:
+        monkeypatch.setattr(
+            "urllib.request.getproxies", lambda: {"https": "http://proxy.test:3128"}
+        )
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": None, "detail": None}
+    assert reach["asked"] == []
+    if setup == "proxy":
+        resp = client.post("/api/providers/amd/connect", json={"api_key": KEY})
+        assert resp.status_code == 200, resp.text
+
+
+def test_an_unreadable_lemonade_address_skips_the_gateway_check(
+    client, lemonade, keys, reach, monkeypatch
+):
+    def unreadable():
+        raise providers.ProviderError("LEMONADE_BASE_URL is not a URL", 503)
+
+    monkeypatch.setattr(providers, "_base_url", unreadable)
+    reach["error"] = _offline()
+    amd = _amd(client.get("/api/providers").json())
+    assert amd["network"] == {"reachable": None, "detail": None}

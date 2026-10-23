@@ -11,7 +11,8 @@ import './settings/CloudSpending.css';
 import { formatGb } from '../utils/modelLabels';
 import { ChatModelChoice, SystemCheck } from './SetupSteps';
 import { StartCards } from './StartCards';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupRunStatus, SetupStep, StartCard } from '../types';
+import { useGatewayNetwork } from '../hooks/useGatewayNetwork';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupPlan, SetupProblem, SetupRunStatus, SetupStep, StartCard } from '../types';
 import './SetupScreen.css';
 
 const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
@@ -177,6 +178,25 @@ function ExistingLemonadeOffer({ onChosen }: { onChosen: (mode: 'external' | 'ga
     );
 }
 
+/** The user's Lemonade isn't answering: start it, or set up GAIA's own instead. */
+function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem; onRetry: () => void; onUseGaia: () => void }) {
+    return (
+        <>
+            {problem.start && <p className="setup-hint">{problem.start}</p>}
+            <div className="setup-row">
+                <button type="button" className="btn-primary" onClick={onRetry}>Try again</button>
+                {problem.use_gaia && (
+                    <button type="button" className="btn-secondary" onClick={onUseGaia}>Use GAIA&rsquo;s own instead</button>
+                )}
+            </div>
+            {problem.use_gaia && (
+                <p className="setup-hint">GAIA&rsquo;s own Lemonade Server downloads its own copy of the models.</p>
+            )}
+            {problem.switch_hint && <p className="setup-hint">{problem.switch_hint}</p>}
+        </>
+    );
+}
+
 interface SetupScreenProps {
     /** What `gaia init --check` said; the screen is shown only when it is not ready. */
     initial: SetupCheck;
@@ -189,7 +209,7 @@ function plannedSteps(steps: SetupStep[], plan: SetupPlan | null, cloud: boolean
     if (!plan) return steps;
     return steps.map((step) => {
         if (step.key === 'server' && plan.lemonade.mode === 'external') {
-            return { ...step, label: 'Use your Lemonade Server', detail: plan.lemonade.url };
+            return { ...step, label: 'Use your Lemonade Server', detail: plan.lemonade.url ?? step.detail };
         }
         if (step.key === 'models' && !cloud && !plan.decided_after_server) {
             const size = plan.download_gb === 0 ? 'already downloaded'
@@ -225,12 +245,17 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
     const [usersServer, setUsersServer] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
+    const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
     const cloud = choice !== 'local';
     const steps: SetupStep[] = run?.steps
         ?? plannedSteps(cloud ? initial.cloud_steps ?? initial.steps : initial.steps, plan, cloud);
     const running = run?.state === 'running' || run?.state === 'verifying';
     const installed = run?.state === 'ready';
+    // A failed or stopped run leaves the choices open, so a retry can change them.
+    const locked = running || installed;
+    const modelNamed = !!run?.chat_model || (!!plan && !plan.decided_after_server);
     // The run's steps are numbered after: check, where, and (local) model.
     const firstRunStep = cloud ? 3 : 4;
 
@@ -287,11 +312,12 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         return stopPolling;
     }, [running, stopPolling]);
 
-    const start = useCallback(async () => {
+    const start = useCallback(async (gaiaLemonade = false) => {
         setStartError(null);
         try {
             saveChoice(choice);
-            setRun(await api.startSetup(cloud));
+            setRun(await api.startSetup(cloud, gaiaLemonade));
+            if (gaiaLemonade) setUsersServer(false);
         } catch (err) {
             setStartError(err instanceof Error ? err.message : String(err));
         }
@@ -352,19 +378,19 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                             <span className="setup-step-num">{hardware || hardwareError ? <Check size={14} aria-hidden="true" /> : 1}</span>
                             <span className="setup-step-label">Check this PC</span>
                         </div>
-                        {!run && (
+                        {!locked && (
                             <div className="setup-step-body">
                                 <SystemCheck hardware={hardware} error={hardwareError} />
                             </div>
                         )}
                     </li>
 
-                    <li className={`setup-step${run ? ' is-done' : ' is-current'}`}>
+                    <li className={`setup-step${locked ? ' is-done' : ' is-current'}`}>
                         <div className="setup-step-head">
-                            <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 2}</span>
+                            <span className="setup-step-num">{locked ? <Check size={14} aria-hidden="true" /> : 2}</span>
                             <span className="setup-step-label">Choose where GAIA runs</span>
                         </div>
-                        {!run && (
+                        {!locked && (
                             <div className="setup-step-body">
                                 <ExistingLemonadeOffer onChosen={(mode) => { setUsersServer(mode === 'external'); loadHardware(); loadPlan(); }} />
                                 <div className="setup-choices" role="radiogroup" aria-label="Where GAIA runs">
@@ -374,25 +400,31 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                             type="button"
                                             role="radio"
                                             aria-checked={choice === c.id}
-                                            className={`setup-choice${choice === c.id ? ' is-active' : ''}`}
+                                            className={`setup-choice${choice === c.id ? ' is-active' : ''}${unreachable(c.id) ? ' is-disabled' : ''}`}
                                             onClick={() => setChoice(c.id)}
+                                            disabled={unreachable(c.id)}
                                         >
                                             {c.id === 'local' ? <Cpu size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}
                                             <span>
                                                 <span className="setup-choice-title">{c.title}</span>
-                                                <span className="setup-choice-note">{c.note}</span>
+                                                <span className="setup-choice-note">{unreachable(c.id) ? gateway?.detail : c.note}</span>
                                             </span>
                                         </button>
                                     ))}
                                 </div>
+                                {gateway?.reachable === false && (
+                                    <button type="button" className="btn-secondary" onClick={recheckGateway}>
+                                        Check the AMD gateway again
+                                    </button>
+                                )}
                             </div>
                         )}
                     </li>
 
                     {!cloud && (
-                        <li className={`setup-step${run ? ' is-done' : ' is-current'}`}>
+                        <li className={`setup-step${locked && modelNamed ? ' is-done' : locked ? ' is-pending' : ' is-current'}`}>
                             <div className="setup-step-head">
-                                <span className="setup-step-num">{run ? <Check size={14} aria-hidden="true" /> : 3}</span>
+                                <span className="setup-step-num">{locked && modelNamed ? <Check size={14} aria-hidden="true" /> : 3}</span>
                                 <span className="setup-step-label">Chat model</span>
                             </div>
                             <div className="setup-step-body">
@@ -400,7 +432,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                     plan={plan}
                                     planError={planError}
                                     chosen={run?.chat_model ?? null}
-                                    locked={!!run}
+                                    locked={locked}
                                     onPlan={setPlan}
                                 />
                             </div>
@@ -409,9 +441,10 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
 
                     {!run && (
                         <li className="setup-step-action">
-                            <button type="button" className="btn-primary setup-start" onClick={() => void start()}>
+                            <button type="button" className="btn-primary setup-start" onClick={() => void start()} disabled={unreachable(choice)}>
                                 Start setup
                             </button>
+                            {unreachable(choice) && <p className="setup-error" role="alert">{gateway?.detail}. Choose another option, or connect and check again.</p>}
                             {startError && <p className="setup-error" role="alert">{startError}</p>}
                         </li>
                     )}
@@ -433,17 +466,25 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                     <div className="setup-step-body">
                                         <p className="setup-hint" role="status">{run.text}</p>
                                         {run.percent != null && (
-                                            <progress className="setup-progress" max={100} value={run.percent} aria-label={run.text} />
+                                            <>
+                                                <progress className="setup-progress" max={100} value={run.percent} aria-label={run.text} />
+                                                <p className="setup-hint">{run.percent}%{run.size ? ` · ${run.size}` : ''}</p>
+                                            </>
                                         )}
                                     </div>
                                 )}
                                 {failed && run && step === activeStep && (
                                     <div className="setup-step-body">
                                         <p className="setup-error" role="alert">{run.error ?? 'Setup stopped.'}</p>
-                                        <div className="setup-row">
-                                            <button type="button" className="btn-primary" onClick={() => void start()}>Try again</button>
-                                            <span className="setup-hint">or run <code>{run.command}</code> in a terminal.</span>
-                                        </div>
+                                        {run.problem ? (
+                                            <ServerProblem problem={run.problem} onRetry={() => void start()} onUseGaia={() => void start(true)} />
+                                        ) : (
+                                            <div className="setup-row">
+                                                <button type="button" className="btn-primary" onClick={() => void start(!!run.gaia_lemonade)}>Try again</button>
+                                                <span className="setup-hint">or run <code>{run.command}</code> in a terminal.</span>
+                                            </div>
+                                        )}
+                                        {startError && <p className="setup-error" role="alert">{startError}</p>}
                                     </div>
                                 )}
                             </li>
@@ -467,7 +508,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                                                 aria-checked={choice === c.id}
                                                 className={choice === c.id ? 'btn-primary' : 'btn-secondary'}
                                                 onClick={() => switchCloud(c.id)}
-                                                disabled={keyState.busy}
+                                                disabled={keyState.busy || unreachable(c.id)}
+                                                title={unreachable(c.id) ? gateway?.detail ?? undefined : undefined}
                                             >
                                                 {c.title}
                                             </button>

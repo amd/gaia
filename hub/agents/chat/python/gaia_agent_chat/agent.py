@@ -5,6 +5,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
 import dataclasses
+import errno
 import os
 import platform
 import re
@@ -103,6 +104,7 @@ from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
 from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
+from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -1104,6 +1106,18 @@ class ChatAgent(
             use_claude=use_claude,
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
+
+    def _no_documents_message(self) -> str:
+        # An Agent UI chat searches only its own attachments, not the library.
+        if getattr(getattr(self, "config", None), "ui_session_id", None):
+            return (
+                "No documents are attached to this chat. The user's Document "
+                "library may hold others, but a chat searches only the documents "
+                "attached to it. If the user expected documents here, say so and "
+                "ask them to attach them (Documents in the sidebar, then the link "
+                "icon), or index a file they name by its path."
+            )
+        return super()._no_documents_message()
 
     def _model_service_label(self) -> Optional[str]:
         """Names the provider in a failed turn's message: "Fireworks AI: …"."""
@@ -2883,7 +2897,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         self.reindex_file(dest_path)
 
     def reindex_file(self, file_path: str) -> None:
-        """Reindex a file that was modified or created."""
+        """Reindex a file that was modified or created.
+
+        Raises:
+            PermissionError: Windows refused the read, because another program
+                holds the file exclusively or has locked part of it. The file
+                watcher retries on this, so it must not be caught here.
+        """
         if not self.rag:
             logger.warning(
                 f"Cannot reindex {file_path}: RAG dependencies not installed"
@@ -2898,18 +2918,36 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             logger.warning(f"Re-indexing skipped: Path not allowed {real_file_path}")
             return
 
+        logger.info(f"Reindexing: {real_file_path}")
         try:
-            logger.info(f"Reindexing: {real_file_path}")
-            # Use the new reindex_document method which removes old chunks first
+            # Catches a whole-file lock on formats whose parser hides the OS error.
+            if os.path.isfile(real_file_path):
+                with open(real_file_path, "rb") as f:
+                    f.read(1)
+        except FileNotFoundError:
+            # Its delete event removes it from the index.
+            logger.info(f"Not reindexing {real_file_path}: deleted before it was read")
+            return
+        except OSError as e:
+            if held_by_another_program(e):
+                raise
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
+        try:
             result = self.rag.reindex_document(real_file_path)
-            if result.get("success"):
-                self.indexed_files.add(file_path)
-                logger.info(f"Successfully reindexed {real_file_path}")
-            else:
-                error = result.get("error", "Unknown error")
-                logger.error(f"Failed to reindex {real_file_path}: {error}")
-        except Exception as e:
-            logger.error(f"Failed to reindex {real_file_path}: {e}")
+        except Exception:
+            # Runs on the file watcher's thread; nothing above it can report this.
+            logger.exception(f"Failed to reindex {real_file_path}")
+            return
+        if result.get("success"):
+            self.indexed_files.add(file_path)
+            logger.info(f"Successfully reindexed {real_file_path}")
+            return
+        error = result.get("error", "Unknown error")
+        if result.get("error_type") == "file_locked":
+            # A partial lock, or one taken after the probe: let the watcher retry.
+            raise PermissionError(errno.EACCES, error, real_file_path)
+        logger.error(f"Failed to reindex {real_file_path}: {error}")
 
     def stop_watching(self) -> None:
         """Stop all file system observers."""

@@ -3198,6 +3198,17 @@
         "title": "Interval Seconds",
         "type": "integer"
       },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
+      },
       "last_result": {
         "anyOf": [
           {
@@ -3645,8 +3656,13 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
     "properties": {
+      "gaia_lemonade": {
+        "default": false,
+        "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
       "skip_chat_model": {
         "default": false,
         "title": "Skip Chat Model",
@@ -4000,6 +4016,17 @@
           }
         ],
         "title": "Processor Name"
+      },
+      "setup_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Setup Error"
       },
       "start_command": {
         "anyOf": [

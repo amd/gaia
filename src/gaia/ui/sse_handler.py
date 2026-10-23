@@ -58,6 +58,10 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
 
+#: Result keys naming a file the tool wrote; kept on the summary view a
+#: relayed result is reduced to.
+RESULT_PATH_KEYS = ("file_path", "image_path")
+
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
 
@@ -510,6 +514,10 @@ class SSEOutputHandler(OutputHandler):
     #: Set when the client denied the live prompt because nobody answered.
     _confirm_timed_out: bool = False
 
+    #: The arguments the model sent for the call about to be confirmed, when
+    #: the prompt shows more than that (see :meth:`note_call_args`).
+    _noted_call: Optional["tuple[str, Dict[str, Any]]"] = None
+
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
@@ -721,11 +729,33 @@ class SSEOutputHandler(OutputHandler):
 
     # === Tool Execution Methods ===
 
-    def print_tool_usage(self, tool_name: str):
+    def record_tool_started(self, tool_name: str) -> None:
+        """Note a tool starting in the turn's ledger and start its timer."""
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
         self.turn_ledger.tool_started(tool_name)
+
+    def record_tool_args(self, args: Dict[str, Any]) -> None:
+        """Note the running tool's arguments in the turn's ledger."""
+        self.turn_ledger.tool_args(args)
+
+    def record_tool_result(self, data: Any, success: bool) -> Optional[float]:
+        """Note the running tool's result and stop its timer.
+
+        Returns the tool's latency in milliseconds, or None when no start was
+        recorded.
+        """
+        self._last_tool_success = success
+        self.turn_ledger.tool_result(data, success)
+        if self._tool_start_time is None:
+            return None
+        latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+        self._tool_start_time = None
+        return latency_ms
+
+    def print_tool_usage(self, tool_name: str):
+        self.record_tool_started(tool_name)
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -776,7 +806,7 @@ class SSEOutputHandler(OutputHandler):
                 if data
                 else self._last_tool_label
             )
-            self.turn_ledger.tool_args(data)
+            self.record_tool_args(data)
             self._emit(
                 {
                     "type": "tool_args",
@@ -799,25 +829,30 @@ class SSEOutputHandler(OutputHandler):
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
         success = not tool_result_failed(data)
-        self._last_tool_success = success
-        self.turn_ledger.tool_result(data, success)
+        latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
             "title": title,
             "summary": summary,
             "success": success,
         }
+        # A relayed result is reduced to this event, and a "skipped" save
+        # must not reach the chat's Outputs as made.
+        if isinstance(data, dict) and isinstance(data.get("status"), str):
+            event["status"] = data["status"]
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # Where the tool wrote, resolved: a relayed turn's Outputs need it.
+        if isinstance(data, dict):
+            for key in RESULT_PATH_KEYS:
+                if isinstance(data.get(key), str):
+                    event[key] = data[key]
 
-        # Attach latency for tool calls (measured from print_tool_usage)
-        if self._tool_start_time is not None:
-            latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+        if latency_ms is not None:
             event["latency_ms"] = latency_ms
-            self._tool_start_time = None
 
         # For command execution results, include structured output data
         # so the frontend can render a proper terminal view
@@ -1695,6 +1730,18 @@ class SSEOutputHandler(OutputHandler):
         """
         return scripted_user.declines(tool_name, tool_args)
 
+    def note_call_args(self, tool_name: str, call_args: Dict[str, Any]) -> None:
+        """Record what the model sent for the call the next prompt asks about.
+
+        The prompt's arguments can carry what GAIA adds for display (the folder
+        a shell call runs in, a risk note), so when they differ the
+        ``permission_request`` also carries these as ``call_args``. Its only
+        reader is ``CanonicalTranslator`` (the ``/query`` wire's ``args``); the
+        Agent UI ignores it. Consumed by the next :meth:`confirm_tool_execution`,
+        and only for the same tool.
+        """
+        self._noted_call = (tool_name, dict(call_args))
+
     def confirm_tool_execution(
         self,
         tool_name: str,
@@ -1719,6 +1766,8 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        noted, self._noted_call = self._noted_call, None
+        call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
         if scripted_user.declines(tool_name, tool_args):
@@ -1818,6 +1867,8 @@ class SSEOutputHandler(OutputHandler):
             "args": tool_args,
             "confirm_id": confirm_id,
         }
+        if call_args is not None and call_args != tool_args:
+            request["call_args"] = call_args
         # Present only when an "always" answer would create a grant, and it
         # names exactly what that grant covers. A front-end must not offer the
         # choice without it: an unqualified "always" is read as far broader

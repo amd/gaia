@@ -179,7 +179,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     run_count        INTEGER DEFAULT 0,
     error_count      INTEGER DEFAULT 0,
     session_id       TEXT,
-    schedule_config  TEXT
+    schedule_config  TEXT,
+    last_error       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schedule_results (
@@ -381,6 +382,8 @@ class ChatDatabase:
         self._add_column("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("sessions", "last_run_status", "TEXT")
+        # The last run's error text, or NULL when it succeeded.
+        self._add_column("scheduled_tasks", "last_error", "TEXT")
         self._add_column(
             "sessions",
             "kind",
@@ -398,16 +401,18 @@ class ChatDatabase:
 
     def close(self):
         """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        # Wait for a query on another thread; closing under it crashes SQLite.
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
     @contextmanager
     def _transaction(self):
         """Execute operations atomically with thread safety."""
-        if self._conn is None:
-            raise RuntimeError("Database connection is closed")
         with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed")
             try:
                 yield
                 self._conn.commit()
@@ -648,6 +653,39 @@ class ChatDatabase:
                     )
 
         return self.get_session(session_id)
+
+    def set_provisional_title(self, session_id: str, title: str) -> bool:
+        """Name a chat that still has a placeholder title; True when renamed.
+
+        ``title_is_custom`` stays off, so the auto-titler can still replace it.
+        A title the user or an API caller chose is never touched.
+        """
+        with self._transaction():
+            row = self._conn.execute(
+                "SELECT title, title_is_custom FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None or row[1] or not is_placeholder_title(row[0]):
+                return False
+            self._conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+                (title, self._now(), session_id),
+            )
+        return True
+
+    def replace_auto_title(self, session_id: str, expected: str, title: str) -> bool:
+        """Swap an auto title for *title* only if it is still *expected*.
+
+        True when renamed. A rename that lands first (a new title or a pin)
+        makes this a no-op, in one statement, so it can never be overwritten.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE sessions SET title = ?, updated_at = ?
+                   WHERE id = ? AND title = ? AND title_is_custom = 0""",
+                (title, self._now(), session_id, expected),
+            )
+            return cursor.rowcount > 0
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""
@@ -1661,13 +1699,15 @@ class ChatDatabase:
         error_count: int = 0,
         session_id: str | None = None,
         schedule_config: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         """Update the mutable fields of a scheduled task row."""
         with self._transaction():
             self._conn.execute(
                 """UPDATE scheduled_tasks
                    SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
-                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?,
+                       last_error = ?
                    WHERE id = ?""",
                 (
                     status,
@@ -1678,6 +1718,7 @@ class ChatDatabase:
                     error_count,
                     session_id,
                     schedule_config,
+                    last_error,
                     task_id,
                 ),
             )
