@@ -422,6 +422,67 @@ def pending_download_sizes(client, model_ids) -> dict:
     return sizes
 
 
+def _model_checkpoint(entry: Optional[dict], model_id: str) -> Optional[str]:
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    entry = entry or {}
+    checkpoint = entry.get("checkpoint") or (entry.get("checkpoints") or {}).get("main")
+    if not checkpoint:
+        mr = find_model_requirement(model_id)
+        checkpoint = mr.checkpoint if mr else None
+    return checkpoint if isinstance(checkpoint, str) and checkpoint else None
+
+
+def _snapshot_bytes(snapshot: Path) -> Optional[int]:
+    """Bytes in one snapshot: the files its download manifest lists, finished
+    or ``.partial``. None when the manifest cannot be read."""
+    manifest = snapshot / ".download_manifest.json"
+    if not manifest.is_file():
+        return sum(p.stat().st_size for p in snapshot.rglob("*.partial"))
+    try:
+        files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+        names = [f["name"] for f in files]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        log.warning("Cannot read Lemonade download manifest %s: %s", manifest, e)
+        return None
+    total = 0
+    for name in names:
+        for path in (snapshot / name, snapshot / f"{name}.partial"):
+            if path.is_file():
+                total += path.stat().st_size
+    return total
+
+
+def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
+    """Bytes of each model Lemonade's store already holds: finished files and
+    the ``.partial`` ones an interrupted pull left. None for a model GAIA
+    cannot look up: a store not on this PC, or no known checkpoint."""
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    store = Path(store_path) if store_path else None
+    if store is None or not store.is_dir():
+        return {m: None for m in model_ids}
+    catalog = client.list_models(show_all=True).get("data", [])
+    found = {}
+    for model_id in model_ids:
+        entry = next(
+            (e for e in catalog if _model_ids_match(e.get("id"), model_id)), None
+        )
+        checkpoint = _model_checkpoint(entry, model_id)
+        if not checkpoint:
+            found[model_id] = None
+            continue
+        repo = checkpoint.split(":", 1)[0]
+        snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
+        counted = (
+            [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+            if snapshots.is_dir()
+            else []
+        )
+        found[model_id] = None if None in counted else sum(counted)
+    return found
+
+
 def _size_note(size_gb) -> str:
     if size_gb is None:
         return ""
@@ -786,12 +847,16 @@ class InitEvents:
     def __init__(self, enabled: bool = False, stream=None):
         self.enabled = enabled
         self._stream = stream
+        #: Set while an in-place progress bar has not ended its line.
+        self.line_open = False
 
     def emit(self, event: str, **fields) -> None:
         if not self.enabled:
             return
         stream = self._stream or sys.stdout
-        stream.write(json.dumps({"event": event, **fields}) + "\n")
+        start = "\n" if self.line_open else ""
+        self.line_open = False
+        stream.write(start + json.dumps({"event": event, **fields}) + "\n")
         stream.flush()
 
 
@@ -851,11 +916,16 @@ class _JsonDownloadProgress:
 
     def _tally(self, event: dict) -> None:
         name = event.get("file") or ""
+        done = int(event.get("bytes_downloaded") or 0)
         if self._file is not None and name != self._file:
             self._finished += self._file_total
+            self._file_total = 0
         self._file = name
-        self._file_total = int(event.get("bytes_total") or 0)
-        self.bytes_done = self._finished + int(event.get("bytes_downloaded") or 0)
+        # Mid-file events can carry bytes_total 0, so keep the largest seen.
+        self._file_total = max(
+            self._file_total, int(event.get("bytes_total") or 0), done
+        )
+        self.bytes_done = self._finished + done
         total = int(event.get("total_download_size") or 0)
         self.bytes_total = max(
             total or self.planned_bytes or self._finished + self._file_total,
@@ -1117,6 +1187,7 @@ class InitCommand:
             if total > 0:
                 size_str += f"/{total / 1024 / 1024:.1f} MB"
             self._print(f"\r   [{bar}] {percent:.0f}% ({size_str})", end="")
+            self.events.line_open = True
 
     @staticmethod
     def _tui_installed() -> bool:
@@ -1941,12 +2012,25 @@ class InitCommand:
                         "Lemonade did not report the free space in its model "
                         f"store, so GAIA could not check that {total_gb:.1f} GB fits."
                     )
-                fits = check_download_fits_disk(total_gb, disk_free_gb, store)
+                # An interrupted pull's bytes already take disk; count only the rest.
+                pending = [m for m in model_ids if sizes.get(m)]
+                on_disk = bytes_already_on_disk(client, pending, store)
+                still_gb = sum(
+                    max(0.0, sizes[m] - (on_disk[m] or 0) / 1e9) for m in pending
+                )
+                fits = check_download_fits_disk(still_gb, disk_free_gb, store)
                 if not fits.fits:
-                    message = f"Not enough disk space: {fits.reason}."
-                    self._print_error(message)
-                    self.events.emit("error", message=message)
-                    return False
+                    if any(on_disk[m] is None for m in pending):
+                        self._print_warning(
+                            f"The disk may be too small: {fits.reason}. GAIA could "
+                            "not read what an earlier download left there, so it "
+                            "downloads anyway; Lemonade stops if the disk fills."
+                        )
+                    else:
+                        message = f"Not enough disk space: {fits.reason}."
+                        self._print_error(message)
+                        self.events.emit("error", message=message)
+                        return False
             self.events.emit(
                 "plan",
                 models=[

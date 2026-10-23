@@ -271,4 +271,19 @@ describe("runGaiaInit", () => {
     expect(log).toContain('"event":"plan"');
     expect(log).not.toContain('"event":"progress"');
   });
+
+  test("reads an event that follows an in-place progress bar's redraws", async () => {
+    const step = line({ event: "step", step: 2, total: 5, message: "Downloading models..." });
+    const { installer, logged } = loadInstaller([
+      `\r   [====------] 40% (40.0 MB/100.0 MB)\r   [==========] 100% (100.0 MB/100.0 MB)\r${step}\n`,
+    ]);
+    const onProgress = jest.fn();
+
+    await installer.ensureBackend({ version: "0.25.0", isPackaged: false, onProgress });
+
+    const messages = onProgress.mock.calls.map(([, , m]) => m);
+    expect(messages).toContain("Step 2 of 5: Downloading models...");
+    // The bar is human output, so the line still reaches the log.
+    expect(logged.join("")).toContain("100% (100.0 MB/100.0 MB)");
+  });
 });

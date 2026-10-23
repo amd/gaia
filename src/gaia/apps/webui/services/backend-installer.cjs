@@ -600,12 +600,17 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
     const logLine = (line) => {
       if (line) log(`  ${stageLabel ? `[${stageLabel}] ` : ""}${line}`);
     };
+    // An in-place progress bar redraws with \r, so each redraw is its own segment.
     const takeLine = (line) => {
-      let quiet = false;
-      try {
-        quiet = onLine(line) === true;
-      } catch (err) {
-        logError(`onLine callback threw: ${err.message}`);
+      let quiet = true;
+      for (const segment of line.split("\r")) {
+        if (!segment) continue;
+        try {
+          quiet = onLine(segment) === true && quiet;
+        } catch (err) {
+          logError(`onLine callback threw: ${err.message}`);
+          quiet = false;
+        }
       }
       if (!quiet) logLine(line);
     };

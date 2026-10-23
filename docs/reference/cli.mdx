@@ -281,7 +281,10 @@ is already installed.
 Before it downloads anything, `gaia init` adds up what the models still need and checks
 it against the free space in Lemonade's model store. When they don't all fit, it stops
 before the first download with `Not enough disk space`, how much the models need, how much
-is free, and where, and exits `1`. Each model fitting on its own is not enough.
+is free, and where, and exits `1`. Each model fitting on its own is not enough. What an
+interrupted download already left there counts as downloaded, so a retry asks only for
+the rest. When GAIA can't read that store (a remote server), a shortfall is a warning and
+the download goes ahead.
 </Note>
 
 #### Progress events
