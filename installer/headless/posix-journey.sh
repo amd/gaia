@@ -194,6 +194,9 @@ launch_agent_ui() {
   local cmd
   cmd="$(agent_ui_cmd)"
   [ -x "${cmd}" ] || die "${cmd} is not there to launch"
+  # These rows install a published release; one before #5629 runs gaia init
+  # (several GB of models) on first launch. Later apps ignore the variable.
+  export GAIA_SKIP_GAIA_INIT=1
   if [ "${OS}" = "Linux" ]; then
     nohup xvfb-run --auto-servernum "${cmd}" >"${LOGS}/app.out" 2>"${LOGS}/app.err" &
   else
