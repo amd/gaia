@@ -380,6 +380,13 @@ folders — so a host without the Python package (the bundled skills live inside
 the binary) can still show them. A skill root that cannot be read is a `500`
 naming it.
 
+`/query` streams the answer as `token` events before its terminal `final`. A
+run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
+empty `final` and sends no `token` after the cancel, so a host keeps the text
+the `token` events already delivered. Answer text the model produced but the
+stream had not yet sent when the cancel landed is discarded with the
+half-written tail.
+
 ### 5.2 `session_id` and agent retention
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.

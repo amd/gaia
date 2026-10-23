@@ -705,6 +705,24 @@ def test_connect_blank_key_replays_the_stored_one(client, lemonade, keys):
     assert resp.json()["remembered"] is False
 
 
+def test_connect_blank_key_while_a_keychain_prompt_is_open_says_so(
+    client, lemonade, keys, keychain_prompt
+):
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "models_discovered": True}
+    keys["stored"]["fireworks"] = KEY
+
+    started = time.monotonic()
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert time.monotonic() - started < 2, "connect hung on the keychain dialog"
+    assert resp.status_code == 409, resp.text
+    assert "Look for a system dialog" in resp.json()["detail"]
+
+    keychain_prompt["answered"].set()
+    _wait_for_reads_to_drain()
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert resp.status_code == 200, resp.text
+
+
 def test_connect_blank_key_replay_failure_is_502(client, lemonade, keys):
     keys["ensure_result"] = CloudKeyError("Lemonade is not reachable")
     resp = client.post("/api/providers/fireworks/connect", json={})

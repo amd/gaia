@@ -15,14 +15,6 @@ import './ScheduleManager.css';
 /** How long the Delete button waits for its "Confirm?" click. */
 export const CONFIRM_DELETE_MS = 8000;
 
-/** Format an interval in seconds to a human-readable string. */
-function formatInterval(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-    return `${Math.round(seconds / 86400)}d`;
-}
-
 /** Format an ISO date string to a relative or short time. */
 function formatTime(iso: string | null, now?: Date): string {
     if (!iso) return 'never';
@@ -184,7 +176,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             </div>
             <div className="schedule-card-prompt">{schedule.prompt}</div>
             <div className="schedule-card-meta">
-                <span><Clock size={11} /> {formatInterval(schedule.interval_seconds)}</span>
+                <span title={schedule.description}><Clock size={11} /> {schedule.description}</span>
                 <span>Runs: {schedule.run_count}</span>
                 {schedule.error_count > 0 && <span>Errors: {schedule.error_count}</span>}
                 <span>Last: {formatTime(schedule.last_run_at)}</span>

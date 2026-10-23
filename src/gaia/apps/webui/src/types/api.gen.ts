@@ -67,6 +67,7 @@ export interface ApiSchemas {
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
@@ -215,7 +216,10 @@ export interface AgentStepResponse {
   id: number;
   label: string;
   latencyMs?: number | null;
+  mcpOutput?: McpOutputResponse | null;
   mcpServer?: string | null;
+  mcpServerLabel?: string | null;
+  mcpTool?: string | null;
   narration?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
@@ -250,6 +254,13 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
+}
+/**
+ * The text an MCP tool returned, capped for the tool row.
+ */
+export interface McpOutputResponse {
+  text?: string;
+  truncated?: boolean;
 }
 /**
  * Request to attach a document to a session.
@@ -958,6 +969,7 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
   error_count?: number;
   id: string;
   interval_seconds: number;

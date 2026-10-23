@@ -807,8 +807,13 @@ def connect_provider(
             except CloudKeyError as e:
                 remember_error = str(e)
         else:
+            from gaia.connectors.credential_wait import CredentialStoreWaiting
+
             try:
-                ensure_authenticated(provider)
+                ensure_authenticated(provider, recall=lambda: _bounded_recall(provider))
+            except CredentialStoreWaiting as e:
+                # 409, not a failure: the screen shows this and asks again.
+                raise ProviderError(str(e), 409) from e
             except (CloudKeyError, requests.RequestException) as e:
                 raise ProviderError(str(e), 502) from e
         del key

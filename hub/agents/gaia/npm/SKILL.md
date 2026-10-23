@@ -323,8 +323,8 @@ The canonical event shapes, as emitted:
 |---|---|
 | `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck |
 | `token` | `{ type, delta }` — answer text to append |
-| `tool_call` | `{ type, tool, args }` |
-| `tool_result` | `{ type, tool, data, render? }` |
+| `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
+| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`) |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say) and `risk_note` (why GAIA's checks don't cover the call) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage?, failed? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result |
@@ -346,7 +346,10 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
-  Dropping the HTTP connection also cancels the run.
+  Dropping the HTTP connection also cancels the run. A run stopped mid-answer
+  ends with an empty `final`, and no `token` follows the cancel, so keep the
+  text the `token` events already delivered. Text not yet sent when the
+  cancel lands is dropped, not delivered late.
 - **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
   (contract ≥ 2.15, body `{ text }`). The run is not interrupted and no second
   turn starts: the agent folds the text in at its next step boundary and
