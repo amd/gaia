@@ -61,13 +61,18 @@ export class ApiError extends Error {
     }
 }
 
+/** Starlette's bare body or the UI server's catch-all ("Internal server error") — no cause. */
+function isBareInternalError(detail: string): boolean {
+    return detail.trim().toLowerCase() === 'internal server error';
+}
+
 /**
- * False when a 500 carries no real cause: Starlette's bare "Internal Server Error",
+ * False when a 500 carries no real cause: a bare "Internal Server Error",
  * a proxy HTML page, or a raw JSON body with an empty or missing `detail`.
  */
 function hasUsefulServerDetail(detail: string): boolean {
     const text = detail.trim();
-    return text !== '' && text !== 'Internal Server Error' && !/^[<{[]/.test(text);
+    return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
 }
 
 function getFriendlyError(status: number, detail: string): string {
@@ -699,7 +704,7 @@ async function consumeSSEResponse(
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
         // The server's own words when it gave any, never a raw JSON body.
         const detail = parseErrorDetail(errText);
-        const message = detail && detail !== 'Internal Server Error' ? detail : getFriendlyError(res.status, detail);
+        const message = detail && !isBareInternalError(detail) ? detail : getFriendlyError(res.status, detail);
         callbacks.onError(new ApiError(message, res.status, detail, parseErrorStatus(errText)));
         return;
     }

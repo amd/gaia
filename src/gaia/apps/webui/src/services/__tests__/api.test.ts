@@ -166,6 +166,7 @@ describe('HTTP 500 error messages', () => {
     it.each([
         ['an empty body', ''],
         ["Starlette's bare body", 'Internal Server Error'],
+        ["the UI server's catch-all", JSON.stringify({ detail: 'Internal server error' })],
         ['a proxy HTML page', '<html><body>Bad Gateway</body></html>'],
         ['an empty JSON detail', JSON.stringify({ detail: '' })],
         ['a JSON body with no detail', JSON.stringify({ error: 'boom' })],
