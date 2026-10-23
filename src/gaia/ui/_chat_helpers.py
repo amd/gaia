@@ -146,7 +146,22 @@ def _spawn_background(coro) -> asyncio.Task:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(_log_background_failure)
     return task
+
+
+def _log_background_failure(task: asyncio.Task) -> None:
+    """Log what ended a fire-and-forget task; nobody awaits it to see."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Background task %s failed: %s",
+            task.get_coro().__qualname__,
+            exc,
+            exc_info=exc,
+        )
 
 
 # ── Agent registry ───────────────────────────────────────────────────────────
@@ -543,27 +558,28 @@ _classify_chat_exception = classify_lemonade_exception
 
 # ── Auto-titling ────────────────────────────────────────────────────────────
 #
-# After the agent finishes a turn, kick off a background task that asks the
-# same LLM (the default chat model if that one is a safety classifier) to
-# generate a 3-6 word title summarising the conversation, then
-# update the session title in the DB. Fires only while the title is still a
-# placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
-# its name, so the sidebar never drifts to the latest question. The title is
-# always drawn from the chat's first question, even if that turn was stopped.
+# When the server takes a chat's first message, the chat is named after that
+# question at once (_set_provisional_title), so it has a name even if nobody
+# is watching when the answer finishes. After the agent finishes a turn, a
+# background task asks the model the turn ran on (the default chat model if
+# that one is a safety classifier) for a 3-6 word title, then updates the
+# session. It fires only while the title is a placeholder ("New Chat" /
+# "New Task" / "Untitled") or still the provisional one: once named, a chat
+# keeps its name, so the sidebar never drifts to the latest question. The
+# title is always drawn from the chat's first question, even if that turn was
+# stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
 #     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
-#   * Title was last updated < 30 s ago — prevents thrash mid-conversation
+#   * A title request already ran for the session in this server run — a
+#     failed one is not retried, so a cloud chat is not billed every turn,
+#     and concurrent fire-and-forget tasks don't pile up
 #   * No agent / no Lemonade base URL available
-#
-# Throttled by a per-session timestamp dict so concurrent fire-and-forget
-# tasks don't pile up.
 _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
-_AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
-_AUTO_TITLE_THROTTLE_S = 30.0
+_AUTO_TITLE_TRIED: set[str] = set()  # sessions that had their title request
 
 
 #: Safety-classifier model families. They answer any prompt with a verdict
@@ -584,6 +600,11 @@ _CLASSIFIER_VERDICT_RE = _re.compile(
     r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
 )
 _QUESTION_TITLE_MAX_CHARS = 60
+#: An attachment link the composer appends: ``[name](target)``.
+_MARKDOWN_LINK_RE = _re.compile(r"\[([^\]]*)\]\([^)]*\)")
+#: A cloud model may reason before it answers, and only some providers let a
+#: request turn that off; this leaves room for the reasoning and the title.
+_CLOUD_TITLE_MAX_TOKENS = 512
 
 
 def _is_guard_model(model_id: str) -> bool:
@@ -592,13 +613,28 @@ def _is_guard_model(model_id: str) -> bool:
     return any(pattern in name for pattern in _GUARD_MODEL_NAME_PATTERNS)
 
 
-def _title_model_for(session_model: str) -> str:
-    """The model that writes the title: the session's, unless it is a guard model."""
+def _title_model_for(session_model: str) -> Optional[str]:
+    """The model that writes the title: the session's, unless it is a guard model.
+
+    None when the stand-in for a local guard model would be a cloud model: a
+    local chat's content never leaves the PC just to name it.
+    """
     if not _is_guard_model(session_model):
         return session_model
-    from gaia.llm.lemonade_client import resolve_default_chat_model
+    from gaia.llm.lemonade_client import (
+        cloud_model_provider,
+        resolve_default_chat_model,
+    )
 
     title_model = resolve_default_chat_model()
+    if cloud_model_provider(title_model) and not cloud_model_provider(session_model):
+        logger.info(
+            "Auto-title: %s is a safety classifier and the default model %s is "
+            "a cloud model; keeping the chat's title",
+            session_model,
+            title_model,
+        )
+        return None
     logger.info(
         "Auto-title: %s is a safety classifier; titling with %s instead",
         session_model,
@@ -609,7 +645,7 @@ def _title_model_for(session_model: str) -> str:
 
 def _title_from_question(user_msg: str) -> Optional[str]:
     """The first question itself, cut at a word boundary, as a title."""
-    text = " ".join((user_msg or "").split())
+    text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", user_msg or "").split())
     if len(text) > _QUESTION_TITLE_MAX_CHARS:
         cut = text[:_QUESTION_TITLE_MAX_CHARS]
         text = (cut.rsplit(" ", 1)[0] or cut) + "…"
@@ -617,14 +653,27 @@ def _title_from_question(user_msg: str) -> Optional[str]:
     return text or None
 
 
-def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
-    """True only while the session still carries a placeholder title."""
+def _should_retitle(
+    current_title: str,
+    title_is_custom: bool = False,
+    provisional: Optional[str] = None,
+) -> bool:
+    """True while the title is a placeholder or the *provisional* question title."""
     if title_is_custom:
         return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
     if title.startswith("Eval:"):
         return False  # eval framework owns these
+    if provisional and title == provisional:
+        return True
     return not title or title.lower() in _AUTO_TITLE_DEFAULTS
+
+
+def _set_provisional_title(db: ChatDatabase, session_id: str, user_msg: str) -> None:
+    """Name a still-untitled chat after the question the server just took."""
+    title = _title_from_question(user_msg)
+    if title and db.set_provisional_title(session_id, title):
+        logger.info("Named session %s after its first question", session_id[:8])
 
 
 async def _generate_session_title(
@@ -676,9 +725,14 @@ async def _generate_session_title(
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
-        # It reasons even at "low"; leave room for the title after that.
-        max_tokens = 96 if mr is not None and mr.reasoning_effort else 24
         local = not cloud_model_provider(model_id)
+        if not local:
+            max_tokens = _CLOUD_TITLE_MAX_TOKENS
+        elif mr is not None and mr.reasoning_effort:
+            # It reasons even at "low"; leave room for the title after that.
+            max_tokens = 96
+        else:
+            max_tokens = 24
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
@@ -715,7 +769,8 @@ async def _generate_session_title(
         )
         return _title_from_question(user_msg)
     try:
-        content = data["choices"][0]["message"].get("content") or ""
+        choice = data["choices"][0]
+        content = choice["message"].get("content") or ""
     except (LookupError, TypeError, AttributeError) as exc:
         logger.warning("Auto-title: unreadable reply from %s: %s", model_id, exc)
         return None
@@ -729,10 +784,11 @@ async def _generate_session_title(
             title = title[len(prefix) :].strip()
     if not title or _CLASSIFIER_VERDICT_RE.match(title):
         logger.warning(
-            "Auto-title: %s replied %r, not a title; "
+            "Auto-title: %s replied %r (finish_reason=%s), not a title; "
             "titling from the first question instead",
             model_id,
             content[:80],
+            choice.get("finish_reason"),
         )
         return _title_from_question(user_msg)
     return title[:64]
@@ -765,11 +821,10 @@ async def _maybe_update_session_title(
     """Best-effort background task: re-title the session if the rules say so.
 
     Called fire-and-forget after each assistant turn finishes — never
-    blocks the user's response.  Failures are logged at debug level
-    only because nothing user-visible breaks if the title doesn't update.
+    blocks the user's response. *model_id* is the model the turn ran on, so a
+    local chat is never titled by a cloud model. A failure is logged as a
+    warning with its reason, and the chat keeps its provisional title.
     """
-    if not model_id:
-        return
     # Lookup current session.  If it's gone (deleted while we were
     # generating), bail silently.
     session = db.get_session(session_id)
@@ -777,18 +832,27 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
-    if not _should_retitle(current_title, title_is_custom):
-        return
     # Name the chat after its first question, even when that turn was stopped.
     user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
+    if not _should_retitle(
+        current_title, title_is_custom, _title_from_question(user_msg)
+    ):
+        return
+    if not model_id:
+        logger.info(
+            "Auto-title: no model is known for session %s's turn; keeping its title",
+            session_id[:8],
+        )
+        return
 
-    # Throttle: don't re-title if we updated within the last 30 s.
-    now = _time.monotonic()
+    title_model = _title_model_for(model_id)
+    if not title_model:
+        return
+
     with _AUTO_TITLE_LOCK:
-        last = _AUTO_TITLE_LAST_AT.get(session_id, 0.0)
-        if now - last < _AUTO_TITLE_THROTTLE_S:
+        if session_id in _AUTO_TITLE_TRIED:
             return
-        _AUTO_TITLE_LAST_AT[session_id] = now
+        _AUTO_TITLE_TRIED.add(session_id)
 
     # Use the same Lemonade endpoint the chat just used.
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -797,22 +861,28 @@ async def _maybe_update_session_title(
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
-        model_id=_title_model_for(model_id),
+        model_id=title_model,
         user_msg=user_msg,
         assistant_msg=assistant_msg,
     )
     if not new_title or new_title.lower() == current_title.lower():
         return
     try:
-        db.update_session(session_id, title=new_title)
+        # A no-op when the user renamed the chat while the title was written.
+        if not db.replace_auto_title(session_id, current_title, new_title):
+            return
         logger.info(
             "Auto-titled session %s: %r → %r",
             session_id[:8],
             current_title,
             new_title,
         )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.debug("Auto-title DB update failed: %s", exc)
+    except (sqlite3.Error, RuntimeError) as exc:
+        logger.warning(
+            "Auto-title: could not save the title of session %s: %s",
+            session_id[:8],
+            exc,
+        )
 
 
 # Eval-only provider opt-in (plan §5c): lets `gaia eval agent` drive a
@@ -2884,6 +2954,8 @@ async def _get_chat_response(
         model_id, device_ctx = resolve_session_model(
             session, agent_type, custom_model, registry
         )
+        if turn_box is not None:
+            turn_box["model"] = model_id
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
@@ -3269,12 +3341,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Beta dynamic tool loader (#1798). Effective only on the doc agent;
         # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
         dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-        # ``session_model`` is the model_id we expect to drive the
-        # session with, captured here in the outer scope so the
-        # auto-title background task at the bottom of this generator
-        # can read it without needing access to the inner producer
-        # thread's ``agent`` variable.
-        session_model = model_id
 
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -4248,23 +4314,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
             spending.record_turn(db, model_id, inference_stats)
-            # Fire-and-forget auto-titling: GAIA renames its own session
-            # once the response is complete. Skips Eval: titles, throttled
-            # to 30 s/session, runs on the same Lemonade slot the chat
-            # just used. Never blocks the user's response.
-            #
-            # NB: ``agent`` lives inside the producer thread's scope and
-            # isn't accessible here. We pass ``session_model`` (set
-            # before the producer started) instead — it's the same
-            # value ``_effective_model`` would have returned for the
-            # default agent factories that honour ``model_id`` kwarg.
+            # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_background(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
                     user_msg=request.message,
                     assistant_msg=full_response,
-                    model_id=session_model,
+                    model_id=model_id,
                 )
             )
             done_event = _done_event(
