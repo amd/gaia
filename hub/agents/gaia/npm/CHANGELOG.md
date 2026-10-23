@@ -14,6 +14,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `final`, the same as the stdio transport. A run cancelled mid-answer stops
   within a token and ends with an empty `final`, as stdio does; text not yet
   sent when the cancel lands is dropped.
+- **Token counts are exact in the published binary, offline too.** The binary
+  could not load its tokenizer, so every turn trimmed history and sized
+  context from an estimate that overcounts, and logged `Unknown encoding
+  cl100k_base`. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
 
 ### For integrators
 
