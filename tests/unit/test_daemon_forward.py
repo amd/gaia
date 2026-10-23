@@ -608,6 +608,21 @@ def test_boundary_delivery_failure_maps_to_502():
     assert r.status_code == 502
 
 
+def test_boundary_busy_connection_maps_to_503_retry():
+    def _mint(*, provider, scopes, agent_id):
+        raise ConnectionBusyError(provider)
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
+    client = _routes_client(fwd)
+    r = client.post(
+        "/daemon/v1/agents/email/connections/google/forward", headers=_auth()
+    )
+    assert r.status_code == 503
+    assert r.headers["Retry-After"] == "1"
+    assert "being saved" in r.json()["detail"]
+    assert http.deletes == []
+
+
 @pytest.mark.parametrize(
     "method,url",
     [

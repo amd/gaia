@@ -120,7 +120,8 @@ def load_current_connection(
     (another process, or another thread here) the connection is left in place
     and ``ConnectionBusyError`` is raised. An unreadable blob (absent, torn or
     corrupt) is handed to the store under the lock too, and raises
-    ``ConnectionBusyError`` while the lock is busy. Blocking keyring I/O.
+    ``ConnectionBusyError`` while the lock is busy, so "busy" can also mean
+    "unreadable and not yet cleared". Blocking keyring I/O.
     """
     provider = get_provider(provider_id)
     current = peek_connection(provider_id, account_email=account_email)
