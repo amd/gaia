@@ -848,8 +848,8 @@ class InitCommand:
         self._chat_choice: Optional[ChatModelChoice] = None
         # Set once that model is confirmed on disk; only then is it recorded.
         self._chat_model_ready = False
-        # Cleared when setup's verify step fails; a model it could not load
-        # must not be pinned as everyone's default.
+        # Cleared when setup's verify step fails; nothing unverified is
+        # pinned as everyone's default.
         self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build

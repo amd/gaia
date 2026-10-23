@@ -2031,7 +2031,7 @@ def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
     try:
         free, resident = _free_memory_snapshot(url)
     except (ModelFitError, LemonadeClientError) as e:
-        return f"cannot read the memory free on this PC, so cannot tell it loads: {e}"
+        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
     verdict = _verdict_for(free, resident, requirement, window)
     if verdict is None or verdict.fits:
         return None
