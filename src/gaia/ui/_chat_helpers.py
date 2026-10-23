@@ -1830,11 +1830,82 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
+#: What a stopped turn's reply is saved as when it wrote no text.
+_CANCELLED_REPLY = "Cancelled."
+
+# A stopped or cut-off reply reads to the model as withdrawn; left blank, the
+# model takes the request as still pending and answers it next turn.
+_STOPPED_REPLY_FOR_MODEL = (
+    "(The user stopped this reply before it finished. Don't continue it "
+    "unless they ask again.)"
+)
+_CUT_OFF_REPLY_FOR_MODEL = (
+    "(This reply was cut off before it finished. Don't continue it unless "
+    "the user asks again.)"
+)
+
+
+def _withdrawn_reply(content: str) -> Optional[str]:
+    """The model's view of a stopped or cut-off reply; None for any other."""
+    from .restart_recovery import (
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+        INTERRUPTED_TURN_NOTICE,
+    )
+
+    text = content.strip()
+    if text == _CANCELLED_REPLY:
+        return _STOPPED_REPLY_FOR_MODEL
+    for notice in (
+        INTERRUPTED_TURN_NOTICE,
+        CANCELLED_TURN_NOTICE,
+        ENDED_WITHOUT_REPLY_NOTICE,
+    ):
+        if text.endswith(notice):
+            # Keep what it streamed and which tools it started.
+            kept = text[: -len(notice)].rstrip()
+            if not kept:
+                return _CUT_OFF_REPLY_FOR_MODEL
+            return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    return None
+
+
+def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:
+    """*model_messages* with its closing answer replaced by *reply*."""
+    if not model_messages:
+        return model_messages
+    turn = [dict(m) for m in model_messages]
+    last = turn[-1]
+    if last.get("role") == "assistant" and not last.get("tool_calls"):
+        turn[-1] = {"role": "assistant", "content": reply}
+    else:
+        turn.append({"role": "assistant", "content": reply})
+    return turn
+
+
+def model_context_messages(db, session_id: str) -> list:
+    """The session's messages as a model reads them: stopped replies withdrawn."""
+    messages = []
+    for message in db.get_context_messages(session_id):
+        if message.get("role") == "assistant":
+            reply = _withdrawn_reply(message.get("content") or "")
+            if reply is not None:
+                message = {
+                    **message,
+                    "content": reply,
+                    "model_messages": _with_final_reply(
+                        message.get("model_messages"), reply
+                    ),
+                }
+        messages.append(message)
+    return messages
+
+
 def model_turns(agent, db, session_id: str) -> list:
     """The session's completed turns as *agent*'s model would be shown them."""
     from gaia.agents.base.history import text_tool_history, transcript_turns
 
-    turns = transcript_turns(db.get_context_messages(session_id))
+    turns = transcript_turns(model_context_messages(db, session_id))
     if (
         hasattr(agent, "_uses_native_tool_calls")
         and not agent._uses_native_tool_calls()
@@ -2388,27 +2459,37 @@ _EMPTY_ANSWER_LEMONADE_MSG = (
 )
 
 
+_NO_ANSWER_AFTER_TOOLS_MSG = (
+    "GAIA ran its tools but didn't write an answer. Send your message again, "
+    "or try another model."
+)
+
+
 def _empty_answer_outcome(
-    turn_cancelled: bool, has_steps: bool
+    turn_cancelled: bool, has_steps: bool, has_card: bool
 ) -> tuple[str, str, bool]:
     """Classify a chat turn that ended with no answer text, for the shared
     persistence tail's empty-``full_response`` branch.
 
-    Returns ``(content, sse_type, keep_steps)``:
+    Returns ``(content, sse_type, keep_steps)``; ``sse_type`` is ``done``,
+    ``failed`` (a ``done`` event marked failed) or ``error``:
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * no answer but steps/cards were produced → ``("", "done", True)`` — a
-        legitimately-empty final (e.g. the whole final turn was an echoed
-        render card the echo-guard stripped to empty); persist empty content
-        but keep the steps/cards so nothing is lost on rehydration.
+      * a render card was shown → ``("", "done", True)`` — the card is the
+        answer (e.g. an echoed card the echo-guard stripped to empty); keep
+        the steps so the card survives a reload.
+      * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
+        ran tools and ended without answering; say so and keep the steps.
       * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
         no cancel, no steps: the only case that warrants the Lemonade copy.
     """
     if turn_cancelled:
-        return "Cancelled.", "done", True
-    if has_steps:
+        return _CANCELLED_REPLY, "done", True
+    if has_card:
         return "", "done", True
+    if has_steps:
+        return _NO_ANSWER_AFTER_TOOLS_MSG, "failed", True
     return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
 
 
@@ -3305,7 +3386,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # A relayed sidecar only sees the transcript it is sent; in-process
         # agents restore traces below.
         history_pairs = (
-            _build_history_pairs(db.get_context_messages(request.session_id))
+            _build_history_pairs(model_context_messages(db, request.session_id))
             if _should_relay_to_sidecar(
                 request.agent_type or session.get("agent_type") or "chat",
                 _agent_registry,
@@ -4298,6 +4379,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 relayed_location=turn_location if model_id else None,
             )
 
+            model_messages = result_holder.get("model_messages")
+            if turn_cancelled:
+                # The model sees what was shown, marked as stopped, not a blank.
+                model_messages = _with_final_reply(
+                    model_messages, f"{full_response}\n\n{_STOPPED_REPLY_FOR_MODEL}"
+                )
             msg_id = db.upsert_message(
                 request.session_id,
                 persisted_policy_block_msg_id,
@@ -4305,7 +4392,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 full_response,
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
-                model_messages=result_holder.get("model_messages"),
+                model_messages=model_messages,
                 turn_summary=turn_summary,
                 ends_turn=True,
             )
@@ -4351,12 +4438,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            # Distinguish a deliberate cancel and a legitimately-empty final
-            # (e.g. a card-echo the echo-guard stripped) from a genuine backend
-            # failure — only the last warrants the Lemonade copy, and the first
-            # two must keep the steps/cards taken before the empty answer.
             content, sse_type, keep_steps = _empty_answer_outcome(
-                turn_cancelled, bool(captured_steps)
+                turn_cancelled,
+                bool(captured_steps),
+                any(step.get("render") for step in captured_steps),
             )
             steps_to_persist = (
                 captured_steps if (keep_steps and captured_steps) else None
@@ -4365,6 +4450,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db.add_message(request.session_id, "assistant", content, ends_turn=True)
                 yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
             else:
+                failed = sse_type == "failed"
+                if failed:
+                    yield _sse({"type": "answer", "content": content})
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
@@ -4378,7 +4466,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     ends_turn=True,
                 )
                 done_event = _done_event(
-                    msg_id, content, turn_cancelled, turn_summary=turn_summary
+                    msg_id,
+                    content,
+                    turn_cancelled,
+                    turn_summary=turn_summary,
+                    failed=failed,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

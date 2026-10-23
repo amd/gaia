@@ -30,6 +30,7 @@ from .. import permissions as session_permissions
 from .._chat_helpers import (
     _set_provisional_title,
     _spawn_background,
+    model_context_messages,
     stuck_producer,
 )
 from ..database import ChatDatabase
@@ -868,7 +869,7 @@ async def retry_with(
         await turn_queue.acquire(sid)
         try:
             earlier, question, recorded = answer_retry.split_latest_turn(
-                db.get_context_messages(sid), record
+                model_context_messages(db, sid), record
             )
             messages = answer_retry.build_retry_messages(
                 earlier, question, resolve_ctx_size(request.model)
