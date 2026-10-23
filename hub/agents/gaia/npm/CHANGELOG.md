@@ -15,6 +15,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changing it into the snapshot store the Agent UI reads, and finishes the
   recording before the terminal event. Older binaries refuse the field with
   `422`, so probe `/version` before sending it.
+- **A confirmation's `args` are only what the model sent.** `needs_confirmation`
+  `args` also carried keys the agent adds to its own prompt — a risk note, a
+  scratch-folder marker, and the folder a shell call runs in — so a policy
+  client auto-approving on `args` matched fields the model never sent. `args`
+  is now exactly the call's arguments; the folder and risk note moved to a new
+  `prompt_context` object.
 - **A tool result names the file it wrote.** When a tool's result carries
   `file_path` or `image_path`, the `tool_result` event's `data` now keeps it, so
   a client can list the files a turn produced.

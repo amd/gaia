@@ -46,6 +46,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -207,9 +208,17 @@ def _dispatch_one(
             if event.get("tool_label"):
                 request["tool_label"] = str(event["tool_label"])
             # The whole call: the summary shortens code, and a path prompt is
-            # worded from the path's kind.
-            if isinstance(event.get("args"), dict):
-                request["args"] = event["args"]
+            # worded from the path's kind. The card reads GAIA's folder and risk
+            # note from args, as in-process, so prompt_context goes back there.
+            args = dict(event["args"]) if isinstance(event.get("args"), dict) else {}
+            context = event.get("prompt_context")
+            if isinstance(context, dict):
+                if context.get("working_directory"):
+                    args["working_directory"] = str(context["working_directory"])
+                if context.get("risk_note"):
+                    args[RISK_NOTE_ARG] = str(context["risk_note"])
+            if args:
+                request["args"] = args
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
             handler._emit(request)

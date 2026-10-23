@@ -527,10 +527,21 @@ class CanonicalTranslator:
             canonical["tool_label"] = str(tool_label)
         # The call itself, so a front-end can show all of what it is approving
         # (the summary shortens code) and word a path prompt for what is there.
-        if args:
-            canonical["args"], truncated = bounded_prompt_args(args)
+        call_args = _model_call_args(event, args)
+        if call_args:
+            canonical["args"], truncated = bounded_prompt_args(call_args)
             if truncated:
                 canonical["args_truncated"] = True
+        # What GAIA adds to the prompt, kept out of ``args`` so a policy client
+        # never matches on a field the model did not send.
+        prompt_context: Dict[str, Any] = {}
+        folder = args.get("working_directory")
+        if folder and folder != call_args.get("working_directory"):
+            prompt_context["working_directory"] = str(folder)
+        if args.get(RISK_NOTE_ARG):
+            prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        if prompt_context:
+            canonical["prompt_context"] = prompt_context
         return [canonical]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -713,6 +724,23 @@ SUMMARY_CODE_LINES = 12
 #: Longest one argument value a ``needs_confirmation`` carries in ``args``.
 #: Generous on purpose: this is what the user reads before approving code.
 PROMPT_ARG_VALUE_CHARS = 64_000
+
+
+#: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
+PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG})
+
+
+def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
+    """The gated call's arguments as the model sent them.
+
+    ``call_args`` is set when the agent noted them; a prompt GAIA raises on its
+    own (a path-access question) has none, and its ``args`` lose only the
+    prompt-only keys.
+    """
+    call_args = event.get("call_args")
+    if isinstance(call_args, dict):
+        return call_args
+    return {k: v for k, v in args.items() if k not in PROMPT_ONLY_ARGS}
 
 
 def bounded_prompt_args(args: Dict[str, Any]) -> "tuple[Dict[str, Any], bool]":

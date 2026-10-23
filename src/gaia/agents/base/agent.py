@@ -6590,6 +6590,10 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # A policy client matches on what the model sent, not what the prompt adds.
+            noting = getattr(self.console, "note_call_args", None)
+            if callable(noting) and isinstance(tool_args, dict):
+                noting(tool_name, tool_args)
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
