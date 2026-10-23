@@ -30,6 +30,7 @@ import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
+from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -684,6 +685,7 @@ _USER_COPY_FIELDS = (
     "documents_upgrade_message",
     "skills_upgrade_message",
     "memory_upgrade_message",
+    "start_failed_message",
 )
 
 
@@ -701,6 +703,14 @@ class TestPlainUserCopy:
         assert "stopped unexpectedly" in text
         assert "kept above" in text
         assert "Send your message again." in text
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_start_failure_copy_says_what_to_try(self, profile):
+        text = profile.start_failed_message
+        assert "couldn't start" in text
+        assert "Send your message again." in text
+        assert "restart GAIA" in text
+        assert "update GAIA to the latest version or reinstall it" in text
 
     @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
     def test_upgrade_copy_says_update_gaia(self, profile):
@@ -778,6 +788,43 @@ class TestPlainUserCopy:
         errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert [e["content"] for e in errors] == [GAIA_PROFILE.stream_ended_message]
         assert errors[0]["fatal"] is True
+
+    def test_a_failed_start_shows_plain_words_and_logs_the_detail(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The daemon's start failure names its internals and carries the
+        agent's raw log tail; the chat gets plain words, the log gets it all."""
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        log_dir = tmp_path / "agents" / "gaia" / "logs"
+        log_dir.mkdir(parents=True)
+        detail = (
+            "the daemon refused to ensure the 'gaia' sidecar: gaia sidecar failed "
+            "to start after 3 attempts. Last failure: gaia sidecar exited early "
+            "(code 1) before becoming healthy. Last log output: "
+            "\u001b[37mINFO\u001b[0m | faiss.loader\n"
+            "Traceback (most recent call last):\n"
+            '  File "server.py", line 55, in <module>\n'
+        )
+
+        def _acquire(agent_id):
+            raise SidecarError(detail)
+
+        monkeypatch.setattr(daemon_client_module, "acquire_handle", _acquire)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        with caplog.at_level("ERROR", logger=chat_helpers_module.logger.name):
+            _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [
+            f"{GAIA_PROFILE.start_failed_message} "
+            f"The details are in this log folder: {log_dir}"
+        ]
+        visible = errors[0]["content"].lower()
+        for word in ("sidecar", "daemon", "ensure", "traceback", "\u001b"):
+            assert word not in visible, word
+        assert any(detail in r.getMessage() for r in caplog.records)
 
     def test_a_sidecar_error_detail_still_passes_through(self):
         class _P:

@@ -126,20 +126,26 @@ class RelayProfile:
     #: Contract version from which ``/query`` takes ``changes_turn_id`` and
     #: records the run's file changes for undo. ``None`` means never sent.
     min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Shown when the daemon can't start the agent for a turn. Shown through
+    #: :meth:`start_failed_text`, which adds the log folder.
+    start_failed_message: str = ""
 
     def stream_ended_text(self) -> str:
-        """:attr:`stream_ended_message`, plus the agent's log folder once it exists.
+        """:attr:`stream_ended_message`, plus the agent's log folder once it exists."""
+        return self._with_log_folder(self.stream_ended_message)
 
-        Resolved per call so it names the real folder under the current GAIA home.
-        """
+    def start_failed_text(self) -> str:
+        """:attr:`start_failed_message`, plus the agent's log folder once it exists."""
+        return self._with_log_folder(self.start_failed_message)
+
+    def _with_log_folder(self, message: str) -> str:
+        # Resolved per call so it names the real folder under the current GAIA home.
         if not self.agent_id:
-            return self.stream_ended_message
+            return message
         log_dir = gaia_agents_dir() / self.agent_id / "logs"
         if not log_dir.is_dir():
-            return self.stream_ended_message
-        return (
-            f"{self.stream_ended_message} The details are in this log folder: {log_dir}"
-        )
+            return message
+        return f"{message} The details are in this log folder: {log_dir}"
 
 
 # --- email ------------------------------------------------------------------
@@ -245,6 +251,11 @@ EMAIL_PROFILE = RelayProfile(
     stream_ended_message=(
         "The email agent stopped unexpectedly while working. Anything it had "
         "already written is kept above. Send your message again."
+    ),
+    start_failed_message=(
+        "The email agent couldn't start. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
     ),
     version_upgrade_message=(
         "The email agent is out of date and can't answer chat messages. Update "
@@ -422,6 +433,11 @@ GAIA_PROFILE = RelayProfile(
     stream_ended_message=(
         "GAIA stopped unexpectedly while answering. Anything it had already "
         "written is kept above. Send your message again."
+    ),
+    start_failed_message=(
+        "GAIA couldn't start its agent. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
     ),
     version_upgrade_message=(
         "GAIA's agent is out of date and can't answer here. Update GAIA to the "
