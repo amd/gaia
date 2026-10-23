@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
-from gaia.agents.base.call_risk import call_risk
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
 from gaia.agents.base.tool_outcome import FAILED_STATUSES
@@ -57,6 +57,12 @@ from gaia.utils.json_string import (
 logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
+#: How much of an MCP tool's text output a tool row carries.
+_MCP_OUTPUT_CHAR_CAP = 16_000
+
+#: Result keys naming a file the tool wrote; kept on the summary view a
+#: relayed result is reduced to.
+RESULT_PATH_KEYS = ("file_path", "image_path")
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -486,6 +492,7 @@ class SSEOutputHandler(OutputHandler):
     """
 
     blocking_confirmation = True
+    asks_past_preapproval = True
 
     #: How long to wait for a decision. A host that can actually deliver one
     #: raises this — a person reading a prompt routinely takes longer than a
@@ -510,8 +517,15 @@ class SSEOutputHandler(OutputHandler):
     #: Set when the client denied the live prompt because nobody answered.
     _confirm_timed_out: bool = False
 
+    #: The arguments the model sent for the call about to be confirmed, when
+    #: the prompt shows more than that (see :meth:`note_call_args`).
+    _noted_call: Optional["tuple[str, Dict[str, Any]]"] = None
+
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
+
+    #: The sidecar question a relayed run is parked on, until it is answered.
+    _relay_question_id: Optional[str] = None
 
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
@@ -527,6 +541,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
+        self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
@@ -594,6 +609,8 @@ class SSEOutputHandler(OutputHandler):
         self.active_relay_run_id: Optional[str] = None
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        # A relayed needs_input question the sidecar run is parked on.
+        self._relay_question_id: Optional[str] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -720,28 +737,44 @@ class SSEOutputHandler(OutputHandler):
 
     # === Tool Execution Methods ===
 
-    def print_tool_usage(self, tool_name: str):
+    def record_tool_started(self, tool_name: str) -> None:
+        """Note a tool starting in the turn's ledger and start its timer."""
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
         self.turn_ledger.tool_started(tool_name)
+
+    def record_tool_args(self, args: Dict[str, Any]) -> None:
+        """Note the running tool's arguments in the turn's ledger."""
+        self.turn_ledger.tool_args(args)
+
+    def record_tool_result(self, data: Any, success: bool) -> Optional[float]:
+        """Note the running tool's result and stop its timer.
+
+        Returns the tool's latency in milliseconds, or None when no start was
+        recorded.
+        """
+        self._last_tool_success = success
+        self.turn_ledger.tool_result(data, success)
+        if self._tool_start_time is None:
+            return None
+        latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+        self._tool_start_time = None
+        return latency_ms
+
+    def print_tool_usage(self, tool_name: str):
+        self.record_tool_started(tool_name)
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
+        self._last_tool_label = detail_label
         event = {
             "type": "tool_start",
             "tool": tool_name,
             "detail": detail_label,
             "narration": derive_narration(tool_name),
         }
-        # Attach MCP server name if this is an MCP tool.
-        # _mcp_server is set by MCPTool.to_gaia_format() during registration
-        # in MCPClientMixin._register_mcp_tools() (see mcp/client/mcp_client.py).
-        meta = get_tool_metadata(tool_name)
-        if meta:
-            mcp_server = meta.get("_mcp_server")
-            if mcp_server:
-                event["mcp_server"] = mcp_server
+        event.update(_mcp_identity(tool_name))
         self._emit(event)
 
     def print_tool_complete(self):
@@ -756,10 +789,25 @@ class SSEOutputHandler(OutputHandler):
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         # When title is "Arguments", emit tool args as a detail update
-        # so the frontend can show what the tool was called with.
-        if title == "Arguments" and isinstance(data, dict):
-            detail = _format_tool_args(self._last_tool_name, data)
-            self.turn_ledger.tool_args(data)
+        # so the frontend can show what the tool was called with. Sent for an
+        # empty call too: the translator holds tool_start until this arrives.
+        if title == "Arguments":
+            if not isinstance(data, dict):
+                # The wire carries an object; log what the model really sent.
+                logger.warning(
+                    "Tool %s was called with %s arguments, not an object: %.200r",
+                    self._last_tool_name,
+                    type(data).__name__,
+                    data,
+                )
+                data = {}
+            # A call with no arguments keeps the tool_start label, not a blank.
+            detail = (
+                _format_tool_args(self._last_tool_name, data)
+                if data
+                else self._last_tool_label
+            )
+            self.record_tool_args(data)
             self._emit(
                 {
                     "type": "tool_args",
@@ -782,25 +830,41 @@ class SSEOutputHandler(OutputHandler):
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
         success = not tool_result_failed(data)
-        self._last_tool_success = success
-        self.turn_ledger.tool_result(data, success)
+        latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
             "title": title,
             "summary": summary,
             "success": success,
         }
+        # A relayed result is reduced to this event, and a "skipped" save
+        # must not reach the chat's Outputs as made.
+        if isinstance(data, dict) and isinstance(data.get("status"), str):
+            event["status"] = data["status"]
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # Where the tool wrote, resolved: a relayed turn's Outputs need it.
+        if isinstance(data, dict):
+            for key in RESULT_PATH_KEYS:
+                if isinstance(data.get(key), str):
+                    event[key] = data[key]
 
-        # Attach latency for tool calls (measured from print_tool_usage)
-        if self._tool_start_time is not None:
-            latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+        if success and (get_tool_metadata(self._last_tool_name) or {}).get(
+            "_mcp_server"
+        ):
+            output = _mcp_output_text(data)
+            if output:
+                event["summary"] = _first_line_summary(output)
+                event["mcp_output"] = {
+                    "text": output[:_MCP_OUTPUT_CHAR_CAP],
+                    "truncated": len(output) > _MCP_OUTPUT_CHAR_CAP,
+                }
+
+        if latency_ms is not None:
             event["latency_ms"] = latency_ms
-            self._tool_start_time = None
 
         # For command execution results, include structured output data
         # so the frontend can render a proper terminal view
@@ -1678,6 +1742,18 @@ class SSEOutputHandler(OutputHandler):
         """
         return scripted_user.declines(tool_name, tool_args)
 
+    def note_call_args(self, tool_name: str, call_args: Dict[str, Any]) -> None:
+        """Record what the model sent for the call the next prompt asks about.
+
+        The prompt's arguments can carry what GAIA adds for display (the folder
+        a shell call runs in, a risk note), so when they differ the
+        ``permission_request`` also carries these as ``call_args``. Its only
+        reader is ``CanonicalTranslator`` (the ``/query`` wire's ``args``); the
+        Agent UI ignores it. Consumed by the next :meth:`confirm_tool_execution`,
+        and only for the same tool.
+        """
+        self._noted_call = (tool_name, dict(call_args))
+
     def confirm_tool_execution(
         self,
         tool_name: str,
@@ -1702,6 +1778,22 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        noted, self._noted_call = self._noted_call, None
+        call_args = noted[1] if noted is not None and noted[0] == tool_name else None
+
+        # A call only a person may approve: pre-approval never answers it.
+        needs_person = (
+            isinstance(tool_args, dict) and tool_args.get(NEEDS_PERSON_ARG) is True
+        )
+        if needs_person:
+            tool_args = {k: v for k, v in tool_args.items() if k != NEEDS_PERSON_ARG}
+            if not self.answers_confirmations:
+                return self.deny_tool_execution(
+                    tool_name,
+                    f"'{tool_name}' needs your approval and nobody can answer on "
+                    "this run. Start the request from the GAIA terminal UI or "
+                    "Agent UI to approve it there.",
+                )
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
         if scripted_user.declines(tool_name, tool_args):
@@ -1724,7 +1816,11 @@ class SSEOutputHandler(OutputHandler):
         # the very next gated tool.
         # Pre-approval answers tool prompts; only full access widens the file scope.
         widens_scope = tool_name == PATH_ACCESS_PROMPT_TOOL and not self.full_access
-        if self.auto_approve_confirmations_enabled() and not widens_scope:
+        if (
+            self.auto_approve_confirmations_enabled()
+            and not widens_scope
+            and not needs_person
+        ):
             self.log_auto_approval(tool_name)
             self._emit(
                 {
@@ -1801,6 +1897,8 @@ class SSEOutputHandler(OutputHandler):
             "args": tool_args,
             "confirm_id": confirm_id,
         }
+        if call_args is not None and call_args != tool_args:
+            request["call_args"] = call_args
         # Present only when an "always" answer would create a grant, and it
         # names exactly what that grant covers. A front-end must not offer the
         # choice without it: an unqualified "always" is read as far broader
@@ -1891,7 +1989,9 @@ class SSEOutputHandler(OutputHandler):
             ) or self._relay_confirm_id is not None:
                 return "permission"
         with self._user_input_lock:
-            if any(not evt.is_set() for evt in self._user_input_events.values()):
+            if self._relay_question_id is not None or any(
+                not evt.is_set() for evt in self._user_input_events.values()
+            ):
                 return "question"
         return None
 
@@ -1902,32 +2002,49 @@ class SSEOutputHandler(OutputHandler):
         On the way back the turn retakes the model at the front of the line,
         and a Stop while it waits there ends the turn.
         """
-        slot = self.turn_slot
-        try:
-            stepped_away = slot is not None and slot.step_away()
-        except TimeoutError:
-            # The hand-back may still run later; never use the model unheld.
-            logger.error("Could not give the model up while waiting; stopping the turn")
-            self.cancelled.set()
-            stepped_away = False
-        if not stepped_away:
+        if not self.step_away_from_model():
             yield
             return
         try:
             yield
         finally:
-            if not self.cancelled.is_set() and not slot.come_back(self.cancelled):
-                # Withdrawn from the line: the turn must not use the model.
+            self.come_back_to_model()
+
+    def step_away_from_model(self) -> bool:
+        """Give the model to other chats while the turn waits on the user.
+
+        Returns whether it was given up, i.e. whether
+        :meth:`come_back_to_model` must follow once the wait ends.
+        """
+        slot = self.turn_slot
+        try:
+            return slot is not None and slot.step_away()
+        except TimeoutError:
+            # The hand-back may still run later; never use the model unheld.
+            logger.error("Could not give the model up while waiting; stopping the turn")
+            self.cancelled.set()
+            return False
+
+    def come_back_to_model(self) -> None:
+        """Retake the model at the front of the line after a wait on the user.
+
+        A Stop while the turn waits in line, or a model that can no longer be
+        loaded, sets ``cancelled``; the caller checks it before going on.
+        """
+        if self.cancelled.is_set():
+            return
+        if not self.turn_slot.come_back(self.cancelled):
+            # Withdrawn from the line: the turn must not use the model.
+            self.cancelled.set()
+        elif not self.cancelled.is_set() and self.on_model_regained is not None:
+            try:
+                self.on_model_regained()
+            except Exception as exc:  # pylint: disable=broad-except
+                # The model the turn needs is gone and can't be loaded:
+                # end the turn before the approved tool runs, and say why.
+                logger.error("Model check after the user answered failed: %s", exc)
+                self._emit({"type": "agent_error", "content": str(exc)})
                 self.cancelled.set()
-            elif not self.cancelled.is_set() and self.on_model_regained is not None:
-                try:
-                    self.on_model_regained()
-                except Exception as exc:  # pylint: disable=broad-except
-                    # The model the turn needs is gone and can't be loaded:
-                    # end the turn before the approved tool runs, and say why.
-                    logger.error("Model check after the user answered failed: %s", exc)
-                    self._emit({"type": "agent_error", "content": str(exc)})
-                    self.cancelled.set()
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -2059,7 +2176,7 @@ class SSEOutputHandler(OutputHandler):
         if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
-            return bool(self._user_input_queue)
+            return bool(self._user_input_queue) or self._relay_question_id is not None
 
     def request_user_input_blocking(
         self,
@@ -2208,7 +2325,16 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        with self._user_input_lock:
+            # A newer question may already be pending; only this one is answered.
+            if self._relay_question_id == request_id:
+                self._relay_question_id = None
         return True
+
+    def set_relay_question(self, request_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the relayed question now pending."""
+        with self._user_input_lock:
+            self._relay_question_id = request_id
 
     def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending."""
@@ -2303,6 +2429,47 @@ def _count_summary(data: Dict[str, Any]) -> Optional[str]:
             continue
         return format_count(len(value), key)
     return None
+
+
+def _mcp_identity(tool_name: Optional[str]) -> Dict[str, str]:
+    """The connector an MCP tool belongs to, as tool-row fields; {} for other tools."""
+    meta = get_tool_metadata(tool_name) if tool_name else None
+    server = (meta or {}).get("_mcp_server")
+    if not server:
+        return {}
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    # A server added by hand to mcp_servers.json has no catalog entry; its
+    # config name is the only name it has.
+    label = REGISTRY.get(server).display_name if server in REGISTRY else server
+    identity = {"mcp_server": server, "mcp_server_label": label}
+    if meta.get("_mcp_tool"):
+        identity["mcp_tool"] = meta["_mcp_tool"]
+    return identity
+
+
+def _mcp_output_text(data: Any) -> Optional[str]:
+    """The text an MCP tool returned, from its wrapped ``tools/call`` result."""
+    result = data.get("data") if isinstance(data, dict) else data
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        result = "\n".join(
+            item["text"]
+            for item in result["content"]
+            if isinstance(item, dict)
+            and item.get("type", "text") == "text"
+            and isinstance(item.get("text"), str)
+        )
+    if not isinstance(result, str) or not result.strip():
+        return None
+    return result.strip("\n")
+
+
+def _first_line_summary(text: str) -> str:
+    """``"a\\nb\\nc"`` -> ``"a (+2 more lines)"``."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first = lines[0][:_SUMMARY_CHAR_CAP] if lines else ""
+    return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
 
 
 def _summarize_tool_result(data: Dict[str, Any]) -> str:

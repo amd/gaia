@@ -47,6 +47,7 @@ from gaia.llm.lemonade_supervisor import (
     LemonadeSupervisor,
     _probe,
 )
+from gaia.llm.retry import http_body_text
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -536,7 +537,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
     try:
         detail = resp.json().get("detail", "")
     except ValueError:
-        detail = resp.text.strip()
+        detail = http_body_text(resp).strip()
     raise LemonadeStartError(
         detail
         or (

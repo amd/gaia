@@ -14,9 +14,10 @@ directories at the front of ``sys.path``, so the checkout you are sitting in is
 the one that gets tested. It also fails the session loudly if a core module
 still resolves elsewhere, rather than letting a green run mean nothing.
 
-It also points GAIA's config file, daemon home, TUI home, memory database, file
-index and scratchpad at a per-session tmp dir, so no result depends on the
-developer's real ~/.gaia, and fails any test that opens a database inside it.
+It also points GAIA's config file, daemon home, TUI home, memory database, log
+file, file index and scratchpad at a per-session tmp dir, so no result depends
+on the developer's real ~/.gaia, and fails any test that opens a database
+inside it.
 
 Set ``GAIA_ALLOW_EXTERNAL_IMPORTS=1`` to opt out — testing an actually-installed
 wheel is a legitimate thing to do, it just must not happen by accident.
@@ -127,6 +128,8 @@ _STATE_ENV = {
     "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
     # The stdio agent writes each session's chat history under it.
     "GAIA_TUI_HOME": ("tui",),
+    # Opened when gaia is first imported, so it must be set before that.
+    "GAIA_LOG_FILE": ("logs", "gaia.log"),
 }
 #: The _STATE_ENV entries that name a directory rather than a file.
 _STATE_DIRS = {"GAIA_DAEMON_HOME", "GAIA_TUI_HOME"}

@@ -1,0 +1,64 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.info-bubble-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+}
+
+.info-bubble-icon:hover,
+.info-bubble-icon:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.info-bubble-icon.is-warning {
+    color: var(--accent-yellow);
+}
+
+.info-bubble {
+    position: fixed;
+    z-index: 1000;
+    max-width: min(280px, calc(100vw - 16px));
+    padding: 8px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    color: var(--text-primary);
+    font-size: var(--fs-label);
+    line-height: 1.45;
+    pointer-events: none;
+}
+
+.info-bubble-title {
+    font-weight: 600;
+}
+
+.info-bubble-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-secondary);
+}
+
+.info-bubble-lines .is-warning {
+    color: var(--accent-yellow);
+}
+
+.info-bubble-id {
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    word-break: break-all;
+}

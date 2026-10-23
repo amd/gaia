@@ -94,7 +94,7 @@ describe('ModelChip during a turn', () => {
         useChatStore.setState({ isStreaming: true });
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(within(dialog).getByRole('button', { name: /Qwen3 4B/ }));
+        fireEvent.click(within(dialog).getByRole('option', { name: /^Qwen3 4B/ }));
 
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
         expect(useModelStore.getState().queued).toBe('Qwen3-4B-GGUF');
@@ -116,7 +116,7 @@ describe('ModelChip during a turn', () => {
     it('switches at once when no reply is running', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        fireEvent.click(within(dialog).getByRole('button', { name: /Qwen3 4B/ }));
+        fireEvent.click(within(dialog).getByRole('option', { name: /^Qwen3 4B/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-4B-GGUF'));
         expect(useModelStore.getState().queued).toBeNull();
     });
@@ -126,7 +126,7 @@ describe('ModelChip model states', () => {
     it('shows exactly one state per local model, each with a text label', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        const row = (name: RegExp) => within(dialog).getByRole('button', { name }).closest('.popover-row') as HTMLElement;
+        const row = (name: RegExp) => within(dialog).getByRole('option', { name }).closest('.popover-row') as HTMLElement;
         expect(within(row(/^Gemma 4 E4B/)).getByRole('img', { name: 'Loaded' })).toBeInTheDocument();
         expect(within(row(/^Qwen3 4B/)).getByTitle('Downloaded, ready to load')).toHaveTextContent('Ready');
         expect(within(row(/^Qwen3.6 35B A3B/)).getByRole('button', { name: 'Download Qwen3.6 35B A3B' })).toBeInTheDocument();
@@ -149,8 +149,27 @@ describe('ModelChip model states', () => {
     it('shows device, size and measured speed', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
-        expect(within(dialog).getByText('GPU · Vulkan · 5.6 GB · 41 tok/s on this PC')).toBeInTheDocument();
-        expect(within(dialog).getByText(/GPU · Vulkan \(expected\) · 21.7 GB/)).toBeInTheDocument();
+        // Rows show only the name; the details wait behind each row's info icon.
+        expect(within(dialog).queryByText(/tok\/s/)).not.toBeInTheDocument();
+        fireEvent.mouseEnter(within(dialog).getByRole('button', { name: 'About Gemma 4 E4B' }));
+        const bubble = await screen.findByRole('tooltip');
+        expect(bubble).toHaveTextContent('GPU · Vulkan');
+        expect(bubble).toHaveTextContent('5.6 GB');
+        expect(bubble).toHaveTextContent('41 tok/s on this PC');
+        fireEvent.mouseLeave(within(dialog).getByRole('button', { name: 'About Gemma 4 E4B' }));
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+        // Keyboard focus opens it too.
+        fireEvent.focus(within(dialog).getByRole('button', { name: 'About Qwen3.6 35B A3B' }));
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(/GPU · Vulkan \(expected\)[\s\S]*21.7 GB/);
+    });
+
+    it('closes the info bubble when the list scrolls', async () => {
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.mouseEnter(within(dialog).getByRole('button', { name: 'About Gemma 4 E4B' }));
+        expect(await screen.findByRole('tooltip')).toBeInTheDocument();
+        fireEvent.scroll(dialog);
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
     });
 
     it('leaves out models this PC cannot run and says how many', async () => {
@@ -170,17 +189,37 @@ describe('ModelChip model states', () => {
         });
         render(<ModelChip />);
         const dialog = await openPicker();
-        expect(within(dialog).getByText(/Running on the CPU instead of the GPU/)).toBeInTheDocument();
+        const info = within(dialog).getByRole('button', { name: 'About Qwen3 4B' });
+        expect(info).toHaveClass('is-warning');
+        fireEvent.mouseEnter(info);
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(/Running on the CPU instead of the GPU/);
     });
 
     it('offers Fireworks with Add your key, and hides an unregistered gateway', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
         expect(within(dialog).getByText('Fireworks AI')).toBeInTheDocument();
-        fireEvent.click(within(dialog).getByRole('button', { name: /Add your key/ }));
+        fireEvent.click(within(dialog).getByRole('option', { name: /^Add your key/ }));
         expect(useChatStore.getState().settingsSection).toBe('model');
         expect(screen.queryByText('AMD LLM Gateway')).not.toBeInTheDocument();
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
+    });
+
+    it('tells apart two Fireworks models that share a short name', async () => {
+        const fireworks: ProviderInfo = { ...FIREWORKS_NO_KEY, models_discovered: true };
+        const cloud = (id: string): ProviderModel => ({
+            id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null,
+        });
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: ACTIVE, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? { provider: 'fireworks', models: [cloud('fireworks.auto'), cloud('fireworks.firerouter/auto'), cloud('fireworks.glm-5p3-flash')] }
+            : { provider: 'local', models: MODELS }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        await within(dialog).findByText('firerouter/auto');
+        expect(within(dialog).getByText('auto')).toBeInTheDocument();
+        expect(within(dialog).getByText('glm-5p3-flash')).toBeInTheDocument();
+        expect(within(dialog).getByText('Qwen3 4B')).toBeInTheDocument();
     });
 
     it('flags a default that is not downloaded on the chip', () => {

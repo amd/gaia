@@ -447,7 +447,9 @@ class TestChatAgentScratchDirectory:
         finally:
             agent.__del__()
 
-    def test_scratch_dir_is_removed_on_cleanup(self):
+    def test_scratch_dir_is_removed_on_cleanup(self, tmp_path, monkeypatch):
+        # Its own anchor: agents other tests leave alive still hold the cwd's.
+        monkeypatch.chdir(tmp_path)
         agent = _build_agent()
         scratch = agent.scratch_dir
         (scratch / "run_tests.py").write_text("print(1)\n", encoding="utf-8")
