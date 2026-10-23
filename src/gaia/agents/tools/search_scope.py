@@ -143,17 +143,20 @@ class SearchBudget:
         return text
 
 
-def walk_files(root: Path, budget: SearchBudget) -> Iterator[Path]:
+def walk_files(
+    root: Path, budget: SearchBudget, skip_dirs: frozenset = frozenset()
+) -> Iterator[Path]:
     """Every file under *root*, folder by folder, within *budget*.
 
-    Links are not entered. Stops when the budget runs out, recording *root* as
-    unfinished; unreadable folders are skipped.
+    Links and folders named in *skip_dirs* are not entered. Stops when the
+    budget runs out, recording *root* as unfinished; unreadable folders are
+    skipped.
     """
     pending = [Path(root)]
     while pending:
         current = pending.pop()
         try:
-            entries = list(os.scandir(current))
+            entries = sorted(os.scandir(current), key=lambda e: e.name)
         except OSError as exc:
             logger.debug("Skipping %s: %s", current, exc)
             continue
@@ -164,7 +167,7 @@ def walk_files(root: Path, budget: SearchBudget) -> Iterator[Path]:
                 return
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    if not is_link(entry):
+                    if entry.name not in skip_dirs and not is_link(entry):
                         subdirs.append(Path(entry.path))
                 elif entry.is_file():
                     yield Path(entry.path)
