@@ -219,6 +219,22 @@ describe('DocumentLibrary failure reasons', () => {
         const retry = screen.getByRole('button', { name: /Retry indexing empty\.txt/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });
+
+    it('says a dropped damaged PDF can\'t be read, with no bug-report link', async () => {
+        mockedApi.uploadDocumentBlob.mockRejectedValue(Object.assign(
+            new Error('RAG indexing failed for 1a2b_broken.pdf: Could not read PDF'),
+            { httpStatus: 422, reason: 'corrupted' },
+        ));
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('broken.pdf');
+
+        const dropped = new File(['%PDF-1.4 truncated'], 'report.pdf', { type: 'application/pdf' });
+        fireEvent.drop(container.querySelector('.drop-zone')!, { dataTransfer: { files: [dropped] } });
+
+        expect(await screen.findByText('"report.pdf" can\'t be read')).toBeTruthy();
+        expect(screen.getByRole('alert').textContent).toContain('looks damaged. Re-download or re-export it');
+        expect(screen.queryByText(/Report this issue/)).toBeNull();
+    });
 });
 
 describe('DocumentLibrary path box', () => {

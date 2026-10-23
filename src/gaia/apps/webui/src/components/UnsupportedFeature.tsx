@@ -211,6 +211,14 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
 
 // ── Upload Error Toast ───────────────────────────────────────────────────
 
+/** Failures retrying can't fix until the file changes (the backend's error kind), and what to do instead. */
+export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
+    corrupted: 'The file looks damaged. Re-download or re-export it, then index the new copy.',
+    encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
+    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
+    empty_file: 'This file is empty. Add content to it, then index it again.',
+};
+
 /** The backend's message without its leading category label, e.g. "File not found:". */
 function stripPrefix(message: string, prefix: string): string {
     return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
@@ -223,6 +231,8 @@ interface UploadErrorToastProps {
     error: string;
     /** HTTP status of the failed request, when there was one. */
     status?: number;
+    /** The backend's error kind (``detail.status``), e.g. ``corrupted``. */
+    kind?: string | null;
     /** Called when the user dismisses the toast. */
     onDismiss: () => void;
     /** Auto-dismiss timeout in ms (default: 15000). 0 = no auto-dismiss. */
@@ -233,7 +243,7 @@ interface UploadErrorToastProps {
  * A dismissible error toast for document upload failures.
  * Parses the backend error to show helpful context and a GitHub link.
  */
-export function UploadErrorToast({ filename, error, status, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+export function UploadErrorToast({ filename, error, status, kind, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -264,8 +274,15 @@ export function UploadErrorToast({ filename, error, status, onDismiss, timeout =
     let issueUrl: string | null;
     let Icon = AlertCircle;
 
-    // A wrong path or a file outside the readable folders is the user's to fix, not a bug to report.
-    if (status === 404) {
+    const permanentHint = kind ? PERMANENT_FAILURE_HINTS[kind] : undefined;
+
+    // A wrong path, a file outside the readable folders or a damaged file is the user's to fix, not a bug to report.
+    if (permanentHint) {
+        title = `"${filename}" can't be read`;
+        detail = permanentHint;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (status === 404) {
         title = `"${filename}" doesn't exist`;
         detail = stripPrefix(error, 'File not found:');
         issueUrl = null;

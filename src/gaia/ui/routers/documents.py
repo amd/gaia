@@ -23,6 +23,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
+from .._chat_helpers import UnreadableDocumentError
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -430,7 +431,10 @@ async def upload_document_blob(
             raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
         if bytes_written == 0:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "empty_file", "message": "Uploaded file is empty"},
+            )
 
         file_hash = hasher.hexdigest()
 
@@ -485,6 +489,12 @@ async def upload_document_blob(
     except HTTPException:
         _cleanup_temp(final_path)
         raise
+    except UnreadableDocumentError as e:
+        _cleanup_temp(final_path)
+        logger.warning("Uploaded document %s can't be read: %s", display_name, e)
+        raise HTTPException(
+            status_code=422, detail={"status": e.kind, "message": str(e)}
+        ) from e
     except Exception as e:
         _cleanup_temp(final_path)
         logger.error(

@@ -8,17 +8,9 @@ import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
-import { UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
+import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
 import './DocumentLibrary.css';
-
-/** Failures retrying can't fix until the file changes, and what to do instead. */
-const PERMANENT_FAILURE_HINTS: Record<string, string> = {
-    corrupted: 'The file looks damaged. Re-download or re-export it, then index the new copy.',
-    encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
-    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
-    empty_file: 'This file is empty. Add content to it, then index it again.',
-};
 
 /** Split a stored indexing error into a one-line summary and the rest. */
 function splitFailureReason(lastError: string): { summary: string; more: string } {
@@ -116,7 +108,7 @@ export function DocumentLibrary() {
     const [uploadStatus, setUploadStatus] = useState('');
     const [folderPath, setFolderPath] = useState('');
     // Upload error state for rich error toasts
-    const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number } | null>(null);
+    const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
     // Outcome of indexing a folder typed into the path box
     const [folderNotice, setFolderNotice] = useState<string | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
@@ -313,7 +305,7 @@ export function DocumentLibrary() {
             const errMsg = httpStatus === 400 && unsupportedMessage
                 ? unsupportedMessage
                 : err instanceof Error ? err.message : 'Upload failed';
-            setUploadError({ filename, error: errMsg, status: httpStatus });
+            setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
         } finally {
             setIsUploading(false);
@@ -631,6 +623,7 @@ export function DocumentLibrary() {
                             filename={uploadError.filename}
                             error={uploadError.error}
                             status={uploadError.status}
+                            kind={uploadError.kind}
                             onDismiss={() => setUploadError(null)}
                         />
                     )}
